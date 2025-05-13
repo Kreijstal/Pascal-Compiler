@@ -1,3 +1,4 @@
+%option noyywrap
 %{
     #include <stdio.h>
     #include <stdlib.h>
@@ -5,7 +6,8 @@
     #include "../ParseTree/tree.h"
     #include "../ParseTree/tree_types.h"
     #include "../List/List.h"
-    #include "y.tab.h"
+    #include "Grammar.tab.h"
+    #include "../ParseTree/tree.h"
 %}
 
 whitespace [ \t]+

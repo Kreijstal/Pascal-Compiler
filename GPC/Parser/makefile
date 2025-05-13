@@ -13,11 +13,13 @@ CCFLAGS = $(FLAGS) $(OPTIMIZE)
 GPC_OBJS = ParsePascal.o
 TREE_OBJS = List/List.o $(TREE_DIR)/tree.o
 SEM_OBJS = SemCheck.o SemCheck_stmt.o SemCheck_expr.o HashTable.o SymTab.o
-PARSER_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/y.tab.o
+PARSER_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/Grammar.tab.o
 ALL_OBJS = $(GPC_OBJS) $(TREE_OBJS) $(SEM_OBJS) $(PARSER_OBJS)
 
 ######## THE MAIN BUILD RULES ###########
-release: lexAndYacc parser
+release:
+	cd LexAndYacc && $(MAKE)
+	$(MAKE) parser
 
 debug_flexbison: debugFlexBison
 debug_bison: bisonDebug parser
@@ -47,10 +49,10 @@ SemCheck_stmt.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
 SemCheck_expr.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_expr.c
 
-HashTable.o: $(GRAMMAR_DIR)/y.tab.h
+HashTable.o: $(GRAMMAR_DIR)/Grammar.tab.h
 	$(CC) $(CCFLAGS) -c SemanticCheck/HashTable/HashTable.c
 
-SymTab.o: $(GRAMMAR_DIR)/y.tab.h HashTable.o
+SymTab.o: $(GRAMMAR_DIR)/Grammar.tab.h HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SymTab/SymTab.c
 
 $(TREE_DIR)/tree.o:

@@ -18,7 +18,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "../../Parser/LexAndYacc/y.tab.h"
+#include "../../Parser/LexAndYacc/Grammar.tab.h"
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len)

@@ -78,7 +78,7 @@ typedef struct Tree
 } Tree_t;
 
 /* GLOBAL TREE */
-Tree_t *parse_tree;
+extern Tree_t *parse_tree;
 
 /* WARNING: Copies are NOT made. Make sure given pointers are safe! */
 /* WARNING: Destroying the tree WILL free given pointers. Do not reference after free! */

@@ -117,7 +117,7 @@
 
 /* For creating labels to jump to */
 /* Please initialize to 1 */
-int label_counter;
+extern int label_counter;
 
 /* This is the entry function */
 void codegen(Tree_t *, char *input_file_name, char *output_file_name);

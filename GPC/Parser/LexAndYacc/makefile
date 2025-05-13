@@ -1,23 +1,23 @@
 LEX = flex
-YACC = byacc -v
+YACC = bison -v
 CC = gcc
 FLAGS = -g
 
 # Debug defines
 FLEX_DEBUG = -DDEBUG_FLEX
 
-all: lex.yy.o y.tab.o
+all: lex.yy.o Grammar.tab.o
 flexDebug: debug_lex.yy.o y.tab.o
 
-lex.yy.o: lex.yy.c y.tab.h
-	$(CC) $(CCFLAGS) -c lex.yy.c
-y.tab.o: y.tab.c y.tab.h
-	$(CC) $(CCFLAGS) -c y.tab.c
+lex.yy.o: lex.yy.c Grammar.tab.h
+	$(CC) $(CCFLAGS) -I. -c lex.yy.c
+Grammar.tab.o: Grammar.tab.c Grammar.tab.h
+	$(CC) $(CCFLAGS) -c Grammar.tab.c
 
-debug_lex.yy.o: lex.yy.c y.tab.h
+debug_lex.yy.o: lex.yy.c Grammar.tab.h
 	$(CC) $(CCFLAGS) $(FLEX_DEBUG) -c lex.yy.c
 
-y.tab.c y.tab.h: Grammar.y
+Grammar.tab.c Grammar.tab.h: Grammar.y
 	$(YACC) -d Grammar.y
 
 lex.yy.c: Tokenizer.l
