@@ -33,4 +33,4 @@ Intel_x86-64/expr_tree/expr_tree.o:
 
 ############ CLEANING ##########3
 clean:
-	rm *.o
+	rm -f *.o

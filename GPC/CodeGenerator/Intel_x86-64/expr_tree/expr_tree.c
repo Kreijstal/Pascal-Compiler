@@ -18,7 +18,7 @@
 #include "../../../Parser/List/List.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
-#include "../../../Parser/LexAndYacc/y.tab.h"
+#include "../../../Parser/LexAndYacc/Grammar.tab.h"
 
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list);

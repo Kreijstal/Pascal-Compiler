@@ -18,7 +18,7 @@
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
-#include "../../LexAndYacc/y.tab.h"
+#include "../../LexAndYacc/Grammar.tab.h"
 
 int is_type_ir(int *type);
 int is_and_or(int *type);

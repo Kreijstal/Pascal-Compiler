@@ -5,7 +5,7 @@
 
 #include "tree.h"
 #include "tree_types.h"
-#include "../LexAndYacc/y.tab.h"
+#include "../LexAndYacc/Grammar.tab.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>

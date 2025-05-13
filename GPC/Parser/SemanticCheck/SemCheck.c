@@ -23,7 +23,7 @@
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
-#include "../LexAndYacc/y.tab.h"
+#include "../LexAndYacc/Grammar.tab.h"
 
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);

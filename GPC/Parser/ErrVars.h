@@ -6,8 +6,8 @@
 #ifndef ERR_VARS_H
 #define ERR_VARS_H
 
-int line_num;
-int col_num;
-char *file_to_parse;
+extern int line_num;
+extern int col_num;
+extern char *file_to_parse;
 
 #endif

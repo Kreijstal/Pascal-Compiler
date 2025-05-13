@@ -1,7 +1,7 @@
 CC = gcc
 FLAGS = -g
 OPTIMIZE =
-LIBS = -ll
+LIBS =
 
 PARSER_DIR = Parser
 GRAMMAR_DIR = Parser/LexAndYacc
@@ -17,7 +17,7 @@ PARSER_OBJS = $(PARSER_DIR)/ParsePascal.o
 TREE_OBJS = $(PARSER_DIR)/List.o $(PARSER_DIR)/tree.o
 SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o
 SEM_OBJS_MORE = $(PARSER_DIR)/SemCheck_stmt.o $(PARSER_DIR)/SemCheck_expr.o
-GRAMMAR_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/y.tab.o
+GRAMMAR_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/Grammar.tab.o
 CODEGEN_OBJS = $(CODEGEN_DIR)/codegen.o $(CODEGEN_DIR)/stackmng.o $(CODEGEN_DIR)/expr_tree.o
 OPTIMIZER_OBJS = optimizer.o
 ALL_OBJS = $(GPC_OBJS) $(GRAMMAR_OBJS) $(PARSER_OBJS) $(TREE_OBJS) $(SEM_OBJS) $(SEM_OBJS_MORE) $(CODEGEN_OBJS) $(OPTIMIZER_OBJS)
@@ -25,7 +25,10 @@ ALL_OBJS = $(GPC_OBJS) $(GRAMMAR_OBJS) $(PARSER_OBJS) $(TREE_OBJS) $(SEM_OBJS) $
 BIN = gpc
 
 ######## THE MAIN BUILD RULES ###########
-release: parser codegen bin
+release:
+	cd Parser && $(MAKE) release
+	$(MAKE) codegen
+	$(MAKE) bin
 
 debug_flexbison: debugFlexBison bin
 debug_flex: flexDebug bin

@@ -6,6 +6,15 @@
 #include <string.h>
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
+
+/* Global variable definitions */
+Tree_t *parse_tree = NULL;
+int label_counter = 1;
+int num_args_alloced = 0;
+int line_num = 1;
+int col_num = 1;
+char *file_to_parse = NULL;
+#include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 
