@@ -99,8 +99,24 @@ void PrintList(ListNode_t *head_node, FILE *f, int num_indent)
     cur = head_node;
     while(cur != NULL)
     {
-        fprintf(f, "%d, ", cur->type);
+        fprintf(f, "%p", cur->cur);
         cur = cur->next;
+        if(cur != NULL)
+            fprintf(f, " -> ");
     }
     fprintf(f, "\n");
+}
+
+/* Returns the length of the list */
+int ListLength(ListNode_t *head_node)
+{
+    int length = 0;
+    ListNode_t *cur = head_node;
+
+    while(cur != NULL)
+    {
+        length++;
+        cur = cur->next;
+    }
+    return length;
 }

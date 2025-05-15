@@ -96,14 +96,14 @@
 #ifndef CODE_GEN_H
 #define CODE_GEN_H
 
-/*#define DEBUG_CODEGEN*/
+#define DEBUG_CODEGEN
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
 #define NORMAL_JMP -1
 
-#define PRINTF_REGISTER ".LC0(%rip)"
-#define PRINTF_CALL "printf@PLT"
+#define WRITE_SYSCALL_NUM 1
+#define STDOUT_FD 1
 
 #define SCANF_REGISTER ".LC1(%rip)"
 #define SCANF_CALL "__isoc99_scanf@PLT"
@@ -118,6 +118,7 @@
 /* For creating labels to jump to */
 /* Please initialize to 1 */
 extern int label_counter;
+extern int write_label_counter;
 
 /* This is the entry function */
 void codegen(Tree_t *, char *input_file_name, char *output_file_name);
@@ -155,6 +156,7 @@ ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
 
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, FILE *);
 ListNode_t *codegen_builtin_write(ListNode_t *, ListNode_t *, FILE *);
+ListNode_t *codegen_builtin_writeln(ListNode_t *, ListNode_t *, FILE *);
 ListNode_t *codegen_builtin_read(ListNode_t *, ListNode_t *, FILE *);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, FILE *);
 

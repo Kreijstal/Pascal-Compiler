@@ -8,6 +8,7 @@
 #include "../LexAndYacc/Grammar.tab.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
 
 /* NOTE: tree_print and destroy_tree implicitely call stmt and expr functions */
@@ -299,6 +300,10 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           fprintf(f, "[R_NUM:%f]\n", expr->expr_data.r_num);
           break;
 
+        case EXPR_STRING:
+          fprintf(f, "[STRING:%s]\n", expr->expr_data.string);
+          break;
+
         default:
           fprintf(stderr, "BAD TYPE IN expr_print!\n");
           exit(1);
@@ -482,6 +487,10 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_RNUM:
+          break;
+
+        case EXPR_STRING:
+          free(expr->expr_data.string);
           break;
 
         default:
@@ -786,6 +795,22 @@ struct Expression *mk_inum(int line_num, int i_num)
     new_expr->line_num = line_num;
     new_expr->type = EXPR_INUM;
     new_expr->expr_data.i_num = i_num;
+
+    return new_expr;
+}
+
+struct Expression *mk_string(int line_num, char *string)
+{
+    struct Expression *new_expr;
+    new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+
+    new_expr->line_num = line_num;
+    new_expr->type = EXPR_STRING;
+    new_expr->expr_data.string = strdup(string);
+    if(new_expr->expr_data.string == NULL) {
+        free(new_expr);
+        return NULL;
+    }
 
     return new_expr;
 }
