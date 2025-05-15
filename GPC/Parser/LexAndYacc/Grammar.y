@@ -7,7 +7,6 @@
     #include "../ErrVars.h"
     void yyerror(char *s); /* Forward declaration */
     #include "../ParseTree/tree.h"
-    #include "../ParseTree/tree_types.h"
     #include "../List/List.h"
     #include "Grammar.tab.h"
 
@@ -19,6 +18,9 @@
     /* Numbers */
     int i_val;
     float f_val;
+
+    /* Strings */
+    char *str;
 
     /* Operators */
     int op_val;
@@ -96,6 +98,7 @@
 %token REAL_NUM
 %token INT_TYPE
 %token REAL_TYPE
+%token <str> STRING
 
 %token ID
 %token ARRAY
@@ -176,6 +179,7 @@
 %type<expr> expression
 %type<expr> term
 %type<expr> factor
+%type<str> string_literal
 %type<op_val> sign
 
 /* Rules to extract union values */
@@ -215,6 +219,10 @@ int_num
 
 real_num
     : REAL_NUM {$$ = yylval.f_val;}
+    ;
+
+string_literal
+    : STRING {$$ = yylval.str;}
     ;
 
 relop
@@ -540,9 +548,17 @@ factor
         {
             $$ = mk_inum(line_num, $1);
         }
+    | string
+        {
+            $$ = mk_string(line_num, $1);
+        }
     | real_num
         {
             $$ = mk_rnum(line_num, $1);
+        }
+    | string_literal
+        {
+            $$ = mk_string(line_num, $1);
         }
     | sign factor
         {

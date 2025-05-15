@@ -12,9 +12,6 @@
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR};
 
-enum ExprType{EXPR_RELOP, EXPR_SIGN_TERM, EXPR_ADDOP, EXPR_MULOP,
-    EXPR_VAR_ID, EXPR_ARRAY_ACCESS, EXPR_FUNCTION_CALL, EXPR_INUM, EXPR_RNUM};
-
 /* A statement subtree */
 struct Statement
 {
@@ -70,11 +67,25 @@ struct Statement
     } stmt_data;
 };
 
+/* Expression types */
+enum ExprType {
+    EXPR_RELOP,
+    EXPR_SIGN_TERM,
+    EXPR_ADDOP,
+    EXPR_MULOP,
+    EXPR_VAR_ID,
+    EXPR_ARRAY_ACCESS,
+    EXPR_FUNCTION_CALL,
+    EXPR_INUM,
+    EXPR_RNUM,
+    EXPR_STRING
+};
+
 /* An expression subtree */
 struct Expression
 {
     int line_num;
-    int type;
+    enum ExprType type;
     union expr_data
     {
         /* Relational expression */
@@ -130,6 +141,9 @@ struct Expression
 
         /* Real number */
         float r_num;
+
+        /* String literal */
+        char *string;
     } expr_data;
 };
 

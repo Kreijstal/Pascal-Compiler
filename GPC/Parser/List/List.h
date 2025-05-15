@@ -49,4 +49,7 @@ void DestroyList(ListNode_t *head_node);
 
 void PrintList(ListNode_t *head_node, FILE *f, int num_indent);
 
+/* Returns the length of the list */
+int ListLength(ListNode_t *head_node);
+
 #endif

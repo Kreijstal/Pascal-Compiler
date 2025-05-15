@@ -124,13 +124,12 @@ void codegen_function_header(char *func_name, FILE *o_file)
 {
     /*
         .globl	<func_name>
-    	.type	<func_name>, @function
         <func_name>:
             pushq   %rbp
             movq    %rsp, %rbp
     */
 
-    fprintf(o_file, ".globl\t%s\n.type\t%s, @function\n", func_name, func_name);
+    fprintf(o_file, ".globl\t%s\n", func_name);
     fprintf(o_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
 
     return;
@@ -143,11 +142,9 @@ void codegen_function_footer(char *func_name, FILE *o_file)
         nop
         leave
         ret
-        .size	<func_name>, .-<func_name>
     */
 
     fprintf(o_file, "\tnop\n\tleave\n\tret\n");
-    fprintf(o_file, "\t.size\t%s, .-%s\n", func_name, func_name);
 
     return;
 }
@@ -186,37 +183,31 @@ void codegen(Tree_t *tree, char *input_file_name, char *output_file_name)
     return;
 }
 
-/* Generates standard gcc headers and labels for printf and scanf */
+/* Generates Windows-compatible headers and labels for printf */
 void codegen_program_header(char *fname, FILE *o_file)
 {
     /*
         .file	"<FILE_NAME>"
-        .section	.rodata
+        .section	.rdata,"dr"
         .LC0:
-            .string "%d\n"
-            .text
-        .LC1:
-            .string "%d"
+            .ascii "%d\12\0"
             .text
     */
 
-    fprintf(o_file, "\t.file\t\"%s\"\n\t.section\t.rodata\n", fname);
-    fprintf(o_file, "\t.LC0:\n\t\t.string\t\"%%d\\n\"\n\t\t.text\n");
-    fprintf(o_file, "\t.LC1:\n\t\t.string\t\"%%d\"\n\t\t.text\n");
+    fprintf(o_file, "\t.file\t\"%s\"\n", fname);
+    fprintf(o_file, "\t.extern printf\n");
+    fprintf(o_file, "\t.text\n");
     return;
 }
 
-/* Generates the footer of the whole program */
-/* TODO: Fix footer to reflect true gcc and os type */
+/* Generates Windows-compatible program footer */
 void codegen_program_footer(FILE *o_file)
 {
     /*
-        .ident	"<Identifications>"
-    	.section	.note.GNU-stack,"",@progbits
+        .ident	"GPC: 0.0.0"
     */
 
     fprintf(o_file, ".ident\t\"GPC: 0.0.0\"\n");
-    fprintf(o_file, ".section\t.note.GNU-stack,\"\",@progbits\n");
 }
 
 /* Generates main which calls our program */
@@ -230,11 +221,15 @@ void codegen_main(char *prgm_name, FILE *o_file)
             popq    %rbp
             ret
     */
+    fprintf(o_file, "\t.section\t.text\n");
+    fprintf(o_file, "\t.globl\tmain\n");
     codegen_function_header("main", o_file);
-
-    fprintf(o_file, "\tmovl\t$0, %%eax\n\tcall\t%s\n\tmovl\t$0, %%eax\n", prgm_name);
-    fprintf(o_file, "\tpopq\t%%rbp\n\tret\n");
-    fprintf(o_file, "\t.size\t%s, .-%s\n", "main", "main");
+    fprintf(o_file, "\tsubq\t$32, %%rsp\n");  // Allocate stack space (32 bytes for shadow space)
+    fprintf(o_file, "\tcall\t%s\n", prgm_name);
+    // Windows-compatible exit
+    fprintf(o_file, "\txor\t%%ecx, %%ecx\n"); // exit code 0
+    fprintf(o_file, "\tcall\texit\n");         // call exit function
+    codegen_function_footer("main", o_file);
 }
 
 /* Generates code to allocate needed stack space */
@@ -515,6 +510,254 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     return inst_list;
 }
 
+/* Code generation for expressions */
+ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o_file)
+{
+    assert(expr != NULL);
+    expr_node_t *expr_tree = NULL;
+    
+    fprintf(stderr, "DEBUG: Generating code for expression type %d\n", expr->type);
+    
+    switch(expr->type) {
+        case EXPR_VAR_ID:
+            fprintf(stderr, "DEBUG: Processing variable ID expression\n");
+            expr_tree = build_expr_tree(expr);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            free_expr_tree(expr_tree);
+            return inst_list;
+        case EXPR_INUM:
+            fprintf(stderr, "DEBUG: Processing integer constant expression\n");
+            expr_tree = build_expr_tree(expr);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            free_expr_tree(expr_tree);
+            return inst_list;
+        case EXPR_RELOP:
+            fprintf(stderr, "DEBUG: Processing relational operator expression\n");
+            return codegen_simple_relop(expr, inst_list, o_file, NULL);
+        default:
+            fprintf(stderr, "ERROR: Unsupported expression type %d\n", expr->type);
+            exit(1);
+    }
+}
+
+int write_label_counter = 1;
+
+/* Code generation for write() builtin - handles multiple args in single printf */
+ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+{
+    char buffer[100];
+    int curr_label = write_label_counter++;
+    ListNode_t *cur_arg = args;
+    int arg_count = 0;
+    char format_str[200] = "";
+    
+    fprintf(stderr, "DEBUG: Generating write with %d args\n", args ? ListLength(args) : 0);
+    fprintf(stderr, "DEBUG: Format string before processing: '%s'\n", format_str);
+    
+    /* First pass: build format string and generate code for args */
+    while(cur_arg != NULL) {
+        struct Expression *expr = (struct Expression *)cur_arg->cur;
+        
+        if(expr->type == EXPR_STRING) {
+            /* Handle string arguments by adding %s to format */
+            strcat(format_str, "%s");
+            
+            /* Generate code to push string address */
+            snprintf(buffer, 100, "\tleaq\t.LC%d(%%rip), %%rax\n", curr_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, 100, "\tpushq\t%%rax\n");
+            inst_list = add_inst(inst_list, buffer);
+            arg_count++;
+            
+            /* Add string to .rodata */
+            snprintf(buffer, 100, "\t.section\t.rodata\n.LC%d:\n\t.string \"%s\"\n\t.text\n",
+                    curr_label++, expr->expr_data.string);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if(expr->type == EXPR_INUM) {
+            /* Handle all integers with %d */
+            strcat(format_str, "%d");
+            
+            /* Generate code to evaluate expression */
+            expr_node_t *expr_tree = build_expr_tree(expr);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            free_expr_tree(expr_tree);
+            
+            /* Save register to stack to preserve for printf */
+            Register_t *top_reg = front_reg_stack(get_reg_stack());
+            snprintf(buffer, 100, "\tpushq\t%%%s\n", top_reg->bit_64+1); // Skip first % in register name
+            inst_list = add_inst(inst_list, buffer);
+            arg_count++;
+        }
+        
+        cur_arg = cur_arg->next;
+    }
+    
+    /* Add format string to .rodata */
+    /* Ensure format string ends with newline and is properly escaped */
+    char escaped_str[200] = "";
+    for(int i = 0; format_str[i]; i++) {
+        if(format_str[i] == '\n') {
+            strcat(escaped_str, "\\n");
+        } else if(format_str[i] == '\"') {
+            strcat(escaped_str, "\\\"");
+        } else {
+            strncat(escaped_str, &format_str[i], 1);
+        }
+    }
+    if (escaped_str[strlen(escaped_str)-1] != '\n') {
+        fprintf(stderr, "DEBUG: Adding newline to format string\n");
+        strcat(escaped_str, "\\n");
+    } else {
+        fprintf(stderr, "DEBUG: Format string already ends with newline\n");
+    }
+    
+    snprintf(buffer, 100, "\t.section\t.rodata\n.LC%d:\n\t.string \"%s\\0\"\n\t.text\n",
+            curr_label, escaped_str);
+    inst_list = add_inst(inst_list, buffer);
+    
+    /* Setup printf call - Windows x64 calling convention */
+    snprintf(buffer, 100, "\tleaq\t.LC%d(%%rip), %%rcx\n", curr_label);
+    inst_list = add_inst(inst_list, buffer);
+    
+    /* Pop arguments into correct registers (rcx, rdx, r8, r9) */
+    for(int i = arg_count; i > 0; i--) {
+        fprintf(stderr, "DEBUG: Processing argument %d\n", i);
+        const char *reg = (i == 1) ? "%%rdx" :
+                         (i == 2) ? "%%r8" :
+                         (i == 3) ? "%%r9" : "%%rax";
+        fprintf(stderr, "DEBUG: Using register %s for argument %d\n", reg, i);
+        snprintf(buffer, 100, "\tpopq\t%s\n", reg+1); // Skip first % in register name
+        inst_list = add_inst(inst_list, buffer);
+    }
+    
+    /* Windows x64 calling convention requires:
+     * - 32 bytes shadow space
+     * - Stack 16-byte aligned
+     */
+    fprintf(stderr, "DEBUG: Allocating shadow space\n");
+    snprintf(buffer, 100, "\tsubq\t$32, %%rsp\n");
+    inst_list = add_inst(inst_list, buffer);
+
+    fprintf(stderr, "DEBUG: Final format string: '%s'\n", escaped_str);
+    snprintf(buffer, 100, "\tcall\tprintf\n");
+    inst_list = add_inst(inst_list, buffer);
+
+    fprintf(stderr, "DEBUG: Cleaning up shadow space\n");
+    snprintf(buffer, 100, "\taddq\t$32, %%rsp\n");
+    inst_list = add_inst(inst_list, buffer);
+    fprintf(stderr, "DEBUG: Write call generated\n");
+    
+    fprintf(stderr, "DEBUG: Write generated\n");
+    return inst_list;
+}
+
+/* Code generation for writeln() builtin */
+ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+{
+    /* Append newline to format string */
+    if(args != NULL) {
+        /* Find last argument */
+        ListNode_t *last = args;
+        while(last->next != NULL) last = last->next;
+        
+        /* If last arg is string, append newline */
+        if(((struct Expression *)last->cur)->type == EXPR_STRING) {
+            char *str = ((struct Expression *)last->cur)->expr_data.string;
+            char new_str[strlen(str) + 2];
+            strcpy(new_str, str);
+            strcat(new_str, "\n");
+            ((struct Expression *)last->cur)->expr_data.string = strdup(new_str);
+        }
+    }
+    
+    /* Generate write call which will handle everything */
+    return codegen_builtin_write(args, inst_list, o_file);
+}
+
+/* Removed duplicate function definition */
+
+/* Code generation for read() builtin */
+ListNode_t *codegen_builtin_read(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+{
+    fprintf(stderr, "DEBUG: Generating read syscall\n");
+    
+    if(args != NULL) {
+        char buffer[100];
+        expr_node_t *expr_tree = build_expr_tree((struct Expression *)args->cur);
+        inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+        free_expr_tree(expr_tree);
+        
+        Register_t *top_reg = front_reg_stack(get_reg_stack());
+        
+        /* Setup scanf call */
+        snprintf(buffer, 100, "\tleaq\t.LC1(%%rip), %%rdi\n");
+        inst_list = add_inst(inst_list, buffer);
+        
+        StackNode_t *stack_node = find_in_temp(top_reg->bit_64);
+        if(stack_node == NULL) {
+            fprintf(stderr, "ERROR: Could not find stack offset for register %s\n", top_reg->bit_64);
+            exit(1);
+        }
+        snprintf(buffer, 100, "\tleaq\t-%d(%%rbp), %%rsi\n", stack_node->offset);
+        inst_list = add_inst(inst_list, buffer);
+        
+        snprintf(buffer, 100, "\tmovl\t$0, %%eax\n");
+        inst_list = add_inst(inst_list, buffer);
+        
+        snprintf(buffer, 100, "\tcall\t__isoc99_scanf@PLT\n");
+        inst_list = add_inst(inst_list, buffer);
+    }
+    
+    fprintf(stderr, "DEBUG: Read syscall generated\n");
+    return inst_list;
+}
+
+/* Code generation for simple relops */
+ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
+                                FILE *o_file, int *relop_type)
+{
+    assert(expr != NULL);
+    assert(expr->type == EXPR_RELOP);
+    
+    fprintf(stderr, "DEBUG: Generating simple relop\n");
+    
+    *relop_type = expr->expr_data.relop_data.type;
+    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, o_file);
+    inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, o_file);
+    
+    Register_t *left_reg = front_reg_stack(get_reg_stack());
+    Register_t *right_reg = front_reg_stack(get_reg_stack());
+    
+    char buffer[100];
+    snprintf(buffer, 100, "\tcmpq\t%s, %s\n", right_reg->bit_64, left_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    
+    fprintf(stderr, "DEBUG: Simple relop generated\n");
+    return inst_list;
+}
+
+/* Code generation for non-local variable access */
+ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
+{
+    fprintf(stderr, "DEBUG: Generating non-local access for %s\n", var_id);
+    
+    char buffer[100];
+    StackNode_t *var = find_label(var_id);
+    
+    if(var == NULL) {
+        fprintf(stderr, "ERROR: Could not find non-local variable %s\n", var_id);
+        exit(1);
+    }
+    
+    *offset = var->offset;
+    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", NON_LOCAL_REG_64);
+    inst_list = add_inst(inst_list, buffer);
+    
+    fprintf(stderr, "DEBUG: Non-local access generated\n");
+    return inst_list;
+}
+
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
 {
@@ -611,7 +854,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     else if(nonlocal_flag() == 1)
     {
         inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, offset, NON_LOCAL_REG_64);
+        snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, NON_LOCAL_REG_64);
     }
     else
     {
@@ -642,11 +885,21 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FIL
     /* First check for builtins */
     if(strcmp("write", proc_name) == 0)
     {
+        fprintf(stderr, "DEBUG: Generating code for write() builtin\n");
         inst_list = codegen_builtin_write(args_expr, inst_list, o_file);
+        fprintf(stderr, "DEBUG: Finished generating code for write()\n");
+    }
+    else if(strcmp("writeln", proc_name) == 0)
+    {
+        fprintf(stderr, "DEBUG: Generating code for writeln() builtin\n");
+        inst_list = codegen_builtin_writeln(args_expr, inst_list, o_file);
+        fprintf(stderr, "DEBUG: Finished generating code for writeln()\n");
     }
     else if(strcmp("read", proc_name) == 0)
     {
+        fprintf(stderr, "DEBUG: Generating code for read() builtin\n");
         inst_list = codegen_builtin_read(args_expr, inst_list, o_file);
+        fprintf(stderr, "DEBUG: Finished generating code for read()\n");
     }
 
     /* Not builtin */
@@ -861,258 +1114,5 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
 
 /* Performs non-local variable chasing with the appropriate register */
 /* Gives the offset to use on the register */
-ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *label, int *offset)
-{
-    StackScope_t *cur_scope;
-    StackNode_t *cur_node;
-    int found;
-
-    cur_scope = get_cur_scope();
-    assert(cur_scope != NULL);
-    found = 0;
-
-    inst_list = codegen_goto_prev_scope(inst_list, cur_scope, "%rbp");
-    cur_scope = cur_scope->prev_scope;
-
-    while(cur_scope != NULL)
-    {
-        cur_node = stackscope_find_x(cur_scope, label);
-        if(cur_node != NULL)
-        {
-            found = 1;
-            *offset = cur_node->offset;
-            break;
-        }
-
-        cur_node = stackscope_find_z(cur_scope, label);
-        if(cur_node != NULL)
-        {
-            found = 1;
-            *offset = cur_node->offset;
-            break;
-        }
-
-        inst_list = codegen_goto_prev_scope(inst_list, cur_scope, NON_LOCAL_REG_64);
-        cur_scope = cur_scope->prev_scope;
-    }
-
-    assert(found == 1);
-
-    return inst_list;
-}
-
-/* For codegen on a simple_relop */
-ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
-    FILE *o_file, int *type)
-{
-    assert(expr != NULL);
-    assert(expr->type == EXPR_RELOP);
-
-    expr_node_t *expr_tree;
-
-    switch(expr->expr_data.relop_data.type)
-    {
-        case EQ:
-        case NE:
-        case LT:
-        case LE:
-        case GT:
-        case GE:
-            *type = expr->expr_data.relop_data.type;
-            expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
-            free_expr_tree(expr_tree);
-
-            break;
-
-        default:
-            fprintf(stderr, "ERROR: Unrecognized simple_relop in codegen!\n");
-            exit(1);
-
-    }
-
-    return inst_list;
-}
-
-/* Code generation for an expression */
-ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o_file)
-{
-    assert(expr != NULL);
-
-    expr_node_t *expr_tree;
-
-    expr_tree = build_expr_tree(expr);
-
-    #ifdef DEBUG_CODEGEN
-        print_expr_tree(expr_tree, 1, stderr);
-    #endif
-
-    inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
-    free_expr_tree(expr_tree);
-    expr_tree = NULL;
-
-    return inst_list;
-}
-
-/* Write builtin */
-ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
-{
-    assert(args != NULL);
-    assert(args->next == NULL);
-
-    int count;
-    struct Expression *expr;
-    char *arg_reg1, *arg_reg2;
-    char full_buffer[50];
-    // Register_t *register1, *register2;
-    Register_t *top;
-
-    arg_reg1 = get_arg_reg64_num(0);
-    arg_reg2 = get_arg_reg32_num(1);
-
-    // get_register_64bit(get_reg_stack(), arg_reg1, &register1);
-    inst_list = codegen_expr((struct Expression *)args->cur, inst_list, o_file);
-    top = front_reg_stack(get_reg_stack());
-
-    // get_register_32bit(get_reg_stack(), arg_reg2, &register2);
-
-    if(strcmp(top->bit_32, arg_reg2) != 0)
-    {
-        snprintf(full_buffer, 50, "\tmovl\t%s, %s\n", top->bit_32, arg_reg2);
-        inst_list = add_inst(inst_list, full_buffer);
-    }
-
-    snprintf(full_buffer, 50, "\tleaq\t%s, %s\n", PRINTF_REGISTER, arg_reg1);
-    inst_list = add_inst(inst_list, full_buffer);
-
-    codegen_vect_reg(inst_list, 0);
-    snprintf(full_buffer, 50, "\tcall\t%s\n", PRINTF_CALL);
-    inst_list = add_inst(inst_list, full_buffer);
-
-    // push_reg_stack(get_reg_stack(), register1);
-    // push_reg_stack(get_reg_stack(), register2);
-
-    return inst_list;
-}
-
-/* Read builtin */
-/* TODO: Process reading into arrays */
-ListNode_t *codegen_builtin_read(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
-{
-    assert(args != NULL);
-    assert(args->next == NULL);
-
-    StackNode_t *var;
-    struct Expression *expr;
-    char *arg_reg1, *arg_reg2;
-    char full_buffer[50];
-    // Register_t *register1, *register2;
-
-    arg_reg1 = get_arg_reg64_num(0);
-    arg_reg2 = get_arg_reg64_num(1);
-
-    // get_register_64bit(get_reg_stack(), arg_reg1, &register1);
-    // get_register_64bit(get_reg_stack(), arg_reg2, &register2);
-
-    /* Extract the single variable to be read into */
-    expr = (struct Expression *)args->cur;
-    assert(expr != NULL);
-    assert(expr->type == EXPR_VAR_ID);
-
-    var = find_label(expr->expr_data.id);
-    snprintf(full_buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var->offset, arg_reg2);
-    inst_list = add_inst(inst_list, full_buffer);
-
-    snprintf(full_buffer, 50, "\tleaq\t%s, %s\n", SCANF_REGISTER, arg_reg1);
-    inst_list = add_inst(inst_list, full_buffer);
-
-    codegen_vect_reg(inst_list, 0);
-    snprintf(full_buffer, 50, "\tcall\t%s\n", SCANF_CALL);
-    inst_list = add_inst(inst_list, full_buffer);
-
-    // push_reg_stack(get_reg_stack(), register1);
-    // push_reg_stack(get_reg_stack(), register2);
-
-    return inst_list;
-}
-
-/* TODO: Functions and procedures only handle max 2 arguments */
-ListNode_t *codegen_args(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
-{
-    int count;
-    struct Expression *expr;
-    char *arg_reg;
-    char full_buffer[50];
-    Register_t *top, *arg;
-
-    count = 0;
-    while(args != NULL)
-    {
-        if(count >= MAX_ARGS)
-        {
-            fprintf(stderr, "ERROR: Can only codegen for %d arguments!\n", MAX_ARGS);
-            exit(1);
-        }
-
-        expr = (struct Expression *)args->cur;
-
-        codegen_expr(expr, inst_list, o_file);
-
-        arg_reg = get_arg_reg32_num(count);
-        assert(arg_reg != NULL);
-
-        top = front_reg_stack(get_reg_stack());
-
-        if(strcmp(top->bit_32, arg_reg) != 0)
-        {
-            snprintf(full_buffer, 50, "\tmovl\t%s, %s\n", top->bit_32, arg_reg);
-            inst_list = add_inst(inst_list, full_buffer);
-        }
-
-        args = args->next;
-        ++count;
-    }
-
-    return inst_list;
-}
-
-
-
-/* (DEPRECATED) */
-ListNode_t *codegen_expr_varid(struct Expression *expr, ListNode_t *inst_list, FILE *o_file)
-{
-    assert(expr != NULL);
-    assert(expr->type == EXPR_VAR_ID);
-
-    char full_buffer[50];
-    Register_t *reg;
-    StackNode_t *var;
-
-    var = find_label(expr->expr_data.id);
-
-    reg = front_reg_stack(get_reg_stack());
-
-    snprintf(full_buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", var->offset, reg->bit_32);
-
-    /*fprintf(stderr, "%s\n", full_buffer);*/
-
-    return add_inst(inst_list, full_buffer);
-}
-
-/* (DEPRECATED) */
-ListNode_t *codegen_expr_inum(struct Expression *expr, ListNode_t *inst_list, FILE *o_file)
-{
-    assert(expr != NULL);
-    assert(expr->type == EXPR_INUM);
-
-    char full_buffer[50];
-    Register_t *reg;
-
-    reg = front_reg_stack(get_reg_stack());
-
-    snprintf(full_buffer, 50, "\tmovl\t$%d, %s\n", expr->expr_data.i_num, reg->bit_32);
-
-    /*fprintf(stderr, "%s\n", full_buffer);*/
-
-    return add_inst(inst_list, full_buffer);
-}
+/* Removed duplicate function definition */
+/* Removed malformed function fragments */

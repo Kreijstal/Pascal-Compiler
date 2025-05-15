@@ -252,6 +252,10 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
 
     inst_list = gencode_leaf_var(expr, inst_list, buf_leaf, 30);
 
+#ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: Loading value %s into register %s\n", buf_leaf, reg->bit_32);
+#endif
+
     snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, reg->bit_32);
 
     return add_inst(inst_list, buffer);

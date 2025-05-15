@@ -4,10 +4,8 @@
     #include <stdlib.h>
     #include "../ErrVars.h"
     #include "../ParseTree/tree.h"
-    #include "../ParseTree/tree_types.h"
     #include "../List/List.h"
     #include "Grammar.tab.h"
-    #include "../ParseTree/tree.h"
 %}
 
 whitespace [ \t]+
@@ -15,6 +13,7 @@ integer  [0-9]+
 real [0-9]*[.][0-9]+
 id   [A-Za-z][A-Za-z0-9]*
 comment [(][*][^*]*[*]+([^*)][^*]*[*]+)*[)]
+string \"([^\"\\]|\\.)*\"
 
 %%
 
@@ -38,6 +37,22 @@ comment [(][*][^*]*[*]+([^*)][^*]*[*]+)*[)]
         fprintf(stderr, "\n");
     #endif
     ++line_num;
+}
+
+{string} {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[STRING] %s\n", yytext);
+    #endif
+    
+    /* Remove surrounding quotes */
+    char *str = malloc(strlen(yytext) - 1);
+    strncpy(str, yytext + 1, strlen(yytext) - 2);
+    str[strlen(yytext) - 2] = '\0';
+    yylval.str = str;
+    return STRING;
+    
+    yylval.str = str;
+    return STRING;
 }
 
 <<EOF>> {
@@ -298,6 +313,38 @@ comment [(][*][^*]*[*]+([^*)][^*]*[*]+)*[)]
     #endif
     yylval.id = strdup(yytext);
     return ID;
+}
+
+{string} {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[STRING:%s] ", yytext);
+    #endif
+    /* Remove surrounding quotes and handle escape sequences */
+    char *str = strdup(yytext+1); // Skip opening quote
+    str[strlen(str)-1] = '\0'; // Remove closing quote
+    
+    /* Handle escape sequences */
+    char *src = str;
+    char *dst = str;
+    while(*src) {
+        if(*src == '\\') {
+            src++;
+            switch(*src) {
+                case 'n': *dst++ = '\n'; break;
+                case 't': *dst++ = '\t'; break;
+                case '\\': *dst++ = '\\'; break;
+                case '"': *dst++ = '"'; break;
+                default: *dst++ = *src; break;
+            }
+            src++;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+    
+    yylval.str = str;
+    return STRING;
 }
 
 .   {
