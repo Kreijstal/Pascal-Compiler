@@ -39,21 +39,6 @@ string \"([^\"\\]|\\.)*\"
     ++line_num;
 }
 
-{string} {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[STRING] %s\n", yytext);
-    #endif
-    
-    /* Remove surrounding quotes */
-    char *str = malloc(strlen(yytext) - 1);
-    strncpy(str, yytext + 1, strlen(yytext) - 2);
-    str[strlen(yytext) - 2] = '\0';
-    yylval.str = str;
-    return STRING;
-    
-    yylval.str = str;
-    return STRING;
-}
 
 <<EOF>> {
     #ifdef DEBUG_FLEX

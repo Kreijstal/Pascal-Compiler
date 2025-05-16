@@ -148,6 +148,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
 
 struct Expression *mk_inum(int line_num, int i_num);
 struct Expression *mk_rnum(int line_num, float r_num);
+struct Expression *mk_string(int line_num, char *str);
 
 struct Expression *mk_string(int line_num, char *string);
 

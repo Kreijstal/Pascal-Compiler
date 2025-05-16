@@ -40,11 +40,15 @@ int main(int argc, char **argv)
         set_flags(argv + required_args, args_left);
     }
 
+    fprintf(stderr, "DEBUG: Starting parsing of file: %s\n", argv[1]);
     parse_tree = ParsePascal(argv[1]);
     if(parse_tree != NULL)
     {
+        fprintf(stderr, "DEBUG: Parsing completed successfully\n");
         fprintf(stderr, "Generating code to file: %s\n", argv[2]);
+        fprintf(stderr, "DEBUG: Starting code generation\n");
         codegen(parse_tree, argv[1], argv[2]);
+        fprintf(stderr, "DEBUG: Code generation completed\n");
 
         destroy_tree(parse_tree);
         parse_tree = NULL;

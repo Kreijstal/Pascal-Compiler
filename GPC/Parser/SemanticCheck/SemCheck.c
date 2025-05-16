@@ -92,9 +92,12 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /**** WRITE PROCEDURE ****/
     id = strdup("write");
 
-    /* Only arg is a variable to read into */
-    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
+    /* Accept single argument of any type (variable args handled in semcheck_proccall) */
+    arg_ids = CreateListNode(strdup("value"), LIST_STRING);
     args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
+
+    AddBuiltinProc(symtab, id, args);
+    args->next->next = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
 
     AddBuiltinProc(symtab, id, args);
 }
@@ -300,7 +303,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Greater than 0 signifies an error */
     if(func_return > 0)
     {
-        fprintf(stderr, "On line %d: redeclaration of name %s!\n",
+        fprintf(stderr, "AAAAAAAAOn line %d: redeclaration of name %s!\n",
             subprogram->line_num, subprogram->tree_data.subprogram_data.id);
 
         return_val += func_return;

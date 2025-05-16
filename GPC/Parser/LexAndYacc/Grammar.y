@@ -2,6 +2,7 @@
 /* If byacc panics from conflicts, look in y.output */
 
 %{
+    #define YYDEBUG 1
     #include <stdio.h>
     #include <stdlib.h>
     #include "../ErrVars.h"
@@ -177,9 +178,9 @@
 
 %type<list> expression_list
 %type<expr> expression
+%type<str> string_literal
 %type<expr> term
 %type<expr> factor
-%type<str> string_literal
 %type<op_val> sign
 
 /* Rules to extract union values */
@@ -381,6 +382,10 @@ statement_list
         {
             $$ = PushListNodeBack($1, CreateListNode($3, LIST_STMT));
         }
+    | statement_list ';'  /* Allow optional trailing semicolon */
+        {
+            $$ = $1;
+        }
     ;
 
 statement
@@ -532,7 +537,13 @@ term
     ;
 
 factor
-    : ident
+    : string_literal
+        {
+            printf("DEBUG: Creating string literal expression at line %d\n", line_num);
+            $$ = mk_string(line_num, $1);
+            printf("DEBUG: Created string literal: %s\n", $1);
+        }
+    | ident
         {
             $$ = mk_varid($1.line_num, $1.id);
         }
@@ -547,10 +558,6 @@ factor
     | int_num
         {
             $$ = mk_inum(line_num, $1);
-        }
-    | string
-        {
-            $$ = mk_string(line_num, $1);
         }
     | real_num
         {
@@ -584,14 +591,43 @@ sign
 
 void yyerror(char *s)
 {
-    /*fprintf(stderr, "Error on line %d:%d\n", line_num, col_num);*/
+    FILE *fp = NULL;
+    char line[256] = {0};
+    extern int yychar; // Current lookahead token
+    
     if(file_to_parse != NULL)
     {
-        fprintf(stderr, "Error parsing %s:\n", file_to_parse);
-        fprintf(stderr, "On line %d:\n", line_num);
+        fprintf(stderr, "\nError in %s, line %d:\n", file_to_parse, line_num);
+        fp = fopen(file_to_parse, "r");
     }
     else
-        fprintf(stderr, "Error on line %d:\n", line_num);
+    {
+        fprintf(stderr, "\nError on line %d:\n", line_num);
+    }
 
-    fprintf(stderr, "%s\n", s);
+    // Print the problematic line if possible
+    if(fp != NULL)
+    {
+        int current_line = 1;
+        while(fgets(line, sizeof(line), fp) != NULL && current_line < line_num)
+        {
+            current_line++;
+        }
+        
+        if(current_line == line_num)
+        {
+            fprintf(stderr, ">>> %s", line);
+            
+            // Add specific error hints
+            if(yychar == END) {
+                fprintf(stderr, "Possible missing semicolon before 'end'\n");
+            }
+        }
+            
+        fclose(fp);
+    }
+
+    fprintf(stderr, "Syntax error: %s\n", s);
+    fprintf(stderr, "Current token: %d\n", yychar);
 }
+

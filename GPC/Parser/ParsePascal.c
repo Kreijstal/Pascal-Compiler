@@ -38,6 +38,8 @@ Tree_t *ParsePascal(char *file)
         file_to_parse = NULL;
 
     InitParser();
+    extern int yydebug;
+    yydebug = 1;
     yyparse();
 
     #ifdef DEBUG_BISON
