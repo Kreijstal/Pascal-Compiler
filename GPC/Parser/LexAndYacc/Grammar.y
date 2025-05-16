@@ -382,10 +382,15 @@ parameter_list
     ;
 
 compound_statement
-    : BBEGIN optional_statements END
+    : BBEGIN optional_statements optional_trailing_semicolon END
         {
             $$ = mk_compoundstatement(line_num, $2);
         }
+    ;
+
+optional_trailing_semicolon
+    : ';'
+    | /* empty */
     ;
 
 optional_statements
