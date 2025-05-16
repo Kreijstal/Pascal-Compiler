@@ -4,6 +4,8 @@
 %{
     #include <stdio.h>
     #include <stdlib.h>
+    #include <string.h> // For strstr, strncpy, strcspn
+    #include <ctype.h>  // For isprint
     #include "../ErrVars.h"
     void yyerror(char *s); /* Forward declaration */
     #include "../ParseTree/tree.h"
@@ -11,7 +13,9 @@
     #include "Grammar.tab.h"
 
     /*extern FILE *yyin;*/
-    extern int yylex();
+   extern int yylex(void); // Standard declaration for yylex
+    extern char *yytext;    // Declare Flex's global variable
+    extern int yyleng;   
 %}
 
 %union{
@@ -582,16 +586,66 @@ sign
 
 %%
 
-void yyerror(char *s)
-{
-    /*fprintf(stderr, "Error on line %d:%d\n", line_num, col_num);*/
-    if(file_to_parse != NULL)
-    {
-        fprintf(stderr, "Error parsing %s:\n", file_to_parse);
-        fprintf(stderr, "On line %d:\n", line_num);
-    }
-    else
-        fprintf(stderr, "Error on line %d:\n", line_num);
+void yyerror(char *s) {
+    // Your debug line (now yytext and yyleng should be known)
+    fprintf(stderr, "Debug yyerror: s = \"%s\", yytext = \"%s\", yyleng = %d, line_num = %d, col_num = %d, file_to_parse = %s\n",
+        s, (yytext ? yytext : "null"), yyleng, line_num, col_num, (file_to_parse ? file_to_parse : "null"));
 
-    fprintf(stderr, "%s\n", s);
+    fprintf(stderr, "Error");
+    if (file_to_parse != NULL && *file_to_parse != '\0') {
+        fprintf(stderr, " in '%s'", file_to_parse);
+    }
+    
+    int start_col = col_num > yyleng ? col_num - yyleng + 1 : 1; 
+    
+    fprintf(stderr, " (line %d, column %d)", line_num, start_col);
+    
+    fprintf(stderr, ": %s\n", s);
+
+    if (yytext != NULL && *yytext != '\0') {
+        char sanitized_yytext[100];
+        strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
+        sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
+        
+        for (char *p = sanitized_yytext; *p; ++p) {
+            if (!isprint((unsigned char)*p) && *p != '\n' && *p != '\t') {
+                *p = '?';
+            }
+        }
+        
+        if (strstr(s, sanitized_yytext) == NULL) {
+            fprintf(stderr, "  Unexpected token: \"%s\"\n", sanitized_yytext);
+        }
+    }
+    
+    if (file_to_parse != NULL) {
+        FILE* f_ctx = fopen(file_to_parse, "r"); // Renamed to f_ctx to avoid conflict if 'f' is used elsewhere
+        if (f_ctx) {
+            char line_buf[256]; // Renamed to line_buf
+            int current_line = 1;
+            
+            while (current_line < line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
+                current_line++;
+            }
+            
+            if (current_line == line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
+                line_buf[strcspn(line_buf, "\n")] = 0; 
+                
+                fprintf(stderr, "  Context: %s\n", line_buf);
+                
+                if (start_col > 0) {
+                    fprintf(stderr, "           "); // 11 spaces for "  Context: "
+                    for (int i = 1; i < start_col; i++) {
+                        fprintf(stderr, " ");
+                    }
+                    fprintf(stderr, "^\n");
+                }
+            }
+            fclose(f_ctx);
+        } else {
+            // Optional: print error if context file can't be opened
+            // fprintf(stderr, "  Warning: Could not open '%s' to show context.\n", file_to_parse);
+        }
+    }
+    fprintf(stderr, "\n");
 }
