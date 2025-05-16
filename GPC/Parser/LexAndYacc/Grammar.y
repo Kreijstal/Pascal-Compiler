@@ -158,6 +158,8 @@ extern int yyleng;
 %type<list> declarations
 %type<list> subprogram_declarations
 %type<stmt> compound_statement
+%type<list> statement_seq_opt  /* New: For zero or more statements */
+%type<list> statement_seq      /* New: For one or more statements */
 
 %type<type_s> type
 %type<i_val> standard_type
@@ -167,8 +169,6 @@ extern int yyleng;
 %type<list> arguments
 %type<list> parameter_list
 
-%type<list> optional_statements
-%type<list> statement_list
 %type<stmt> statement
 %type<stmt> variable_assignment
 %type<stmt> procedure_statement
@@ -382,31 +382,26 @@ parameter_list
     ;
 
 compound_statement
-    : BBEGIN optional_statements optional_trailing_semicolon END
+    : BBEGIN statement_seq_opt END
         {
             $$ = mk_compoundstatement(line_num, $2);
         }
     ;
 
-optional_trailing_semicolon
-    : ';'
-    | /* empty */
+statement_seq_opt  /* Zero or more statements, handles optional trailing semicolon for the sequence */
+    : /* empty */
+        { $$ = NULL; }
+    | statement_seq
+        { $$ = $1; }
+    | statement_seq ';' /* A sequence of statements can end with a semicolon */
+        { $$ = $1; } /* The list itself is $1, semicolon is consumed */
     ;
 
-optional_statements
-    : statement_list {$$ = $1;}
-    | /* empty */ {$$ = NULL;}
-    ;
-
-statement_list
+statement_seq      /* One or more statements, separated by semicolons */
     : statement
-        {
-            $$ = CreateListNode($1, LIST_STMT);
-        }
-    | statement_list ';' statement
-        {
-            $$ = PushListNodeBack($1, CreateListNode($3, LIST_STMT));
-        }
+        { $$ = CreateListNode($1, LIST_STMT); }
+    | statement_seq ';' statement
+        { $$ = PushListNodeBack($1, CreateListNode($3, LIST_STMT)); }
     ;
 
 statement
