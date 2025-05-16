@@ -5,15 +5,20 @@
     #include <stdio.h>
     #include <stdlib.h>
     #include "../ErrVars.h"
+#include <string.h>
+#include <ctype.h>
     void yyerror(char *s); /* Forward declaration */
     #include "../ParseTree/tree.h"
     #include "../List/List.h"
-    #include "Grammar.tab.h"
+extern int yylex(void);
+extern char *yytext;
+extern int yyleng;
 
     /*extern FILE *yyin;*/
     extern int yylex();
 %}
 
+%define parse.error verbose
 %union{
     /* Numbers */
     int i_val;
@@ -578,16 +583,64 @@ sign
 
 %%
 
-void yyerror(char *s)
-{
-    /*fprintf(stderr, "Error on line %d:%d\n", line_num, col_num);*/
-    if(file_to_parse != NULL)
-    {
-        fprintf(stderr, "Error parsing %s:\n", file_to_parse);
-        fprintf(stderr, "On line %d:\n", line_num);
+// In Grammar.y's C code section (after %%)
+void yyerror(char *s) { // s is the message from Bison
+    fprintf(stderr, "Error");
+    if (file_to_parse != NULL && *file_to_parse != '\0') {
+        fprintf(stderr, " in '%s'", file_to_parse);
     }
-    else
-        fprintf(stderr, "Error on line %d:\n", line_num);
 
-    fprintf(stderr, "%s\n", s);
+    // Ensure yytext and yyleng are declared extern in %{...%}
+    int current_yyleng = (yytext ? yyleng : 0); // Use yyleng if yytext is valid
+    int start_col = col_num > current_yyleng ? col_num - current_yyleng + 1 : 1;
+
+    fprintf(stderr, " (line %d, column %d)", line_num, start_col);
+
+    // Bison's error message 's'. With %error-verbose, this might be:
+    // "syntax error, unexpected T_SEMICOLON, expecting T_LPAREN or T_IDENTIFIER"
+    // or on older Bisons / simpler errors, just "syntax error"
+    fprintf(stderr, ": %s\n", s);
+
+    // If 's' is generic, but we have yytext (the unexpected token)
+    if (yytext != NULL && *yytext != '\0') {
+        char sanitized_yytext[100];
+        strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
+        sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
+        for (char *p = sanitized_yytext; *p; ++p) {
+            if (!isprint((unsigned char)*p) && *p != '\n' && *p != '\t') *p = '?';
+        }
+        // Only print if 's' doesn't already prominently feature the unexpected token.
+        // This check is a bit heuristic.
+        if (strstr(s, "unexpected") == NULL || strstr(s, sanitized_yytext) == NULL) {
+             fprintf(stderr, "  Unexpected token: \"%s\"\n", sanitized_yytext);
+        }
+    }
+    
+    // No direct way to get a list of expected tokens from yyparse's default yyerror(char *s)
+    // beyond what 's' provides with %error-verbose.
+    // The 'expecting ...' part *is* what Bison puts in 's'.
+    // If it's not there, Bison didn't generate it for that specific error condition.
+
+    // Context line printing
+    if (file_to_parse != NULL) {
+        FILE* f_ctx = fopen(file_to_parse, "r");
+        if (f_ctx) {
+            char line_buf[256];
+            int current_line = 1;
+            while (current_line < line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
+                current_line++;
+            }
+            if (current_line == line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
+                line_buf[strcspn(line_buf, "\n\r")] = 0; 
+                fprintf(stderr, "  Context: %s\n", line_buf);
+                if (start_col > 0) {
+                    fprintf(stderr, "           "); 
+                    for (int i = 1; i < start_col; i++) fprintf(stderr, " ");
+                    fprintf(stderr, "^\n");
+                }
+            }
+            fclose(f_ctx);
+        }
+    }
+    fprintf(stderr, "\n");
 }
