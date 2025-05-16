@@ -153,6 +153,7 @@ extern int yyleng;
 
 /* TYPES FOR THE GRAMMAR */
 %type<ident_list> identifier_list
+%type<list> optional_program_parameters
 %type<list> declarations
 %type<list> subprogram_declarations
 %type<stmt> compound_statement
@@ -197,15 +198,29 @@ extern int yyleng;
 
 %%
 
+optional_program_parameters
+    : '(' identifier_list ')'
+        { $$ = $2.list; }
+    | /* empty */
+        { $$ = NULL; }
+    ;
+
 program
-    : PROGRAM ident '(' identifier_list ')' ';'
+    : PROGRAM ident optional_program_parameters ';'
      declarations
      subprogram_declarations
      compound_statement
      '.'
      END_OF_FILE
      {
-         parse_tree = mk_program($2.line_num, $2.id, $4.list, $7, $8, $9);
+         // $1: PROGRAM token
+         // $2: ident (type 'ident', provides $2.id and $2.line_num)
+         // $3: optional_program_parameters (type 'list', provides ListNode_t* for args)
+         // $4: ';' token
+         // $5: declarations
+         // $6: subprogram_declarations
+         // $7: compound_statement
+         parse_tree = mk_program($2.line_num, $2.id, $3, $5, $6, $7);
          return -1;
      }
     ;
