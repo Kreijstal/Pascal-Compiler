@@ -20,6 +20,9 @@
     /* Numbers */
     int i_val;
     float f_val;
+}
+
+%error-verbose
 
     /* Strings */
     char *str;
