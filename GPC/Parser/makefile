@@ -7,7 +7,12 @@ LIBS = -ly -ll -lm
 GRAMMAR_DIR = LexAndYacc
 TREE_DIR = ParseTree
 
-CCFLAGS = $(FLAGS) $(OPTIMIZE)
+# Base CCFLAGS without debug flags
+CCFLAGS_BASE = $(FLAGS) $(OPTIMIZE)
+# Extra flags that can be passed from command line
+EXTRA_CCFLAGS ?=
+# Final CCFLAGS used in compilation
+CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
 GPC_OBJS = ParsePascal.o
@@ -21,9 +26,17 @@ release:
 	cd LexAndYacc && $(MAKE)
 	$(MAKE) parser
 
-debug_flexbison: debugFlexBison
-debug_bison: bisonDebug parser
-debug_flex: flexDebug parser
+debug_flexbison:
+	cd $(GRAMMAR_DIR) && $(MAKE) flexDebug
+	$(MAKE) parser EXTRA_CCFLAGS="-DDEBUG_BISON"
+
+debug_bison:
+	cd $(GRAMMAR_DIR) && $(MAKE)
+	$(MAKE) parser EXTRA_CCFLAGS="-DDEBUG_BISON"
+
+debug_flex:
+	cd $(GRAMMAR_DIR) && $(MAKE) flexDebug
+	$(MAKE) parser EXTRA_CCFLAGS=""
 
 
 ############ MAKING OBJS #############
@@ -61,16 +74,8 @@ $(TREE_DIR)/tree.o:
 lexAndYacc:
 	cd $(GRAMMAR_DIR) && $(MAKE)
 
-debugFlexBison:
-	cd $(GRAMMAR_DIR) && $(MAKE) flexDebug
-	CCFLAGS += -DDEBUG_BISON
 
-bisonDebug:
-	cd $(GRAMMAR_DIR) && $(MAKE)
-	CCFLAGS += -DDEBUG_BISON
 
-flexDebug:
-	cd $(GRAMMAR_DIR) && $(MAKE) flexDebug
 
 
 

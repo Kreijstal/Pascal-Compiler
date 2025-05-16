@@ -9,7 +9,12 @@ TREE_DIR = Parser/ParseTree
 CODEGEN_DIR = CodeGenerator
 OPTIMIZER_DIR = Optimizer
 
-CCFLAGS = $(FLAGS) $(OPTIMIZE)
+# Base CCFLAGS without debug flags
+CCFLAGS_BASE = $(FLAGS) $(OPTIMIZE)
+# Extra flags that can be passed from command line
+EXTRA_CCFLAGS ?=
+# Final CCFLAGS used in compilation
+CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
 GPC_OBJS = main.o flags.o
@@ -57,13 +62,13 @@ codegen:
 	cd $(CODEGEN_DIR) && $(MAKE)
 
 debugFlexBison:
-	cd $(PARSER_DIR) && $(MAKE) debug_flexbison
+	cd $(PARSER_DIR) && $(MAKE) debug_flexbison EXTRA_CCFLAGS="-DDEBUG_BISON"
 
 flexDebug:
-	cd $(PARSER_DIR) && $(MAKE) debug_flex
+	cd $(PARSER_DIR) && $(MAKE) debug_flex EXTRA_CCFLAGS=""
 
 bisonDebug:
-	cd $(PARSER_DIR) && $(MAKE) debug_bison
+	cd $(PARSER_DIR) && $(MAKE) debug_bison EXTRA_CCFLAGS="-DDEBUG_BISON"
 
 
 
