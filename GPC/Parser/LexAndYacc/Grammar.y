@@ -22,8 +22,6 @@
     float f_val;
 }
 
-%error-verbose
-
     /* Strings */
     char *str;
 
@@ -89,6 +87,8 @@
     /* List */
     ListNode_t *list;
 }
+
+%error-verbose
 
 /* Token keywords */
 %token PROGRAM
