@@ -583,28 +583,68 @@ sign
 
 %%
 
-void yyerror(char *s)
-{
-    fprintf(stderr, "[Parser Error]");
-    if (file_to_parse != NULL && *file_to_parse != '\0')
-    {
+void yyerror(char *s) {
+    fprintf(stderr, "Error");
+    if (file_to_parse != NULL && *file_to_parse != '\0') {
         fprintf(stderr, " in '%s'", file_to_parse);
     }
+    
+    // Calculate start column of token (col_num is end column from lexer)
+    int start_col = col_num > yyleng ? col_num - yyleng + 1 : 1;
+    
+    fprintf(stderr, " (line %d, column %d)", line_num, start_col);
+    
+    // Bison's message (includes expected tokens if %error-verbose is set)
+    fprintf(stderr, ": %s\n", s);
 
-    fprintf(stderr, " on line %d", line_num);
-    if (col_num > 0) {
-         fprintf(stderr, " (near column %d)", col_num);
-    }
-    fprintf(stderr, ":\n");
-
-    fprintf(stderr, "  %s\n", s);
-
-    if (yytext != NULL && *yytext != '\0' && strstr(s, yytext) == NULL) {
+    if (yytext != NULL && *yytext != '\0') {
         char sanitized_yytext[100];
         strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
         sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
-        for (char *p = sanitized_yytext; *p; ++p) if (!isprint((unsigned char)*p) && *p != '\n') *p = '?';
-        fprintf(stderr, "  (The problematic text was: \"%s\")\n", sanitized_yytext);
+        
+        // Replace non-printable chars except newline and tab
+        for (char *p = sanitized_yytext; *p; ++p) {
+            if (!isprint((unsigned char)*p) && *p != '\n' && *p != '\t') {
+                *p = '?';
+            }
+        }
+        
+        // Only show unexpected token if not already in Bison's message
+        if (strstr(s, sanitized_yytext) == NULL) {
+            fprintf(stderr, "  Unexpected token: \"%s\"\n", sanitized_yytext);
+        }
     }
+    
+    // Show context line if possible (simplified version)
+    if (file_to_parse != NULL) {
+        FILE* f = fopen(file_to_parse, "r");
+        if (f) {
+            char line[256];
+            int current_line = 1;
+            
+            // Find the error line
+            while (current_line < line_num && fgets(line, sizeof(line), f)) {
+                current_line++;
+            }
+            
+            if (current_line == line_num && fgets(line, sizeof(line), f)) {
+                // Remove trailing newline if present
+                line[strcspn(line, "\n")] = 0;
+                
+                fprintf(stderr, "  Context: %s\n", line);
+                
+                // Show pointer to error location
+                if (start_col > 0) {
+                    fprintf(stderr, "           ");
+                    for (int i = 1; i < start_col; i++) {
+                        fprintf(stderr, " ");
+                    }
+                    fprintf(stderr, "^\n");
+                }
+            }
+            fclose(f);
+        }
+    }
+    
     fprintf(stderr, "\n");
 }

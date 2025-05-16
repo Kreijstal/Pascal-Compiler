@@ -17,7 +17,7 @@ string \"([^\"\\]|\\.)*\"
 
 %%
 
-{whitespace} ;
+{whitespace} { col_num += yyleng; }
 
 {comment}|"//".*   { /* Well documented way to ignore comments */
     #ifdef DEBUG_FLEX
@@ -27,8 +27,12 @@ string \"([^\"\\]|\\.)*\"
     int i;
     for(i = 0; i < strlen(yytext); ++i)
     {
-        if(yytext[i] == '\n')
+        if(yytext[i] == '\n') {
             ++line_num;
+            col_num = 1;
+        } else {
+            col_num++;
+        }
     }
 }
 
@@ -37,12 +41,14 @@ string \"([^\"\\]|\\.)*\"
         fprintf(stderr, "\n");
     #endif
     ++line_num;
+    col_num = 1;
 }
 
 {string} {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[STRING] %s\n", yytext);
     #endif
+    col_num += yyleng;
     
     /* Remove surrounding quotes */
     char *str = malloc(strlen(yytext) - 1);
@@ -66,6 +72,7 @@ string \"([^\"\\]|\\.)*\"
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[PROGRAM] ");
     #endif
+    col_num += yyleng;
     return PROGRAM;
 }
 
@@ -311,6 +318,7 @@ string \"([^\"\\]|\\.)*\"
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[ID:%s] ", yytext);
     #endif
+    col_num += yyleng;
     yylval.id = strdup(yytext);
     return ID;
 }
@@ -351,6 +359,7 @@ string \"([^\"\\]|\\.)*\"
     #ifdef DEBUG_FLEX
         fprintf(stderr, "{%s} ", yytext);
     #endif
+    col_num += yyleng;
     return yytext[0];
 }
 
