@@ -583,8 +583,6 @@ sign
 
 %%
 
-%error-verbose
-
 void yyerror(char *s)
 {
     fprintf(stderr, "[Parser Error]");
