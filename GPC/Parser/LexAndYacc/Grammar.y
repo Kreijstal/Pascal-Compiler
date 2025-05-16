@@ -609,4 +609,15 @@ void yyerror(char *s)
         fprintf(stderr, "  (The problematic text was: \"%s\")\n", sanitized_yytext);
     }
     fprintf(stderr, "\n");
+
+    fprintf(stderr, "  %s\n", s);
+
+    if (yytext != NULL && *yytext != '\0' && strstr(s, yytext) == NULL) {
+        char sanitized_yytext[100];
+        strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
+        sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
+        for (char *p = sanitized_yytext; *p; ++p) if (!isprint((unsigned char)*p) && *p != '\n') *p = '?';
+        fprintf(stderr, "  (The problematic text was: \"%s\")\n", sanitized_yytext);
+    }
+    fprintf(stderr, "\n");
 }
