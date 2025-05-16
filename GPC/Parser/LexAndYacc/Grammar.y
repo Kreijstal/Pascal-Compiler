@@ -548,7 +548,7 @@ factor
         {
             $$ = mk_inum(line_num, $1);
         }
-    | string
+    | STRING
         {
             $$ = mk_string(line_num, $1);
         }
