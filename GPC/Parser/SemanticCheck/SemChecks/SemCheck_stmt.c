@@ -136,19 +136,17 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
     scope_return = FindIdent(&sym_return, symtab, (char *)stmt->stmt_data.procedure_call_data.id);
-    sym_return->referenced += 1;
 
     if(scope_return == -1)
     {
         fprintf(stderr, "Error on line %d, unrecognized name %s\n", stmt->line_num,
             (char *)stmt->stmt_data.procedure_call_data.id);
-
             /*PrintSymTab(symtab, stderr, 0);*/
-
         ++return_val;
     }
     else
     {
+        sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n",
