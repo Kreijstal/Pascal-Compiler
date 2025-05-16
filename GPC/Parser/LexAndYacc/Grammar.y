@@ -4,6 +4,7 @@
 %{
     #include <stdio.h>
     #include <stdlib.h>
+    #include <ctype.h>
     #include "../ErrVars.h"
     void yyerror(char *s); /* Forward declaration */
     #include "../ParseTree/tree.h"
@@ -12,6 +13,7 @@
 
     /*extern FILE *yyin;*/
     extern int yylex();
+    extern char *yytext;
 %}
 
 %union{
@@ -578,16 +580,30 @@ sign
 
 %%
 
+%error-verbose
+
 void yyerror(char *s)
 {
-    /*fprintf(stderr, "Error on line %d:%d\n", line_num, col_num);*/
-    if(file_to_parse != NULL)
+    fprintf(stderr, "[Parser Error]");
+    if (file_to_parse != NULL && *file_to_parse != '\0')
     {
-        fprintf(stderr, "Error parsing %s:\n", file_to_parse);
-        fprintf(stderr, "On line %d:\n", line_num);
+        fprintf(stderr, " in '%s'", file_to_parse);
     }
-    else
-        fprintf(stderr, "Error on line %d:\n", line_num);
 
-    fprintf(stderr, "%s\n", s);
+    fprintf(stderr, " on line %d", line_num);
+    if (col_num > 0) {
+         fprintf(stderr, " (near column %d)", col_num);
+    }
+    fprintf(stderr, ":\n");
+
+    fprintf(stderr, "  %s\n", s);
+
+    if (yytext != NULL && *yytext != '\0' && strstr(s, yytext) == NULL) {
+        char sanitized_yytext[100];
+        strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
+        sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
+        for (char *p = sanitized_yytext; *p; ++p) if (!isprint((unsigned char)*p) && *p != '\n') *p = '?';
+        fprintf(stderr, "  (The problematic text was: \"%s\")\n", sanitized_yytext);
+    }
+    fprintf(stderr, "\n");
 }
