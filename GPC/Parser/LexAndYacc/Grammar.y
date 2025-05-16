@@ -7,7 +7,7 @@
     #include "../ErrVars.h"
 #include <string.h>
 #include <ctype.h>
-    void yyerror(char *s); /* Forward declaration */
+    void yyerror(const char *s); /* Forward declaration for const-correctness */
     #include "../ParseTree/tree.h"
     #include "../List/List.h"
 extern int yylex(void);
@@ -151,6 +151,7 @@ extern int yyleng;
 %nonassoc THEN
 %nonassoc ELSE
 
+%start program /* Explicitly set the start symbol */
 /* TYPES FOR THE GRAMMAR */
 %type<ident_list> identifier_list
 %type<list> optional_program_parameters
@@ -599,7 +600,7 @@ sign
 %%
 
 // In Grammar.y's C code section (after %%)
-void yyerror(char *s) { // s is the message from Bison
+void yyerror(const char *s) { // s is the message from Bison
     fprintf(stderr, "Error");
     if (file_to_parse != NULL && *file_to_parse != '\0') {
         fprintf(stderr, " in '%s'", file_to_parse);
