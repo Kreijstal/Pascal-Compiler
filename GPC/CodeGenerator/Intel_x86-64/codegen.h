@@ -96,9 +96,33 @@
 #ifndef CODE_GEN_H
 #define CODE_GEN_H
 
+/* Platform detection */
+#ifdef __linux__
+#define PLATFORM_LINUX 1
+#define PLATFORM_WINDOWS 0
+#elif defined(_WIN32) || defined(_WIN64)
+#define PLATFORM_LINUX 0
+#define PLATFORM_WINDOWS 1
+#else
+#error "Unsupported platform"
+#endif
+
 #define DEBUG_CODEGEN
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
+
+/* Linux-specific defines */
+#if PLATFORM_LINUX
+#define WRITE_SYSCALL_NUM 1
+#define STDOUT_FD 1
+#define EXIT_SYSCALL_NUM 60
+#define SCANF_CALL "__isoc99_scanf"
+#endif
+
+/* Windows-specific defines */
+#if PLATFORM_WINDOWS
+#define SCANF_CALL "__isoc99_scanf@PLT"
+#endif
 
 #define NORMAL_JMP -1
 

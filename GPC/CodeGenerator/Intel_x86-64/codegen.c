@@ -655,6 +655,8 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
 /* Code generation for writeln() builtin */
 ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
 {
+    char buffer[100];
+    
     /* Append newline to format string */
     if(args != NULL) {
         /* Find last argument */
@@ -670,9 +672,41 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
             ((struct Expression *)last->cur)->expr_data.string = strdup(new_str);
         }
     }
-    
-    /* Generate write call which will handle everything */
+
+#if PLATFORM_LINUX
+    /* Linux syscall implementation */
+    if(args != NULL && ((struct Expression *)args->cur)->type == EXPR_STRING) {
+        char *str = ((struct Expression *)args->cur)->expr_data.string;
+        int len = strlen(str);
+        
+        /* Add string to .rodata */
+        snprintf(buffer, 100, "\t.section\t.rodata\n.LC%d:\n\t.string \"%s\"\n\t.text\n",
+                write_label_counter, str);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* Linux write syscall */
+        snprintf(buffer, 100, "\tmovq $1, %%rax  # syscall number for write\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 100, "\tmovq $1, %%rdi  # file descriptor (stdout)\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 100, "\tleaq .LC%d(%%rip), %%rsi  # buffer address\n", write_label_counter);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 100, "\tmovq $%d, %%rdx  # message length\n", len);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 100, "\tsyscall\n");
+        inst_list = add_inst(inst_list, buffer);
+        
+        write_label_counter++;
+    } else {
+        /* Fall back to printf for non-string args */
+        return codegen_builtin_write(args, inst_list, o_file);
+    }
+#else
+    /* Windows implementation */
     return codegen_builtin_write(args, inst_list, o_file);
+#endif
+
+    return inst_list;
 }
 
 /* Removed duplicate function definition */
