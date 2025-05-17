@@ -117,20 +117,16 @@
 #define STDOUT_FD 1
 #define EXIT_SYSCALL_NUM 60
 #define SCANF_CALL "__isoc99_scanf"
-#endif
-
-/* Windows-specific defines */
-#if PLATFORM_WINDOWS
+#define SCANF_REGISTER ".LC1(%rip)"
+#elif defined(_WIN32) || defined(_WIN64)
+#define PLATFORM_WINDOWS 1
 #define SCANF_CALL "__isoc99_scanf@PLT"
+#define SCANF_REGISTER ".LC1"
+#else
+#error "Unsupported platform"
 #endif
 
 #define NORMAL_JMP -1
-
-#define WRITE_SYSCALL_NUM 1
-#define STDOUT_FD 1
-
-#define SCANF_REGISTER ".LC1(%rip)"
-#define SCANF_CALL "__isoc99_scanf@PLT"
 
 #include <stdlib.h>
 #include <stdio.h>
