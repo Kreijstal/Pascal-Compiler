@@ -7,10 +7,14 @@
     #include <string.h> // For strstr, strncpy, strcspn
     #include <ctype.h>  // For isprint
     #include "../ErrVars.h"
-    void yyerror(char *s); /* Forward declaration */
+#include <string.h>
+#include <ctype.h>
+    void yyerror(const char *s); /* Forward declaration for const-correctness */
     #include "../ParseTree/tree.h"
     #include "../List/List.h"
-    #include "Grammar.tab.h"
+extern int yylex(void);
+extern char *yytext;
+extern int yyleng;
 
     /*extern FILE *yyin;*/
    extern int yylex(void); // Standard declaration for yylex
@@ -18,6 +22,7 @@
     extern int yyleng;   
 %}
 
+%define parse.error verbose
 %union{
     /* Numbers */
     int i_val;
@@ -150,11 +155,15 @@
 %nonassoc THEN
 %nonassoc ELSE
 
+%start program /* Explicitly set the start symbol */
 /* TYPES FOR THE GRAMMAR */
 %type<ident_list> identifier_list
+%type<list> optional_program_parameters
 %type<list> declarations
 %type<list> subprogram_declarations
 %type<stmt> compound_statement
+%type<list> statement_seq_opt  /* New: For zero or more statements */
+%type<list> statement_seq      /* New: For one or more statements */
 
 %type<type_s> type
 %type<i_val> standard_type
@@ -164,8 +173,6 @@
 %type<list> arguments
 %type<list> parameter_list
 
-%type<list> optional_statements
-%type<list> statement_list
 %type<stmt> statement
 %type<stmt> variable_assignment
 %type<stmt> procedure_statement
@@ -196,15 +203,29 @@
 
 %%
 
+optional_program_parameters
+    : '(' identifier_list ')'
+        { $$ = $2.list; }
+    | /* empty */
+        { $$ = NULL; }
+    ;
+
 program
-    : PROGRAM ident '(' identifier_list ')' ';'
+    : PROGRAM ident optional_program_parameters ';'
      declarations
      subprogram_declarations
      compound_statement
      '.'
      END_OF_FILE
      {
-         parse_tree = mk_program($2.line_num, $2.id, $4.list, $7, $8, $9);
+         // $1: PROGRAM token
+         // $2: ident (type 'ident', provides $2.id and $2.line_num)
+         // $3: optional_program_parameters (type 'list', provides ListNode_t* for args)
+         // $4: ';' token
+         // $5: declarations
+         // $6: subprogram_declarations
+         // $7: compound_statement
+         parse_tree = mk_program($2.line_num, $2.id, $3, $5, $6, $7);
          return -1;
      }
     ;
@@ -365,26 +386,26 @@ parameter_list
     ;
 
 compound_statement
-    : BBEGIN optional_statements END
+    : BBEGIN statement_seq_opt END
         {
             $$ = mk_compoundstatement(line_num, $2);
         }
     ;
 
-optional_statements
-    : statement_list {$$ = $1;}
-    | /* empty */ {$$ = NULL;}
+statement_seq_opt  /* Zero or more statements, handles optional trailing semicolon for the sequence */
+    : /* empty */
+        { $$ = NULL; }
+    | statement_seq
+        { $$ = $1; }
+    | statement_seq ';' /* A sequence of statements can end with a semicolon */
+        { $$ = $1; } /* The list itself is $1, semicolon is consumed */
     ;
 
-statement_list
+statement_seq      /* One or more statements, separated by semicolons */
     : statement
-        {
-            $$ = CreateListNode($1, LIST_STMT);
-        }
-    | statement_list ';' statement
-        {
-            $$ = PushListNodeBack($1, CreateListNode($3, LIST_STMT));
-        }
+        { $$ = CreateListNode($1, LIST_STMT); }
+    | statement_seq ';' statement
+        { $$ = PushListNodeBack($1, CreateListNode($3, LIST_STMT)); }
     ;
 
 statement
@@ -552,10 +573,6 @@ factor
         {
             $$ = mk_inum(line_num, $1);
         }
-    | STRING
-        {
-            $$ = mk_string(line_num, $1);
-        }
     | real_num
         {
             $$ = mk_rnum(line_num, $1);
@@ -586,42 +603,47 @@ sign
 
 %%
 
-void yyerror(char *s) {
-    // Your debug line (now yytext and yyleng should be known)
+void yyerror(const char *s) {
+    // Debug output
     fprintf(stderr, "Debug yyerror: s = \"%s\", yytext = \"%s\", yyleng = %d, line_num = %d, col_num = %d, file_to_parse = %s\n",
         s, (yytext ? yytext : "null"), yyleng, line_num, col_num, (file_to_parse ? file_to_parse : "null"));
 
+    // Main error message
     fprintf(stderr, "Error");
     if (file_to_parse != NULL && *file_to_parse != '\0') {
         fprintf(stderr, " in '%s'", file_to_parse);
     }
-    
-    int start_col = col_num > yyleng ? col_num - yyleng + 1 : 1; 
-    
+
+    // Calculate column position
+    int current_yyleng = (yytext ? yyleng : 0);
+    int start_col = col_num > current_yyleng ? col_num - current_yyleng + 1 : 1;
     fprintf(stderr, " (line %d, column %d)", line_num, start_col);
-    
     fprintf(stderr, ": %s\n", s);
 
+    // Handle unexpected token display
     if (yytext != NULL && *yytext != '\0') {
         char sanitized_yytext[100];
         strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
         sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
         
+        // Sanitize non-printable characters
         for (char *p = sanitized_yytext; *p; ++p) {
             if (!isprint((unsigned char)*p) && *p != '\n' && *p != '\t') {
                 *p = '?';
             }
         }
         
-        if (strstr(s, sanitized_yytext) == NULL) {
+        // Only print if 's' doesn't already feature the token
+        if (strstr(s, "unexpected") == NULL || strstr(s, sanitized_yytext) == NULL) {
             fprintf(stderr, "  Unexpected token: \"%s\"\n", sanitized_yytext);
         }
     }
     
+    // Context line printing
     if (file_to_parse != NULL) {
-        FILE* f_ctx = fopen(file_to_parse, "r"); // Renamed to f_ctx to avoid conflict if 'f' is used elsewhere
+        FILE* f_ctx = fopen(file_to_parse, "r");
         if (f_ctx) {
-            char line_buf[256]; // Renamed to line_buf
+            char line_buf[256];
             int current_line = 1;
             
             while (current_line < line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
@@ -629,12 +651,11 @@ void yyerror(char *s) {
             }
             
             if (current_line == line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
-                line_buf[strcspn(line_buf, "\n")] = 0; 
-                
+                line_buf[strcspn(line_buf, "\n\r")] = 0;
                 fprintf(stderr, "  Context: %s\n", line_buf);
                 
                 if (start_col > 0) {
-                    fprintf(stderr, "           "); // 11 spaces for "  Context: "
+                    fprintf(stderr, "           ");
                     for (int i = 1; i < start_col; i++) {
                         fprintf(stderr, " ");
                     }
@@ -642,9 +663,6 @@ void yyerror(char *s) {
                 }
             }
             fclose(f_ctx);
-        } else {
-            // Optional: print error if context file can't be opened
-            // fprintf(stderr, "  Warning: Could not open '%s' to show context.\n", file_to_parse);
         }
     }
     fprintf(stderr, "\n");

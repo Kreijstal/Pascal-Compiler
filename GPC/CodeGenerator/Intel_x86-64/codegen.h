@@ -96,17 +96,37 @@
 #ifndef CODE_GEN_H
 #define CODE_GEN_H
 
+/* Platform detection */
+#ifdef __linux__
+#define PLATFORM_LINUX 1
+#define PLATFORM_WINDOWS 0
+#elif defined(_WIN32) || defined(_WIN64)
+#define PLATFORM_LINUX 0
+#define PLATFORM_WINDOWS 1
+#else
+#error "Unsupported platform"
+#endif
+
 #define DEBUG_CODEGEN
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
-#define NORMAL_JMP -1
-
+/* Linux-specific defines */
+#if PLATFORM_LINUX
 #define WRITE_SYSCALL_NUM 1
 #define STDOUT_FD 1
-
+#define EXIT_SYSCALL_NUM 60
+#define SCANF_CALL "__isoc99_scanf"
 #define SCANF_REGISTER ".LC1(%rip)"
+#elif defined(_WIN32) || defined(_WIN64)
+#define PLATFORM_WINDOWS 1
 #define SCANF_CALL "__isoc99_scanf@PLT"
+#define SCANF_REGISTER ".LC1"
+#else
+#error "Unsupported platform"
+#endif
+
+#define NORMAL_JMP -1
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -119,6 +139,12 @@
 /* Please initialize to 1 */
 extern int label_counter;
 extern int write_label_counter;
+
+/* Generates a label */
+void gen_label(char *buf, int buf_len);
+
+/* Escapes string for assembly output */
+void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
 void codegen(Tree_t *, char *input_file_name, char *output_file_name);

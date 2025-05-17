@@ -20,6 +20,13 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/LexAndYacc/Grammar.tab.h"
 
+/* Platform detection */
+#if defined(__linux__) || defined(__unix__)
+#define PLATFORM_LINUX 1
+#else
+#define PLATFORM_LINUX 0
+#endif
+
 /* Generates a label */
 void gen_label(char *buf, int buf_len)
 {
@@ -183,31 +190,32 @@ void codegen(Tree_t *tree, char *input_file_name, char *output_file_name)
     return;
 }
 
-/* Generates Windows-compatible headers and labels for printf */
+/* Generates platform-compatible headers */
 void codegen_program_header(char *fname, FILE *o_file)
 {
-    /*
-        .file	"<FILE_NAME>"
-        .section	.rdata,"dr"
-        .LC0:
-            .ascii "%d\12\0"
-            .text
-    */
-
     fprintf(o_file, "\t.file\t\"%s\"\n", fname);
-    fprintf(o_file, "\t.extern printf\n");
+    
+#if PLATFORM_LINUX
+    /* Linux sections */
+    fprintf(o_file, "\t.section\t.rodata\n");
+#else
+    /* Windows sections */
+    fprintf(o_file, "\t.section\t.rdata,\"dr\"\n");
+#endif
+
     fprintf(o_file, "\t.text\n");
     return;
 }
 
-/* Generates Windows-compatible program footer */
+/* Generates platform-compatible program footer */
 void codegen_program_footer(FILE *o_file)
 {
-    /*
-        .ident	"GPC: 0.0.0"
-    */
-
+#if PLATFORM_LINUX
+    /* Linux doesn't need .ident */
+#else
+    /* Windows .ident directive */
     fprintf(o_file, ".ident\t\"GPC: 0.0.0\"\n");
+#endif
 }
 
 /* Generates main which calls our program */
@@ -631,6 +639,18 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
         inst_list = add_inst(inst_list, buffer);
     }
     
+#if PLATFORM_LINUX
+    /* Linux syscall implementation */
+    fprintf(stderr, "DEBUG: Using syscall for output\n");
+    snprintf(buffer, sizeof(buffer),
+            "\tmovq $1, %%rax\n"
+            "\tmovq $1, %%rdi\n"
+            "\tleaq .LC%d(%%rip), %%rsi\n"
+            "\tmovq $%d, %%rdx\n"
+            "\tsyscall\n",
+            curr_label, strlen(escaped_str)+1);
+    inst_list = add_inst(inst_list, buffer);
+#else
     /* Windows x64 calling convention requires:
      * - 32 bytes shadow space
      * - Stack 16-byte aligned
@@ -638,41 +658,92 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
     fprintf(stderr, "DEBUG: Allocating shadow space\n");
     snprintf(buffer, 100, "\tsubq\t$32, %%rsp\n");
     inst_list = add_inst(inst_list, buffer);
-
-    fprintf(stderr, "DEBUG: Final format string: '%s'\n", escaped_str);
+    
+    fprintf(stderr, "DEBUG: Calling printf\n");
     snprintf(buffer, 100, "\tcall\tprintf\n");
     inst_list = add_inst(inst_list, buffer);
-
+    
     fprintf(stderr, "DEBUG: Cleaning up shadow space\n");
     snprintf(buffer, 100, "\taddq\t$32, %%rsp\n");
     inst_list = add_inst(inst_list, buffer);
-    fprintf(stderr, "DEBUG: Write call generated\n");
-    
-    fprintf(stderr, "DEBUG: Write generated\n");
+#endif
     return inst_list;
 }
 
 /* Code generation for writeln() builtin */
 ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
 {
-    /* Append newline to format string */
-    if(args != NULL) {
-        /* Find last argument */
-        ListNode_t *last = args;
-        while(last->next != NULL) last = last->next;
-        
-        /* If last arg is string, append newline */
-        if(((struct Expression *)last->cur)->type == EXPR_STRING) {
-            char *str = ((struct Expression *)last->cur)->expr_data.string;
-            char new_str[strlen(str) + 2];
-            strcpy(new_str, str);
-            strcat(new_str, "\n");
-            ((struct Expression *)last->cur)->expr_data.string = strdup(new_str);
-        }
-    }
+    char buffer[100];
     
-    /* Generate write call which will handle everything */
-    return codegen_builtin_write(args, inst_list, o_file);
+    /* For writeln(), we'll handle newlines in the format string */
+    /* Don't modify the original string to avoid duplicate newlines */
+
+#if PLATFORM_LINUX
+    /* Linux syscall implementation */
+    if(args != NULL && ((struct Expression *)args->cur)->type == EXPR_STRING) {
+        char *str = ((struct Expression *)args->cur)->expr_data.string;
+        int len = strlen(str);
+        
+        /* Add string to .rodata */
+        /* Generate properly formatted assembly string */
+        char escaped_str[512];
+        escape_string(escaped_str, str, sizeof(escaped_str));
+        int str_len = strlen(escaped_str) + 1; // Include null terminator
+        
+        char buffer[512];
+        snprintf(buffer, sizeof(buffer),
+                "\t.section\t.rodata\n"
+                ".LC%d:\n"
+                "\t.string \"%s\"\n"  // String with properly escaped content
+                "\t.text\n"
+                "\tmovq $1, %%rax\n"
+                "\tmovq $1, %%rdi\n"
+                "\tleaq .LC%d(%%rip), %%rsi\n"
+                "\tmovq $%d, %%rdx\n"
+                "\tsyscall\n",
+                write_label_counter, escaped_str,
+                write_label_counter, strlen(escaped_str)+1);  // Length with escaped content
+        inst_list = add_inst(inst_list, buffer);
+        
+        
+        write_label_counter++;
+    } else {
+        /* Fall back to printf for non-string args */
+        return codegen_builtin_write(args, inst_list, o_file);
+    }
+#else
+    /* Windows implementation with proper string escaping */
+    if(args != NULL && ((struct Expression *)args->cur)->type == EXPR_STRING) {
+        char *str = ((struct Expression *)args->cur)->expr_data.string;
+        char escaped_str[512];
+        escape_string(escaped_str, str, sizeof(escaped_str));
+        
+        /* Add string to .rdata section with proper escaping */
+        snprintf(buffer, sizeof(buffer),
+                "\t.section\t.rdata,\"dr\"\n"
+                ".LC%d:\n"
+                "\t.ascii \"%s\\0\"\n"  // Explicit null termination
+                "\t.text\n",
+                write_label_counter, escaped_str);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* Setup printf call with proper Windows calling convention */
+        snprintf(buffer, sizeof(buffer),
+                "\tleaq\t.LC%d(%%rip), %%rcx\n"
+                "\tsubq\t$32, %%rsp\n"  // Shadow space
+                "\tcall\tprintf\n"
+                "\taddq\t$32, %%rsp\n",
+                write_label_counter);
+        inst_list = add_inst(inst_list, buffer);
+        
+        write_label_counter++;
+    } else {
+        /* Fall back to printf for non-string args */
+        return codegen_builtin_write(args, inst_list, o_file);
+    }
+#endif
+
+    return inst_list;
 }
 
 /* Removed duplicate function definition */
@@ -1116,3 +1187,32 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
 /* Gives the offset to use on the register */
 /* Removed duplicate function definition */
 /* Removed malformed function fragments */
+
+/* Helper function to escape string for assembly */
+void escape_string(char *dest, const char *src, size_t dest_size) {
+    size_t i = 0, j = 0;
+    while (src[i] != '\0' && j < dest_size - 1) {
+        switch (src[i]) {
+            case '\n': 
+                dest[j++] = '\\';
+                dest[j++] = 'n';
+                break;
+            case '\t':
+                dest[j++] = '\\';
+                dest[j++] = 't';
+                break;
+            case '\"':
+                dest[j++] = '\\';
+                dest[j++] = '\"';
+                break;
+            case '\\':
+                dest[j++] = '\\';
+                dest[j++] = '\\';
+                break;
+            default:
+                dest[j++] = src[i];
+        }
+        i++;
+    }
+    dest[j] = '\0';
+}
