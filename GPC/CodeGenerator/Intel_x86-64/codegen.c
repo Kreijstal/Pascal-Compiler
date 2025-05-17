@@ -675,21 +675,8 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
 {
     char buffer[100];
     
-    /* Append newline to format string */
-    if(args != NULL) {
-        /* Find last argument */
-        ListNode_t *last = args;
-        while(last->next != NULL) last = last->next;
-        
-        /* If last arg is string, append newline */
-        if(((struct Expression *)last->cur)->type == EXPR_STRING) {
-            char *str = ((struct Expression *)last->cur)->expr_data.string;
-            char new_str[strlen(str) + 2];
-            strcpy(new_str, str);
-            strcat(new_str, "\n");
-            ((struct Expression *)last->cur)->expr_data.string = strdup(new_str);
-        }
-    }
+    /* For writeln(), we'll handle newlines in the format string */
+    /* Don't modify the original string to avoid duplicate newlines */
 
 #if PLATFORM_LINUX
     /* Linux syscall implementation */
@@ -725,8 +712,35 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
         return codegen_builtin_write(args, inst_list, o_file);
     }
 #else
-    /* Windows implementation */
-    return codegen_builtin_write(args, inst_list, o_file);
+    /* Windows implementation with proper string escaping */
+    if(args != NULL && ((struct Expression *)args->cur)->type == EXPR_STRING) {
+        char *str = ((struct Expression *)args->cur)->expr_data.string;
+        char escaped_str[512];
+        escape_string(escaped_str, str, sizeof(escaped_str));
+        
+        /* Add string to .rdata section with proper escaping */
+        snprintf(buffer, sizeof(buffer),
+                "\t.section\t.rdata,\"dr\"\n"
+                ".LC%d:\n"
+                "\t.ascii \"%s\\0\"\n"  // Explicit null termination
+                "\t.text\n",
+                write_label_counter, escaped_str);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* Setup printf call with proper Windows calling convention */
+        snprintf(buffer, sizeof(buffer),
+                "\tleaq\t.LC%d(%%rip), %%rcx\n"
+                "\tsubq\t$32, %%rsp\n"  // Shadow space
+                "\tcall\tprintf\n"
+                "\taddq\t$32, %%rsp\n",
+                write_label_counter);
+        inst_list = add_inst(inst_list, buffer);
+        
+        write_label_counter++;
+    } else {
+        /* Fall back to printf for non-string args */
+        return codegen_builtin_write(args, inst_list, o_file);
+    }
 #endif
 
     return inst_list;
