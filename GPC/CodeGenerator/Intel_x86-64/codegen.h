@@ -140,6 +140,12 @@
 extern int label_counter;
 extern int write_label_counter;
 
+/* Generates a label */
+void gen_label(char *buf, int buf_len);
+
+/* Escapes string for assembly output */
+void escape_string(char *dest, const char *src, size_t dest_size);
+
 /* This is the entry function */
 void codegen(Tree_t *, char *input_file_name, char *output_file_name);
 

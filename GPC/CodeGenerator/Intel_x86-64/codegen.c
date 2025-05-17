@@ -639,6 +639,18 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
         inst_list = add_inst(inst_list, buffer);
     }
     
+#if PLATFORM_LINUX
+    /* Linux syscall implementation */
+    fprintf(stderr, "DEBUG: Using syscall for output\n");
+    snprintf(buffer, sizeof(buffer),
+            "\tmovq $1, %%rax\n"
+            "\tmovq $1, %%rdi\n"
+            "\tleaq .LC%d(%%rip), %%rsi\n"
+            "\tmovq $%d, %%rdx\n"
+            "\tsyscall\n",
+            curr_label, strlen(escaped_str)+1);
+    inst_list = add_inst(inst_list, buffer);
+#else
     /* Windows x64 calling convention requires:
      * - 32 bytes shadow space
      * - Stack 16-byte aligned
@@ -646,17 +658,15 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
     fprintf(stderr, "DEBUG: Allocating shadow space\n");
     snprintf(buffer, 100, "\tsubq\t$32, %%rsp\n");
     inst_list = add_inst(inst_list, buffer);
-
-    fprintf(stderr, "DEBUG: Final format string: '%s'\n", escaped_str);
+    
+    fprintf(stderr, "DEBUG: Calling printf\n");
     snprintf(buffer, 100, "\tcall\tprintf\n");
     inst_list = add_inst(inst_list, buffer);
-
+    
     fprintf(stderr, "DEBUG: Cleaning up shadow space\n");
     snprintf(buffer, 100, "\taddq\t$32, %%rsp\n");
     inst_list = add_inst(inst_list, buffer);
-    fprintf(stderr, "DEBUG: Write call generated\n");
-    
-    fprintf(stderr, "DEBUG: Write generated\n");
+#endif
     return inst_list;
 }
 
@@ -688,21 +698,26 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
         int len = strlen(str);
         
         /* Add string to .rodata */
-        snprintf(buffer, 100, "\t.section\t.rodata\n.LC%d:\n\t.string \"%s\"\n\t.text\n",
-                write_label_counter, str);
+        /* Generate properly formatted assembly string */
+        char escaped_str[512];
+        escape_string(escaped_str, str, sizeof(escaped_str));
+        int str_len = strlen(escaped_str) + 1; // Include null terminator
+        
+        char buffer[512];
+        snprintf(buffer, sizeof(buffer),
+                "\t.section\t.rodata\n"
+                ".LC%d:\n"
+                "\t.string \"%s\"\n"  // String with properly escaped content
+                "\t.text\n"
+                "\tmovq $1, %%rax\n"
+                "\tmovq $1, %%rdi\n"
+                "\tleaq .LC%d(%%rip), %%rsi\n"
+                "\tmovq $%d, %%rdx\n"
+                "\tsyscall\n",
+                write_label_counter, escaped_str,
+                write_label_counter, strlen(escaped_str)+1);  // Length with escaped content
         inst_list = add_inst(inst_list, buffer);
         
-        /* Linux write syscall */
-        snprintf(buffer, 100, "\tmovq $1, %%rax  # syscall number for write\n");
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tmovq $1, %%rdi  # file descriptor (stdout)\n");
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tleaq .LC%d(%%rip), %%rsi  # buffer address\n", write_label_counter);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tmovq $%d, %%rdx  # message length\n", len);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tsyscall\n");
-        inst_list = add_inst(inst_list, buffer);
         
         write_label_counter++;
     } else {
@@ -1158,3 +1173,32 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
 /* Gives the offset to use on the register */
 /* Removed duplicate function definition */
 /* Removed malformed function fragments */
+
+/* Helper function to escape string for assembly */
+void escape_string(char *dest, const char *src, size_t dest_size) {
+    size_t i = 0, j = 0;
+    while (src[i] != '\0' && j < dest_size - 1) {
+        switch (src[i]) {
+            case '\n': 
+                dest[j++] = '\\';
+                dest[j++] = 'n';
+                break;
+            case '\t':
+                dest[j++] = '\\';
+                dest[j++] = 't';
+                break;
+            case '\"':
+                dest[j++] = '\\';
+                dest[j++] = '\"';
+                break;
+            case '\\':
+                dest[j++] = '\\';
+                dest[j++] = '\\';
+                break;
+            default:
+                dest[j++] = src[i];
+        }
+        i++;
+    }
+    dest[j] = '\0';
+}
