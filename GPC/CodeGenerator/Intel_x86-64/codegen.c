@@ -20,6 +20,13 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/LexAndYacc/Grammar.tab.h"
 
+/* Platform detection */
+#if defined(__linux__) || defined(__unix__)
+#define PLATFORM_LINUX 1
+#else
+#define PLATFORM_LINUX 0
+#endif
+
 /* Generates a label */
 void gen_label(char *buf, int buf_len)
 {
