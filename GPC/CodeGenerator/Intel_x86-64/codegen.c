@@ -183,31 +183,32 @@ void codegen(Tree_t *tree, char *input_file_name, char *output_file_name)
     return;
 }
 
-/* Generates Windows-compatible headers and labels for printf */
+/* Generates platform-compatible headers */
 void codegen_program_header(char *fname, FILE *o_file)
 {
-    /*
-        .file	"<FILE_NAME>"
-        .section	.rdata,"dr"
-        .LC0:
-            .ascii "%d\12\0"
-            .text
-    */
-
     fprintf(o_file, "\t.file\t\"%s\"\n", fname);
-    fprintf(o_file, "\t.extern printf\n");
+    
+#if PLATFORM_LINUX
+    /* Linux sections */
+    fprintf(o_file, "\t.section\t.rodata\n");
+#else
+    /* Windows sections */
+    fprintf(o_file, "\t.section\t.rdata,\"dr\"\n");
+#endif
+
     fprintf(o_file, "\t.text\n");
     return;
 }
 
-/* Generates Windows-compatible program footer */
+/* Generates platform-compatible program footer */
 void codegen_program_footer(FILE *o_file)
 {
-    /*
-        .ident	"GPC: 0.0.0"
-    */
-
+#if PLATFORM_LINUX
+    /* Linux doesn't need .ident */
+#else
+    /* Windows .ident directive */
     fprintf(o_file, ".ident\t\"GPC: 0.0.0\"\n");
+#endif
 }
 
 /* Generates main which calls our program */
