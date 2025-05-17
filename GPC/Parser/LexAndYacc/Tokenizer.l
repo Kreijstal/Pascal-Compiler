@@ -13,8 +13,7 @@ integer  [0-9]+
 real [0-9]*[.][0-9]+
 id   [A-Za-z][A-Za-z0-9]*
 comment [(][*][^*]*[*]+([^*)][^*]*[*]+)*[)]
-string \"([^\"\\]|\\.)*\"
-
+pascal_string \'([^\']|\'\')*\' 
 %%
 
 {whitespace} ;
@@ -39,21 +38,7 @@ string \"([^\"\\]|\\.)*\"
     ++line_num;
 }
 
-{string} {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[STRING] %s\n", yytext);
-    #endif
-    
-    /* Remove surrounding quotes */
-    char *str = malloc(strlen(yytext) - 1);
-    strncpy(str, yytext + 1, strlen(yytext) - 2);
-    str[strlen(yytext) - 2] = '\0';
-    yylval.str = str;
-    return STRING;
-    
-    yylval.str = str;
-    return STRING;
-}
+
 
 <<EOF>> {
     #ifdef DEBUG_FLEX
@@ -315,7 +300,7 @@ string \"([^\"\\]|\\.)*\"
     return ID;
 }
 
-{string} {
+{pascal_string} {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[STRING:%s] ", yytext);
     #endif

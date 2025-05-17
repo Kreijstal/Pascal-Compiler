@@ -75,6 +75,7 @@ int start_semcheck(Tree_t *parse_tree)
 }
 
 /* Adds built-in functions */
+/*TODO: these should be defined in pascal not in semantic analyzer */
 void semcheck_add_builtins(SymTab_t *symtab)
 {
     char *id;
@@ -96,6 +97,12 @@ void semcheck_add_builtins(SymTab_t *symtab)
     arg_ids = CreateListNode(strdup("var"), LIST_STRING);
     args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
 
+    AddBuiltinProc(symtab, id, args);
+
+    /**** WRITELN PROCEDURE ****/
+    id = strdup("writeln");
+    arg_ids = CreateListNode(strdup("var_ln"), LIST_STRING);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
     AddBuiltinProc(symtab, id, args);
 }
 
