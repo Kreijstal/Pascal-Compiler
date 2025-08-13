@@ -311,6 +311,13 @@ pascal_string \'([^\']|\'\')*\'
     return WHILE;
 }
 
+"cname" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[CNAME] ");
+    #endif
+    return CNAME;
+}
+
 ":="   {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[ASSIGNOP] ");

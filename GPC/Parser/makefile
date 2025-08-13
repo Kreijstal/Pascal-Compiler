@@ -17,7 +17,7 @@ CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 # Object files to build
 GPC_OBJS = ParsePascal.o
 TREE_OBJS = List/List.o $(TREE_DIR)/tree.o
-SEM_OBJS = SemCheck.o SemCheck_stmt.o SemCheck_expr.o HashTable.o SymTab.o
+SEM_OBJS = SemCheck.o SemCheck_stmt.o SemCheck_expr.o HashTable.o SymTab.o NameMangling.o
 PARSER_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/Grammar.tab.o
 ALL_OBJS = $(GPC_OBJS) $(TREE_OBJS) $(SEM_OBJS) $(PARSER_OBJS)
 
@@ -53,14 +53,17 @@ ParsePascal.o: $(PARSER_OBJS) $(TREE_OBJS) ParsePascal.h ParsePascal.c
 List/List.o:
 	$(CC) $(CCFLAGS) -c List/List.c
 
-SemCheck.o: $(PARSER_OBJS) $(TREE_OBJS) SemCheck_stmt.o SemCheck_expr.o SymTab.o HashTable.o
+SemCheck.o: $(PARSER_OBJS) $(TREE_OBJS) SemCheck_stmt.o SemCheck_expr.o SymTab.o HashTable.o NameMangling.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemCheck.c
 
 SemCheck_stmt.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_stmt.c
 
-SemCheck_expr.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
+SemCheck_expr.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o NameMangling.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_expr.c
+
+NameMangling.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
+	$(CC) $(CCFLAGS) -c SemanticCheck/NameMangling.c
 
 HashTable.o: $(GRAMMAR_DIR)/Grammar.tab.h
 	$(CC) $(CCFLAGS) -c SemanticCheck/HashTable/HashTable.c

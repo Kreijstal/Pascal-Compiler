@@ -75,6 +75,7 @@
         int line_num;
         int return_type; /* -1 if procedure */
         char *return_type_id;
+        int cname_flag;
     } subprogram_head_s;
 
     /* For the for_assign rule */
@@ -135,6 +136,7 @@
 
 %token FOR
 %token TO
+%token CNAME
 
 %token END_OF_FILE
 
@@ -186,6 +188,7 @@
 %type<list> arguments
 %type<list> parameter_list
 %type<tree> parameter_item
+%type<i_val> optional_cname
 
 %type<stmt> statement
 %type<stmt> variable_assignment
@@ -378,14 +381,14 @@ subprogram_declaration
     : subprogram_head declarations subprogram_declarations compound_statement
         {
             if($1.sub_type == PROCEDURE)
-                $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4);
+                $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4, $1.cname_flag);
             else
-                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id);
+                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id, $1.cname_flag);
         }
     ;
 
 subprogram_head
-    : FUNCTION ident arguments ':' type ';'
+    : FUNCTION ident arguments ':' type ';' optional_cname
         {
             $$.sub_type = FUNCTION;
             $$.args = $3;
@@ -399,8 +402,9 @@ subprogram_head
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
+            $$.cname_flag = $7;
         }
-    | PROCEDURE ident arguments ';'
+    | PROCEDURE ident arguments ';' optional_cname
         {
             $$.sub_type = PROCEDURE;
             $$.args = $3;
@@ -409,7 +413,13 @@ subprogram_head
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
+            $$.cname_flag = $5;
         }
+    ;
+
+optional_cname
+    : CNAME { $$ = 1; }
+    | /* empty */ { $$ = 0; }
     ;
 
 arguments

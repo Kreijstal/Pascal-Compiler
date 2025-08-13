@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include "SemCheck_expr.h"
+#include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
@@ -443,8 +444,10 @@ int semcheck_funccall(int *type_return,
     char *id;
     int arg_type, cur_arg;
     ListNode_t *true_args, *true_arg_ids, *args_given;
-    HashNode_t *hash_return;
+    HashNode_t *hash_return = NULL;
     Tree_t *arg_decl;
+    char *mangled_name = NULL;
+
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_FUNCTION_CALL);
@@ -455,14 +458,28 @@ int semcheck_funccall(int *type_return,
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
+    // Try unmangled name first (for cname)
     scope_return = FindIdent(&hash_return, symtab, id);
-    set_hash_meta(hash_return, mutating);
+
+    if (scope_return == -1 || (hash_return->hash_type != HASHTYPE_FUNCTION && hash_return->hash_type != HASHTYPE_FUNCTION_RETURN))
+    {
+        // Not found or not a function, try mangled name
+        mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
+        scope_return = FindIdent(&hash_return, symtab, mangled_name);
+    }
+
+    if (hash_return != NULL) {
+        set_hash_meta(hash_return, mutating);
+        if (mangled_name != NULL) {
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = mangled_name;
+        }
+    }
 
     if(scope_return == -1)
     {
         fprintf(stderr, "Error on line %d, undeclared identifier %s!\n\n", expr->line_num, id);
         ++return_val;
-
         *type_return = UNKNOWN_TYPE;
     }
     else

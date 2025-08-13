@@ -14,6 +14,7 @@
 #include <limits.h>
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
+#include "../NameMangling.h"
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
@@ -127,9 +128,11 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val, scope_return, cur_arg, arg_type;
-    HashNode_t *sym_return;
+    HashNode_t *sym_return = NULL;
     ListNode_t *true_args, *true_arg_ids, *args_given;
     Tree_t *arg_decl;
+    char *id;
+    char *mangled_name = NULL;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -137,20 +140,30 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     return_val = 0;
 
+    id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
-    scope_return = FindIdent(&sym_return, symtab, (char *)stmt->stmt_data.procedure_call_data.id);
+    scope_return = FindIdent(&sym_return, symtab, id);
+
+    if (scope_return == -1 || (sym_return->hash_type != HASHTYPE_PROCEDURE && sym_return->hash_type != HASHTYPE_BUILTIN_PROCEDURE))
+    {
+        mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
+        scope_return = FindIdent(&sym_return, symtab, mangled_name);
+    }
 
     if(scope_return == -1)
     {
-        fprintf(stderr, "Error on line %d, unrecognized name %s\n", stmt->line_num,
-            (char *)stmt->stmt_data.procedure_call_data.id);
-            /*PrintSymTab(symtab, stderr, 0);*/
+        fprintf(stderr, "Error on line %d, unrecognized name %s\n", stmt->line_num, id);
         ++return_val;
     }
     else
     {
-        sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
+        if (mangled_name != NULL) {
+            free(stmt->stmt_data.procedure_call_data.id);
+            stmt->stmt_data.procedure_call_data.id = mangled_name;
+        }
+
+        sym_return->referenced += 1;
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n",
