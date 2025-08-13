@@ -13,7 +13,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 #include "SemCheck_expr.h"
+#include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
@@ -344,8 +346,6 @@ int semcheck_varid(int *type_return,
     id = expr->expr_data.id;
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    set_hash_meta(hash_return, mutating);
-
     if(scope_return == -1)
     {
         fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
@@ -355,6 +355,7 @@ int semcheck_varid(int *type_return,
     }
     else
     {
+        set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
@@ -395,8 +396,6 @@ int semcheck_arrayaccess(int *type_return,
     /***** FIRST VERIFY ARRAY IDENTIFIER *****/
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    set_hash_meta(hash_return, mutating);
-
     if(scope_return == -1)
     {
         fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
@@ -406,6 +405,7 @@ int semcheck_arrayaccess(int *type_return,
     }
     else
     {
+        set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
@@ -441,6 +441,7 @@ int semcheck_funccall(int *type_return,
 {
     int return_val, scope_return;
     char *id;
+    char *mangled_name;
     int arg_type, cur_arg;
     ListNode_t *true_args, *true_arg_ids, *args_given;
     HashNode_t *hash_return;
@@ -455,18 +456,20 @@ int semcheck_funccall(int *type_return,
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
-    scope_return = FindIdent(&hash_return, symtab, id);
-    set_hash_meta(hash_return, mutating);
+    mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
+    expr->expr_data.function_call_data.mangled_id = mangled_name;
+    scope_return = FindIdent(&hash_return, symtab, mangled_name);
 
     if(scope_return == -1)
     {
-        fprintf(stderr, "Error on line %d, undeclared identifier %s!\n\n", expr->line_num, id);
+        fprintf(stderr, "Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
         ++return_val;
 
         *type_return = UNKNOWN_TYPE;
     }
     else
     {
+        set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n\n",

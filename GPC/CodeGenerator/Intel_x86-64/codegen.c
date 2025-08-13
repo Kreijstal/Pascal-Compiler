@@ -394,7 +394,7 @@ void codegen_procedure(Tree_t *proc_tree, FILE *o_file)
     char buffer[50];
     char *sub_id;
 
-    struct Subprogram *proc = &proc_tree->tree_data.subprogram_data;
+    proc = &proc_tree->tree_data.subprogram_data;
 
     // Use mangled_id if it exists, otherwise fall back to id
     sub_id = (proc->mangled_id != NULL) ? proc->mangled_id : proc->id;
@@ -431,7 +431,7 @@ void codegen_function(Tree_t *func_tree, FILE *o_file)
     char *sub_id;
     StackNode_t *return_var;
 
-    struct Subprogram *func = &func_tree->tree_data.subprogram_data;
+    func = &func_tree->tree_data.subprogram_data;
 
     // Use mangled_id if it exists, otherwise fall back to id
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
@@ -992,23 +992,24 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FIL
     ListNode_t *args_expr;
     char buffer[50];
 
-    proc_name = stmt->stmt_data.procedure_call_data.id;
+    proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
 
+    char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
     /* First check for builtins */
-    if(strcmp("write", proc_name) == 0)
+    if(strcmp("write", unmangled_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for write() builtin\n");
         inst_list = codegen_builtin_write(args_expr, inst_list, o_file);
         fprintf(stderr, "DEBUG: Finished generating code for write()\n");
     }
-    else if(strcmp("writeln", proc_name) == 0 || strcmp("writeLn", proc_name) == 0)
+    else if(strcmp("writeln", unmangled_name) == 0 || strcmp("writeLn", unmangled_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for writeln() builtin\n");
         inst_list = codegen_builtin_writeln(args_expr, inst_list, o_file);
         fprintf(stderr, "DEBUG: Finished generating code for writeln()\n");
     }
-    else if(strcmp("read", proc_name) == 0 || strcmp("readLn", proc_name) == 0)
+    else if(strcmp("read", unmangled_name) == 0 || strcmp("readLn", unmangled_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for read() builtin\n");
         inst_list = codegen_builtin_read(args_expr, inst_list, o_file);

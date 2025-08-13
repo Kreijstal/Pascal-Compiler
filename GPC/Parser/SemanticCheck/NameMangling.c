@@ -19,6 +19,22 @@ static void DestroyIntList(ListNode_t* list) {
     }
 }
 
+static enum VarType ConvertParserTypeToVarType(int parser_type)
+{
+    switch(parser_type)
+    {
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            return HASHVAR_INTEGER;
+        case REAL_TYPE:
+            return HASHVAR_REAL;
+        case HASHVAR_PCHAR:
+            return HASHVAR_PCHAR;
+        default:
+            return HASHVAR_UNTYPED;
+    }
+}
+
 // Helper function to flatten argument lists into a list of HASHVAR_ types.
 static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab) { // <-- Add symtab
     if (args == NULL) {
@@ -43,15 +59,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 }
             } else {
                 // It's a built-in type, convert from parser token to semantic type
-                switch (decl_tree->tree_data.var_decl_data.type) {
-                    case INT_TYPE:
-                    case LONGINT_TYPE:
-                        resolved_type = HASHVAR_INTEGER;
-                        break;
-                    case REAL_TYPE:
-                        resolved_type = HASHVAR_REAL;
-                        break;
-                }
+                resolved_type = ConvertParserTypeToVarType(decl_tree->tree_data.var_decl_data.type);
             }
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
@@ -134,7 +142,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         semcheck_expr_main(&type, symtab, (struct Expression *)arg_cur->cur, max_scope_lev, NO_MUTATE);
 
         int* type_ptr = malloc(sizeof(int));
-        *type_ptr = type;
+        *type_ptr = ConvertParserTypeToVarType(type);
         if (type_list == NULL) {
             type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
         } else {
