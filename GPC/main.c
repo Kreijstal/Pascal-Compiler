@@ -50,20 +50,23 @@ int main(int argc, char **argv)
         ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
         ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
 
-        if (user_subs == NULL)
+        if (prelude_subs == NULL)
         {
-            user_tree->tree_data.program_data.subprograms = prelude_subs;
+            // user_tree is already correct
         }
         else
         {
-            ListNode_t *last_node = user_subs;
+            ListNode_t *last_node = prelude_subs;
             while(last_node->next != NULL)
             {
                 last_node = last_node->next;
             }
-            last_node->next = prelude_subs;
+            last_node->next = user_subs;
+            user_tree->tree_data.program_data.subprograms = prelude_subs;
         }
-        prelude_tree->tree_data.program_data.subprograms = NULL;
+        // Since we moved the user_subs list, we need to avoid a double free
+        if(prelude_tree != NULL)
+            prelude_tree->tree_data.program_data.subprograms = NULL;
 
         if(start_semcheck(user_tree) == 0)
         {

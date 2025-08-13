@@ -75,6 +75,7 @@
         int line_num;
         int return_type; /* -1 if procedure */
         char *return_type_id;
+        int cname_flag;
     } subprogram_head_s;
 
     /* For the for_assign rule */
@@ -135,6 +136,8 @@
 
 %token FOR
 %token TO
+
+%token CNAME
 
 %token END_OF_FILE
 
@@ -378,9 +381,9 @@ subprogram_declaration
     : subprogram_head declarations subprogram_declarations compound_statement
         {
             if($1.sub_type == PROCEDURE)
-                $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4);
+                $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4, $1.cname_flag);
             else
-                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id);
+                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id, $1.cname_flag);
         }
     ;
 
@@ -399,6 +402,23 @@ subprogram_head
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
+            $$.cname_flag = 0;
+        }
+    | FUNCTION ident arguments ':' type CNAME ';'
+        {
+            $$.sub_type = FUNCTION;
+            $$.args = $3;
+            if ($5.type == ID) {
+                $$.return_type = -1;
+                $$.return_type_id = $5.id;
+            } else {
+                $$.return_type = $5.actual_type;
+                $$.return_type_id = NULL;
+            }
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 1;
         }
     | PROCEDURE ident arguments ';'
         {
@@ -409,6 +429,18 @@ subprogram_head
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
+            $$.cname_flag = 0;
+        }
+    | PROCEDURE ident arguments CNAME ';'
+        {
+            $$.sub_type = PROCEDURE;
+            $$.args = $3;
+            $$.return_type = -1;
+            $$.return_type_id = NULL;
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 1;
         }
     ;
 

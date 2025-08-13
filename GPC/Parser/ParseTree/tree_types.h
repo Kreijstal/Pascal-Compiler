@@ -36,6 +36,7 @@ struct Statement
         struct ProcedureCall
         {
             char *id;
+            char *mangled_id;
             ListNode_t *expr_args;
         } procedure_call_data;
 
@@ -139,6 +140,7 @@ struct Expression
         struct FunctionCall
         {
             char *id;
+            char *mangled_id;
             ListNode_t *args_expr;
         } function_call_data;
 
