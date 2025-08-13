@@ -107,6 +107,44 @@ class TestCompiler(unittest.TestCase):
         # A simple way is to check that `subq $16` is not present.
         self.assertNotIn("subq\t$16", optimized_asm)
 
+    def test_sign_function(self):
+        """Tests the sign function with positive, negative, and zero inputs."""
+        input_file = "GPC/TestPrograms/sign_test.p"
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "sign_test.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "sign_test")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Test with different inputs
+        test_cases = {
+            "10": "1\n",
+            "-10": "-1\n",
+            "0": "0\n",
+        }
+
+        for input_str, expected_output in test_cases.items():
+            with self.subTest(input=input_str):
+                try:
+                    process = subprocess.run(
+                        [executable_file],
+                        input=input_str,
+                        capture_output=True,
+                        text=True,
+                        timeout=5 # Add a timeout to prevent hanging
+                    )
+                    # The program seems to be printing a space after the number
+                    self.assertEqual(process.stdout.strip(), expected_output.strip())
+                    self.assertEqual(process.returncode, 0)
+                except subprocess.TimeoutExpired:
+                    self.fail("Test execution timed out.")
+
 
 if __name__ == "__main__":
     unittest.main()
