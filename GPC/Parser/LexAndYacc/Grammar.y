@@ -12,12 +12,13 @@
     void yyerror(const char *s); /* Forward declaration for const-correctness */
     #include "../ParseTree/tree.h"
     #include "../List/List.h"
-extern int yylex(void);
-extern char *yytext;
-extern int yyleng;
+
+    extern int yylex(void);
+    extern char *yytext;
+    extern int yyleng;
 
     /*extern FILE *yyin;*/
-   extern int yylex(void); // Standard declaration for yylex
+    extern int yylex(void); // Standard declaration for yylex
     extern char *yytext;    // Declare Flex's global variable
     extern int yyleng;   
 %}
@@ -59,6 +60,7 @@ extern int yyleng;
 
         /* For arrays */
         int actual_type;
+        char *id;
         int start;
         int end;
     } type_s;
@@ -72,6 +74,7 @@ extern int yyleng;
         ListNode_t *args;
         int line_num;
         int return_type; /* -1 if procedure */
+        char *return_type_id;
     } subprogram_head_s;
 
     /* For the for_assign rule */
@@ -107,10 +110,17 @@ extern int yyleng;
 %token REAL_NUM
 %token INT_TYPE
 %token REAL_TYPE
+%token LONGINT_TYPE
 %token <str> STRING
+%token <str> ENDASM
 
 %token ID
+%token TYPE
 %token ARRAY
+%token ASSEMBLER
+%token ASM
+%token CONST
+%token ASMMODE
 %token SINGLE
 %token OF
 %token DOTDOT
@@ -160,6 +170,8 @@ extern int yyleng;
 %type<ident_list> identifier_list
 %type<list> optional_program_parameters
 %type<list> declarations
+%type<list> type_declarations_opt
+%type<list> type_declaration_list
 %type<list> subprogram_declarations
 %type<stmt> compound_statement
 %type<list> statement_seq_opt  /* New: For zero or more statements */
@@ -167,11 +179,13 @@ extern int yyleng;
 
 %type<type_s> type
 %type<i_val> standard_type
+%type<tree> type_declaration
 
 %type<tree> subprogram_declaration
 %type<subprogram_head_s> subprogram_head
 %type<list> arguments
 %type<list> parameter_list
+%type<tree> parameter_item
 
 %type<stmt> statement
 %type<stmt> variable_assignment
@@ -196,6 +210,7 @@ extern int yyleng;
 /* Rules to extract union values */
 %type<ident> ident
 %type<i_val> int_num
+%type<i_val> signed_int
 %type<f_val> real_num
 %type<op_val> relop
 %type<op_val> addop
@@ -212,20 +227,14 @@ optional_program_parameters
 
 program
     : PROGRAM ident optional_program_parameters ';'
+     type_declarations_opt
      declarations
      subprogram_declarations
      compound_statement
      '.'
      END_OF_FILE
      {
-         // $1: PROGRAM token
-         // $2: ident (type 'ident', provides $2.id and $2.line_num)
-         // $3: optional_program_parameters (type 'list', provides ListNode_t* for args)
-         // $4: ';' token
-         // $5: declarations
-         // $6: subprogram_declarations
-         // $7: compound_statement
-         parse_tree = mk_program($2.line_num, $2.id, $3, $5, $6, $7);
+         parse_tree = mk_program($2.line_num, $2.id, $3, $6, $5, $7, $8);
          return -1;
      }
     ;
@@ -281,7 +290,7 @@ declarations
             if($5.type == ARRAY)
                 tree = mk_arraydecl($3.line_num, $3.list, $5.actual_type, $5.start, $5.end);
             else
-                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type);
+                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id);
 
             if($1 == NULL)
                 $$ = CreateListNode(tree, LIST_TREE);
@@ -291,25 +300,67 @@ declarations
     | /* empty */ {$$ = NULL;}
     ;
 
+type_declarations_opt
+    : TYPE type_declaration_list { $$ = $2; }
+    | /* empty */ { $$ = NULL; }
+    ;
+
+type_declaration_list
+    : type_declaration
+        { $$ = CreateListNode($1, LIST_TREE); }
+    | type_declaration_list type_declaration
+        { $$ = PushListNodeBack($1, CreateListNode($2, LIST_TREE)); }
+    ;
+
+type_declaration
+    : ident relop signed_int DOTDOT signed_int ';'
+    {
+        if ($2 != EQ) {
+            yyerror("Expected '=' in type declaration");
+        }
+        $$ = mk_typedecl($1.line_num, $1.id, $3, $5);
+    }
+    ;
+
+signed_int
+    : int_num { $$ = $1; }
+    | addop int_num
+    {
+        if ($1 == MINUS) {
+            $$ = -$2;
+        } else {
+            $$ = $2;
+        }
+    }
+    ;
+
 type
     : standard_type
         {
             $$.type = SINGLE;
             $$.actual_type = $1;
+            $$.id = NULL;
         }
     | ARRAY '[' int_num DOTDOT int_num ']' OF standard_type
         {
             $$.type = ARRAY;
             $$.actual_type = $8;
+            $$.id = NULL;
             $$.start = $3;
             $$.end = $5;
         }
-
+    | ident
+        {
+            $$.type = ID;
+            $$.id = $1.id;
+            $$.actual_type = -1;
+        }
     ;
 
 standard_type
     : INT_TYPE {$$ = INT_TYPE;}
     | REAL_TYPE {$$ = REAL_TYPE;}
+    | LONGINT_TYPE {$$ = LONGINT_TYPE;}
     ;
 
 subprogram_declarations
@@ -324,24 +375,27 @@ subprogram_declarations
     ;
 
 subprogram_declaration
-    : subprogram_head
-    declarations
-    subprogram_declarations
-    compound_statement
+    : subprogram_head declarations subprogram_declarations compound_statement
         {
             if($1.sub_type == PROCEDURE)
                 $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4);
             else
-                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type);
+                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id);
         }
     ;
 
 subprogram_head
-    : FUNCTION ident arguments ':' standard_type ';'
+    : FUNCTION ident arguments ':' type ';'
         {
             $$.sub_type = FUNCTION;
             $$.args = $3;
-            $$.return_type = $5;
+            if ($5.type == ID) {
+                $$.return_type = -1;
+                $$.return_type_id = $5.id;
+            } else {
+                $$.return_type = $5.actual_type;
+                $$.return_type_id = NULL;
+            }
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
@@ -351,6 +405,7 @@ subprogram_head
             $$.sub_type = PROCEDURE;
             $$.args = $3;
             $$.return_type = -1;
+            $$.return_type_id = NULL;
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
@@ -362,34 +417,33 @@ arguments
     | /* empty */ {$$ = NULL;}
     ;
 
+optional_const
+    : CONST
+    | /* empty */
+    ;
+
 parameter_list
-    : identifier_list ':' type
+    : parameter_list ';' parameter_item
+        { $$ = PushListNodeBack($1, CreateListNode($3, LIST_TREE)); }
+    | parameter_item
+        { $$ = CreateListNode($1, LIST_TREE); }
+    ;
+
+parameter_item
+    : optional_const identifier_list ':' type
         {
             Tree_t *tree;
-            if($3.type == ARRAY)
-                tree = mk_arraydecl($1.line_num, $1.list, $3.actual_type, $3.start, $3.end);
+            if($4.type == ARRAY)
+                tree = mk_arraydecl($2.line_num, $2.list, $4.actual_type, $4.start, $4.end);
             else
-                tree = mk_vardecl($1.line_num, $1.list, $3.actual_type);
-
-            $$ = CreateListNode(tree, LIST_TREE);
-        }
-    | parameter_list ';' identifier_list ':' type
-        {
-            Tree_t *tree;
-            if($5.type == ARRAY)
-                tree = mk_arraydecl($3.line_num, $3.list, $5.actual_type, $5.start, $5.end);
-            else
-                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type);
-
-            $$ = PushListNodeBack($1, CreateListNode(tree, LIST_TREE));
+                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id);
+            $$ = tree;
         }
     ;
 
 compound_statement
-    : BBEGIN statement_seq_opt END
-        {
-            $$ = mk_compoundstatement(line_num, $2);
-        }
+    : BBEGIN statement_seq_opt END { $$ = mk_compoundstatement(line_num, $2); }
+    | ASSEMBLER ';' ASM ENDASM { $$ = mk_asmblock(line_num, $4); }
     ;
 
 statement_seq_opt  /* Zero or more statements, handles optional trailing semicolon for the sequence */

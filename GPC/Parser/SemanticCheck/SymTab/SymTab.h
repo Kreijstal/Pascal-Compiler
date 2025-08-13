@@ -53,6 +53,9 @@ int PushFunctionOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, Lis
 /* NOTE: args can be NULL to represent no args */
 int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args);
 
+/* Pushes a new type onto the current scope (head) */
+int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type);
+
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */

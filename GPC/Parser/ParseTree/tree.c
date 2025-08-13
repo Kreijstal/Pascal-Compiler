@@ -89,7 +89,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
               case TREE_SUBPROGRAM_FUNC:
                 fprintf(f, "[FUNCTION:%s]:\n", tree->tree_data.subprogram_data.id);
                 print_indent(f, num_indent);
-                fprintf(f, "[RETURNS:%d]\n", tree->tree_data.subprogram_data.return_type);
+                if (tree->tree_data.subprogram_data.return_type_id != NULL)
+                    fprintf(f, "[RETURNS:%s]\n", tree->tree_data.subprogram_data.return_type_id);
+                else
+                    fprintf(f, "[RETURNS:%d]\n", tree->tree_data.subprogram_data.return_type);
                 break;
 
               default:
@@ -116,7 +119,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           break;
 
         case TREE_VAR_DECL:
-          fprintf(f, "[VARDECL of type %d]\n", tree->tree_data.var_decl_data.type);
+          if (tree->tree_data.var_decl_data.type_id != NULL)
+            fprintf(f, "[VARDECL of type %s]\n", tree->tree_data.var_decl_data.type_id);
+          else
+            fprintf(f, "[VARDECL of type %d]\n", tree->tree_data.var_decl_data.type);
           list_print(tree->tree_data.var_decl_data.ids, f, num_indent+1);
           break;
 
@@ -127,6 +133,11 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
 
           list_print(tree->tree_data.var_decl_data.ids, f, num_indent+1);
           break;
+
+        case TREE_TYPE_DECL:
+            fprintf(f, "[TYPEDECL:%s = %d..%d]\n", tree->tree_data.type_decl_data.id,
+                tree->tree_data.type_decl_data.start, tree->tree_data.type_decl_data.end);
+            break;
 
         default:
         fprintf(stderr, "BAD TYPE IN tree_print!\n");
@@ -214,6 +225,12 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           fprintf(f, "[DO]:\n");
           stmt_print(stmt->stmt_data.for_data.do_for, f, num_indent+1);
           break;
+
+          case STMT_ASM_BLOCK:
+            fprintf(f, "[ASM_BLOCK]:\n");
+            print_indent(f, num_indent+1);
+            fprintf(f, "%s\n", stmt->stmt_data.asm_block_data.code);
+            break;
 
           default:
             fprintf(stderr, "BAD TYPE IN stmt_print!\n");
@@ -363,6 +380,8 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_SUBPROGRAM:
           free(tree->tree_data.subprogram_data.id);
+          if (tree->tree_data.subprogram_data.return_type_id != NULL)
+            free(tree->tree_data.subprogram_data.return_type_id);
 
           destroy_list(tree->tree_data.subprogram_data.args_var);
 
@@ -379,7 +398,13 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_ARR_DECL:
           destroy_list(tree->tree_data.var_decl_data.ids);
+          if (tree->tree_data.var_decl_data.type_id != NULL)
+            free(tree->tree_data.var_decl_data.type_id);
           break;
+
+        case TREE_TYPE_DECL:
+            free(tree->tree_data.type_decl_data.id);
+            break;
 
         default:
           fprintf(stderr, "BAD TYPE IN destroy_tree!\n");
@@ -437,6 +462,10 @@ void destroy_stmt(struct Statement *stmt)
 
           destroy_expr(stmt->stmt_data.for_data.to);
           destroy_stmt(stmt->stmt_data.for_data.do_for);
+          break;
+
+        case STMT_ASM_BLOCK:
+          free(stmt->stmt_data.asm_block_data.code);
           break;
 
           default:
@@ -501,7 +530,7 @@ void destroy_expr(struct Expression *expr)
 }
 
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement)
+    ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -511,8 +540,23 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_dec
     new_tree->tree_data.program_data.program_id = id;
     new_tree->tree_data.program_data.args_char = args;
     new_tree->tree_data.program_data.var_declaration = var_decl;
+    new_tree->tree_data.program_data.type_declaration = type_decl;
     new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.body_statement = compound_statement;
+
+    return new_tree;
+}
+
+Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
+{
+    Tree_t *new_tree;
+    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_TYPE_DECL;
+    new_tree->tree_data.type_decl_data.id = id;
+    new_tree->tree_data.type_decl_data.start = start;
+    new_tree->tree_data.type_decl_data.end = end;
 
     return new_tree;
 }
@@ -538,7 +582,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_d
 }
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type)
+    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -549,6 +593,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_de
     new_tree->tree_data.subprogram_data.id = id;
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.return_type = return_type;
+    new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -558,7 +603,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_de
 
 /*enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_STATEMENT_TYPE};*/
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type)
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -567,6 +612,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type)
     new_tree->type = TREE_VAR_DECL;
     new_tree->tree_data.var_decl_data.ids = ids;
     new_tree->tree_data.var_decl_data.type = type;
+    new_tree->tree_data.var_decl_data.type_id = type_id;
 
     return new_tree;
 }
@@ -689,6 +735,18 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
   new_stmt->stmt_data.for_data.for_assign_data.var = for_var;
 
   return new_stmt;
+}
+
+struct Statement *mk_asmblock(int line_num, char *code)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_ASM_BLOCK;
+    new_stmt->stmt_data.asm_block_data.code = code;
+
+    return new_stmt;
 }
 
 /*********** Expression routines ***************/

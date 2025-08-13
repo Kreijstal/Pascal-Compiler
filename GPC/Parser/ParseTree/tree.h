@@ -18,7 +18,7 @@ typedef struct Tree Tree_t;
 
 /* Enum for readability */
 enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
-    TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC};
+    TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC, TREE_TYPE_DECL};
 
 typedef struct Tree
 {
@@ -33,9 +33,18 @@ typedef struct Tree
 
             ListNode_t *args_char;
             ListNode_t *var_declaration;
+            ListNode_t *type_declaration;
             ListNode_t *subprograms;
             struct Statement *body_statement;
         } program_data;
+
+        /* A type declaration */
+        struct TypeDecl
+        {
+            char *id;
+            int start;
+            int end;
+        } type_decl_data;
 
         /* A subprogram */
         struct Subprogram
@@ -45,6 +54,7 @@ typedef struct Tree
             char *id;
             ListNode_t *args_var;
             int return_type; /* Should be -1 for PROCEDURE */
+            char *return_type_id;
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
@@ -57,6 +67,7 @@ typedef struct Tree
         {
             ListNode_t *ids;
             int type; /* Int, or real */
+            char *type_id;
         } var_decl_data;
 
         /* An array declaration */
@@ -99,15 +110,17 @@ void destroy_expr(struct Expression *expr);
 
 /* Tree routines */
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement);
+    ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement);
+
+Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
     ListNode_t *subprograms, struct Statement *compound_statement);
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type);
+    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id);
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type);
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, int start, int end);
 
@@ -129,6 +142,8 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
 
 struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Expression *to,
                               struct Statement *do_for);
+
+struct Statement *mk_asmblock(int line_num, char *code);
 
 /* Expression routines */
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
