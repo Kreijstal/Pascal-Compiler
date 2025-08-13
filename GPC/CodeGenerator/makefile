@@ -15,13 +15,22 @@ GRAMMAR_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/y.tab.o
 ALL_OBJS = $(GPC_OBJS) $(GRAMMAR_OBJS) $(PARSER_OBJS) $(TREE_OBJS) $(SEM_OBJS) $(SEM_OBJS_MORE)
 
 ######## THE MAIN BUILD RULES ###########
-Intel_x86-64: Intel_x86-64/codegen.o Intel_x86-64/stackmng/stackmng.o Intel_x86-64/expr_tree/expr_tree.o
+Intel_x86-64: Intel_x86-64/codegen.o Intel_x86-64/stackmng/stackmng.o Intel_x86-64/expr_tree/expr_tree.o Intel_x86-64/stmt_gen.o Intel_x86-64/expr_gen.o Intel_x86-64/builtin.o
 
 ############ MAKING OBJS #############
 # Making all the objects and bins across directories
 # Please no touch :)
 Intel_x86-64/codegen.o:
 	$(CC) $(CCFLAGS) -c Intel_x86-64/codegen.c
+
+Intel_x86-64/stmt_gen.o:
+	$(CC) $(CCFLAGS) -c Intel_x86-64/stmt_gen.c
+
+Intel_x86-64/expr_gen.o:
+	$(CC) $(CCFLAGS) -c Intel_x86-64/expr_gen.c
+
+Intel_x86-64/builtin.o:
+	$(CC) $(CCFLAGS) -c Intel_x86-64/builtin.c
 
 Intel_x86-64/stackmng/stackmng.o:
 	$(CC) $(CCFLAGS) -c Intel_x86-64/stackmng/stackmng.c

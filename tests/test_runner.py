@@ -3,13 +3,14 @@ import os
 import unittest
 
 # Path to the compiler executable
-GPC_PATH = "GPC/gpc"
+GPC_PATH = "./gpc"
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 
 def compile_compiler():
     """Compiles the GPC compiler by running make."""
     print("--- Compiling the compiler ---")
+    print("--- CWD: ", os.getcwd())
     try:
         # I need to find the correct makefile. Based on the file listing, it's in the root of GPC.
         subprocess.run(["make", "-C", "GPC"], check=True, capture_output=True, text=True)
@@ -28,6 +29,8 @@ def run_compiler(input_file, output_file, flags=None):
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
+    input_file = os.path.abspath(input_file)
+    output_file = os.path.abspath(output_file)
     command = [GPC_PATH, input_file, output_file] + flags
     print(f"--- Running compiler: {' '.join(command)} ---")
     try:
@@ -175,6 +178,35 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+
+    def test_refactor(self):
+        """Tests the refactored code with a new test case."""
+        input_file = "GPC/TestPrograms/CodeGeneration/refactor_test.p"
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "refactor_test.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "refactor_test")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            expected_output = "i is less than j\nk = 0\nk = 1\nk = 2\nk = 3\nk = 4\ni = 1, i = 2, i = 3, i = 4, i = 5, \n"
+            self.assertEqual(process.stdout, expected_output)
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
 
 if __name__ == "__main__":
     unittest.main()

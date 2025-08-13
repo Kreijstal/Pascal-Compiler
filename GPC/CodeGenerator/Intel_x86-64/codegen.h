@@ -146,6 +146,12 @@ void gen_label(char *buf, int buf_len);
 /* Escapes string for assembly output */
 void escape_string(char *dest, const char *src, size_t dest_size);
 
+/* Generates a label */
+void gen_label(char *buf, int buf_len);
+
+/* Generates jmp */
+ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
+
 /* This is the entry function */
 void codegen(Tree_t *, char *input_file_name, char *output_file_name);
 
@@ -166,28 +172,11 @@ void codegen_procedure(Tree_t *, FILE *);
 void codegen_function(Tree_t *, FILE *);
 ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, FILE *);
 
-ListNode_t *codegen_stmt(struct Statement *, ListNode_t *,FILE *);
-ListNode_t *codegen_compound_stmt(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_var_assignment(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_proc_call(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_if_then(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_while(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_for(struct Statement *, ListNode_t *, FILE *);
+#include "stmt_gen.h"
+#include "expr_gen.h"
+#include "builtin.h"
 
 ListNode_t *codegen_pass_arguments(ListNode_t *, ListNode_t *, FILE *);
 ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *);
-
-ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
-    FILE *, int *);
-
-ListNode_t *codegen_expr(struct Expression *, ListNode_t *, FILE *);
-ListNode_t *codegen_builtin_write(ListNode_t *, ListNode_t *, FILE *);
-ListNode_t *codegen_builtin_writeln(ListNode_t *, ListNode_t *, FILE *);
-ListNode_t *codegen_builtin_read(ListNode_t *, ListNode_t *, FILE *);
-ListNode_t *codegen_args(ListNode_t*, ListNode_t *, FILE *);
-
-/* (DEPRECATED) */
-ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, FILE *);
-ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, FILE *);
 
 #endif

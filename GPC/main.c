@@ -42,7 +42,7 @@ int main(int argc, char **argv)
         set_flags(argv + required_args, args_left);
     }
 
-    prelude_tree = ParsePascalOnly("GPC/stdlib.p");
+    prelude_tree = ParsePascalOnly("stdlib.p");
     user_tree = ParsePascalOnly(argv[1]);
 
     if(prelude_tree != NULL && user_tree != NULL)
