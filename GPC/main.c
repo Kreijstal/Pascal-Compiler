@@ -20,9 +20,11 @@ char *file_to_parse = NULL;
 
 void set_flags(char **, int);
 
+#include "Parser/SemanticCheck/SemCheck.h"
+
 int main(int argc, char **argv)
 {
-    Tree_t * parse_tree;
+    Tree_t *prelude_tree, *user_tree;
     int required_args, args_left;
 
     required_args = 3;
@@ -40,14 +42,52 @@ int main(int argc, char **argv)
         set_flags(argv + required_args, args_left);
     }
 
-    parse_tree = ParsePascal(argv[1]);
-    if(parse_tree != NULL)
-    {
-        fprintf(stderr, "Generating code to file: %s\n", argv[2]);
-        codegen(parse_tree, argv[1], argv[2]);
+    prelude_tree = ParsePascalOnly("GPC/stdlib.p");
+    user_tree = ParsePascalOnly(argv[1]);
 
-        destroy_tree(parse_tree);
-        parse_tree = NULL;
+    if(prelude_tree != NULL && user_tree != NULL)
+    {
+        ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
+        ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
+
+        if (user_subs == NULL)
+        {
+            user_tree->tree_data.program_data.subprograms = prelude_subs;
+        }
+        else
+        {
+            ListNode_t *last_node = user_subs;
+            while(last_node->next != NULL)
+            {
+                last_node = last_node->next;
+            }
+            last_node->next = prelude_subs;
+        }
+        prelude_tree->tree_data.program_data.subprograms = NULL;
+
+        if(start_semcheck(user_tree) == 0)
+        {
+            fprintf(stderr, "Generating code to file: %s\n", argv[2]);
+            codegen(user_tree, argv[1], argv[2]);
+        }
+
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
+        prelude_tree = NULL;
+        user_tree = NULL;
+    }
+    else
+    {
+        if(prelude_tree != NULL)
+        {
+            destroy_tree(prelude_tree);
+            prelude_tree = NULL;
+        }
+        if(user_tree != NULL)
+        {
+            destroy_tree(user_tree);
+            user_tree = NULL;
+        }
     }
 }
 

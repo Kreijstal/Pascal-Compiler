@@ -22,9 +22,6 @@ void free_arg_regs()
 /* TODO: Support loading arguments into temp if needed */
 char *get_arg_reg64_num(int num)
 {
-    if(num_args_alloced > num)
-        return NULL;
-
     if(num == 0)
     {
         return ARG_REG_1_64;
@@ -42,7 +39,6 @@ char *get_arg_reg64_num(int num)
         return ARG_REG_4_64;
     }
 
-    ++num_args_alloced;
     return NULL;
 }
 

@@ -77,6 +77,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return_val += semcheck_for(symtab, stmt, max_scope_lev);
             break;
 
+        case STMT_ASM_BLOCK:
+            /* No semantic checking needed for asm blocks */
+            break;
+
         default:
             fprintf(stderr, "ERROR: Bad type in semcheck_stmt!\n");
             exit(1);
@@ -181,8 +185,17 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
             while(true_arg_ids != NULL && args_given != NULL)
             {
-                if(arg_type != arg_decl->tree_data.var_decl_data.type &&
-                    arg_decl->tree_data.var_decl_data.type != BUILTIN_ANY_TYPE)
+                int expected_type = arg_decl->tree_data.var_decl_data.type;
+                if(expected_type == -1 && arg_decl->tree_data.var_decl_data.type_id != NULL)
+                {
+                    HashNode_t *type_node;
+                    if(FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1)
+                    {
+                        expected_type = type_node->var_type;
+                    }
+                }
+
+                if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, (char *)stmt->stmt_data.procedure_call_data.id, cur_arg);

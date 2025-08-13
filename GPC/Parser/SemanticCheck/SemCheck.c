@@ -117,6 +117,9 @@ void semcheck_add_builtins(SymTab_t *symtab)
     char *id;
     ListNode_t *args, *arg_ids;
 
+    AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
+    AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
+
     /**** READ PROCEDURE ****/
     id = strdup("read");
 
@@ -148,11 +151,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
     AddBuiltinProc(symtab, id, args);
 
     id = strdup("writeLn");
-    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
-    AddBuiltinProc(symtab, id, args);
-
-    id = strdup("WriteLn");
     arg_ids = CreateListNode(strdup("var"), LIST_STRING);
     args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
     AddBuiltinProc(symtab, id, args);
