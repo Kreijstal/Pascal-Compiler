@@ -503,12 +503,16 @@ int semcheck_funccall(int *type_return,
 
             while(true_arg_ids != NULL && args_given != NULL)
             {
-                if(arg_type != arg_decl->tree_data.var_decl_data.type &&
-                    arg_decl->tree_data.var_decl_data.type != BUILTIN_ANY_TYPE)
+                int expected_type = arg_decl->tree_data.var_decl_data.type;
+                if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
-                    fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
-                        expr->line_num, id, cur_arg);
-                    ++return_val;
+                    if (!((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
+                          (arg_type == LONGINT_TYPE && expected_type == INT_TYPE)))
+                    {
+                        fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
+                            expr->line_num, id, cur_arg);
+                        ++return_val;
+                    }
                 }
 
                 true_arg_ids = true_arg_ids->next;

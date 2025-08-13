@@ -43,6 +43,7 @@ int semcheck_id_not_main(char *id)
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
+int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
@@ -74,6 +75,41 @@ int start_semcheck(Tree_t *parse_tree)
     return return_val;
 }
 
+/* Pushes a bunch of type declarations onto the current scope */
+int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
+{
+    ListNode_t *cur;
+    Tree_t *tree;
+    int return_val, func_return;
+    enum VarType var_type;
+
+    assert(symtab != NULL);
+
+    return_val = 0;
+    cur = type_decls;
+    while(cur != NULL)
+    {
+        assert(cur->type == LIST_TREE);
+        tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_TYPE_DECL);
+
+        // For now, all custom types are integer based
+        var_type = HASHVAR_INTEGER;
+        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type);
+
+        if(func_return > 0)
+        {
+            fprintf(stderr, "Error on line %d, redeclaration of name %s!\n",
+                tree->line_num, tree->tree_data.type_decl_data.id);
+            return_val += func_return;
+        }
+
+        cur = cur->next;
+    }
+
+    return return_val;
+}
+
 /* Adds built-in functions */
 /*TODO: these should be defined in pascal not in semantic analyzer */
 void semcheck_add_builtins(SymTab_t *symtab)
@@ -86,7 +122,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
     /* Only arg is a variable to read into */
     arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
 
     AddBuiltinProc(symtab, id, args);
 
@@ -95,14 +131,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
     /* Only arg is a variable to read into */
     arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
 
     AddBuiltinProc(symtab, id, args);
 
     /**** WRITELN PROCEDURE ****/
     id = strdup("writeln");
     arg_ids = CreateListNode(strdup("var_ln"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE), LIST_TREE);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
+    AddBuiltinProc(symtab, id, args);
+
+    /**** READLN PROCEDURE ****/
+    id = strdup("readLn");
+    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
+    AddBuiltinProc(symtab, id, args);
+
+    id = strdup("writeLn");
+    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
     AddBuiltinProc(symtab, id, args);
 }
 
@@ -127,6 +174,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
 
+    return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0);
@@ -211,7 +259,22 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Variable declarations */
             if(tree->type == TREE_VAR_DECL)
             {
-                if(tree->tree_data.var_decl_data.type == INT_TYPE)
+                if (tree->tree_data.var_decl_data.type_id != NULL)
+                {
+                    HashNode_t *type_node;
+                    if (FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id) == -1)
+                    {
+                        fprintf(stderr, "Error on line %d, undefined type %s!\n",
+                            tree->line_num, tree->tree_data.var_decl_data.type_id);
+                        return_val++;
+                        var_type = HASHVAR_UNTYPED;
+                    }
+                    else
+                    {
+                        var_type = type_node->var_type;
+                    }
+                }
+                else if(tree->tree_data.var_decl_data.type == INT_TYPE || tree->tree_data.var_decl_data.type == LONGINT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else
                     var_type = HASHVAR_REAL;
@@ -221,7 +284,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Array declarations */
             else
             {
-                if(tree->tree_data.arr_decl_data.type == INT_TYPE)
+                if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else
                     var_type = HASHVAR_REAL;
@@ -284,7 +347,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     else
     {
         /* Need to additionally extract the return type */
-        if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)
+        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+        {
+            HashNode_t *type_node;
+            if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)
+            {
+                fprintf(stderr, "Error on line %d, undefined type %s!\n",
+                    subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
+                return_val++;
+                var_type = HASHVAR_UNTYPED;
+            }
+            else
+            {
+                var_type = type_node->var_type;
+            }
+        }
+        else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE || subprogram->tree_data.subprogram_data.return_type == LONGINT_TYPE)
             var_type = HASHVAR_INTEGER;
         else
             var_type = HASHVAR_REAL;

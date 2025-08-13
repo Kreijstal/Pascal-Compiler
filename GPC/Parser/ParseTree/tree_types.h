@@ -10,7 +10,7 @@
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
-    STMT_IF_THEN, STMT_WHILE, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR};
+    STMT_IF_THEN, STMT_WHILE, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR, STMT_ASM_BLOCK};
 
 /* A statement subtree */
 struct Statement
@@ -25,6 +25,12 @@ struct Statement
             struct Expression *var;
             struct Expression *expr;
         } var_assign_data;
+
+        /* Asm block */
+        struct AsmBlock
+        {
+            char *code;
+        } asm_block_data;
 
         /* Procedure call */
         struct ProcedureCall

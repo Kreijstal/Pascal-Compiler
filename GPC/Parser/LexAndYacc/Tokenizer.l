@@ -1,22 +1,125 @@
 %option noyywrap
+%x ASM_MODE
+%x COMMENT_MODE
+%x IGNORE_MODE
+
 %{
     #include <stdio.h>
     #include <stdlib.h>
+    #include <string.h>
     #include "../ErrVars.h"
     #include "../ParseTree/tree.h"
     #include "../List/List.h"
     #include "Grammar.tab.h"
+
+    char asm_buffer[1024];
+    int if_stack[100];
+    int if_stack_ptr = 0;
+
+    // Hardcoded defined symbols for now
+    const char* defined_symbols[] = {"CPUx86_64", NULL};
+
+    int is_defined(const char* symbol) {
+        for (int i = 0; defined_symbols[i] != NULL; i++) {
+            if (strcmp(defined_symbols[i], symbol) == 0) {
+                return 1;
+            }
+        }
+        return 0;
+    }
 %}
 
 whitespace [ \t]+
 integer  [0-9]+
 real [0-9]*[.][0-9]+
-id   [A-Za-z][A-Za-z0-9]*
+id   [A-Za-z][A-Za-z0-9_]*
 comment [(][*][^*]*[*]+([^*)][^*]*[*]+)*[)]
 pascal_string \'([^\']|\'\')*\' 
 %%
 
 {whitespace} ;
+
+"{"/[^$] {
+    BEGIN(COMMENT_MODE);
+}
+
+<COMMENT_MODE>"}" {
+    BEGIN(INITIAL);
+}
+
+<COMMENT_MODE>(.|\n) {
+    if (yytext[0] == '\n') {
+        line_num++;
+    }
+}
+
+"{$ifDef"([ \t]+[A-Za-z0-9_]+)?"}" {
+    char symbol[100];
+    sscanf(yytext, "{$ifDef %99s}", symbol);
+    if (if_stack_ptr > 0 && if_stack[if_stack_ptr-1] == 0) {
+        if_stack[if_stack_ptr++] = 0; // nested if in false branch
+    } else {
+        if_stack[if_stack_ptr++] = is_defined(symbol);
+    }
+    if (if_stack[if_stack_ptr-1] == 0) {
+        BEGIN(IGNORE_MODE);
+    }
+}
+
+"{$ifNDef"([ \t]+[A-Za-z0-9_]+)?"}" {
+    char symbol[100];
+    sscanf(yytext, "{$ifNDef %99s}", symbol);
+    if (if_stack_ptr > 0 && if_stack[if_stack_ptr-1] == 0) {
+        if_stack[if_stack_ptr++] = 0; // nested if in false branch
+    } else {
+        if_stack[if_stack_ptr++] = !is_defined(symbol);
+    }
+    if (if_stack[if_stack_ptr-1] == 0) {
+        BEGIN(IGNORE_MODE);
+    }
+}
+
+"{$else}" {
+    if (if_stack_ptr > 0) {
+        if (if_stack[if_stack_ptr-1] == 1) { // if part was true, ignore else
+            BEGIN(IGNORE_MODE);
+        } else { // if part was false, parse else
+            if (if_stack_ptr > 1 && if_stack[if_stack_ptr-2] == 0) {
+                // nested in false branch, still ignore
+            } else {
+                BEGIN(INITIAL);
+            }
+        }
+    }
+}
+
+"{$endIf}" {
+    if (if_stack_ptr > 0) {
+        if_stack_ptr--;
+        if (if_stack_ptr == 0 || if_stack[if_stack_ptr-1] == 1) {
+            BEGIN(INITIAL);
+        }
+    }
+}
+
+<IGNORE_MODE>"{$ifDef"([ \t]+[A-Za-z0-9_]+)?"}" { if_stack_ptr++; }
+<IGNORE_MODE>"{$ifNDef"([ \t]+[A-Za-z0-9_]+)?"}" { if_stack_ptr++; }
+<IGNORE_MODE>"{$else}" {
+    if (if_stack_ptr > 0) {
+        if (if_stack[if_stack_ptr-1] == 0) { // was in false if
+            if (if_stack_ptr > 1 && if_stack[if_stack_ptr-2] == 0) {
+                // still ignoring
+            } else {
+                BEGIN(INITIAL);
+            }
+        }
+    }
+}
+<IGNORE_MODE>"{$endIf}" { if (if_stack_ptr > 0) if_stack_ptr--; if(if_stack_ptr == 0 || if_stack[if_stack_ptr-1]==1) BEGIN(INITIAL); }
+<IGNORE_MODE>(.|\n) {}
+
+"}" { /* might be needed for asmMode */ return '}'; }
+
 
 {comment}|"//".*   { /* Well documented way to ignore comments */
     #ifdef DEBUG_FLEX
@@ -80,6 +183,55 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "[END] ");
     #endif
     return END;
+}
+
+"asm" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[ASM] ");
+    #endif
+    asm_buffer[0] = '\0';
+    BEGIN(ASM_MODE);
+    return ASM;
+}
+
+<ASM_MODE>end {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[ENDASM] ");
+    #endif
+    yylval.str = strdup(asm_buffer);
+    BEGIN(INITIAL);
+    return ENDASM;
+}
+
+<ASM_MODE>(.|\n) {
+    if (strlen(asm_buffer) + strlen(yytext) < sizeof(asm_buffer)) {
+        strcat(asm_buffer, yytext);
+    } else {
+        fprintf(stderr, "ASM buffer overflow\n");
+        exit(1);
+    }
+}
+
+
+"assembler" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[ASSEMBLER] ");
+    #endif
+    return ASSEMBLER;
+}
+
+"const" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[CONST] ");
+    #endif
+    return CONST;
+}
+
+"type" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[TYPE] ");
+    #endif
+    return TYPE;
 }
 
 "var"   {
@@ -272,6 +424,13 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "[REAL_TYPE] ");
     #endif
     return REAL_TYPE;
+}
+
+"longint" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[LONGINT_TYPE] ");
+    #endif
+    return LONGINT_TYPE;
 }
 
 

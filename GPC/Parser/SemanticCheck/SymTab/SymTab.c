@@ -198,6 +198,25 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, char *id)
     return return_val;
 }
 
+/* Pushes a new type onto the current scope (head) */
+int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+
+    HashTable_t *cur_hash;
+
+    if(FindIdentInTable(symtab->builtins, id) == NULL)
+    {
+        cur_hash = (HashTable_t *)symtab->stack_head->cur;
+        return AddIdentToTable(cur_hash, id, var_type, HASHTYPE_TYPE, NULL);
+    }
+    else
+    {
+        return 1;
+    }
+}
+
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab)
 {
