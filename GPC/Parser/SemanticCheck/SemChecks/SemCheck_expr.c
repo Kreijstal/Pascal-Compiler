@@ -345,7 +345,6 @@ int semcheck_varid(int *type_return,
     id = expr->expr_data.id;
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    set_hash_meta(hash_return, mutating);
 
     if(scope_return == -1)
     {
@@ -356,6 +355,7 @@ int semcheck_varid(int *type_return,
     }
     else
     {
+        set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
@@ -396,7 +396,6 @@ int semcheck_arrayaccess(int *type_return,
     /***** FIRST VERIFY ARRAY IDENTIFIER *****/
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    set_hash_meta(hash_return, mutating);
 
     if(scope_return == -1)
     {
@@ -407,6 +406,7 @@ int semcheck_arrayaccess(int *type_return,
     }
     else
     {
+        set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
@@ -440,115 +440,111 @@ int semcheck_arrayaccess(int *type_return,
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
-    int return_val, scope_return;
+    int return_val = 0, scope_return;
     char *id;
     int arg_type, cur_arg;
     ListNode_t *true_args, *true_arg_ids, *args_given;
     HashNode_t *hash_return = NULL;
-    Tree_t *arg_decl;
     char *mangled_name = NULL;
 
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_FUNCTION_CALL);
 
-    return_val = 0;
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
 
-    /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
+    fprintf(stderr, "Debug: Entering semcheck_funccall for %s\n", id);
 
-    // Try unmangled name first (for cname)
+    // First, try to find the identifier as is (for cname or non-overloaded funcs)
+    fprintf(stderr, "Debug: Looking for unmangled function %s\n", id);
     scope_return = FindIdent(&hash_return, symtab, id);
+    fprintf(stderr, "Debug: FindIdent returned %d\n", scope_return);
 
+    // If it's not found, or it's not a function, try to find a mangled version
     if (scope_return == -1 || (hash_return->hash_type != HASHTYPE_FUNCTION && hash_return->hash_type != HASHTYPE_FUNCTION_RETURN))
     {
-        // Not found or not a function, try mangled name
+        fprintf(stderr, "Debug: Looking for mangled function %s\n", id);
         mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
+        fprintf(stderr, "Debug: Mangled name is %s\n", mangled_name);
         scope_return = FindIdent(&hash_return, symtab, mangled_name);
+        fprintf(stderr, "Debug: FindIdent for mangled returned %d\n", scope_return);
     }
 
-    if (hash_return != NULL) {
-        set_hash_meta(hash_return, mutating);
-        if (mangled_name != NULL) {
-            free(expr->expr_data.function_call_data.id);
-            expr->expr_data.function_call_data.id = mangled_name;
-        }
-    }
-
-    if(scope_return == -1)
+    // Now, check the final result of the lookups
+    if (scope_return == -1)
     {
-        fprintf(stderr, "Error on line %d, undeclared identifier %s!\n\n", expr->line_num, id);
+        fprintf(stderr, "Error on line %d, undeclared function '%s' (or wrong arguments for overloaded function)!\n\n", expr->line_num, id);
+        if (mangled_name) free(mangled_name); // Clean up if mangling was attempted but failed
         ++return_val;
         *type_return = UNKNOWN_TYPE;
     }
-    else
+    else // Found a valid function (either mangled or not)
     {
-        if(scope_return > max_scope_lev)
-        {
-            fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n\n",
-                expr->line_num, id);
-            fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
-            ++return_val;
+        fprintf(stderr, "Debug: Found function %s\n", hash_return->id);
+        // If we found it via mangling, update the parse tree with the new name
+        if (mangled_name != NULL) {
+            fprintf(stderr, "Debug: Updating parse tree with mangled name\n");
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = mangled_name;
         }
-        if(hash_return->hash_type != HASHTYPE_FUNCTION &&
-            hash_return->hash_type != HASHTYPE_FUNCTION_RETURN)
-        {
-            fprintf(stderr, "Error on line %d, \"%s\" is not a function!\n\n",
-                expr->line_num, id);
+
+        set_hash_meta(hash_return, mutating);
+
+        // --- All subsequent checks go here, inside the success path ---
+
+        if (scope_return > max_scope_lev) {
+            fprintf(stderr, "Error on line %d, cannot call function '%s', invalid scope!\n\n",
+                expr->line_num, expr->expr_data.function_call_data.id);
             ++return_val;
         }
 
         set_type_from_hashtype(type_return, hash_return);
 
-        /***** THEN VERIFY ARGS INSIDE *****/
+        /***** VERIFY ARGS INSIDE *****/
         cur_arg = 0;
         true_args = hash_return->args;
-        while(args_given != NULL && true_args != NULL)
+        while (args_given != NULL && true_args != NULL)
         {
             ++cur_arg;
             assert(args_given->type == LIST_EXPR);
             assert(true_args->type == LIST_TREE);
-            return_val += semcheck_expr_main(&arg_type,
-                symtab, (struct Expression *)args_given->cur, max_scope_lev, NO_MUTATE);
+            return_val += semcheck_expr_main(&arg_type, symtab, (struct Expression *)args_given->cur, max_scope_lev, NO_MUTATE);
 
-            arg_decl = (Tree_t *)true_args->cur;
+            Tree_t *arg_decl = (Tree_t *)true_args->cur;
             assert(arg_decl->type == TREE_VAR_DECL);
             true_arg_ids = arg_decl->tree_data.var_decl_data.ids;
 
-            while(true_arg_ids != NULL && args_given != NULL)
+            while (true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = arg_decl->tree_data.var_decl_data.type;
-                if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
+                if (arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
                     if (!((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
                           (arg_type == LONGINT_TYPE && expected_type == INT_TYPE)))
                     {
-                        fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
-                            expr->line_num, id, cur_arg);
+                        fprintf(stderr, "Error on line %d, on function call '%s', argument %d: Type mismatch!\n\n",
+                                expr->line_num, expr->expr_data.function_call_data.id, cur_arg);
                         ++return_val;
                     }
                 }
-
                 true_arg_ids = true_arg_ids->next;
                 args_given = args_given->next;
             }
-
             true_args = true_args->next;
         }
-        if(true_args == NULL && args_given != NULL)
-        {
-            fprintf(stderr, "Error on line %d, on function call %s, too many arguments given!\n\n",
-                expr->line_num, id);
+
+        if (true_args == NULL && args_given != NULL) {
+            fprintf(stderr, "Error on line %d, on function call '%s', too many arguments given!\n\n",
+                    expr->line_num, expr->expr_data.function_call_data.id);
             ++return_val;
-        }
-        else if(true_args != NULL && args_given == NULL)
-        {
-            fprintf(stderr, "Error on line %d, on function call %s, not enough arguments given!\n\n",
-                expr->line_num, id);
+        } else if (true_args != NULL && args_given == NULL) {
+            fprintf(stderr, "Error on line %d, on function call '%s', not enough arguments given!\n\n",
+                    expr->line_num, expr->expr_data.function_call_data.id);
             ++return_val;
         }
     }
 
+    fprintf(stderr, "Debug: Exiting semcheck_funccall for %s\n", id);
     return return_val;
 }

@@ -17,7 +17,7 @@ EXTRA_CCFLAGS ?=
 CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
-GPC_OBJS = main.o flags.o
+GPC_OBJS = main.o flags.o runtime.o
 PARSER_OBJS = $(PARSER_DIR)/ParsePascal.o
 TREE_OBJS = $(PARSER_DIR)/List.o $(PARSER_DIR)/tree.o
 SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o $(PARSER_DIR)/NameMangling.o
@@ -71,6 +71,12 @@ bisonDebug:
 	cd $(PARSER_DIR) && $(MAKE) debug_bison EXTRA_CCFLAGS="-DDEBUG_BISON"
 
 
+
+bisonDebug:
+	cd $(PARSER_DIR) && $(MAKE) debug_bison EXTRA_CCFLAGS="-DDEBUG_BISON"
+
+runtime.o:
+	$(CC) $(CCFLAGS) -c runtime.c
 
 ############ CLEANING ##########3
 clean: clean_gpc clean_LexYacc clean_CodeGen

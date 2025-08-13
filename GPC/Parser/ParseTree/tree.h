@@ -52,6 +52,7 @@ typedef struct Tree
             /* FUNCTION or PROCEDURE */
             enum TreeType sub_type;
             char *id;
+            char *mangled_id;
             ListNode_t *args_var;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;

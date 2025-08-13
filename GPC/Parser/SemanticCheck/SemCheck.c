@@ -323,8 +323,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     enum VarType var_type;
     enum TreeType sub_type;
     HashNode_t *hash_return;
-    char *id_to_use;
-    char *mangled_name = NULL;
+    char *id_to_use_for_lookup;
 
     assert(symtab != NULL);
     assert(subprogram != NULL);
@@ -336,29 +335,32 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val = 0;
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
+    // --- Name Mangling Logic ---
     if (subprogram->tree_data.subprogram_data.cname_flag) {
-        id_to_use = subprogram->tree_data.subprogram_data.id;
+        id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
     } else {
-        mangled_name = MangleFunctionName(subprogram->tree_data.subprogram_data.id,
-                                          subprogram->tree_data.subprogram_data.args_var);
-        id_to_use = mangled_name;
+        // Generate the mangled name and store it in the new field
+        subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
+            subprogram->tree_data.subprogram_data.id,
+            subprogram->tree_data.subprogram_data.args_var);
+        id_to_use_for_lookup = subprogram->tree_data.subprogram_data.mangled_id;
     }
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
-        func_return = PushProcedureOntoScope(symtab, id_to_use,
+        // Use the mangled (or original if cname) name for the external symbol
+        func_return = PushProcedureOntoScope(symtab, id_to_use_for_lookup,
                         subprogram->tree_data.subprogram_data.args_var);
 
-        /* Pushing new scope for the subprogram and allowing recursion */
         PushScope(symtab);
-        PushProcedureOntoScope(symtab, id_to_use,
+        // Push it again in the new scope to allow recursion
+        PushProcedureOntoScope(symtab, id_to_use_for_lookup,
             subprogram->tree_data.subprogram_data.args_var);
 
         new_max_scope = max_scope_lev+1;
     }
-    /* Function */
-    else
+    else // Function
     {
         /* Need to additionally extract the return type */
         if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
@@ -381,14 +383,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         else
             var_type = HASHVAR_REAL;
 
-
-        func_return = PushFunctionOntoScope(symtab, id_to_use,
+        // Use the mangled (or original if cname) name for the external symbol
+        func_return = PushFunctionOntoScope(symtab, id_to_use_for_lookup,
                         var_type, subprogram->tree_data.subprogram_data.args_var);
 
-        /* Pushing new scope for the subprogram and allowing recursion and return statements */
-        /* NOTE: HASHTYPE_FUNCTION_RETURN is a special type you can call and set (return stmt) */
         PushScope(symtab);
-        PushFuncRetOntoScope(symtab, id_to_use,
+        // **THIS IS THE FIX FOR THE RETURN VALUE**:
+        // Use the ORIGINAL name for the internal return variable.
+        PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
             var_type, subprogram->tree_data.subprogram_data.args_var);
 
         new_max_scope = 0;
@@ -422,7 +424,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     else
     {
-        assert(FindIdent(&hash_return, symtab, id_to_use)
+        assert(FindIdent(&hash_return, symtab, subprogram->tree_data.subprogram_data.id)
                     == 0);
 
         ResetHashNodeStatus(hash_return);
