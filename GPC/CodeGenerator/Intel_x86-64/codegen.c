@@ -107,9 +107,9 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
             break;
         case GE:
             if(inverse > 0)
-                snprintf(jmp_buf, 6, "jge");
-            else
                 snprintf(jmp_buf, 6, "jl");
+            else
+                snprintf(jmp_buf, 6, "jge");
             break;
 
         case NORMAL_JMP:
@@ -235,7 +235,7 @@ void codegen_main(char *prgm_name, FILE *o_file)
     fprintf(o_file, "\tsubq\t$32, %%rsp\n");  // Allocate stack space (32 bytes for shadow space)
     fprintf(o_file, "\tcall\t%s\n", prgm_name);
     // Windows-compatible exit
-    fprintf(o_file, "\txor\t%%ecx, %%ecx\n"); // exit code 0
+    fprintf(o_file, "\txor\t%%edi, %%edi\n"); // exit code 0
     fprintf(o_file, "\tcall\texit\n");         // call exit function
     codegen_function_footer("main", o_file);
 }
@@ -684,6 +684,8 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
     inst_list = add_inst(inst_list, buffer);
     
     fprintf(stderr, "DEBUG: Calling printf\n");
+    snprintf(buffer, 100, "\tmovl\t$0, %%eax\n");
+    inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, 100, "\tcall\tprintf\n");
     inst_list = add_inst(inst_list, buffer);
     
