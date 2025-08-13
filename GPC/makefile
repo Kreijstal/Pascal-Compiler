@@ -17,10 +17,10 @@ EXTRA_CCFLAGS ?=
 CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
-GPC_OBJS = main.o flags.o runtime.o
+GPC_OBJS = main.o flags.o
 PARSER_OBJS = $(PARSER_DIR)/ParsePascal.o
 TREE_OBJS = $(PARSER_DIR)/List.o $(PARSER_DIR)/tree.o
-SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o $(PARSER_DIR)/NameMangling.o
+SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o
 SEM_OBJS_MORE = $(PARSER_DIR)/SemCheck_stmt.o $(PARSER_DIR)/SemCheck_expr.o
 GRAMMAR_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/Grammar.tab.o
 CODEGEN_OBJS = $(CODEGEN_DIR)/Intel_x86-64/codegen.o $(CODEGEN_DIR)/Intel_x86-64/stackmng/stackmng.o $(CODEGEN_DIR)/Intel_x86-64/expr_tree/expr_tree.o
@@ -71,12 +71,6 @@ bisonDebug:
 	cd $(PARSER_DIR) && $(MAKE) debug_bison EXTRA_CCFLAGS="-DDEBUG_BISON"
 
 
-
-bisonDebug:
-	cd $(PARSER_DIR) && $(MAKE) debug_bison EXTRA_CCFLAGS="-DDEBUG_BISON"
-
-runtime.o:
-	$(CC) $(CCFLAGS) -c runtime.c
 
 ############ CLEANING ##########3
 clean: clean_gpc clean_LexYacc clean_CodeGen

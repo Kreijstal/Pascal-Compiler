@@ -1,12 +1,12 @@
 #ifndef NAME_MANGLING_H
 #define NAME_MANGLING_H
 
-#include "../ParseTree/tree.h"
+#include "../List/List.h"
 #include "SymTab/SymTab.h"
 
 // Generates a mangled name for a function from its declaration.
 // The caller is responsible for freeing the returned string.
-char* MangleFunctionName(const char* original_name, ListNode_t* args);
+char* MangleFunctionName(const char* original_name, ListNode_t* args, SymTab_t* symtab);
 
 // Generates a mangled name for a function from a call site.
 // The caller is responsible for freeing the returned string.

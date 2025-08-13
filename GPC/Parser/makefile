@@ -53,17 +53,14 @@ ParsePascal.o: $(PARSER_OBJS) $(TREE_OBJS) ParsePascal.h ParsePascal.c
 List/List.o:
 	$(CC) $(CCFLAGS) -c List/List.c
 
-SemCheck.o: $(PARSER_OBJS) $(TREE_OBJS) SemCheck_stmt.o SemCheck_expr.o SymTab.o HashTable.o NameMangling.o
+SemCheck.o: $(PARSER_OBJS) $(TREE_OBJS) SemCheck_stmt.o SemCheck_expr.o SymTab.o HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemCheck.c
 
 SemCheck_stmt.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_stmt.c
 
-SemCheck_expr.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o NameMangling.o
+SemCheck_expr.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_expr.c
-
-NameMangling.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
-	$(CC) $(CCFLAGS) -c SemanticCheck/NameMangling.c
 
 HashTable.o: $(GRAMMAR_DIR)/Grammar.tab.h
 	$(CC) $(CCFLAGS) -c SemanticCheck/HashTable/HashTable.c
@@ -88,3 +85,6 @@ clean_parser:
 	rm -f $(ALL_OBJS) *.o
 clean_LexYacc:
 	cd $(GRAMMAR_DIR) && $(MAKE) clean
+
+NameMangling.o: $(GRAMMAR_DIR)/Grammar.tab.h SemCheck_expr.o
+	$(CC) $(CCFLAGS) -c SemanticCheck/NameMangling.c

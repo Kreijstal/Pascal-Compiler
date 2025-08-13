@@ -304,18 +304,18 @@ pascal_string \'([^\']|\'\')*\'
     return DO;
 }
 
-"while" {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[WHILE] ");
-    #endif
-    return WHILE;
-}
-
 "cname" {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[CNAME] ");
     #endif
     return CNAME;
+}
+
+"while" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[WHILE] ");
+    #endif
+    return WHILE;
 }
 
 ":="   {

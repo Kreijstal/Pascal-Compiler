@@ -136,6 +136,7 @@
 
 %token FOR
 %token TO
+
 %token CNAME
 
 %token END_OF_FILE
@@ -188,7 +189,6 @@
 %type<list> arguments
 %type<list> parameter_list
 %type<tree> parameter_item
-%type<i_val> optional_cname
 
 %type<stmt> statement
 %type<stmt> variable_assignment
@@ -388,7 +388,7 @@ subprogram_declaration
     ;
 
 subprogram_head
-    : FUNCTION ident arguments ':' type ';' optional_cname
+    : FUNCTION ident arguments ':' type ';'
         {
             $$.sub_type = FUNCTION;
             $$.args = $3;
@@ -402,9 +402,25 @@ subprogram_head
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
-            $$.cname_flag = $7;
+            $$.cname_flag = 0;
         }
-    | PROCEDURE ident arguments ';' optional_cname
+    | FUNCTION ident arguments ':' type CNAME ';'
+        {
+            $$.sub_type = FUNCTION;
+            $$.args = $3;
+            if ($5.type == ID) {
+                $$.return_type = -1;
+                $$.return_type_id = $5.id;
+            } else {
+                $$.return_type = $5.actual_type;
+                $$.return_type_id = NULL;
+            }
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 1;
+        }
+    | PROCEDURE ident arguments ';'
         {
             $$.sub_type = PROCEDURE;
             $$.args = $3;
@@ -413,13 +429,19 @@ subprogram_head
 
             $$.id = $2.id;
             $$.line_num = $2.line_num;
-            $$.cname_flag = $5;
+            $$.cname_flag = 0;
         }
-    ;
+    | PROCEDURE ident arguments CNAME ';'
+        {
+            $$.sub_type = PROCEDURE;
+            $$.args = $3;
+            $$.return_type = -1;
+            $$.return_type_id = NULL;
 
-optional_cname
-    : CNAME { $$ = 1; }
-    | /* empty */ { $$ = 0; }
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 1;
+        }
     ;
 
 arguments

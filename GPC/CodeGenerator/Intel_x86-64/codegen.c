@@ -389,10 +389,12 @@ void codegen_procedure(Tree_t *proc_tree, FILE *o_file)
     assert(proc_tree->type == TREE_SUBPROGRAM);
     assert(proc_tree->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC);
 
-    struct Subprogram *proc = &proc_tree->tree_data.subprogram_data;
+    struct Subprogram *proc;
     ListNode_t *inst_list;
     char buffer[50];
     char *sub_id;
+
+    struct Subprogram *proc = &proc_tree->tree_data.subprogram_data;
 
     // Use mangled_id if it exists, otherwise fall back to id
     sub_id = (proc->mangled_id != NULL) ? proc->mangled_id : proc->id;
@@ -423,11 +425,13 @@ void codegen_function(Tree_t *func_tree, FILE *o_file)
     assert(func_tree->type == TREE_SUBPROGRAM);
     assert(func_tree->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC);
 
-    struct Subprogram *func = &func_tree->tree_data.subprogram_data;
+    struct Subprogram *func;
     ListNode_t *inst_list;
     char buffer[50];
     char *sub_id;
     StackNode_t *return_var;
+
+    struct Subprogram *func = &func_tree->tree_data.subprogram_data;
 
     // Use mangled_id if it exists, otherwise fall back to id
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
@@ -474,7 +478,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     char buffer[50];
     StackNode_t *arg_stack;
 
-    arg_num = 0;
     while(args != NULL)
     {
         arg_decl = (Tree_t *)args->cur;
@@ -487,6 +490,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 if(type == REAL_TYPE)
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
 
+                arg_num = 0;
                 while(arg_ids != NULL)
                 {
                     arg_reg = get_arg_reg32_num(arg_num);
@@ -555,37 +559,6 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o
             return inst_list;
         case EXPR_SIGN_TERM:
             fprintf(stderr, "DEBUG: Processing sign term expression\n");
-            expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
-            free_expr_tree(expr_tree);
-            return inst_list;
-        case EXPR_FUNCTION_CALL:
-            {
-                fprintf(stderr, "DEBUG: Processing function call expression\n");
-                char *func_name = expr->expr_data.function_call_data.id;
-                ListNode_t *args_expr = expr->expr_data.function_call_data.args_expr;
-                char buffer[50];
-                Register_t *return_reg;
-
-                inst_list = codegen_pass_arguments(args_expr, inst_list, o_file);
-                inst_list = codegen_vect_reg(inst_list, 0);
-                snprintf(buffer, 50, "\tcall\t%s\n", func_name);
-                inst_list = add_inst(inst_list, buffer);
-                free_arg_regs();
-
-                // The result is in %eax (RETURN_REG_32)
-                // Move it to a register from the register stack
-                return_reg = pop_reg_stack(get_reg_stack());
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", RETURN_REG_32, return_reg->bit_32);
-                inst_list = add_inst(inst_list, buffer);
-                push_reg_stack(get_reg_stack(), return_reg);
-
-                return inst_list;
-            }
-        case EXPR_RNUM:
-            fprintf(stderr, "DEBUG: Processing real number expression (treating as int)\n");
-            expr->type = EXPR_INUM;
-            expr->expr_data.i_num = (int)expr->expr_data.r_num;
             expr_tree = build_expr_tree(expr);
             inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
             free_expr_tree(expr_tree);
@@ -1049,10 +1022,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FIL
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
     }
-
-    // THIS IS THE FIX: Reset the argument register counter after EVERY call.
-    free_arg_regs();
 
     return inst_list;
 }

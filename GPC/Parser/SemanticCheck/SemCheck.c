@@ -323,11 +323,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     enum VarType var_type;
     enum TreeType sub_type;
     HashNode_t *hash_return;
-    char *id_to_use_for_lookup;
 
     assert(symtab != NULL);
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
+
+    char *id_to_use_for_lookup;
 
     sub_type = subprogram->tree_data.subprogram_data.sub_type;
     assert(sub_type == TREE_SUBPROGRAM_PROC || sub_type == TREE_SUBPROGRAM_FUNC);
@@ -339,10 +340,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (subprogram->tree_data.subprogram_data.cname_flag) {
         id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
     } else {
-        // Generate the mangled name and store it in the new field
+        // Pass the symbol table to the mangler
         subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
             subprogram->tree_data.subprogram_data.id,
-            subprogram->tree_data.subprogram_data.args_var);
+            subprogram->tree_data.subprogram_data.args_var,
+            symtab); // <-- PASS symtab HERE
         id_to_use_for_lookup = subprogram->tree_data.subprogram_data.mangled_id;
     }
 

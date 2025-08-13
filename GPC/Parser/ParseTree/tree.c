@@ -381,7 +381,7 @@ void destroy_tree(Tree_t *tree)
         case TREE_SUBPROGRAM:
           free(tree->tree_data.subprogram_data.id);
           if (tree->tree_data.subprogram_data.mangled_id != NULL)
-            free(tree->tree_data.subprogram_data.mangled_id);
+            free(tree->tree_data.subprogram_data.mangled_id); // <-- ADD THIS
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
 
@@ -577,6 +577,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_d
     new_tree->tree_data.subprogram_data.mangled_id = NULL;
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.return_type = -1;
+    new_tree->tree_data.subprogram_data.return_type_id = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
@@ -595,6 +596,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_de
     new_tree->type = TREE_SUBPROGRAM;
     new_tree->tree_data.subprogram_data.sub_type = TREE_SUBPROGRAM_FUNC;
     new_tree->tree_data.subprogram_data.id = id;
+    new_tree->tree_data.subprogram_data.mangled_id = NULL;
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;

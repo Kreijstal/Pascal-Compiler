@@ -6,6 +6,7 @@
 #include "../List/List.h"
 #include "../LexAndYacc/Grammar.tab.h"
 #include "SemChecks/SemCheck_expr.h"
+#include "SymTab/SymTab.h"
 
 // Helper to free a list of integers
 static void DestroyIntList(ListNode_t* list) {
@@ -18,8 +19,8 @@ static void DestroyIntList(ListNode_t* list) {
     }
 }
 
-// Helper function to flatten argument lists into a list of types for mangling.
-static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args) {
+// Helper function to flatten argument lists into a list of HASHVAR_ types.
+static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab) { // <-- Add symtab
     if (args == NULL) {
         return NULL;
     }
@@ -28,24 +29,39 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args) {
     ListNode_t* arg_cur = args;
     while (arg_cur != NULL) {
         Tree_t* decl_tree = (Tree_t*)arg_cur->cur;
-        int type;
+        enum VarType resolved_type = HASHVAR_UNTYPED; // Default to untyped
         ListNode_t* ids;
 
         if (decl_tree->type == TREE_VAR_DECL) {
-            type = decl_tree->tree_data.var_decl_data.type;
             ids = decl_tree->tree_data.var_decl_data.ids;
-        } else if (decl_tree->type == TREE_ARR_DECL) {
-            type = -1; // Special type for arrays
+            // --- THIS IS THE CORE LOGIC ---
+            if (decl_tree->tree_data.var_decl_data.type_id != NULL) {
+                // It's a custom type, look it up in the symbol table
+                HashNode_t* type_node;
+                if (FindIdent(&type_node, symtab, decl_tree->tree_data.var_decl_data.type_id) != -1 && type_node->hash_type == HASHTYPE_TYPE) {
+                    resolved_type = type_node->var_type;
+                }
+            } else {
+                // It's a built-in type, convert from parser token to semantic type
+                switch (decl_tree->tree_data.var_decl_data.type) {
+                    case INT_TYPE:
+                    case LONGINT_TYPE:
+                        resolved_type = HASHVAR_INTEGER;
+                        break;
+                    case REAL_TYPE:
+                        resolved_type = HASHVAR_REAL;
+                        break;
+                }
+            }
+        } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
-        } else {
-            arg_cur = arg_cur->next;
-            continue;
+            resolved_type = -1; // Special marker for array
         }
 
         ListNode_t* id_cur = ids;
         while (id_cur != NULL) {
             int* type_ptr = malloc(sizeof(int));
-            *type_ptr = type;
+            *type_ptr = resolved_type;
             if (type_list == NULL) {
                 type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
             } else {
@@ -84,12 +100,12 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     while (cur != NULL) {
         int type = *(int*)cur->cur;
         const char* type_suffix;
-        switch (type) {
-            case INT_TYPE: type_suffix = "_i"; break;
-            case LONGINT_TYPE: type_suffix = "_li"; break;
-            case REAL_TYPE: type_suffix = "_r"; break;
-            case -1: type_suffix = "_a"; break; // Array
-            default: type_suffix = "_u"; break; // Unknown/unsupported
+        switch ((enum VarType)type) { // <-- Cast to enum VarType
+            case HASHVAR_INTEGER: type_suffix = "_i"; break;
+            case HASHVAR_REAL:    type_suffix = "_r"; break;
+            case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
+            case -1:              type_suffix = "_a"; break; // Array
+            default:              type_suffix = "_u"; break; // Unknown/unsupported
         }
         strcat(mangled_name, type_suffix);
         cur = cur->next;
@@ -99,8 +115,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     return mangled_name;
 }
 
-char* MangleFunctionName(const char* original_name, ListNode_t* args) {
-    ListNode_t* type_list = GetFlatTypeListForMangling(args);
+// Update the main function signature and the call
+char* MangleFunctionName(const char* original_name, ListNode_t* args, SymTab_t* symtab) { // <-- Add symtab
+    ListNode_t* type_list = GetFlatTypeListForMangling(args, symtab); // <-- Pass symtab
     return MangleNameFromTypeList(original_name, type_list);
 }
 
