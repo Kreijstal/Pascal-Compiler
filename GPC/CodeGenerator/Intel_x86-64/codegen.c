@@ -1004,6 +1004,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FIL
         inst_list = codegen_builtin_writeln(args_expr, inst_list, o_file);
         fprintf(stderr, "DEBUG: Finished generating code for writeln()\n");
     }
+    else if(strcmp("WriteLn", proc_name) == 0)
+    {
+        fprintf(stderr, "DEBUG: Generating code for WriteLn() builtin\n");
+        inst_list = codegen_builtin_writeln(args_expr, inst_list, o_file);
+        fprintf(stderr, "DEBUG: Finished generating code for WriteLn()\n");
+    }
     else if(strcmp("read", proc_name) == 0 || strcmp("readLn", proc_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for read() builtin\n");
