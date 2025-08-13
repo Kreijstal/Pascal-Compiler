@@ -52,9 +52,11 @@ typedef struct Tree
             /* FUNCTION or PROCEDURE */
             enum TreeType sub_type;
             char *id;
+            char *mangled_id; // <-- ADD THIS LINE
             ListNode_t *args_var;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
+            int cname_flag;
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
@@ -115,10 +117,10 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_dec
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement);
+    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag);
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id);
+    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag);
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id);
 

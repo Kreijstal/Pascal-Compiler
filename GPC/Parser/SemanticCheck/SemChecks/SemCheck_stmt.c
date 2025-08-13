@@ -12,8 +12,10 @@
 #include <stdio.h>
 #include <assert.h>
 #include <limits.h>
+#include <string.h>
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
+#include "../NameMangling.h"
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
@@ -130,6 +132,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     HashNode_t *sym_return;
     ListNode_t *true_args, *true_arg_ids, *args_given;
     Tree_t *arg_decl;
+    char *proc_id;
+    char *mangled_name;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -137,15 +141,28 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     return_val = 0;
 
+    proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
-    scope_return = FindIdent(&sym_return, symtab, (char *)stmt->stmt_data.procedure_call_data.id);
+    scope_return = FindIdent(&sym_return, symtab, proc_id);
+    if(scope_return != -1 && sym_return->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    {
+        mangled_name = strdup(proc_id);
+    }
+    else
+    {
+        mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
+        if(mangled_name != NULL)
+            scope_return = FindIdent(&sym_return, symtab, mangled_name);
+        else
+            scope_return = -1;
+    }
+    stmt->stmt_data.procedure_call_data.mangled_id = mangled_name;
 
     if(scope_return == -1)
     {
-        fprintf(stderr, "Error on line %d, unrecognized name %s\n", stmt->line_num,
-            (char *)stmt->stmt_data.procedure_call_data.id);
-            /*PrintSymTab(symtab, stderr, 0);*/
+        fprintf(stderr, "Error on line %d, unrecognized procedure call %s\n", stmt->line_num,
+            proc_id);
         ++return_val;
     }
     else
@@ -153,8 +170,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
         if(scope_return > max_scope_lev)
         {
-            fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n",
-                stmt->line_num, (char *)stmt->stmt_data.procedure_call_data.id);
+            fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n\n",
+                stmt->line_num, proc_id);
             fprintf(stderr, "[Was it defined above the current function context?]\n");
 
             ++return_val;
@@ -162,8 +179,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         if(sym_return->hash_type != HASHTYPE_PROCEDURE &&
             sym_return->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
         {
-            fprintf(stderr, "Error on line %d, expected %s to be a procedure or builtin!\n",
-                stmt->line_num, (char *)stmt->stmt_data.procedure_call_data.id);
+            fprintf(stderr, "Error on line %d, expected %s to be a procedure or builtin!\n\n",
+                stmt->line_num, proc_id);
 
             ++return_val;
         }
@@ -198,7 +215,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
-                        stmt->line_num, (char *)stmt->stmt_data.procedure_call_data.id, cur_arg);
+                        stmt->line_num, proc_id, cur_arg);
                     ++return_val;
                 }
 
@@ -213,13 +230,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         if(true_args == NULL && args_given != NULL)
         {
             fprintf(stderr, "Error on line %d, on procedure call %s, too many arguments given!\n\n",
-                stmt->line_num, (char *)stmt->stmt_data.procedure_call_data.id);
+                stmt->line_num, proc_id);
             ++return_val;
         }
         else if(true_args != NULL && args_given == NULL)
         {
             fprintf(stderr, "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
-                stmt->line_num, (char *)stmt->stmt_data.procedure_call_data.id);
+                stmt->line_num, proc_id);
             ++return_val;
         }
     }

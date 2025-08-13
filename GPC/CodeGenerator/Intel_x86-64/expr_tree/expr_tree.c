@@ -255,7 +255,7 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, NULL);
-        snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.id);
+        snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", reg->bit_32);
         inst_list = add_inst(inst_list, buffer);

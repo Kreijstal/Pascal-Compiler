@@ -17,7 +17,7 @@ CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 # Object files to build
 GPC_OBJS = ParsePascal.o
 TREE_OBJS = List/List.o $(TREE_DIR)/tree.o
-SEM_OBJS = SemCheck.o SemCheck_stmt.o SemCheck_expr.o HashTable.o SymTab.o
+SEM_OBJS = SemCheck.o SemCheck_stmt.o SemCheck_expr.o HashTable.o SymTab.o NameMangling.o
 PARSER_OBJS = $(GRAMMAR_DIR)/lex.yy.o $(GRAMMAR_DIR)/Grammar.tab.o
 ALL_OBJS = $(GPC_OBJS) $(TREE_OBJS) $(SEM_OBJS) $(PARSER_OBJS)
 
@@ -85,3 +85,6 @@ clean_parser:
 	rm -f $(ALL_OBJS) *.o
 clean_LexYacc:
 	cd $(GRAMMAR_DIR) && $(MAKE) clean
+
+NameMangling.o: $(GRAMMAR_DIR)/Grammar.tab.h SemCheck_expr.o
+	$(CC) $(CCFLAGS) -c SemanticCheck/NameMangling.c
