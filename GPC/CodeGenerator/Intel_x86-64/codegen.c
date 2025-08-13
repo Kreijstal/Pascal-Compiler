@@ -542,6 +542,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o
         case EXPR_RELOP:
             fprintf(stderr, "DEBUG: Processing relational operator expression\n");
             return codegen_simple_relop(expr, inst_list, o_file, NULL);
+        case EXPR_ADDOP:
+            fprintf(stderr, "DEBUG: Processing addop expression\n");
+            expr_tree = build_expr_tree(expr);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            free_expr_tree(expr_tree);
+            return inst_list;
         default:
             fprintf(stderr, "ERROR: Unsupported expression type %d\n", expr->type);
             exit(1);
