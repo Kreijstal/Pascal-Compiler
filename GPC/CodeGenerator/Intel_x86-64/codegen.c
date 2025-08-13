@@ -574,7 +574,7 @@ int write_label_counter = 1;
 /* Code generation for write() builtin - handles multiple args in single printf */
 ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
 {
-    char buffer[100];
+    char buffer[300];
     int curr_label = write_label_counter++;
     ListNode_t *cur_arg = args;
     int arg_count = 0;
@@ -708,7 +708,7 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
 /* Code generation for writeln() builtin */
 ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
 {
-    char buffer[100];
+    char buffer[1024];
     
     /* For writeln(), we'll handle newlines in the format string */
     /* Don't modify the original string to avoid duplicate newlines */
@@ -734,7 +734,7 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
                 "\tmovq $1, %%rax\n"
                 "\tmovq $1, %%rdi\n"
                 "\tleaq .LC%d(%%rip), %%rsi\n"
-                "\tmovq $%d, %%rdx\n"
+                "\tmovq $%zu, %%rdx\n"
                 "\tsyscall\n",
                 write_label_counter, escaped_str,
                 write_label_counter, strlen(escaped_str)+1);  // Length with escaped content
