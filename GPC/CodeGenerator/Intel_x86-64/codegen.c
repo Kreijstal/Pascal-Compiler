@@ -234,8 +234,13 @@ void codegen_main(char *prgm_name, FILE *o_file)
     codegen_function_header("main", o_file);
     fprintf(o_file, "\tsubq\t$32, %%rsp\n");  // Allocate stack space (32 bytes for shadow space)
     fprintf(o_file, "\tcall\t%s\n", prgm_name);
-    // Windows-compatible exit
+#if PLATFORM_LINUX
+    // System V ABI (Linux) uses %edi for the first argument
     fprintf(o_file, "\txor\t%%edi, %%edi\n"); // exit code 0
+#else
+    // Windows x64 ABI uses %ecx for the first argument
+    fprintf(o_file, "\txor\t%%ecx, %%ecx\n"); // exit code 0
+#endif
     fprintf(o_file, "\tcall\texit\n");         // call exit function
     codegen_function_footer("main", o_file);
 }
