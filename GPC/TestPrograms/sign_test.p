@@ -38,5 +38,5 @@ end;
 // M A I N =================================================
 begin
 	readLn(x);
-	writeLn(signum(x));
+	WriteIntLn(signum(x));
 end.

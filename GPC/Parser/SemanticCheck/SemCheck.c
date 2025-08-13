@@ -117,6 +117,9 @@ void semcheck_add_builtins(SymTab_t *symtab)
     char *id;
     ListNode_t *args, *arg_ids;
 
+    AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
+    AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
+
     /**** READ PROCEDURE ****/
     id = strdup("read");
 

@@ -67,6 +67,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_VAR_ID:
         case EXPR_INUM:
         case EXPR_FUNCTION_CALL:
+        case EXPR_STRING:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -259,6 +260,17 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
         snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
+    }
+    else if (expr->type == EXPR_STRING)
+    {
+        char label[20];
+        snprintf(label, 20, ".LC%d", write_label_counter++);
+        char add_rodata[1024];
+        snprintf(add_rodata, 1024, "\t.section\t.rodata\n%s:\n\t.string \"%s\"\n\t.text\n",
+            label, expr->expr_data.string);
+        inst_list = add_inst(inst_list, add_rodata);
+        snprintf(buffer, 50, "\tleaq\t%s(%%rip), %s\n", label, reg->bit_64);
+        return add_inst(inst_list, buffer);
     }
 
     inst_list = gencode_leaf_var(expr, inst_list, buf_leaf, 30);

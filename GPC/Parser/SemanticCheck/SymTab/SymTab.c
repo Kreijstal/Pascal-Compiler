@@ -38,6 +38,15 @@ int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args)
             HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args);
 }
 
+/* Adds a built-in type */
+int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    return AddIdentToTable(symtab->builtins, id, var_type, HASHTYPE_TYPE, NULL);
+}
+
 /* Pushes a new scope onto the stack (FIFO) */
 void PushScope(SymTab_t *symtab)
 {

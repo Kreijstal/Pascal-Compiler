@@ -1188,7 +1188,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, FILE
     arg_num = 0;
     while(args != NULL)
     {
-        arg_reg_char = get_arg_reg32_num(arg_num);
+        arg_reg_char = get_arg_reg64_num(arg_num);
         if(arg_reg_char == NULL)
         {
             fprintf(stderr, "ERROR: Could not get arg register: %d\n", arg_num);
@@ -1200,7 +1200,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, FILE
         free_expr_tree(expr_tree);
 
         top_reg = front_reg_stack(get_reg_stack());
-        snprintf(buffer, 50, "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg_char);
+        snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
         inst_list = add_inst(inst_list, buffer);
 
         args = args->next;

@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include "ParseTree/tree.h"
 
+Tree_t *ParsePascalOnly(char *file);
 Tree_t *ParsePascal(char *file);
 
 #endif
