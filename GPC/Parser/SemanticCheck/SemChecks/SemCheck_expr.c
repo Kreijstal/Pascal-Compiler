@@ -155,9 +155,7 @@ int semcheck_expr_main(int *type_return,
             break;
         
         case EXPR_STRING:
-            /* String literals are being passed to writeln, which expects BUILTIN_ANY_TYPE.
-               So, let's say a string literal evaluates to this type for now. */
-            *type_return = BUILTIN_ANY_TYPE;
+            *type_return = HASHVAR_PCHAR;
             break;
 
         default:
