@@ -3,3 +3,15 @@
 
 # Windows executables
 *.exe
+
+# Compiled binary
+GPC/gpc
+
+# Generated parser files
+GPC/Parser/LexAndYacc/lex.yy.c
+GPC/Parser/LexAndYacc/Grammar.tab.c
+GPC/Parser/LexAndYacc/Grammar.tab.h
+GPC/Parser/LexAndYacc/Grammar.output
+
+# Test output
+tests/output/

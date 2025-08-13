@@ -1,0 +1,112 @@
+import subprocess
+import os
+import unittest
+
+# Path to the compiler executable
+GPC_PATH = "GPC/gpc"
+TEST_CASES_DIR = "tests/test_cases"
+TEST_OUTPUT_DIR = "tests/output"
+
+def compile_compiler():
+    """Compiles the GPC compiler by running make."""
+    print("--- Compiling the compiler ---")
+    try:
+        # I need to find the correct makefile. Based on the file listing, it's in the root of GPC.
+        subprocess.run(["make", "-C", "GPC"], check=True, capture_output=True, text=True)
+        print("--- Compiler compiled successfully ---")
+    except subprocess.CalledProcessError as e:
+        print(f"--- Compiler compilation failed ---")
+        print(f"--- stdout: {e.stdout} ---")
+        print(f"--- stderr: {e.stderr} ---")
+        exit(1)
+
+def run_compiler(input_file, output_file, flags=None):
+    """Runs the GPC compiler with the given arguments."""
+    if flags is None:
+        flags = []
+
+    # Ensure the output directory exists
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    command = [GPC_PATH, input_file, output_file] + flags
+    print(f"--- Running compiler: {' '.join(command)} ---")
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        print(result.stderr) # The compiler prints status messages to stderr
+        return result.stderr
+    except subprocess.CalledProcessError as e:
+        print(f"--- Compiler execution failed ---")
+        print(f"--- stdout: {e.stdout} ---")
+        print(f"--- stderr: {e.stderr} ---")
+        # Still raise the exception, but return stderr if it exists
+        if e.stderr:
+            return e.stderr
+        raise
+
+def read_file_content(filepath):
+    """Reads and returns the content of a file."""
+    with open(filepath, "r") as f:
+        return f.read()
+
+class TestCompiler(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Compile the compiler once before any tests run
+        compile_compiler()
+        # Create output directories
+        os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
+        os.makedirs(TEST_CASES_DIR, exist_ok=True)
+
+    def test_constant_folding_o1(self):
+        """Tests the -O1 constant folding optimization."""
+        input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")
+
+        # --- Run without optimization ---
+        unoptimized_output_file = os.path.join(TEST_OUTPUT_DIR, "simple_expr_unoptimized.s")
+        run_compiler(input_file, unoptimized_output_file)
+        unoptimized_asm = read_file_content(unoptimized_output_file)
+
+        # In the unoptimized version, we expect to see the `add` instruction.
+        # The compiler might use `addl` for 32-bit integers.
+        # I'll check for "addl" since the compiler seems to be generating 32-bit code.
+        self.assertIn("addl", unoptimized_asm)
+
+        # --- Run with -O1 optimization ---
+        optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "simple_expr_optimized_o1.s")
+        run_compiler(input_file, optimized_output_file, flags=["-O1"])
+        optimized_asm = read_file_content(optimized_output_file)
+
+        # In the optimized version, we expect the constant `5` to be moved directly.
+        self.assertIn("movl\t$5", optimized_asm)
+        # And we should not see the `add` instruction.
+        self.assertNotIn("addl", optimized_asm)
+
+    def test_dead_code_elimination_o2(self):
+        """Tests the -O2 dead code elimination optimization."""
+        input_file = os.path.join(TEST_CASES_DIR, "dead_code.p")
+
+        # --- Run without optimization ---
+        unoptimized_output_file = os.path.join(TEST_OUTPUT_DIR, "dead_code_unoptimized.s")
+        run_compiler(input_file, unoptimized_output_file)
+        unoptimized_asm = read_file_content(unoptimized_output_file)
+
+        # In the unoptimized version, we expect space for two integers (x and y).
+        # The stack is 16-byte aligned, so this will be 16 bytes.
+        self.assertIn("subq\t$16", unoptimized_asm)
+
+        # --- Run with -O2 optimization ---
+        optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "dead_code_optimized_o2.s")
+        run_compiler(input_file, optimized_output_file, flags=["-O2"])
+        optimized_asm = read_file_content(optimized_output_file)
+
+        # In the optimized version, the variable `y` is removed.
+        # The variable `x` is also removed because it is assigned to but never used.
+        # So, no local variables are needed, and the stack allocation should be minimal.
+        # The function prologue still happens, but we expect no stack allocation for locals.
+        # Let's check that the stack allocation is less than the unoptimized version.
+        # A simple way is to check that `subq $16` is not present.
+        self.assertNotIn("subq\t$16", optimized_asm)
+
+
+if __name__ == "__main__":
+    unittest.main()
