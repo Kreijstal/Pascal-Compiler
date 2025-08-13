@@ -151,6 +151,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     arg_ids = CreateListNode(strdup("var"), LIST_STRING);
     args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
     AddBuiltinProc(symtab, id, args);
+
+    id = strdup("WriteLn");
+    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
+    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
+    AddBuiltinProc(symtab, id, args);
 }
 
 /* Semantic check for a program */
