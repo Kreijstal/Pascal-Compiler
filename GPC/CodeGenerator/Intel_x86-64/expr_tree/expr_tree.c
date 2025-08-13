@@ -66,6 +66,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 
         case EXPR_VAR_ID:
         case EXPR_INUM:
+        case EXPR_FUNCTION_CALL:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -249,6 +250,16 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     expr = node->expr;
     reg = front_reg_stack(reg_stack);
     assert(reg != NULL);
+
+    if (expr->type == EXPR_FUNCTION_CALL)
+    {
+        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, NULL);
+        snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.id);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
+    }
 
     inst_list = gencode_leaf_var(expr, inst_list, buf_leaf, 30);
 
