@@ -167,6 +167,46 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
+/* Gencode for modulus */
+// left is right operand (B), right is left operand (A)
+// calculates A mod B, stores result in A's location (right)
+ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
+{
+    StackNode_t *temp;
+    char buffer[50];
+
+    // Move dividend (A, right) to eax
+    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Sign extend eax to edx
+    snprintf(buffer, 50, "\tcltd\n");
+    inst_list = add_inst(inst_list, buffer);
+
+    // If divisor (B, left) is a constant, move it to memory
+    if(left[0] == '$')
+    {
+        temp = find_in_temp("TEMP_MOD");
+        if(temp == NULL)
+            temp = add_l_t("TEMP_MOD");
+        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 50, "\tidivl\t-%d(%%rbp)\n", temp->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else // Divisor is a register
+    {
+        snprintf(buffer, 50, "\tidivl\t%s\n", left);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    // Move remainder from edx to the target register (A's location, right)
+    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", right);
+    inst_list = add_inst(inst_list, buffer);
+
+    return inst_list;
+}
+
 /* Checks if node is a leaf */
 int expr_tree_is_leaf(expr_node_t *node)
 {
@@ -438,6 +478,10 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 {
                     inst_list = gencode_divide_no_const(left, right, inst_list);
                 }
+            }
+            else if(type == MOD)
+            {
+                inst_list = gencode_modulus(left, right, inst_list);
             }
             else
             {
