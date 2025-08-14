@@ -54,7 +54,7 @@ void free_stackmng();
 typedef struct RegStack
 {
     ListNode_t *registers_free;
-    int num_registers_alloced;
+    ListNode_t *registers_allocated;
     int num_registers;
 } RegStack_t;
 
@@ -66,11 +66,12 @@ int get_register_64bit(RegStack_t *, char *reg_64, Register_t **);
 int get_register_32bit(RegStack_t *, char *reg_32, Register_t **);
 void restore_register_64bit(RegStack_t *, Register_t *, int temp_offset);
 void restore_register_32bit(RegStack_t *, Register_t *, int temp_offset);
-void push_reg_stack(RegStack_t *, Register_t *);
+void free_reg(RegStack_t *, Register_t *);
 void swap_reg_stack(RegStack_t *);
 Register_t *front_reg_stack(RegStack_t *);
-Register_t *pop_reg_stack(RegStack_t *);
-int get_num_registers(RegStack_t *);
+Register_t *get_free_reg(RegStack_t *, ListNode_t **);
+int get_num_registers_free(RegStack_t *);
+int get_num_registers_alloced(RegStack_t *);
 
 void free_reg_stack(RegStack_t *);
 
