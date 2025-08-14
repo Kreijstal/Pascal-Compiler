@@ -14,9 +14,6 @@ ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
 
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_builtin_write(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_builtin_writeln(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_builtin_read(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 
 /* (DEPRECATED) */
