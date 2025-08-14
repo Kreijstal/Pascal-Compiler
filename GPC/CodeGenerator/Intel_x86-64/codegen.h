@@ -156,8 +156,10 @@ void escape_string(char *dest, const char *src, size_t dest_size);
 void codegen(Tree_t *, char *input_file_name, CodeGenContext *ctx);
 
 ListNode_t *add_inst(ListNode_t *, char *);
+ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(char *, CodeGenContext *ctx);
+void codegen_rodata(CodeGenContext *ctx);
 void codegen_program_footer(CodeGenContext *ctx);
 void codegen_main(char *prgm_name, CodeGenContext *ctx);
 void codegen_stack_space(CodeGenContext *ctx);
@@ -172,12 +174,5 @@ void codegen_procedure(Tree_t *, CodeGenContext *ctx);
 void codegen_function(Tree_t *, CodeGenContext *ctx);
 ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
 
-ListNode_t *codegen_stmt(struct Statement *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_compound_stmt(struct Statement *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_var_assignment(struct Statement *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_proc_call(struct Statement *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_if_then(struct Statement *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_while(struct Statement *, ListNode_t *, CodeGenContext *ctx);
-ListNode_t *codegen_for(struct Statement *, ListNode_t *, CodeGenContext *ctx);
 
 #endif

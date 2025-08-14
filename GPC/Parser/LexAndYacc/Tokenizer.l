@@ -262,6 +262,13 @@ pascal_string \'([^\']|\'\')*\'
     return OF;
 }
 
+"overload" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[OVERLOAD] ");
+    #endif
+    return OVERLOAD;
+}
+
 "if" {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[IF] ");
@@ -438,6 +445,13 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "[LONGINT_TYPE] ");
     #endif
     return LONGINT_TYPE;
+}
+
+"string" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[STRING_TYPE] ");
+    #endif
+    return STRING_TYPE;
 }
 
 

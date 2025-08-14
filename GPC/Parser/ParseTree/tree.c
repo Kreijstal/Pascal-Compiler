@@ -565,7 +565,7 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
 
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag)
+    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -579,6 +579,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_d
     new_tree->tree_data.subprogram_data.return_type = -1;
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
+    new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -587,7 +588,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_d
 }
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag)
+    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -601,6 +602,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_de
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
+    new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -610,7 +612,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_de
 
 /*enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_STATEMENT_TYPE};*/
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id)
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -620,6 +622,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id)
     new_tree->tree_data.var_decl_data.ids = ids;
     new_tree->tree_data.var_decl_data.type = type;
     new_tree->tree_data.var_decl_data.type_id = type_id;
+    new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
 
     return new_tree;
 }
