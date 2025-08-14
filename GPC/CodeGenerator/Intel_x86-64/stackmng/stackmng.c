@@ -340,7 +340,7 @@ RegStack_t *init_reg_stack()
     registers = PushListNodeBack(registers, CreateListNode(rbx, LIST_UNSPECIFIED));
     */
 
-    reg_stack->num_registers_alloced = 0;
+    reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
     reg_stack->num_registers = 2;
 
@@ -365,14 +365,13 @@ int get_register_64bit(RegStack_t *regstack, char *reg_64, Register_t **return_r
         reg = (Register_t *)cur_reg->cur;
         if(strcmp(reg->bit_64, reg_64) == 0)
         {
-            regstack->num_registers_alloced++;
-
             if(prev_reg == NULL)
                 regstack->registers_free = cur_reg->next;
             else
                 prev_reg->next = cur_reg->next;
 
-            free(cur_reg);
+            cur_reg->next = regstack->registers_allocated;
+            regstack->registers_allocated = cur_reg;
             *return_reg = reg;
 
             return 0;
@@ -404,14 +403,13 @@ int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_r
         reg = (Register_t *)cur_reg->cur;
         if(strcmp(reg->bit_32, reg_32) == 0)
         {
-            regstack->num_registers_alloced++;
-
             if(prev_reg == NULL)
                 regstack->registers_free = cur_reg->next;
             else
                 prev_reg->next = cur_reg->next;
 
-            free(cur_reg);
+            cur_reg->next = regstack->registers_allocated;
+            regstack->registers_allocated = cur_reg;
             *return_reg = reg;
 
             return 0;
@@ -425,23 +423,34 @@ int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_r
     exit(1);
 }
 
-void push_reg_stack(RegStack_t *reg_stack, Register_t *reg)
+void free_reg(RegStack_t *reg_stack, Register_t *reg)
 {
     assert(reg_stack != NULL);
     assert(reg != NULL);
 
-    reg_stack->num_registers_alloced--;
+    ListNode_t *cur, *prev;
 
-    if(reg_stack->registers_free == NULL)
+    cur = reg_stack->registers_allocated;
+    prev = NULL;
+    while(cur != NULL)
     {
-        reg_stack->registers_free = CreateListNode(reg, LIST_UNSPECIFIED);
+        if(cur->cur == reg)
+        {
+            if(prev == NULL)
+                reg_stack->registers_allocated = cur->next;
+            else
+                prev->next = cur->next;
+
+            cur->next = reg_stack->registers_free;
+            reg_stack->registers_free = cur;
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
     }
 
-    else
-    {
-        reg_stack->registers_free = PushListNodeFront(reg_stack->registers_free,
-            CreateListNode(reg, LIST_UNSPECIFIED));
-    }
+    fprintf(stderr, "ERROR: Could not find register to push onto stack!\n");
+    exit(1);
 }
 
 void swap_reg_stack(RegStack_t *reg_stack)
@@ -467,7 +476,8 @@ Register_t *front_reg_stack(RegStack_t *reg_stack)
     return (Register_t *)reg_stack->registers_free->cur;
 }
 
-Register_t *pop_reg_stack(RegStack_t *reg_stack)
+/* TODO: Spilling */
+Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 {
     assert(reg_stack != NULL);
 
@@ -476,33 +486,40 @@ Register_t *pop_reg_stack(RegStack_t *reg_stack)
 
     if(reg_stack->registers_free != NULL)
     {
-        reg_stack->num_registers_alloced++;
-
         register_node = reg_stack->registers_free;
         reg_stack->registers_free = reg_stack->registers_free->next;
 
+        register_node->next = reg_stack->registers_allocated;
+        reg_stack->registers_allocated = register_node;
+
         reg = (Register_t *)register_node->cur;
-        free(register_node);
 
         return reg;
     }
     else
+    {
         return NULL;
+    }
 }
 
-int get_num_registers(RegStack_t *reg_stack)
+int get_num_registers_free(RegStack_t *reg_stack)
 {
-    return reg_stack->num_registers - reg_stack->num_registers_alloced;
+    return ListLength(reg_stack->registers_free);
+}
+
+int get_num_registers_alloced(RegStack_t *reg_stack)
+{
+    return ListLength(reg_stack->registers_allocated);
 }
 
 void free_reg_stack(RegStack_t *reg_stack)
 {
     assert(reg_stack != NULL);
 
-    if(reg_stack->num_registers_alloced != 0)
+    if(ListLength(reg_stack->registers_allocated) != 0)
     {
         fprintf(stderr, "WARNING: Not all registers freed, %d still remaining!\n",
-            reg_stack->num_registers_alloced);
+            ListLength(reg_stack->registers_allocated));
     }
 
     ListNode_t *cur;
@@ -519,6 +536,21 @@ void free_reg_stack(RegStack_t *reg_stack)
         free(reg);
         free(cur);
     }
+
+    /* Just in case something was left allocated */
+    while(reg_stack->registers_allocated != NULL)
+    {
+        cur = reg_stack->registers_allocated;
+        reg_stack->registers_allocated = cur->next;
+
+        reg = (Register_t *)cur->cur;
+
+        free(reg->bit_64);
+        free(reg->bit_32);
+        free(reg);
+        free(cur);
+    }
+
 
     free(reg_stack);
 }
