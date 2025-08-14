@@ -13,6 +13,7 @@
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
+#include "../codegen_expression.h"
 #include "../stackmng/stackmng.h"
 #include "../../../flags.h"
 #include "../../../Parser/List/List.h"
