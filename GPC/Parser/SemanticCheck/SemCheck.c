@@ -121,40 +121,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
     AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
 
-    /**** READ PROCEDURE ****/
-    id = strdup("read");
-
-    /* Only arg is a variable to read into */
-    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
-
-    AddBuiltinProc(symtab, id, args);
-
-    /**** WRITE PROCEDURE ****/
-    id = strdup("write");
-
-    /* Only arg is a variable to read into */
-    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
-
-    AddBuiltinProc(symtab, id, args);
-
-    /**** WRITELN PROCEDURE ****/
-    id = strdup("writeln");
-    arg_ids = CreateListNode(strdup("var_ln"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
-    AddBuiltinProc(symtab, id, args);
-
-    /**** READLN PROCEDURE ****/
-    id = strdup("readLn");
-    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
-    AddBuiltinProc(symtab, id, args);
-
-    id = strdup("writeLn");
-    arg_ids = CreateListNode(strdup("var"), LIST_STRING);
-    args = CreateListNode(mk_vardecl(-1, arg_ids, BUILTIN_ANY_TYPE, NULL), LIST_TREE);
-    AddBuiltinProc(symtab, id, args);
+    /* Builtins are now in stdlib.p */
 }
 
 /* Semantic check for a program */
@@ -338,26 +305,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     // --- Name Mangling Logic ---
     if (subprogram->tree_data.subprogram_data.cname_flag) {
-        id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
+        subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
     } else {
         // Pass the symbol table to the mangler
         subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
             subprogram->tree_data.subprogram_data.id,
             subprogram->tree_data.subprogram_data.args_var,
             symtab); // <-- PASS symtab HERE
-        id_to_use_for_lookup = subprogram->tree_data.subprogram_data.mangled_id;
     }
+    id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
+
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
-        // Use the mangled (or original if cname) name for the external symbol
+        // Use the original name for the external symbol, to support overloading
         func_return = PushProcedureOntoScope(symtab, id_to_use_for_lookup,
+                        subprogram->tree_data.subprogram_data.mangled_id,
                         subprogram->tree_data.subprogram_data.args_var);
 
         PushScope(symtab);
         // Push it again in the new scope to allow recursion
         PushProcedureOntoScope(symtab, id_to_use_for_lookup,
+            subprogram->tree_data.subprogram_data.mangled_id,
             subprogram->tree_data.subprogram_data.args_var);
 
         new_max_scope = max_scope_lev+1;
@@ -385,8 +355,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         else
             var_type = HASHVAR_REAL;
 
-        // Use the mangled (or original if cname) name for the external symbol
+        // Use the original name for the external symbol, to support overloading
         func_return = PushFunctionOntoScope(symtab, id_to_use_for_lookup,
+                        subprogram->tree_data.subprogram_data.mangled_id,
                         var_type, subprogram->tree_data.subprogram_data.args_var);
 
         PushScope(symtab);

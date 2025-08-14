@@ -57,6 +57,7 @@ typedef struct Tree
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
             int cname_flag;
+            int overload_flag;
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
@@ -70,6 +71,7 @@ typedef struct Tree
             ListNode_t *ids;
             int type; /* Int, or real */
             char *type_id;
+            int is_var_param;
         } var_decl_data;
 
         /* An array declaration */
@@ -117,12 +119,12 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_dec
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag);
+    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag, int overload_flag);
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag);
+    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag, int overload_flag);
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id);
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, int start, int end);
 

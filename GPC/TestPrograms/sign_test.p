@@ -38,6 +38,6 @@ end;
 
 // M A I N =================================================
 begin
-	readLn(x);
-	WriteIntLn(signum(x));
+	read(x);
+	writeln(signum(x));
 end.

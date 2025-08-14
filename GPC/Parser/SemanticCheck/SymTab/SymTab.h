@@ -46,11 +46,11 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
 
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushProcedureOntoScope(SymTab_t *symtab, char *id, ListNode_t *args);
+int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args);
 
 /* Pushes a new function onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushFunctionOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args);
+int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum VarType var_type, ListNode_t *args);
 
 /* Pushes a new function return type var onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
@@ -63,6 +63,10 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type);
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
 int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, char *id);
+
+/* Searches for all instances of an identifier and returns a list of HashNode_t* */
+/* Returns NULL if not found */
+ListNode_t *FindAllIdents(SymTab_t *symtab, char *id);
 
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab);

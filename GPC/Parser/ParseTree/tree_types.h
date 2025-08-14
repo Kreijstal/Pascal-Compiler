@@ -38,6 +38,7 @@ struct Statement
             char *id;
             char *mangled_id;
             ListNode_t *expr_args;
+        struct HashNode *resolved_proc;
         } procedure_call_data;
 
         /* Compound Statements */
@@ -142,6 +143,7 @@ struct Expression
             char *id;
             char *mangled_id;
             ListNode_t *args_expr;
+        struct HashNode *resolved_func;
         } function_call_data;
 
         /* Integer number */

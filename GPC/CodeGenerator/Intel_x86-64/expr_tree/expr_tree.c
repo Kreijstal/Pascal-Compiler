@@ -255,7 +255,7 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx);
+        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx, expr->expr_data.function_call_data.resolved_func);
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", reg->bit_32);
@@ -416,20 +416,19 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     {
         case EXPR_ADDOP:
             type = expr->expr_data.addop_data.addop_type;
-            if(type == PLUS)
+            switch(type)
             {
-                snprintf(buffer, 50, "\taddl\t%s, %s\n", left, right);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == MINUS)
-            {
-                snprintf(buffer, 50, "\tsubl\t%s, %s\n", left, right);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else
-            {
-                fprintf(stderr, "ERROR: Bad addop type!\n");
-                exit(1);
+                case PLUS:
+                    snprintf(buffer, 50, "\taddl\t%s, %s\n", left, right);
+                    inst_list = add_inst(inst_list, buffer);
+                    break;
+                case MINUS:
+                    snprintf(buffer, 50, "\tsubl\t%s, %s\n", left, right);
+                    inst_list = add_inst(inst_list, buffer);
+                    break;
+                default:
+                    fprintf(stderr, "ERROR: Bad addop type!\n");
+                    exit(1);
             }
 
             break;
