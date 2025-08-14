@@ -135,59 +135,65 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 
-/* For creating labels to jump to */
-/* Please initialize to 1 */
-extern int label_counter;
-extern int write_label_counter;
+/*
+    The context for the code generator.
+    This struct holds all the state that was previously global,
+    allowing for a more modular and re-entrant design.
+*/
+typedef struct {
+    int label_counter;
+    int write_label_counter;
+    FILE *output_file;
+} CodeGenContext;
 
 /* Generates a label */
-void gen_label(char *buf, int buf_len);
+void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 
 /* Escapes string for assembly output */
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, char *input_file_name, char *output_file_name);
+void codegen(Tree_t *, char *input_file_name, CodeGenContext *ctx);
 
 ListNode_t *add_inst(ListNode_t *, char *);
 
-void codegen_program_header(char *, FILE *);;
-void codegen_program_footer(FILE *);
-void codegen_main(char *prgm_name, FILE *o_file);
-void codegen_stack_space(FILE *);
-void codegen_inst_list(ListNode_t *, FILE *);
+void codegen_program_header(char *, CodeGenContext *ctx);
+void codegen_program_footer(CodeGenContext *ctx);
+void codegen_main(char *prgm_name, CodeGenContext *ctx);
+void codegen_stack_space(CodeGenContext *ctx);
+void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 
-char * codegen_program(Tree_t *, FILE *);
-void codegen_function_locals(ListNode_t *, FILE *);
+char * codegen_program(Tree_t *, CodeGenContext *ctx);
+void codegen_function_locals(ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
-void codegen_subprograms(ListNode_t *, FILE *);
-void codegen_procedure(Tree_t *, FILE *);
-void codegen_function(Tree_t *, FILE *);
-ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, FILE *);
+void codegen_subprograms(ListNode_t *, CodeGenContext *ctx);
+void codegen_procedure(Tree_t *, CodeGenContext *ctx);
+void codegen_function(Tree_t *, CodeGenContext *ctx);
+ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
 
-ListNode_t *codegen_stmt(struct Statement *, ListNode_t *,FILE *);
-ListNode_t *codegen_compound_stmt(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_var_assignment(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_proc_call(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_if_then(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_while(struct Statement *, ListNode_t *, FILE *);
-ListNode_t *codegen_for(struct Statement *, ListNode_t *, FILE *);
+ListNode_t *codegen_stmt(struct Statement *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_compound_stmt(struct Statement *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_var_assignment(struct Statement *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_proc_call(struct Statement *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_if_then(struct Statement *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_while(struct Statement *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_for(struct Statement *, ListNode_t *, CodeGenContext *ctx);
 
-ListNode_t *codegen_pass_arguments(ListNode_t *, ListNode_t *, FILE *);
+ListNode_t *codegen_pass_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *);
 
 ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
-    FILE *, int *);
+    CodeGenContext *ctx, int *);
 
-ListNode_t *codegen_expr(struct Expression *, ListNode_t *, FILE *);
-ListNode_t *codegen_builtin_write(ListNode_t *, ListNode_t *, FILE *);
-ListNode_t *codegen_builtin_writeln(ListNode_t *, ListNode_t *, FILE *);
-ListNode_t *codegen_builtin_read(ListNode_t *, ListNode_t *, FILE *);
-ListNode_t *codegen_args(ListNode_t*, ListNode_t *, FILE *);
+ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_builtin_write(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_builtin_writeln(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_builtin_read(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 
 /* (DEPRECATED) */
-ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, FILE *);
-ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, FILE *);
+ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 
 #endif

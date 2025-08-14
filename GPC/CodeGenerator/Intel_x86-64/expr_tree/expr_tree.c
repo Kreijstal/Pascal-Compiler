@@ -10,9 +10,9 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
-#include "../codegen.h"
 #include "../stackmng/stackmng.h"
 #include "../../../flags.h"
 #include "../../../Parser/List/List.h"
@@ -21,11 +21,11 @@
 #include "../../../Parser/LexAndYacc/Grammar.tab.h"
 
 /* Helper functions */
-ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list);
-ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list);
-ListNode_t *gencode_case1(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list);
-ListNode_t *gencode_case2(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list);
-ListNode_t *gencode_case3(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list);
+ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx);
+ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx);
+ListNode_t *gencode_case1(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx);
+ListNode_t *gencode_case2(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx);
+ListNode_t *gencode_case3(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, char *, int );
 ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     ListNode_t *inst_list);
@@ -121,7 +121,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 }
 
 /* The famous gencode algorithm */
-ListNode_t *gencode_expr_tree(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list)
+ListNode_t *gencode_expr_tree(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
@@ -135,28 +135,28 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, RegStack_t *reg_stack, ListNode
     /* Handle special cases first */
     if(node->expr->type == EXPR_SIGN_TERM)
     {
-        inst_list = gencode_sign_term(node, reg_stack, inst_list);
+        inst_list = gencode_sign_term(node, reg_stack, inst_list, ctx);
     }
 
     /* CASE 0 */
     else if(expr_tree_is_leaf(node) == 1)
     {
-        inst_list = gencode_case0(node, reg_stack, inst_list);
+        inst_list = gencode_case0(node, reg_stack, inst_list, ctx);
     }
     /* CASE 1 */
     else if(expr_tree_is_leaf(node->right_expr))
     {
-        inst_list = gencode_case1(node, reg_stack, inst_list);
+        inst_list = gencode_case1(node, reg_stack, inst_list, ctx);
     }
     /* CASE 2 */
     else if(node->left_expr->label < node->right_expr->label)
     {
-        inst_list = gencode_case2(node, reg_stack, inst_list);
+        inst_list = gencode_case2(node, reg_stack, inst_list, ctx);
     }
     /* CASE 3 */
     else if(node->left_expr->label >= node->right_expr->label)
     {
-        inst_list = gencode_case3(node, reg_stack, inst_list);
+        inst_list = gencode_case3(node, reg_stack, inst_list, ctx);
     }
     else
     {
@@ -219,7 +219,7 @@ void free_expr_tree(expr_node_t *node)
 }
 
 /* Special case for a sign term */
-ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list)
+ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
@@ -228,7 +228,7 @@ ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode
     char buffer[50];
     Register_t *reg;
 
-    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list);
+    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list, ctx);
     reg = front_reg_stack(reg_stack);
 
     snprintf(buffer, 50, "\tnegl\t%s\n", reg->bit_32);
@@ -238,7 +238,7 @@ ListNode_t *gencode_sign_term(expr_node_t *node, RegStack_t *reg_stack, ListNode
 }
 
 /* node is a leaf */
-ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list)
+ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
@@ -254,7 +254,7 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, NULL);
+        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx);
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", reg->bit_32);
@@ -264,7 +264,7 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     else if (expr->type == EXPR_STRING)
     {
         char label[20];
-        snprintf(label, 20, ".LC%d", write_label_counter++);
+        snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
         char add_rodata[1024];
         snprintf(add_rodata, 1024, "\t.section\t.rodata\n%s:\n\t.string \"%s\"\n\t.text\n",
             label, expr->expr_data.string);
@@ -285,7 +285,7 @@ ListNode_t *gencode_case0(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
 }
 
 /* right node is a leaf */
-ListNode_t *gencode_case1(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list)
+ListNode_t *gencode_case1(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
@@ -297,7 +297,7 @@ ListNode_t *gencode_case1(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     struct Expression *expr, *right_expr;
     Register_t *reg;
 
-    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list);
+    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list, ctx);
 
     expr = node->expr;
     right_expr = node->right_expr->expr;
@@ -311,7 +311,7 @@ ListNode_t *gencode_case1(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
 }
 
 
-ListNode_t *gencode_case2(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list)
+ListNode_t *gencode_case2(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
@@ -321,9 +321,9 @@ ListNode_t *gencode_case2(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     Register_t *reg1, *reg2;
 
     swap_reg_stack(reg_stack);
-    inst_list = gencode_expr_tree(node->right_expr, reg_stack, inst_list);
+    inst_list = gencode_expr_tree(node->right_expr, reg_stack, inst_list, ctx);
     reg1 = pop_reg_stack(reg_stack);
-    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list);
+    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list, ctx);
 
     reg2 = front_reg_stack(reg_stack);
     inst_list = gencode_op(node->expr, reg1->bit_32, reg2->bit_32, inst_list);
@@ -334,7 +334,7 @@ ListNode_t *gencode_case2(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     return inst_list;
 }
 
-ListNode_t *gencode_case3(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list)
+ListNode_t *gencode_case3(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
@@ -343,9 +343,9 @@ ListNode_t *gencode_case3(expr_node_t *node, RegStack_t *reg_stack, ListNode_t *
     char op_buf[30];
     Register_t *reg1, *reg2;
 
-    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list);
+    inst_list = gencode_expr_tree(node->left_expr, reg_stack, inst_list, ctx);
     reg1 = pop_reg_stack(reg_stack);
-    inst_list = gencode_expr_tree(node->right_expr, reg_stack, inst_list);
+    inst_list = gencode_expr_tree(node->right_expr, reg_stack, inst_list, ctx);
 
     reg2 = front_reg_stack(reg_stack);
     inst_list = gencode_op(node->expr, reg2->bit_32, reg1->bit_32, inst_list);

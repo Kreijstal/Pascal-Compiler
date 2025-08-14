@@ -28,9 +28,9 @@
 #endif
 
 /* Generates a label */
-void gen_label(char *buf, int buf_len)
+void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
-    snprintf(buf, buf_len, ".L%d", ++label_counter);
+    snprintf(buf, buf_len, ".L%d", ++ctx->label_counter);
 }
 
 /* Adds instruction to instruction list */
@@ -127,7 +127,7 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 }
 
 /* Generates a function header */
-void codegen_function_header(char *func_name, FILE *o_file)
+void codegen_function_header(char *func_name, CodeGenContext *ctx)
 {
     /*
         .globl	<func_name>
@@ -136,14 +136,14 @@ void codegen_function_header(char *func_name, FILE *o_file)
             movq    %rsp, %rbp
     */
 
-    fprintf(o_file, ".globl\t%s\n", func_name);
-    fprintf(o_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
+    fprintf(ctx->output_file, ".globl\t%s\n", func_name);
+    fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
 
     return;
 }
 
 /* Generates a function footer */
-void codegen_function_footer(char *func_name, FILE *o_file)
+void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 {
     /*
         nop
@@ -151,39 +151,25 @@ void codegen_function_footer(char *func_name, FILE *o_file)
         ret
     */
 
-    fprintf(o_file, "\tnop\n\tleave\n\tret\n");
+    fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
 
     return;
 }
 
 
 /* This is the entry function */
-void codegen(Tree_t *tree, char *input_file_name, char *output_file_name)
+void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx)
 {
-    FILE *output_file;
     char *prgm_name;
-
-    output_file = fopen(output_file_name, "w");
-    if(output_file == NULL)
-    {
-        fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file_name);
-        exit(1);
-    }
-
-    /* codegen.h */
-    label_counter = 1;
 
     init_stackmng();
 
-    codegen_program_header(input_file_name, output_file);
+    codegen_program_header(input_file_name, ctx);
 
-    prgm_name = codegen_program(tree, output_file);
-    codegen_main(prgm_name, output_file);
+    prgm_name = codegen_program(tree, ctx);
+    codegen_main(prgm_name, ctx);
 
-    codegen_program_footer(output_file);
-
-    fclose(output_file);
-    output_file = NULL;
+    codegen_program_footer(ctx);
 
     free_stackmng();
 
@@ -191,35 +177,35 @@ void codegen(Tree_t *tree, char *input_file_name, char *output_file_name)
 }
 
 /* Generates platform-compatible headers */
-void codegen_program_header(char *fname, FILE *o_file)
+void codegen_program_header(char *fname, CodeGenContext *ctx)
 {
-    fprintf(o_file, "\t.file\t\"%s\"\n", fname);
+    fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
     
 #if PLATFORM_LINUX
     /* Linux sections */
-    fprintf(o_file, "\t.section\t.rodata\n");
+    fprintf(ctx->output_file, "\t.section\t.rodata\n");
 #else
     /* Windows sections */
-    fprintf(o_file, "\t.section\t.rdata,\"dr\"\n");
+    fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
 #endif
 
-    fprintf(o_file, "\t.text\n");
+    fprintf(ctx->output_file, "\t.text\n");
     return;
 }
 
 /* Generates platform-compatible program footer */
-void codegen_program_footer(FILE *o_file)
+void codegen_program_footer(CodeGenContext *ctx)
 {
 #if PLATFORM_LINUX
     /* Linux doesn't need .ident */
 #else
     /* Windows .ident directive */
-    fprintf(o_file, ".ident\t\"GPC: 0.0.0\"\n");
+    fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
 #endif
 }
 
 /* Generates main which calls our program */
-void codegen_main(char *prgm_name, FILE *o_file)
+void codegen_main(char *prgm_name, CodeGenContext *ctx)
 {
     /*
         HEADER
@@ -229,24 +215,24 @@ void codegen_main(char *prgm_name, FILE *o_file)
             popq    %rbp
             ret
     */
-    fprintf(o_file, "\t.section\t.text\n");
-    fprintf(o_file, "\t.globl\tmain\n");
-    codegen_function_header("main", o_file);
-    fprintf(o_file, "\tsubq\t$32, %%rsp\n");  // Allocate stack space (32 bytes for shadow space)
-    fprintf(o_file, "\tcall\t%s\n", prgm_name);
+    fprintf(ctx->output_file, "\t.section\t.text\n");
+    fprintf(ctx->output_file, "\t.globl\tmain\n");
+    codegen_function_header("main", ctx);
+    fprintf(ctx->output_file, "\tsubq\t$32, %%rsp\n");  // Allocate stack space (32 bytes for shadow space)
+    fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
 #if PLATFORM_LINUX
     // System V ABI (Linux) uses %edi for the first argument
-    fprintf(o_file, "\txor\t%%edi, %%edi\n"); // exit code 0
+    fprintf(ctx->output_file, "\txor\t%%edi, %%edi\n"); // exit code 0
 #else
     // Windows x64 ABI uses %ecx for the first argument
-    fprintf(o_file, "\txor\t%%ecx, %%ecx\n"); // exit code 0
+    fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n"); // exit code 0
 #endif
-    fprintf(o_file, "\tcall\texit\n");         // call exit function
-    codegen_function_footer("main", o_file);
+    fprintf(ctx->output_file, "\tcall\texit\n");         // call exit function
+    codegen_function_footer("main", ctx);
 }
 
 /* Generates code to allocate needed stack space */
-void codegen_stack_space(FILE *o_file)
+void codegen_stack_space(CodeGenContext *ctx)
 {
     int needed_space;
     needed_space = get_full_stack_offset();
@@ -255,13 +241,13 @@ void codegen_stack_space(FILE *o_file)
     if(needed_space != 0)
     {
         /* subq	$<needed_space>, %rsp */
-        fprintf(o_file, "\tsubq\t$%d, %%rsp\n", needed_space);
+        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", needed_space);
     }
 }
 
 /* Writes instruction list to file */
 /* A NULL inst_list is interpreted as no instructions */
-void codegen_inst_list(ListNode_t *inst_list, FILE *o_file)
+void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 {
     char *inst;
 
@@ -270,7 +256,7 @@ void codegen_inst_list(ListNode_t *inst_list, FILE *o_file)
         inst = (char *)inst_list->cur;
         assert(inst != NULL);
 
-        fprintf(o_file, "%s", inst);
+        fprintf(ctx->output_file, "%s", inst);
 
         inst_list = inst_list->next;
     }
@@ -281,7 +267,7 @@ void codegen_inst_list(ListNode_t *inst_list, FILE *o_file)
 
 /* TODO: Currently only handles local variables and body_statement */
 /* Returns the program name for use with main */
-char * codegen_program(Tree_t *prgm, FILE *o_file)
+char * codegen_program(Tree_t *prgm, CodeGenContext *ctx)
 {
     assert(prgm->type == TREE_PROGRAM_TYPE);
 
@@ -294,16 +280,16 @@ char * codegen_program(Tree_t *prgm, FILE *o_file)
 
     push_stackscope();
 
-    codegen_function_locals(data->var_declaration, o_file);
-    codegen_subprograms(data->subprograms, o_file);
+    codegen_function_locals(data->var_declaration, ctx);
+    codegen_subprograms(data->subprograms, ctx);
 
     inst_list = NULL;
-    inst_list = codegen_stmt(data->body_statement, inst_list, o_file);
+    inst_list = codegen_stmt(data->body_statement, inst_list, ctx);
 
-    codegen_function_header(prgm_name, o_file);
-    codegen_stack_space(o_file);
-    codegen_inst_list(inst_list, o_file);
-    codegen_function_footer(prgm_name, o_file);
+    codegen_function_header(prgm_name, ctx);
+    codegen_stack_space(ctx);
+    codegen_inst_list(inst_list, ctx);
+    codegen_function_footer(prgm_name, ctx);
     free_inst_list(inst_list);
 
     pop_stackscope();
@@ -312,7 +298,7 @@ char * codegen_program(Tree_t *prgm, FILE *o_file)
 }
 
 /* Pushes function locals onto the stack */
-void codegen_function_locals(ListNode_t *local_decl, FILE *o_file)
+void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
 {
      ListNode_t *cur, *id_list;
      Tree_t *tree;
@@ -353,7 +339,7 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
 
 /* Codegen for a list of subprograms */
 /* NOTE: List can be null */
-void codegen_subprograms(ListNode_t *sub_list, FILE *o_file)
+void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx)
 {
     Tree_t *sub;
 
@@ -366,11 +352,11 @@ void codegen_subprograms(ListNode_t *sub_list, FILE *o_file)
         switch(sub->tree_data.subprogram_data.sub_type)
         {
             case TREE_SUBPROGRAM_PROC:
-                codegen_procedure(sub, o_file);
+                codegen_procedure(sub, ctx);
                 break;
 
             case TREE_SUBPROGRAM_FUNC:
-                codegen_function(sub, o_file);
+                codegen_function(sub, ctx);
                 break;
 
             default:
@@ -383,7 +369,7 @@ void codegen_subprograms(ListNode_t *sub_list, FILE *o_file)
 
 /* Code generation for a procedure */
 /* TODO: Support non-local variables */
-void codegen_procedure(Tree_t *proc_tree, FILE *o_file)
+void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx)
 {
     assert(proc_tree != NULL);
     assert(proc_tree->type == TREE_SUBPROGRAM);
@@ -402,24 +388,24 @@ void codegen_procedure(Tree_t *proc_tree, FILE *o_file)
     push_stackscope();
 
     inst_list = NULL;
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, o_file);
+    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx);
 
-    codegen_function_locals(proc->declarations, o_file);
-    codegen_subprograms(proc->subprograms, o_file);
+    codegen_function_locals(proc->declarations, ctx);
+    codegen_subprograms(proc->subprograms, ctx);
 
-    inst_list = codegen_stmt(proc->statement_list, inst_list, o_file);
+    inst_list = codegen_stmt(proc->statement_list, inst_list, ctx);
 
-    codegen_function_header(sub_id, o_file);
-    codegen_stack_space(o_file);
-    codegen_inst_list(inst_list, o_file);
-    codegen_function_footer(sub_id, o_file);
+    codegen_function_header(sub_id, ctx);
+    codegen_stack_space(ctx);
+    codegen_inst_list(inst_list, ctx);
+    codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
 
     pop_stackscope();
 }
 
 /* Code generation for a function */
-void codegen_function(Tree_t *func_tree, FILE *o_file)
+void codegen_function(Tree_t *func_tree, CodeGenContext *ctx)
 {
     assert(func_tree != NULL);
     assert(func_tree->type == TREE_SUBPROGRAM);
@@ -439,26 +425,26 @@ void codegen_function(Tree_t *func_tree, FILE *o_file)
     push_stackscope();
 
     inst_list = NULL;
-    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, o_file);
+    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
 
     /* Function name treated as return variable */
     /* For simplicity, just treating it as a local variable (let semcheck deal with shenanigans) */
     return_var = add_l_x(func->id);
     
-    codegen_function_locals(func->declarations, o_file);
-    codegen_subprograms(func->subprograms, o_file);
+    codegen_function_locals(func->declarations, ctx);
+    codegen_subprograms(func->subprograms, ctx);
 
-    inst_list = codegen_stmt(func->statement_list, inst_list, o_file);
+    inst_list = codegen_stmt(func->statement_list, inst_list, ctx);
 
     /* Return statement */
     snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
     inst_list = add_inst(inst_list, buffer);
 
 
-    codegen_function_header(sub_id, o_file);
-    codegen_stack_space(o_file);
-    codegen_inst_list(inst_list, o_file);
-    codegen_function_footer(sub_id, o_file);
+    codegen_function_header(sub_id, ctx);
+    codegen_stack_space(ctx);
+    codegen_inst_list(inst_list, ctx);
+    codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
 
     pop_stackscope();
@@ -469,7 +455,7 @@ void codegen_function(Tree_t *func_tree, FILE *o_file)
 /* NOTE: List can be NULL */
 /* TODO: Support arrays */
 /* TODO: Support any number of arguments */
-ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     Tree_t *arg_decl;
     int type, arg_num;
@@ -528,7 +514,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 }
 
 /* Code generation for expressions */
-ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(expr != NULL);
     expr_node_t *expr_tree = NULL;
@@ -539,28 +525,28 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o
         case EXPR_VAR_ID:
             fprintf(stderr, "DEBUG: Processing variable ID expression\n");
             expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_INUM:
             fprintf(stderr, "DEBUG: Processing integer constant expression\n");
             expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_RELOP:
             fprintf(stderr, "DEBUG: Processing relational operator expression\n");
-            return codegen_simple_relop(expr, inst_list, o_file, NULL);
+            return codegen_simple_relop(expr, inst_list, ctx, NULL);
         case EXPR_ADDOP:
             fprintf(stderr, "DEBUG: Processing addop expression\n");
             expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_SIGN_TERM:
             fprintf(stderr, "DEBUG: Processing sign term expression\n");
             expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
             free_expr_tree(expr_tree);
             return inst_list;
         default:
@@ -569,13 +555,11 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, FILE *o
     }
 }
 
-int write_label_counter = 1;
-
 /* Code generation for write() builtin - handles multiple args in single printf */
-ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     char *buffer;
-    int curr_label = write_label_counter++;
+    int curr_label = ctx->write_label_counter++;
     ListNode_t *cur_arg = args;
     int arg_count = 0;
     char format_str[200] = "";
@@ -620,7 +604,7 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
             
             /* Generate code to evaluate expression */
             expr_node_t *expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
             free_expr_tree(expr_tree);
             
             /* Save register to stack to preserve for printf */
@@ -636,7 +620,7 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
         {
             strcat(format_str, "%d");
             expr_node_t *expr_tree = build_expr_tree(expr);
-            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
             free_expr_tree(expr_tree);
 
             Register_t *top_reg = front_reg_stack(get_reg_stack());
@@ -755,7 +739,7 @@ ListNode_t *codegen_builtin_write(ListNode_t *args, ListNode_t *inst_list, FILE 
 }
 
 /* Code generation for writeln() builtin */
-ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     char *buffer;
     
@@ -784,8 +768,8 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
                 "\tleaq .LC%d(%%rip), %%rsi\n"
                 "\tmovq $%zu, %%rdx\n"
                 "\tsyscall\n",
-                write_label_counter, escaped_str,
-                write_label_counter, strlen(escaped_str)+1);  // Length with escaped content
+                ctx->write_label_counter, escaped_str,
+                ctx->write_label_counter, strlen(escaped_str)+1);  // Length with escaped content
         buffer = malloc(len + 1);
         snprintf(buffer, len + 1,
                 "\t.section\t.rodata\n"
@@ -797,16 +781,16 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
                 "\tleaq .LC%d(%%rip), %%rsi\n"
                 "\tmovq $%zu, %%rdx\n"
                 "\tsyscall\n",
-                write_label_counter, escaped_str,
-                write_label_counter, strlen(escaped_str)+1);
+                ctx->write_label_counter, escaped_str,
+                ctx->write_label_counter, strlen(escaped_str)+1);
         inst_list = add_inst(inst_list, buffer);
         free(buffer);
         
         
-        write_label_counter++;
+        ctx->write_label_counter++;
     } else {
         /* Fall back to printf for non-string args */
-        return codegen_builtin_write(args, inst_list, o_file);
+        return codegen_builtin_write(args, inst_list, ctx);
     }
 #else
     /* Windows implementation with proper string escaping */
@@ -821,14 +805,14 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
                 ".LC%d:\n"
                 "\t.ascii \"%s\\0\"\n"  // Explicit null termination
                 "\t.text\n",
-                write_label_counter, escaped_str);
+                ctx->write_label_counter, escaped_str);
         buffer = malloc(len + 1);
         snprintf(buffer, len + 1,
                 "\t.section\t.rdata,\"dr\"\n"
                 ".LC%d:\n"
                 "\t.ascii \"%s\\0\"\n"
                 "\t.text\n",
-                write_label_counter, escaped_str);
+                ctx->write_label_counter, escaped_str);
         inst_list = add_inst(inst_list, buffer);
         free(buffer);
         
@@ -838,21 +822,21 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
                 "\tsubq\t$32, %%rsp\n"  // Shadow space
                 "\tcall\tprintf\n"
                 "\taddq\t$32, %%rsp\n",
-                write_label_counter);
+                ctx->write_label_counter);
         buffer = malloc(len + 1);
         snprintf(buffer, len + 1,
                 "\tleaq\t.LC%d(%%rip), %%rcx\n"
                 "\tsubq\t$32, %%rsp\n"
                 "\tcall\tprintf\n"
                 "\taddq\t$32, %%rsp\n",
-                write_label_counter);
+                ctx->write_label_counter);
         inst_list = add_inst(inst_list, buffer);
         free(buffer);
         
-        write_label_counter++;
+        ctx->write_label_counter++;
     } else {
         /* Fall back to printf for non-string args */
-        return codegen_builtin_write(args, inst_list, o_file);
+        return codegen_builtin_write(args, inst_list, ctx);
     }
 #endif
 
@@ -862,7 +846,7 @@ ListNode_t *codegen_builtin_writeln(ListNode_t *args, ListNode_t *inst_list, FIL
 /* Removed duplicate function definition */
 
 /* Code generation for read() builtin */
-ListNode_t *codegen_builtin_read(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_builtin_read(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     fprintf(stderr, "DEBUG: Generating read syscall\n");
     
@@ -879,7 +863,7 @@ ListNode_t *codegen_builtin_read(ListNode_t *args, ListNode_t *inst_list, FILE *
         }
         
         /* Setup scanf call */
-        int label_num = write_label_counter++;
+        int label_num = ctx->write_label_counter++;
         snprintf(buffer, 100, "\t.section\t.rodata\n.LC%d:\n\t.string \"%%d\"\n\t.text\n", label_num);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, 100, "\tleaq\t.LC%d(%%rip), %%rdi\n", label_num);
@@ -901,7 +885,7 @@ ListNode_t *codegen_builtin_read(ListNode_t *args, ListNode_t *inst_list, FILE *
 
 /* Code generation for simple relops */
 ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
-                                FILE *o_file, int *relop_type)
+                                CodeGenContext *ctx, int *relop_type)
 {
     assert(expr != NULL);
     assert(expr->type == EXPR_RELOP);
@@ -909,10 +893,10 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     fprintf(stderr, "DEBUG: Generating simple relop\n");
     
     *relop_type = expr->expr_data.relop_data.type;
-    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, o_file);
+    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
     
     Register_t *left_reg = pop_reg_stack(get_reg_stack());
-    inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, o_file);
+    inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
     Register_t *right_reg = front_reg_stack(get_reg_stack());
     
     char buffer[100];
@@ -946,7 +930,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 }
 
 /* Codegen for a statement */
-ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
 
@@ -955,27 +939,27 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, FILE *o_
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
-            inst_list = codegen_var_assignment(stmt, inst_list, o_file);
+            inst_list = codegen_var_assignment(stmt, inst_list, ctx);
             break;
 
         case STMT_PROCEDURE_CALL:
-            inst_list = codegen_proc_call(stmt, inst_list, o_file);
+            inst_list = codegen_proc_call(stmt, inst_list, ctx);
             break;
 
         case STMT_COMPOUND_STATEMENT:
-            inst_list = codegen_compound_stmt(stmt, inst_list, o_file);
+            inst_list = codegen_compound_stmt(stmt, inst_list, ctx);
             break;
 
         case STMT_IF_THEN:
-            inst_list = codegen_if_then(stmt, inst_list, o_file);
+            inst_list = codegen_if_then(stmt, inst_list, ctx);
             break;
 
         case STMT_WHILE:
-            inst_list = codegen_while(stmt, inst_list, o_file);
+            inst_list = codegen_while(stmt, inst_list, ctx);
             break;
 
         case STMT_FOR:
-            inst_list = codegen_for(stmt, inst_list, o_file);
+            inst_list = codegen_for(stmt, inst_list, ctx);
             break;
 
         case STMT_ASM_BLOCK:
@@ -992,7 +976,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, FILE *o_
 
 /* TODO: Only handles assignments and read/write builtins */
 /* Returns a list of instructions */
-ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     assert(stmt->type == STMT_COMPOUND_STATEMENT);
@@ -1006,7 +990,7 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
     {
         cur_stmt = (struct Statement *)stmt_list->cur;
 
-        inst_list = codegen_stmt(cur_stmt, inst_list, o_file);
+        inst_list = codegen_stmt(cur_stmt, inst_list, ctx);
 
         stmt_list = stmt_list->next;
     }
@@ -1016,7 +1000,7 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
 
 /* Code generation for a variable assignment */
 /* TODO: Array assignments not currently supported */
-ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     assert(stmt->type == STMT_VAR_ASSIGN);
@@ -1034,7 +1018,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     assert(var_expr->type == EXPR_VAR_ID);
     var = find_label(var_expr->expr_data.id);
 
-    inst_list = codegen_expr(assign_expr, inst_list, o_file);
+    inst_list = codegen_expr(assign_expr, inst_list, ctx);
 
     reg = front_reg_stack(get_reg_stack());
 
@@ -1061,7 +1045,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 /* NOTE: This function will also recognize builtin procedures */
 /* TODO: Currently only handles builtins */
 /* TODO: Functions and procedures only handle max 2 arguments */
-ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
@@ -1078,26 +1062,26 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FIL
     if(strcmp("write", unmangled_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for write() builtin\n");
-        inst_list = codegen_builtin_write(args_expr, inst_list, o_file);
+        inst_list = codegen_builtin_write(args_expr, inst_list, ctx);
         fprintf(stderr, "DEBUG: Finished generating code for write()\n");
     }
     else if(strcmp("writeln", unmangled_name) == 0 || strcmp("writeLn", unmangled_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for writeln() builtin\n");
-        inst_list = codegen_builtin_writeln(args_expr, inst_list, o_file);
+        inst_list = codegen_builtin_writeln(args_expr, inst_list, ctx);
         fprintf(stderr, "DEBUG: Finished generating code for writeln()\n");
     }
     else if(strcmp("read", unmangled_name) == 0 || strcmp("readLn", unmangled_name) == 0)
     {
         fprintf(stderr, "DEBUG: Generating code for read() builtin\n");
-        inst_list = codegen_builtin_read(args_expr, inst_list, o_file);
+        inst_list = codegen_builtin_read(args_expr, inst_list, ctx);
         fprintf(stderr, "DEBUG: Finished generating code for read()\n");
     }
 
     /* Not builtin */
     else
     {
-        inst_list = codegen_pass_arguments(args_expr, inst_list, o_file);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
@@ -1109,7 +1093,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, FIL
 
 /* Code generation for if-then-else statements */
 /* TODO: Support more than simple relops */
-ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     assert(stmt->type == STMT_IF_THEN);
@@ -1121,18 +1105,18 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, FILE 
 
     /* Evaluating the relop */
     expr = stmt->stmt_data.if_then_data.relop_expr;
-    inst_list = codegen_simple_relop(expr, inst_list, o_file, &relop_type);
+    inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
 
     /* Preparing labels and data */
-    gen_label(label1, 18);
-    gen_label(label2, 18);
+    gen_label(label1, 18, ctx);
+    gen_label(label2, 18, ctx);
     if_stmt = stmt->stmt_data.if_then_data.if_stmt;
     else_stmt = stmt->stmt_data.if_then_data.else_stmt;
 
     /* IF STATEMENT */
     inverse = 1;
     inst_list = gencode_jmp(relop_type, inverse, label1, inst_list);
-    inst_list = codegen_stmt(if_stmt, inst_list, o_file);
+    inst_list = codegen_stmt(if_stmt, inst_list, ctx);
 
     /* ELSE STATEMENT (if applicable) */
     if(else_stmt == NULL)
@@ -1148,7 +1132,7 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, FILE 
         snprintf(buffer, 50, "%s:\n", label1);
         inst_list = add_inst(inst_list, buffer);
 
-        inst_list = codegen_stmt(else_stmt, inst_list, o_file);
+        inst_list = codegen_stmt(else_stmt, inst_list, ctx);
 
         snprintf(buffer, 50, "%s:\n", label2);
         inst_list = add_inst(inst_list, buffer);
@@ -1159,7 +1143,7 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, FILE 
 
 /* Code generation for while statements */
 /* TODO: Support more than simple relops */
-ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     assert(stmt->type == STMT_WHILE);
@@ -1170,8 +1154,8 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, FILE *o
     char label1[18], label2[18], buffer[50];
 
     /* Preparing labels and data */
-    gen_label(label1, 18);
-    gen_label(label2, 18);
+    gen_label(label1, 18, ctx);
+    gen_label(label2, 18, ctx);
     while_stmt = stmt->stmt_data.while_data.while_stmt;
     expr = stmt->stmt_data.while_data.relop_expr;
 
@@ -1182,12 +1166,12 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, FILE *o
     /* WHILE STMT */
     snprintf(buffer, 50, "%s:\n", label2);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_stmt(while_stmt, inst_list, o_file);
+    inst_list = codegen_stmt(while_stmt, inst_list, ctx);
 
     /* Comparison area */
     snprintf(buffer, 50, "%s:\n", label1);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_simple_relop(expr, inst_list, o_file, &relop_type);
+    inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
 
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
@@ -1197,7 +1181,7 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, FILE *o
 
 /* Code generation for for statements */
 /* TODO: Support more than simple relops */
-ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     assert(stmt->type == STMT_FOR);
@@ -1208,8 +1192,8 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, FILE *o_f
     char label1[18], label2[18], buffer[50];
 
     /* Preparing labels and data */
-    gen_label(label1, 18);
-    gen_label(label2, 18);
+    gen_label(label1, 18, ctx);
+    gen_label(label2, 18, ctx);
     for_body = stmt->stmt_data.for_data.do_for;
     expr = stmt->stmt_data.for_data.to;
 
@@ -1217,7 +1201,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, FILE *o_f
     if(stmt->stmt_data.for_data.for_assign_type == STMT_FOR_ASSIGN_VAR)
     {
         for_assign = stmt->stmt_data.for_data.for_assign_data.var_assign;
-        inst_list = codegen_var_assignment(for_assign, inst_list, o_file);
+        inst_list = codegen_var_assignment(for_assign, inst_list, ctx);
         for_var = stmt->stmt_data.for_data.for_assign_data.var_assign->stmt_data.var_assign_data.var;
     }
     else
@@ -1238,15 +1222,15 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, FILE *o_f
     /* FOR STMT */
     snprintf(buffer, 50, "%s:\n", label2);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_stmt(for_body, inst_list, o_file);
+    inst_list = codegen_stmt(for_body, inst_list, ctx);
 
     /* UPDATE */
-    inst_list = codegen_stmt(update_stmt, inst_list, o_file);
+    inst_list = codegen_stmt(update_stmt, inst_list, ctx);
 
     /* Comparison area */
     snprintf(buffer, 50, "%s:\n", label1);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_simple_relop(comparison_expr, inst_list, o_file, &relop_type);
+    inst_list = codegen_simple_relop(comparison_expr, inst_list, ctx, &relop_type);
 
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
@@ -1259,7 +1243,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, FILE *o_f
 }
 
 /* Code generation for passing arguments */
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, FILE *o_file)
+ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     int arg_num;
     StackNode_t *stack_node;
@@ -1279,7 +1263,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, FILE
         }
 
         expr_tree = build_expr_tree((struct Expression *)args->cur);
-        inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list);
+        inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
         free_expr_tree(expr_tree);
 
         top_reg = front_reg_stack(get_reg_stack());
