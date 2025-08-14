@@ -29,7 +29,7 @@ typedef struct expr_node
 } expr_node_t;
 
 expr_node_t *build_expr_tree(struct Expression *);
-ListNode_t *gencode_expr_tree(expr_node_t *, RegStack_t *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 int expr_tree_is_leaf(expr_node_t *);
 void print_expr_tree(expr_node_t *, int num_indent, FILE *);
 void free_expr_tree(expr_node_t *);
