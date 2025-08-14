@@ -17,6 +17,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/LexAndYacc/Grammar.tab.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 
 /* Code generation for expressions */
@@ -109,7 +110,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 }
 
 /* Code generation for passing arguments */
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
 {
     int arg_num;
     StackNode_t *stack_node;
@@ -117,6 +118,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     char buffer[50];
     char *arg_reg_char;
     expr_node_t *expr_tree;
+
+    ListNode_t *formal_args = proc_node->args;
 
     arg_num = 0;
     while(args != NULL)
@@ -128,15 +131,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             exit(1);
         }
 
-        expr_tree = build_expr_tree((struct Expression *)args->cur);
-        inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
-        free_expr_tree(expr_tree);
+        struct Expression *arg_expr = (struct Expression *)args->cur;
+        Tree_t *formal_arg_decl = (Tree_t *)formal_args->cur;
+        if(formal_arg_decl->tree_data.var_decl_data.is_var_param)
+        {
+            // Pass by reference
+            assert(arg_expr->type == EXPR_VAR_ID);
+            StackNode_t *var_node = find_label(arg_expr->expr_data.id);
+            snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            // Pass by value
+            expr_tree = build_expr_tree(arg_expr);
+            inst_list = gencode_expr_tree(expr_tree, get_reg_stack(), inst_list, ctx);
+            free_expr_tree(expr_tree);
 
-        top_reg = front_reg_stack(get_reg_stack());
-        snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
-        inst_list = add_inst(inst_list, buffer);
+            top_reg = front_reg_stack(get_reg_stack());
+            snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         args = args->next;
+        formal_args = formal_args->next;
         ++arg_num;
     }
 

@@ -151,9 +151,11 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx)
 {
     char *prgm_name;
 
+    fprintf(stderr, "DEBUG: ENTERING codegen\n");
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+    codegen_rodata(ctx);
 
     prgm_name = codegen_program(tree, ctx);
     codegen_main(prgm_name, ctx);
@@ -162,7 +164,24 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx)
 
     free_stackmng();
 
+    fprintf(stderr, "DEBUG: LEAVING codegen\n");
     return;
+}
+
+void codegen_rodata(CodeGenContext *ctx)
+{
+    fprintf(ctx->output_file, ".section .rodata\n");
+    fprintf(ctx->output_file, ".format_str_s:\n");
+    fprintf(ctx->output_file, ".string \"%%s\"\n");
+    fprintf(ctx->output_file, ".format_str_d:\n");
+    fprintf(ctx->output_file, ".string \"%%d\"\n");
+    fprintf(ctx->output_file, ".format_str_sn:\n");
+    fprintf(ctx->output_file, ".string \"%%s\\n\"\n");
+    fprintf(ctx->output_file, ".format_str_dn:\n");
+    fprintf(ctx->output_file, ".string \"%%d\\n\"\n");
+    fprintf(ctx->output_file, ".format_str_n:\n");
+    fprintf(ctx->output_file, ".string \"\\n\"\n");
+    fprintf(ctx->output_file, ".text\n");
 }
 
 /* Generates platform-compatible headers */

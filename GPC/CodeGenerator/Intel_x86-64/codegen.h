@@ -159,6 +159,7 @@ ListNode_t *add_inst(ListNode_t *, char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(char *, CodeGenContext *ctx);
+void codegen_rodata(CodeGenContext *ctx);
 void codegen_program_footer(CodeGenContext *ctx);
 void codegen_main(char *prgm_name, CodeGenContext *ctx);
 void codegen_stack_space(CodeGenContext *ctx);

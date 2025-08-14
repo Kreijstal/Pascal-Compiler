@@ -31,7 +31,7 @@ BIN = gpc
 
 ######## THE MAIN BUILD RULES ###########
 release:
-	cd Parser && $(MAKE) release
+	cd Parser && $(MAKE) release debug_flexbison
 	$(MAKE) codegen
 	$(MAKE) bin
 

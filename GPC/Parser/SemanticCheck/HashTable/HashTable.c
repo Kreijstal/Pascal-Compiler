@@ -26,7 +26,7 @@ HashTable_t *InitHashTable()
 
 /* Adds an identifier to the table */
 /* Returns 1 if successfully added, 0 if the identifier already exists */
-int AddIdentToTable(HashTable_t *table, char *id, enum VarType var_type,
+int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
     enum HashType hash_type, ListNode_t *args)
 {
     ListNode_t *list, *cur;
@@ -41,6 +41,7 @@ int AddIdentToTable(HashTable_t *table, char *id, enum VarType var_type,
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = id;
+        hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
@@ -55,8 +56,16 @@ int AddIdentToTable(HashTable_t *table, char *id, enum VarType var_type,
         {
             hash_node = (HashNode_t *)cur->cur;
             if(strcmp(hash_node->id, id) == 0)
-                return 1;
+            {
+                int is_new_proc_func = (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
+                int is_existing_proc_func = (hash_node->hash_type == HASHTYPE_PROCEDURE || hash_node->hash_type == HASHTYPE_FUNCTION);
 
+                if (!is_new_proc_func || !is_existing_proc_func)
+                {
+                    // If either is not a proc/func, it's a redeclaration error.
+                    return 1;
+                }
+            }
             cur = cur->next;
         }
 
@@ -65,6 +74,7 @@ int AddIdentToTable(HashTable_t *table, char *id, enum VarType var_type,
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = id;
+        hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
@@ -103,6 +113,33 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
 
         return NULL;
     }
+}
+
+/* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
+ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
+{
+    ListNode_t *list;
+    ListNode_t *matches = NULL;
+    HashNode_t *hash_node;
+    int hash;
+
+    hash = hashpjw(id);
+    list = table->table[hash];
+
+    while(list != NULL)
+    {
+        hash_node = (HashNode_t *)list->cur;
+        if(strcmp(hash_node->id, id) == 0)
+        {
+            if(matches == NULL)
+                matches = CreateListNode(hash_node, LIST_UNSPECIFIED);
+            else
+                PushListNodeBack(matches, CreateListNode(hash_node, LIST_UNSPECIFIED));
+        }
+        list = list->next;
+    }
+
+    return matches;
 }
 
 /* Resets hash node mutation and reference status */

@@ -456,11 +456,100 @@ int semcheck_funccall(int *type_return,
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
+    ListNode_t *overload_candidates = FindAllIdents(symtab, id);
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
-    expr->expr_data.function_call_data.mangled_id = mangled_name;
-    scope_return = FindIdent(&hash_return, symtab, mangled_name);
 
-    if(scope_return == -1)
+    HashNode_t *resolved_func = NULL;
+    int match_count = 0;
+
+    if (overload_candidates != NULL)
+    {
+        ListNode_t *cur = overload_candidates;
+        while(cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
+            {
+                resolved_func = candidate;
+                match_count++;
+            }
+            cur = cur->next;
+        }
+    }
+
+    HashNode_t *best_match = NULL;
+    int best_score = 9999;
+    int num_best_matches = 0;
+
+    if (overload_candidates != NULL)
+    {
+        ListNode_t *cur = overload_candidates;
+        while(cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+
+            if (ListLength(candidate->args) == ListLength(args_given))
+            {
+                int current_score = 0;
+                ListNode_t *formal_args = candidate->args;
+                ListNode_t *call_args = args_given;
+
+                while(formal_args != NULL)
+                {
+                    Tree_t *formal_decl = (Tree_t *)formal_args->cur;
+                    int formal_type = formal_decl->tree_data.var_decl_data.type;
+
+                    int call_type;
+                    semcheck_expr_main(&call_type, symtab, (struct Expression *)call_args->cur, max_scope_lev, NO_MUTATE);
+
+                    if(formal_type == call_type)
+                        current_score += 0;
+                    else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
+                        current_score += 1;
+                    else
+                        current_score += 1000; // Mismatch
+
+                    formal_args = formal_args->next;
+                    call_args = call_args->next;
+                }
+
+                if(current_score < best_score)
+                {
+                    best_score = current_score;
+                    best_match = candidate;
+                    num_best_matches = 1;
+                }
+                else if (current_score == best_score)
+                {
+                    num_best_matches++;
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    if (num_best_matches == 1)
+    {
+        expr->expr_data.function_call_data.mangled_id = strdup(best_match->mangled_id);
+        expr->expr_data.function_call_data.resolved_func = best_match;
+        hash_return = best_match;
+        scope_return = 0; // FIXME
+    }
+    else if (num_best_matches == 0)
+    {
+        fprintf(stderr, "Error on line %d, call to function %s does not match any available overload\n", expr->line_num, id);
+        *type_return = UNKNOWN_TYPE;
+        return ++return_val;
+    }
+    else
+    {
+        fprintf(stderr, "Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
+        *type_return = UNKNOWN_TYPE;
+        return ++return_val;
+    }
+
+
+    if(scope_return == -1) // Should not happen if match_count > 0
     {
         fprintf(stderr, "Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
         ++return_val;

@@ -8,7 +8,6 @@
 #include "stackmng/stackmng.h"
 #include "expr_tree/expr_tree.h"
 #include "codegen_expression.h"
-#include "codegen_builtins.h"
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
@@ -120,26 +119,11 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
 
-    if(strcmp("write", unmangled_name) == 0)
-    {
-        inst_list = codegen_builtin_write(args_expr, inst_list, ctx);
-    }
-    else if(strcmp("writeln", unmangled_name) == 0 || strcmp("writeLn", unmangled_name) == 0)
-    {
-        inst_list = codegen_builtin_writeln(args_expr, inst_list, ctx);
-    }
-    else if(strcmp("read", unmangled_name) == 0 || strcmp("readLn", unmangled_name) == 0)
-    {
-        inst_list = codegen_builtin_read(args_expr, inst_list, ctx);
-    }
-    else
-    {
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx);
-        inst_list = codegen_vect_reg(inst_list, 0);
-        snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
-        inst_list = add_inst(inst_list, buffer);
-        free_arg_regs();
-    }
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, stmt->stmt_data.procedure_call_data.resolved_proc);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
     return inst_list;
 }
 

@@ -262,6 +262,13 @@ pascal_string \'([^\']|\'\')*\'
     return OF;
 }
 
+"overload" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[OVERLOAD] ");
+    #endif
+    return OVERLOAD;
+}
+
 "if" {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[IF] ");

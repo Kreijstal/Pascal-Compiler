@@ -76,6 +76,7 @@
         int return_type; /* -1 if procedure */
         char *return_type_id;
         int cname_flag;
+        int overload_flag;
     } subprogram_head_s;
 
     /* For the for_assign rule */
@@ -103,6 +104,7 @@
 %token VARIABLE
 %token PROCEDURE
 %token FUNCTION
+%token OVERLOAD
 %token BBEGIN
 %token END
 
@@ -293,7 +295,7 @@ declarations
             if($5.type == ARRAY)
                 tree = mk_arraydecl($3.line_num, $3.list, $5.actual_type, $5.start, $5.end);
             else
-                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id);
+                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id, 0);
 
             if($1 == NULL)
                 $$ = CreateListNode(tree, LIST_TREE);
@@ -381,9 +383,9 @@ subprogram_declaration
     : subprogram_head declarations subprogram_declarations compound_statement
         {
             if($1.sub_type == PROCEDURE)
-                $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4, $1.cname_flag);
+                $$ = mk_procedure($1.line_num, $1.id, $1.args, $2, $3, $4, $1.cname_flag, $1.overload_flag);
             else
-                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id, $1.cname_flag);
+                $$ = mk_function($1.line_num, $1.id, $1.args, $2, $3, $4, $1.return_type, $1.return_type_id, $1.cname_flag, $1.overload_flag);
         }
     ;
 
@@ -403,6 +405,24 @@ subprogram_head
             $$.id = $2.id;
             $$.line_num = $2.line_num;
             $$.cname_flag = 0;
+            $$.overload_flag = 0;
+        }
+    | FUNCTION ident arguments ':' type OVERLOAD ';'
+        {
+            $$.sub_type = FUNCTION;
+            $$.args = $3;
+            if ($5.type == ID) {
+                $$.return_type = -1;
+                $$.return_type_id = $5.id;
+            } else {
+                $$.return_type = $5.actual_type;
+                $$.return_type_id = NULL;
+            }
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 0;
+            $$.overload_flag = 1;
         }
     | FUNCTION ident arguments ':' type CNAME ';'
         {
@@ -419,6 +439,24 @@ subprogram_head
             $$.id = $2.id;
             $$.line_num = $2.line_num;
             $$.cname_flag = 1;
+            $$.overload_flag = 0;
+        }
+    | FUNCTION ident arguments ':' type CNAME OVERLOAD ';'
+        {
+            $$.sub_type = FUNCTION;
+            $$.args = $3;
+            if ($5.type == ID) {
+                $$.return_type = -1;
+                $$.return_type_id = $5.id;
+            } else {
+                $$.return_type = $5.actual_type;
+                $$.return_type_id = NULL;
+            }
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 1;
+            $$.overload_flag = 1;
         }
     | PROCEDURE ident arguments ';'
         {
@@ -430,6 +468,19 @@ subprogram_head
             $$.id = $2.id;
             $$.line_num = $2.line_num;
             $$.cname_flag = 0;
+            $$.overload_flag = 0;
+        }
+    | PROCEDURE ident arguments OVERLOAD ';'
+        {
+            $$.sub_type = PROCEDURE;
+            $$.args = $3;
+            $$.return_type = -1;
+            $$.return_type_id = NULL;
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 0;
+            $$.overload_flag = 1;
         }
     | PROCEDURE ident arguments CNAME ';'
         {
@@ -441,6 +492,19 @@ subprogram_head
             $$.id = $2.id;
             $$.line_num = $2.line_num;
             $$.cname_flag = 1;
+            $$.overload_flag = 0;
+        }
+    | PROCEDURE ident arguments CNAME OVERLOAD ';'
+        {
+            $$.sub_type = PROCEDURE;
+            $$.args = $3;
+            $$.return_type = -1;
+            $$.return_type_id = NULL;
+
+            $$.id = $2.id;
+            $$.line_num = $2.line_num;
+            $$.cname_flag = 1;
+            $$.overload_flag = 1;
         }
     ;
 
@@ -468,7 +532,16 @@ parameter_item
             if($4.type == ARRAY)
                 tree = mk_arraydecl($2.line_num, $2.list, $4.actual_type, $4.start, $4.end);
             else
-                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id);
+                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id, 0);
+            $$ = tree;
+        }
+    | VARIABLE optional_const identifier_list ':' type
+        {
+            Tree_t *tree;
+            if($5.type == ARRAY)
+                tree = mk_arraydecl($3.line_num, $3.list, $5.actual_type, $5.start, $5.end);
+            else
+                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id, 1);
             $$ = tree;
         }
     ;

@@ -34,8 +34,7 @@ int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    return AddIdentToTable(symtab->builtins, id,
-            HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args);
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args);
 }
 
 /* Adds a built-in type */
@@ -44,7 +43,7 @@ int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    return AddIdentToTable(symtab->builtins, id, var_type, HASHTYPE_TYPE, NULL);
+    return AddIdentToTable(symtab->builtins, id, NULL, var_type, HASHTYPE_TYPE, NULL);
 }
 
 /* Pushes a new scope onto the stack (FIFO) */
@@ -74,7 +73,7 @@ int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, var_type, HASHTYPE_VAR, NULL);
+        return AddIdentToTable(cur_hash, id, NULL, var_type, HASHTYPE_VAR, NULL);
     }
     else
     {
@@ -94,7 +93,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, var_type, HASHTYPE_ARRAY, NULL);
+        return AddIdentToTable(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL);
     }
     else
     {
@@ -104,7 +103,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
 
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushProcedureOntoScope(SymTab_t *symtab, char *id, ListNode_t *args)
+int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -115,7 +114,7 @@ int PushProcedureOntoScope(SymTab_t *symtab, char *id, ListNode_t *args)
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, HASHVAR_PROCEDURE, HASHTYPE_PROCEDURE, args);
+        return AddIdentToTable(cur_hash, id, mangled_id, HASHVAR_PROCEDURE, HASHTYPE_PROCEDURE, args);
     }
     else
     {
@@ -125,7 +124,7 @@ int PushProcedureOntoScope(SymTab_t *symtab, char *id, ListNode_t *args)
 
 /* Pushes a new function onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushFunctionOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args)
+int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum VarType var_type, ListNode_t *args)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -136,7 +135,7 @@ int PushFunctionOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, Lis
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, var_type, HASHTYPE_FUNCTION, args);
+        return AddIdentToTable(cur_hash, id, mangled_id, var_type, HASHTYPE_FUNCTION, args);
     }
     else
     {
@@ -157,7 +156,7 @@ int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, List
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, var_type, HASHTYPE_FUNCTION_RETURN, args);
+        return AddIdentToTable(cur_hash, id, NULL, var_type, HASHTYPE_FUNCTION_RETURN, args);
     }
     else
     {
@@ -207,6 +206,33 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, char *id)
     return return_val;
 }
 
+/* Searches for all instances of an identifier and returns a list of HashNode_t* */
+/* Returns NULL if not found */
+ListNode_t *FindAllIdents(SymTab_t *symtab, char *id)
+{
+    ListNode_t *cur_scope;
+    ListNode_t *found_nodes = NULL;
+
+    cur_scope = symtab->stack_head;
+
+    /* Check builtins first */
+    found_nodes = FindAllIdentsInTable(symtab->builtins, id);
+    if(found_nodes != NULL)
+        return found_nodes;
+
+    /* Check scopes */
+    while(cur_scope != NULL)
+    {
+        found_nodes = FindAllIdentsInTable((HashTable_t *)cur_scope->cur, id);
+        if(found_nodes != NULL)
+            return found_nodes;
+
+        cur_scope = cur_scope->next;
+    }
+
+    return NULL;
+}
+
 /* Pushes a new type onto the current scope (head) */
 int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type)
 {
@@ -218,7 +244,7 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type)
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, var_type, HASHTYPE_TYPE, NULL);
+        return AddIdentToTable(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL);
     }
     else
     {
