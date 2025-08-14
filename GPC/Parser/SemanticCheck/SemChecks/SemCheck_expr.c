@@ -85,6 +85,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         case HASHVAR_PROCEDURE:
             *type = PROCEDURE;
             break;
+        case HASHVAR_PCHAR:
+             *type = STRING_TYPE;
+             break;
         case HASHVAR_UNTYPED:
             *type = UNKNOWN_TYPE;
             break;
@@ -157,7 +160,7 @@ int semcheck_expr_main(int *type_return,
             break;
         
         case EXPR_STRING:
-            *type_return = HASHVAR_PCHAR;
+            *type_return = STRING_TYPE;
             break;
 
         default:

@@ -114,6 +114,7 @@
 %token INT_TYPE
 %token REAL_TYPE
 %token LONGINT_TYPE
+%token STRING_TYPE
 %token <str> STRING
 %token <str> ENDASM
 
@@ -366,6 +367,7 @@ standard_type
     : INT_TYPE {$$ = INT_TYPE;}
     | REAL_TYPE {$$ = REAL_TYPE;}
     | LONGINT_TYPE {$$ = LONGINT_TYPE;}
+    | STRING_TYPE {$$ = STRING_TYPE;}
     ;
 
 subprogram_declarations

@@ -447,6 +447,13 @@ pascal_string \'([^\']|\'\')*\'
     return LONGINT_TYPE;
 }
 
+"string" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[STRING_TYPE] ");
+    #endif
+    return STRING_TYPE;
+}
+
 
 {integer}   {
     #ifdef DEBUG_FLEX
