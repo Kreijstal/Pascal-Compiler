@@ -151,7 +151,7 @@
 %token ADDOP
 %token<op_val> PLUS MINUS OR
 %token MULOP
-%token<op_val> STAR SLASH AND
+%token<op_val> STAR SLASH AND MOD
 %token PAREN
 
 /* Extra tokens, DO NOT USE IN GRAMMAR RULES! */

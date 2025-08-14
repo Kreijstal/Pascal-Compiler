@@ -176,5 +176,34 @@ class TestCompiler(unittest.TestCase):
             self.fail("Test execution timed out.")
 
 
+    def test_mod_operator(self):
+        """Tests that the mod operator works correctly."""
+        input_file = os.path.join(TEST_CASES_DIR, "mod_test.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "mod_test.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "mod_test")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            self.assertEqual(process.stdout, "1\n")
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+
+
 if __name__ == "__main__":
     unittest.main()
