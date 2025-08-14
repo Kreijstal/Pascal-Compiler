@@ -127,11 +127,11 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(node != NULL);
     assert(node->expr != NULL);
 
-    if(node->label > get_num_registers(get_reg_stack()))
+    /*if(node->label > get_num_registers_free(get_reg_stack()))
     {
         fprintf(stderr, "ERROR: codegen more complex than number of registers is unsupported!\n");
         exit(1);
-    }
+    }*/
 
     /* Handle special cases first */
     if(node->expr->type == EXPR_SIGN_TERM)
@@ -351,13 +351,29 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     Register_t *temp_reg;
 
-    temp_reg = pop_reg_stack(get_reg_stack());
-    inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-    inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if(temp_reg == NULL)
+    {
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
 
-    inst_list = gencode_op(node->expr, temp_reg->bit_32, target_reg->bit_32, inst_list);
+        StackNode_t *spill_loc = add_l_t("spill");
+        char buffer[50];
+        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", target_reg->bit_32, spill_loc->offset);
+        inst_list = add_inst(inst_list, buffer);
 
-    push_reg_stack(get_reg_stack(), temp_reg);
+        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+
+        char spill_mem[30];
+        snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
+        inst_list = gencode_op(node->expr, spill_mem, target_reg->bit_32, inst_list);
+    }
+    else
+    {
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
+        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = gencode_op(node->expr, temp_reg->bit_32, target_reg->bit_32, inst_list);
+        free_reg(get_reg_stack(), temp_reg);
+    }
 
     return inst_list;
 }
@@ -370,12 +386,27 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     Register_t *temp_reg;
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-    temp_reg = pop_reg_stack(get_reg_stack());
-    inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
+    temp_reg = get_free_reg(get_reg_stack(), &inst_list);
 
-    inst_list = gencode_op(node->expr, temp_reg->bit_32, target_reg->bit_32, inst_list);
+    if(temp_reg == NULL)
+    {
+        StackNode_t *spill_loc = add_l_t("spill");
+        char buffer[50];
+        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", target_reg->bit_32, spill_loc->offset);
+        inst_list = add_inst(inst_list, buffer);
 
-    push_reg_stack(get_reg_stack(), temp_reg);
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
+
+        char spill_mem[30];
+        snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
+        inst_list = gencode_op(node->expr, spill_mem, target_reg->bit_32, inst_list);
+    }
+    else
+    {
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
+        inst_list = gencode_op(node->expr, temp_reg->bit_32, target_reg->bit_32, inst_list);
+        free_reg(get_reg_stack(), temp_reg);
+    }
 
     return inst_list;
 }

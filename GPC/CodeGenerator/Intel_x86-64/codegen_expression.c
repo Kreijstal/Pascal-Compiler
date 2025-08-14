@@ -33,17 +33,17 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_VAR_ID:
             fprintf(stderr, "DEBUG: Processing variable ID expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = pop_reg_stack(get_reg_stack());
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            push_reg_stack(get_reg_stack(), target_reg);
+            free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_INUM:
             fprintf(stderr, "DEBUG: Processing integer constant expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = pop_reg_stack(get_reg_stack());
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            push_reg_stack(get_reg_stack(), target_reg);
+            free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_RELOP:
@@ -52,17 +52,17 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_ADDOP:
             fprintf(stderr, "DEBUG: Processing addop expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = pop_reg_stack(get_reg_stack());
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            push_reg_stack(get_reg_stack(), target_reg);
+            free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_SIGN_TERM:
             fprintf(stderr, "DEBUG: Processing sign term expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = pop_reg_stack(get_reg_stack());
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            push_reg_stack(get_reg_stack(), target_reg);
+            free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             return inst_list;
         default:
@@ -84,13 +84,13 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     *relop_type = expr->expr_data.relop_data.type;
     inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
 
-    Register_t *left_reg = pop_reg_stack(get_reg_stack());
+    Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
     inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
     Register_t *right_reg = front_reg_stack(get_reg_stack());
 
     char buffer[100];
     snprintf(buffer, 100, "\tcmpl\t%s, %s\n", right_reg->bit_32, left_reg->bit_32);
-    push_reg_stack(get_reg_stack(), left_reg);
+    free_reg(get_reg_stack(), left_reg);
     inst_list = add_inst(inst_list, buffer);
 
     fprintf(stderr, "DEBUG: Simple relop generated\n");
@@ -154,12 +154,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         {
             // Pass by value
             expr_tree = build_expr_tree(arg_expr);
-            top_reg = pop_reg_stack(get_reg_stack());
+            top_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
             snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
-            push_reg_stack(get_reg_stack(), top_reg);
+            free_reg(get_reg_stack(), top_reg);
             inst_list = add_inst(inst_list, buffer);
         }
 
