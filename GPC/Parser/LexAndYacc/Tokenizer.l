@@ -410,6 +410,14 @@ pascal_string \'([^\']|\'\')*\'
     return MULOP;
 }
 
+"mod" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[MULOP:%s] ", yytext);
+    #endif
+    yylval.op_val = MOD;
+    return MULOP;
+}
+
 "+" {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[ADDOP:%s] ", yytext);
