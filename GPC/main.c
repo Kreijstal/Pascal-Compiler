@@ -9,7 +9,6 @@
 
 /* Global variable definitions */
 Tree_t *parse_tree = NULL;
-int label_counter = 1;
 int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
@@ -42,7 +41,9 @@ int main(int argc, char **argv)
         set_flags(argv + required_args, args_left);
     }
 
+    file_to_parse = "GPC/stdlib.p";
     prelude_tree = ParsePascalOnly("GPC/stdlib.p");
+    file_to_parse = argv[1];
     user_tree = ParsePascalOnly(argv[1]);
 
     if(prelude_tree != NULL && user_tree != NULL)
@@ -71,7 +72,20 @@ int main(int argc, char **argv)
         if(start_semcheck(user_tree) == 0)
         {
             fprintf(stderr, "Generating code to file: %s\n", argv[2]);
-            codegen(user_tree, argv[1], argv[2]);
+
+            CodeGenContext ctx;
+            ctx.output_file = fopen(argv[2], "w");
+            if (ctx.output_file == NULL)
+            {
+                fprintf(stderr, "ERROR: Failed to open output file: %s\n", argv[2]);
+                exit(1);
+            }
+            ctx.label_counter = 1;
+            ctx.write_label_counter = 1;
+
+            codegen(user_tree, argv[1], &ctx);
+
+            fclose(ctx.output_file);
         }
 
         destroy_tree(prelude_tree);
