@@ -33,6 +33,7 @@ gpc_sources = [
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
+  'stacktrace.c'
 ]
 
 gpc_sources += bison_generated
@@ -56,6 +57,10 @@ gpc_exe = executable('gpc', gpc_sources,
   dependencies: [
     compiler.find_library('m', required: true),
     compiler.find_library('fl', required: true),
+    compiler.find_library('unwind', required: true),
+    compiler.find_library('unwind-x86_64', required: true),
+    compiler.find_library('dl', required: true),
+    compiler.find_library('pthread', required: true),
   ]
 )
 

@@ -7,6 +7,7 @@
 #define SEM_CHECK_H
 
 #include "../ParseTree/tree.h"
+#include "SymTab/SymTab.h"
 
 /* The main function for checking a tree */
 /* Return values:
@@ -14,6 +15,6 @@
     -1      -> Check successful with warnings
     >= 1    -> Check failed with n errors
 */
-int start_semcheck(Tree_t *parse_tree);
+SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
 
 #endif

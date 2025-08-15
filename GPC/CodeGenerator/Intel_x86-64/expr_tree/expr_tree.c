@@ -47,6 +47,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 
     new_node = (expr_node_t *)malloc(sizeof(expr_node_t));
     new_node->expr = expr;
+    new_node->reg = NULL;
 
     /* Building the tree */
     switch(expr->type)
@@ -127,6 +128,18 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(node != NULL);
     assert(node->expr != NULL);
 
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
+    #endif
+
+    if(node->reg != NULL)
+    {
+        char buffer[50];
+        snprintf(buffer, 50, "\tmovl\t%s, %s\n", node->reg->bit_32, target_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
+    }
+
     /*if(node->label > get_num_registers_free(get_reg_stack()))
     {
         fprintf(stderr, "ERROR: codegen more complex than number of registers is unsupported!\n");
@@ -142,6 +155,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     else if(expr_tree_is_leaf(node) == 1)
     {
         inst_list = gencode_case0(node, inst_list, ctx, target_reg);
+        node->reg = target_reg;
     }
     /* CASE 1 */
     else if(expr_tree_is_leaf(node->right_expr))
@@ -278,6 +292,9 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 /* node is a leaf */
 ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "gencode_case0\n");
+    #endif
     assert(node != NULL);
     assert(node->expr != NULL);
 
@@ -323,6 +340,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 /* right node is a leaf */
 ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "gencode_case1\n");
+    #endif
     assert(node != NULL);
     assert(node->expr != NULL);
     assert(node->right_expr != NULL);
@@ -338,7 +358,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(right_expr != NULL);
     inst_list = gencode_leaf_var(right_expr, inst_list, name_buf, 30);
 
-    inst_list = gencode_op(expr, name_buf, target_reg->bit_32, inst_list);
+    inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
 
     return inst_list;
 }
@@ -346,6 +366,9 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
 ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "gencode_case2\n");
+    #endif
     assert(node != NULL);
     assert(node->expr != NULL);
 
@@ -365,13 +388,13 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        inst_list = gencode_op(node->expr, spill_mem, target_reg->bit_32, inst_list);
+        inst_list = gencode_op(node->expr, target_reg->bit_32, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = gencode_op(node->expr, temp_reg->bit_32, target_reg->bit_32, inst_list);
+        inst_list = gencode_op(node->expr, target_reg->bit_32, temp_reg->bit_32, inst_list);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -380,6 +403,9 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
 ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "gencode_case3\n");
+    #endif
     assert(node != NULL);
     assert(node->expr != NULL);
 
@@ -399,12 +425,12 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        inst_list = gencode_op(node->expr, spill_mem, target_reg->bit_32, inst_list);
+        inst_list = gencode_op(node->expr, target_reg->bit_32, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-        inst_list = gencode_op(node->expr, temp_reg->bit_32, target_reg->bit_32, inst_list);
+        inst_list = gencode_op(node->expr, target_reg->bit_32, temp_reg->bit_32, inst_list);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -424,7 +450,13 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     switch(expr->type)
     {
         case EXPR_VAR_ID:
+            #ifdef DEBUG_CODEGEN
+            fprintf(stderr, "DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
+            #endif
             stack_node = find_label(expr->expr_data.id);
+            #ifdef DEBUG_CODEGEN
+            fprintf(stderr, "DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
+            #endif
 
             if(stack_node != NULL)
             {
@@ -474,11 +506,11 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             switch(type)
             {
                 case PLUS:
-                    snprintf(buffer, 50, "\taddl\t%s, %s\n", left, right);
+                    snprintf(buffer, 50, "\taddl\t%s, %s\n", right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 case MINUS:
-                    snprintf(buffer, 50, "\tsubl\t%s, %s\n", left, right);
+                    snprintf(buffer, 50, "\tsubl\t%s, %s\n", right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:
@@ -492,23 +524,58 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             type = expr->expr_data.mulop_data.mulop_type;
             if(type == STAR)
             {
-                snprintf(buffer, 50, "\timull\t%s, %s\n", left, right);
+                snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == MOD)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tcdq\n");
+                inst_list = add_inst(inst_list, buffer);
+
+                char reg[10];
+                snprintf(reg, 10, "%%r10d");
+                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
                 inst_list = add_inst(inst_list, buffer);
             }
             /* NOTE: Division and modulus is a more special case */
-            else if(type == SLASH)
+            else if(type == SLASH || type == DIV)
             {
-                /* Constant divisor */
-                /* TODO: Optimize */
-                if(left[0] == '$')
-                {
-                    inst_list = gencode_divide_const_no_optimize(left, right, inst_list);
-                }
-                /* Non-constant divisor */
-                else
-                {
-                    inst_list = gencode_divide_no_const(left, right, inst_list);
-                }
+                #ifdef DEBUG_CODEGEN
+                fprintf(stderr, "DEBUG: gencode_op: left = %s, right = %s\n", left, right);
+                #endif
+                // left is the dividend, right is the divisor
+                snprintf(buffer, 50, "\tpushq\t%%rax\n");
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tpushq\t%%rdx\n");
+                inst_list = add_inst(inst_list, buffer);
+
+
+                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tcdq\n");
+                inst_list = add_inst(inst_list, buffer);
+
+                char reg[10];
+                snprintf(reg, 10, "%%r10d");
+                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, 50, "\tpopq\t%%rdx\n");
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tpopq\t%%rax\n");
+                inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)
             {
@@ -536,54 +603,6 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     return inst_list;
 }
 
-/* Gencode for division with constant divisor (no optimization) */
-/* Throws constant divisor into temporary stack (TODO: This is bad) */
-ListNode_t *gencode_divide_const_no_optimize(char *left, char *right, ListNode_t *inst_list)
-{
-    StackNode_t *temp;
-    char buffer[50];
-
-    temp = find_in_temp("TEMP_DIV");
-    if(temp == NULL)
-        temp = add_l_t("TEMP_DIV");
-
-    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tcltd\n");
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tidivl\t-%d(%%rbp)\n", temp->offset);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", right);
-    inst_list = add_inst(inst_list, buffer);
-
-    return inst_list;
-}
-
-/* Gencode for division with non-constant divisor */
-ListNode_t *gencode_divide_no_const(char *left, char *right, ListNode_t *inst_list)
-{
-    char buffer[50];
-
-    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tcltd\n");
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tidivl\t%s\n", left);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", right);
-    inst_list = add_inst(inst_list, buffer);
-
-    return inst_list;
-}
 
 /* Gets simple operation of a node */
 /* DEPRECATED */

@@ -151,7 +151,7 @@
 %token ADDOP
 %token<op_val> PLUS MINUS OR
 %token MULOP
-%token<op_val> STAR SLASH AND MOD
+%token<op_val> STAR SLASH AND MOD DIV
 %token PAREN
 
 /* Extra tokens, DO NOT USE IN GRAMMAR RULES! */
@@ -176,6 +176,7 @@
 %type<ident_list> identifier_list
 %type<list> optional_program_parameters
 %type<list> declarations
+%type<list> declaration_list
 %type<list> type_declarations_opt
 %type<list> type_declaration_list
 %type<list> subprogram_declarations
@@ -290,20 +291,35 @@ identifier_list
     ;
 
 declarations
-    : declarations VARIABLE identifier_list ':' type ';'
+    : VARIABLE declaration_list
+        { $$ = $2; }
+    | /* empty */ {$$ = NULL;}
+    ;
+
+declaration_list
+    : declaration_list identifier_list ':' type ';'
         {
             Tree_t *tree;
-            if($5.type == ARRAY)
-                tree = mk_arraydecl($3.line_num, $3.list, $5.actual_type, $5.start, $5.end);
+            if($4.type == ARRAY)
+                tree = mk_arraydecl($2.line_num, $2.list, $4.actual_type, $4.start, $4.end);
             else
-                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id, 0);
+                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id, 0);
 
             if($1 == NULL)
                 $$ = CreateListNode(tree, LIST_TREE);
             else
                 $$ = PushListNodeBack($1, CreateListNode(tree, LIST_TREE));
         }
-    | /* empty */ {$$ = NULL;}
+    | identifier_list ':' type ';'
+        {
+            Tree_t *tree;
+            if($3.type == ARRAY)
+                tree = mk_arraydecl($1.line_num, $1.list, $3.actual_type, $3.start, $3.end);
+            else
+                tree = mk_vardecl($1.line_num, $1.list, $3.actual_type, $3.id, 0);
+
+            $$ = CreateListNode(tree, LIST_TREE);
+        }
     ;
 
 type_declarations_opt

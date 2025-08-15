@@ -1,4 +1,4 @@
-	.file	"mod_test.p"
+	.file	"simple_test.p"
 	.section	.rodata
 	.text
 .section .rodata
@@ -13,8 +13,8 @@
 .format_str_n:
 .string "\n"
 .text
-.globl	write_s
-write_s:
+.globl	write_u
+write_u:
 	pushq	%rbp
 	movq	%rsp, %rbp
 	subq	$16, %rsp
@@ -41,8 +41,8 @@ write_i:
 	nop
 	leave
 	ret
-.globl	writeln_s
-writeln_s:
+.globl	writeln_u
+writeln_u:
 	pushq	%rbp
 	movq	%rsp, %rbp
 	subq	$16, %rsp
@@ -119,6 +119,33 @@ read_li:
         leaq .format_str_d(%rip), %rdi
         movl $0, %eax
         call __isoc99_scanf
+	nop
+	leave
+	ret
+.globl	simple_test
+simple_test:
+	pushq	%rbp
+	movq	%rsp, %rbp
+	subq	$16, %rsp
+	movl	$10, %ebx
+	movl	%ebx, -4(%rbp)
+	movl	-4(%rbp), %ebx
+	movq	%rbx, %rdi
+	movl	$0, %eax
+	call	writeln_i
+	nop
+	leave
+	ret
+	.section	.text
+	.globl	main
+.globl	main
+main:
+	pushq	%rbp
+	movq	%rsp, %rbp
+	subq	$32, %rsp
+	call	simple_test
+	xor	%edi, %edi
+	call	exit
 	nop
 	leave
 	ret

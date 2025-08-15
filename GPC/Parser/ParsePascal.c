@@ -53,8 +53,11 @@ Tree_t *ParsePascal(char *file)
 
     /**** SEMANTIC CHECKING ****/
     if(tree != NULL)
-        {
-        semcheck_return = start_semcheck(tree);
+    {
+        int sem_result;
+        SymTab_t *symtab = start_semcheck(tree, &sem_result);
+        semcheck_return = sem_result;
+        DestroySymTab(symtab);
 
         if(semcheck_return > 0)
         {
