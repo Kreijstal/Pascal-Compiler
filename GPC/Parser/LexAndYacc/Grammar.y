@@ -6,12 +6,12 @@
     #include <stdlib.h>
     #include <string.h> // For strstr, strncpy, strcspn
     #include <ctype.h>  // For isprint
-    #include "../ErrVars.h"
+    #include "ErrVars.h"
 #include <string.h>
 #include <ctype.h>
     void yyerror(const char *s); /* Forward declaration for const-correctness */
-    #include "../ParseTree/tree.h"
-    #include "../List/List.h"
+    #include "tree.h"
+    #include "List.h"
 
     extern int yylex(void);
     extern char *yytext;

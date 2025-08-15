@@ -11,7 +11,7 @@
 #include "ParseTree/tree_types.h"
 #include "List/List.h"
 #include "SemanticCheck/SemCheck.h"
-#include "LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 
 extern FILE *yyin;
 extern int yyparse();

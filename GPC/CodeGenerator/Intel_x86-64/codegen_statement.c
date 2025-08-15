@@ -12,7 +12,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "../../Parser/LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)

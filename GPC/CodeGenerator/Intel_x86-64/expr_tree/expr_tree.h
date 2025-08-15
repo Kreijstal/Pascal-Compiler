@@ -13,7 +13,7 @@
 #include "../stackmng/stackmng.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
-#include "../../../Parser/LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 
 
 typedef struct expr_node expr_node_t;
