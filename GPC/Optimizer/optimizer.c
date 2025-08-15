@@ -23,7 +23,7 @@
 #include "../Parser/ParseTree/tree_types.h"
 #include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../Parser/LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 
 void optimize_prog(SymTab_t *symtab, Tree_t *prog);
 void optimize_subprog(SymTab_t *symtab, Tree_t *sub);

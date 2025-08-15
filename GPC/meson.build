@@ -43,12 +43,25 @@ inc_dirs = include_directories(
   'Parser',
   'Parser/LexAndYacc',
   'Parser/ParseTree',
-  'Parser/List'
+  'Parser/List',
+  'Parser/SemanticCheck/HashTable',
+  'Parser/SemanticCheck/SymTab',
+  'Parser/SemanticCheck',
+  'CodeGenerator/Intel_x86-64',
+  'Optimizer'
 )
 
-executable('gpc', gpc_sources,
+gpc_exe = executable('gpc', gpc_sources,
   include_directories: inc_dirs,
   dependencies: [
     compiler.find_library('m', required: true),
+    compiler.find_library('fl', required: true),
   ]
+)
+
+python = find_program('python3')
+test('Compiler tests', python,
+  args: [meson.project_source_root() / 'tests/test_runner.py'],
+  workdir: meson.project_source_root(),
+  depends: gpc_exe
 )

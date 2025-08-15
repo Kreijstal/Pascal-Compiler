@@ -4,7 +4,7 @@
 #include "NameMangling.h"
 #include "../ParseTree/tree.h"
 #include "../List/List.h"
-#include "../LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 #include "SemChecks/SemCheck_expr.h"
 #include "SymTab/SymTab.h"
 
