@@ -7,9 +7,9 @@
     #include <stdio.h>
     #include <stdlib.h>
     #include <string.h>
-    #include "../ErrVars.h"
-    #include "../ParseTree/tree.h"
-    #include "../List/List.h"
+    #include "ErrVars.h"
+    #include "tree.h"
+    #include "List.h"
     #include "Grammar.tab.h"
 
     char asm_buffer[1024];
