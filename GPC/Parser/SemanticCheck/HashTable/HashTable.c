@@ -40,7 +40,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
-        hash_node->id = id;
+        hash_node->id = strdup(id);
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->referenced = 0;
@@ -73,7 +73,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
-        hash_node->id = id;
+        hash_node->id = strdup(id);
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->referenced = 0;

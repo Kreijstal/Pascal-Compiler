@@ -56,7 +56,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     -1      -> Check successful with warnings
     >= 1    -> Check failed with n errors
 */
-int start_semcheck(Tree_t *parse_tree)
+SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 {
     SymTab_t *symtab;
     int return_val;
@@ -66,14 +66,14 @@ int start_semcheck(Tree_t *parse_tree)
     /*PrintSymTab(symtab, stderr, 0);*/
 
     return_val = semcheck_program(symtab, parse_tree);
-    DestroySymTab(symtab);
 
     if(return_val > 0)
         fprintf(stderr, "\nCheck failed with %d error(s)!\n\n", return_val);
     else
         fprintf(stderr, "\nCheck successful!\n\n");
 
-    return return_val;
+    *sem_result = return_val;
+    return symtab;
 }
 
 /* Pushes a bunch of type declarations onto the current scope */

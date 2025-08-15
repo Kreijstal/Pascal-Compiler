@@ -134,6 +134,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
+#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 
 /*
     The context for the code generator.
@@ -153,7 +154,7 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, char *input_file_name, CodeGenContext *ctx);
+void codegen(Tree_t *, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
 ListNode_t *add_inst(ListNode_t *, char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
@@ -165,13 +166,13 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx);
 void codegen_stack_space(CodeGenContext *ctx);
 void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 
-char * codegen_program(Tree_t *, CodeGenContext *ctx);
+char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
-void codegen_subprograms(ListNode_t *, CodeGenContext *ctx);
-void codegen_procedure(Tree_t *, CodeGenContext *ctx);
-void codegen_function(Tree_t *, CodeGenContext *ctx);
+void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen_procedure(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen_function(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx);
 
 

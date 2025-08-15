@@ -26,6 +26,7 @@ typedef struct expr_node
     expr_node_t *right_expr;
 
     struct Expression *expr;
+    Register_t *reg;
 } expr_node_t;
 
 expr_node_t *build_expr_tree(struct Expression *);
