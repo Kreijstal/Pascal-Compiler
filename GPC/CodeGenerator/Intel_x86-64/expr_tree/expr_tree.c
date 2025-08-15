@@ -527,6 +527,23 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
+            else if(type == MOD)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tcdq\n");
+                inst_list = add_inst(inst_list, buffer);
+
+                char reg[10];
+                snprintf(reg, 10, "%%r10d");
+                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
             /* NOTE: Division and modulus is a more special case */
             else if(type == SLASH || type == DIV)
             {
@@ -534,6 +551,12 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 fprintf(stderr, "DEBUG: gencode_op: left = %s, right = %s\n", left, right);
                 #endif
                 // left is the dividend, right is the divisor
+                snprintf(buffer, 50, "\tpushq\t%%rax\n");
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tpushq\t%%rdx\n");
+                inst_list = add_inst(inst_list, buffer);
+
+
                 snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tcdq\n");
@@ -547,6 +570,11 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 inst_list = add_inst(inst_list, buffer);
 
                 snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, 50, "\tpopq\t%%rdx\n");
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tpopq\t%%rax\n");
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)

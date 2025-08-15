@@ -91,8 +91,7 @@ class TestCompiler(unittest.TestCase):
         # The variable `x` is also removed because it is assigned to but never used.
         # So, no local variables are needed from the user's code.
         # The prelude functions still exist, so we can't just check for no stack allocation.
-        # Instead, we will check that the main program's body has no stack allocation for its own locals.
-        # A simple way is to check that the stack allocation is smaller than the unoptimized one.
+        # Instead, we will check that the stack allocation is smaller than the unoptimized one.
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
 
 

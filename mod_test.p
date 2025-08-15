@@ -5,7 +5,7 @@ var
 begin
     for i := 0 to 9 do
     begin
-        mod3 := i - (3 * (i div 3));
+        mod3 := i mod 3;
         write(i);
         write(' mod 3 = ');
         writeln(mod3);

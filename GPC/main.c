@@ -71,7 +71,9 @@ int main(int argc, char **argv)
         if(prelude_tree != NULL)
             prelude_tree->tree_data.program_data.subprograms = NULL;
 
-        if(start_semcheck(user_tree) == 0)
+        int sem_result;
+        SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+        if(sem_result == 0)
         {
             fprintf(stderr, "Generating code to file: %s\n", argv[2]);
 
@@ -85,10 +87,11 @@ int main(int argc, char **argv)
             ctx.label_counter = 1;
             ctx.write_label_counter = 1;
 
-            codegen(user_tree, argv[1], &ctx);
+            codegen(user_tree, argv[1], &ctx, symtab);
 
             fclose(ctx.output_file);
         }
+        DestroySymTab(symtab);
 
         destroy_tree(prelude_tree);
         destroy_tree(user_tree);

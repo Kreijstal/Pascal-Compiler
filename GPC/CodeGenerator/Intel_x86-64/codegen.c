@@ -147,7 +147,7 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 
 
 /* This is the entry function */
-void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx)
+void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
 {
     char *prgm_name;
 
@@ -157,7 +157,7 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx)
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx);
 
-    prgm_name = codegen_program(tree, ctx);
+    prgm_name = codegen_program(tree, ctx, symtab);
     codegen_main(prgm_name, ctx);
 
     codegen_program_footer(ctx);
@@ -255,7 +255,7 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 }
 
 /* Returns the program name for use with main */
-char * codegen_program(Tree_t *prgm, CodeGenContext *ctx)
+char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(prgm->type == TREE_PROGRAM_TYPE);
 
@@ -269,10 +269,10 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx)
     push_stackscope();
 
     codegen_function_locals(data->var_declaration, ctx);
-    codegen_subprograms(data->subprograms, ctx);
+    codegen_subprograms(data->subprograms, ctx, symtab);
 
     inst_list = NULL;
-    inst_list = codegen_stmt(data->body_statement, inst_list, ctx);
+    inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space(ctx);
@@ -324,7 +324,7 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
 }
 
 /* Codegen for a list of subprograms */
-void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx)
+void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     Tree_t *sub;
 
@@ -337,10 +337,10 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx)
         switch(sub->tree_data.subprogram_data.sub_type)
         {
             case TREE_SUBPROGRAM_PROC:
-                codegen_procedure(sub, ctx);
+                codegen_procedure(sub, ctx, symtab);
                 break;
             case TREE_SUBPROGRAM_FUNC:
-                codegen_function(sub, ctx);
+                codegen_function(sub, ctx, symtab);
                 break;
             default:
                 fprintf(stderr, "ERROR: Unrecognized subprogram type in codegen!\n");
@@ -350,7 +350,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx)
 }
 
 /* Code generation for a procedure */
-void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx)
+void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(proc_tree != NULL);
     assert(proc_tree->type == TREE_SUBPROGRAM);
@@ -367,8 +367,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx)
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx);
     codegen_function_locals(proc->declarations, ctx);
-    codegen_subprograms(proc->subprograms, ctx);
-    inst_list = codegen_stmt(proc->statement_list, inst_list, ctx);
+    codegen_subprograms(proc->subprograms, ctx, symtab);
+    inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -378,7 +378,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx)
 }
 
 /* Code generation for a function */
-void codegen_function(Tree_t *func_tree, CodeGenContext *ctx)
+void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(func_tree != NULL);
     assert(func_tree->type == TREE_SUBPROGRAM);
@@ -398,8 +398,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx)
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
     return_var = add_l_x(func->id);
     codegen_function_locals(func->declarations, ctx);
-    codegen_subprograms(func->subprograms, ctx);
-    inst_list = codegen_stmt(func->statement_list, inst_list, ctx);
+    codegen_subprograms(func->subprograms, ctx, symtab);
+    inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
     inst_list = add_inst(inst_list, buffer);
     codegen_function_header(sub_id, ctx);
@@ -458,4 +458,3 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     }
     return inst_list;
 }
-
