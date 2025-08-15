@@ -13,6 +13,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "Grammar.tab.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
@@ -118,8 +119,47 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
+    HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, stmt->stmt_data.procedure_call_data.resolved_proc);
+    fprintf(stderr, "DEBUG: codegen_proc_call for procedure %s\n", unmangled_name);
+    if (proc_node != NULL) {
+        fprintf(stderr, "DEBUG: proc_node->id = %s\n", proc_node->id);
+        if (proc_node->mangled_id != NULL) {
+            fprintf(stderr, "DEBUG: proc_node->mangled_id = %s\n", proc_node->mangled_id);
+        } else {
+            fprintf(stderr, "DEBUG: proc_node->mangled_id is NULL\n");
+        }
+    } else {
+        fprintf(stderr, "DEBUG: proc_node is NULL\n");
+    }
+
+    if (args_expr != NULL) {
+        fprintf(stderr, "DEBUG: args_expr is not NULL\n");
+    } else {
+        fprintf(stderr, "DEBUG: args_expr is NULL\n");
+    }
+    fprintf(stderr, "DEBUG: codegen_proc_call for procedure %s\n", unmangled_name);
+    if (proc_node != NULL) {
+        if(proc_node->id != NULL)
+            fprintf(stderr, "DEBUG: proc_node->id = %s\n", proc_node->id);
+        else
+            fprintf(stderr, "DEBUG: proc_node->id is NULL\n");
+
+        if (proc_node->mangled_id != NULL) {
+            fprintf(stderr, "DEBUG: proc_node->mangled_id = %s\n", proc_node->mangled_id);
+        } else {
+            fprintf(stderr, "DEBUG: proc_node->mangled_id is NULL\n");
+        }
+    } else {
+        fprintf(stderr, "DEBUG: proc_node is NULL\n");
+    }
+
+    if (args_expr != NULL) {
+        fprintf(stderr, "DEBUG: args_expr is not NULL\n");
+    } else {
+        fprintf(stderr, "DEBUG: args_expr is NULL\n");
+    }
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
     inst_list = codegen_vect_reg(inst_list, 0);
     snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
     inst_list = add_inst(inst_list, buffer);
