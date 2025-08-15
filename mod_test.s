@@ -13,8 +13,8 @@
 .format_str_n:
 .string "\n"
 .text
-.globl	write_u
-write_u:
+.globl	write_s
+write_s:
 	pushq	%rbp
 	movq	%rsp, %rbp
 	subq	$16, %rsp
@@ -41,8 +41,8 @@ write_i:
 	nop
 	leave
 	ret
-.globl	writeln_u
-writeln_u:
+.globl	writeln_s
+writeln_s:
 	pushq	%rbp
 	movq	%rsp, %rbp
 	subq	$16, %rsp
