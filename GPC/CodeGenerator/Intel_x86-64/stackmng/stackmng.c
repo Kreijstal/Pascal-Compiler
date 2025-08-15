@@ -269,22 +269,27 @@ StackNode_t *find_label(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    cur_node = stackscope_find_z(cur_scope, label);
-    if(cur_node != NULL)
+    while (cur_scope != NULL)
     {
-        return cur_node;
-    }
+        cur_node = stackscope_find_z(cur_scope, label);
+        if(cur_node != NULL)
+        {
+            return cur_node;
+        }
 
-    cur_node = stackscope_find_x(cur_scope, label);
-    if(cur_node != NULL)
-    {
-        return cur_node;
-    }
+        cur_node = stackscope_find_x(cur_scope, label);
+        if(cur_node != NULL)
+        {
+            return cur_node;
+        }
 
-    cur_node = stackscope_find_t(cur_scope, label);
-    if(cur_node != NULL)
-    {
-        return cur_node;
+        cur_node = stackscope_find_t(cur_scope, label);
+        if(cur_node != NULL)
+        {
+            return cur_node;
+        }
+
+        cur_scope = cur_scope->prev_scope;
     }
 
     return NULL;

@@ -38,6 +38,14 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             return inst_list;
+        case EXPR_MULOP:
+            fprintf(stderr, "DEBUG: Processing mulop expression\n");
+            expr_tree = build_expr_tree(expr);
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+            free_reg(get_reg_stack(), target_reg);
+            free_expr_tree(expr_tree);
+            return inst_list;
         case EXPR_INUM:
             fprintf(stderr, "DEBUG: Processing integer constant expression\n");
             expr_tree = build_expr_tree(expr);
