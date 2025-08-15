@@ -20,7 +20,7 @@
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../List/List.h"
-#include "../../LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 

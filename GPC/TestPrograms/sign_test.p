@@ -8,7 +8,7 @@ var
 
 { returns the sign of an integer }
 function signum({$ifNDef CPUx86_64} const {$endIf} x: longint): signumCodomain;
-{$ifDef CPUx86_64} // ============= optimized implementation
+{$ifDef CPUx86_64_DISABLED} // ============= optimized implementation
 assembler;
 asm
 	xorq %rax, %rax

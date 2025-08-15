@@ -20,7 +20,14 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y flex bison
+        sudo apt-get install -y flex bison libfl-dev
+        pip install meson ninja
+
+    - name: Configure build
+      run: meson setup builddir
+
+    - name: Build
+      run: meson compile -C builddir
 
     - name: Run tests
-      run: python3 tests/test_runner.py
+      run: meson test -C builddir

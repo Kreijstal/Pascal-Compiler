@@ -20,7 +20,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "../../Parser/LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 
 /* Platform detection */
 #if defined(__linux__) || defined(__unix__)

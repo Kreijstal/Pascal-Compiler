@@ -23,7 +23,7 @@
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
-#include "../LexAndYacc/Grammar.tab.h"
+#include "Grammar.tab.h"
 #include "NameMangling.h"
 
 /* Adds built-in functions */
