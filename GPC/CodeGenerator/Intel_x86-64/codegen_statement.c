@@ -13,6 +13,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "Grammar.tab.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
@@ -118,8 +119,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
+    HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, stmt->stmt_data.procedure_call_data.resolved_proc);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
     inst_list = codegen_vect_reg(inst_list, 0);
     snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
     inst_list = add_inst(inst_list, buffer);
