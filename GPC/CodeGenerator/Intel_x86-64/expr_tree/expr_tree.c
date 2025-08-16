@@ -128,10 +128,6 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(node != NULL);
     assert(node->expr != NULL);
 
-    #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
-    #endif
-
     if(node->reg != NULL)
     {
         char buffer[50];
@@ -579,7 +575,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
             else if(type == MOD)
             {
-                inst_list = gencode_modulus(right, left, inst_list);
+                inst_list = gencode_modulus(left, right, inst_list);
             }
             else
             {

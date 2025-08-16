@@ -151,7 +151,6 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t 
 {
     char *prgm_name;
 
-    fprintf(stderr, "DEBUG: ENTERING codegen\n");
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
@@ -164,7 +163,6 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t 
 
     free_stackmng();
 
-    fprintf(stderr, "DEBUG: LEAVING codegen\n");
     return;
 }
 
@@ -302,7 +300,6 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
          id_list = tree->tree_data.var_decl_data.ids;
          if(tree->tree_data.var_decl_data.type == REAL_TYPE)
          {
-             fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
          }
 
          while(id_list != NULL)
@@ -430,8 +427,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             case TREE_VAR_DECL:
                 arg_ids = arg_decl->tree_data.var_decl_data.ids;
                 type = arg_decl->tree_data.var_decl_data.type;
-                if(type == REAL_TYPE)
-                    fprintf(stderr, "WARNING: Only integers are supported!\n");
+                if(type == REAL_TYPE);
                 arg_num = 0;
                 while(arg_ids != NULL)
                 {

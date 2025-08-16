@@ -45,12 +45,6 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
-        # Initialize the stack manager
-        # This is a hack to get the tests to run
-        # The compiler should be refactored to not use global variables
-        # but for now this will do
-        subprocess.run(["builddir/GPC/gpc", "--init-stack"], check=True)
-
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")

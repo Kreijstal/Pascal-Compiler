@@ -330,7 +330,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             subprogram->tree_data.subprogram_data.mangled_id,
             subprogram->tree_data.subprogram_data.args_var);
 
-        subprogram->tree_data.subprogram_data.args_var = NULL;
         new_max_scope = max_scope_lev+1;
     }
     else // Function
@@ -367,7 +366,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
             var_type, subprogram->tree_data.subprogram_data.args_var);
 
-        subprogram->tree_data.subprogram_data.args_var = NULL;
         new_max_scope = 0;
     }
 
