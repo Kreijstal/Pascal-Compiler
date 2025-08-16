@@ -1,3 +1,8 @@
+/*
+    Damon Gwinn
+    Code generation for expressions
+*/
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -22,8 +27,11 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     expr_node_t *expr_tree = NULL;
     Register_t *target_reg;
 
+    fprintf(stderr, "DEBUG: Generating code for expression type %d\n", expr->type);
+
     switch(expr->type) {
         case EXPR_VAR_ID:
+            fprintf(stderr, "DEBUG: Processing variable ID expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
@@ -31,6 +39,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_MULOP:
+            fprintf(stderr, "DEBUG: Processing mulop expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
@@ -38,6 +47,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_INUM:
+            fprintf(stderr, "DEBUG: Processing integer constant expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
@@ -45,8 +55,10 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_RELOP:
+            fprintf(stderr, "DEBUG: Processing relational operator expression\n");
             return codegen_simple_relop(expr, inst_list, ctx, NULL);
         case EXPR_ADDOP:
+            fprintf(stderr, "DEBUG: Processing addop expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
@@ -54,6 +66,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             free_expr_tree(expr_tree);
             return inst_list;
         case EXPR_SIGN_TERM:
+            fprintf(stderr, "DEBUG: Processing sign term expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
@@ -74,6 +87,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     assert(expr != NULL);
     assert(expr->type == EXPR_RELOP);
 
+    fprintf(stderr, "DEBUG: Generating simple relop\n");
+
     *relop_type = expr->expr_data.relop_data.type;
     inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
 
@@ -86,12 +101,15 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     free_reg(get_reg_stack(), left_reg);
     inst_list = add_inst(inst_list, buffer);
 
+    fprintf(stderr, "DEBUG: Simple relop generated\n");
     return inst_list;
 }
 
 /* Code generation for non-local variable access */
 ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
 {
+    fprintf(stderr, "DEBUG: Generating non-local access for %s\n", var_id);
+
     char buffer[100];
     StackNode_t *var = find_label(var_id);
 
@@ -104,6 +122,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", NON_LOCAL_REG_64);
     inst_list = add_inst(inst_list, buffer);
 
+    fprintf(stderr, "DEBUG: Non-local access generated\n");
     return inst_list;
 }
 

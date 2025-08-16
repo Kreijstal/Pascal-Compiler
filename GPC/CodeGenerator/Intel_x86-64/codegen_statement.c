@@ -120,6 +120,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
     else
     {
+        fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
         exit(1);
     }
     return add_inst(inst_list, buffer);

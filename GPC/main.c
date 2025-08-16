@@ -75,6 +75,8 @@ int main(int argc, char **argv)
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if(sem_result == 0)
         {
+            fprintf(stderr, "Generating code to file: %s\n", argv[2]);
+
             CodeGenContext ctx;
             ctx.output_file = fopen(argv[2], "w");
             if (ctx.output_file == NULL)
