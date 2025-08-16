@@ -45,6 +45,12 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
+        # Initialize the stack manager
+        # This is a hack to get the tests to run
+        # The compiler should be refactored to not use global variables
+        # but for now this will do
+        subprocess.run(["builddir/GPC/gpc", "--init-stack"], check=True)
+
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")
@@ -188,6 +194,36 @@ class TestCompiler(unittest.TestCase):
                 timeout=5
             )
             self.assertEqual(process.stdout, "1\n")
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+
+    def test_fizzbuzz(self):
+        """Tests the fizzbuzz program."""
+        input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz")
+        expected_output_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.expected")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            expected_output = read_file_content(expected_output_file)
+            self.assertEqual(process.stdout, expected_output)
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
