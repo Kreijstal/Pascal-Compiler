@@ -136,11 +136,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     char *arg_reg_char;
     expr_node_t *expr_tree;
 
-    ListNode_t *formal_args = proc_node->args;
+    ListNode_t *formal_args = NULL;
+    if(proc_node != NULL)
+        formal_args = proc_node->args;
 
     arg_num = 0;
     while(args != NULL)
     {
+        fprintf(stderr, "DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
+        struct Expression *arg_expr = (struct Expression *)args->cur;
+        fprintf(stderr, "DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
+
         arg_reg_char = get_arg_reg64_num(arg_num);
         if(arg_reg_char == NULL)
         {
@@ -148,9 +154,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             exit(1);
         }
 
-        struct Expression *arg_expr = (struct Expression *)args->cur;
-        Tree_t *formal_arg_decl = (Tree_t *)formal_args->cur;
-        if(formal_arg_decl->tree_data.var_decl_data.is_var_param)
+        Tree_t *formal_arg_decl = NULL;
+        if(formal_args != NULL)
+            formal_arg_decl = (Tree_t *)formal_args->cur;
+
+        if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
             assert(arg_expr->type == EXPR_VAR_ID);
@@ -163,6 +171,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             // Pass by value
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
+            fprintf(stderr, "DEBUG: top_reg at %p\n", top_reg);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
@@ -172,7 +181,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         }
 
         args = args->next;
-        formal_args = formal_args->next;
+        if(formal_args != NULL)
+            formal_args = formal_args->next;
         ++arg_num;
     }
 
