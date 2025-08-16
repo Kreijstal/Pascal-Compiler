@@ -325,7 +325,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     }
 
     assert(for_var->type == EXPR_VAR_ID);
-    comparison_expr = mk_relop(-1, LT, for_var, expr);
+    comparison_expr = mk_relop(-1, LE, for_var, expr);
     one_expr = mk_inum(-1, 1);
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
