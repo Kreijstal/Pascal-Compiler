@@ -129,6 +129,13 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
 {
+    fprintf(stderr, "DEBUG: codegen_pass_arguments START\n");
+    if(args != NULL)
+        fprintf(stderr, "DEBUG: args is not NULL\n");
+    if(proc_node != NULL)
+        fprintf(stderr, "DEBUG: proc_node is not NULL, name: %s\n", proc_node->id);
+
+
     int arg_num;
     StackNode_t *stack_node;
     Register_t *top_reg;
@@ -136,7 +143,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     char *arg_reg_char;
     expr_node_t *expr_tree;
 
-    ListNode_t *formal_args = proc_node->args;
+    ListNode_t *formal_args = NULL;
+    if(proc_node != NULL)
+        formal_args = proc_node->args;
 
     arg_num = 0;
     while(args != NULL)
@@ -149,8 +158,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         }
 
         struct Expression *arg_expr = (struct Expression *)args->cur;
-        Tree_t *formal_arg_decl = (Tree_t *)formal_args->cur;
-        if(formal_arg_decl->tree_data.var_decl_data.is_var_param)
+        Tree_t *formal_arg_decl = NULL;
+        if(formal_args != NULL)
+            formal_arg_decl = (Tree_t *)formal_args->cur;
+
+        if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
             assert(arg_expr->type == EXPR_VAR_ID);
@@ -172,7 +184,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         }
 
         args = args->next;
-        formal_args = formal_args->next;
+        if(formal_args != NULL)
+            formal_args = formal_args->next;
         ++arg_num;
     }
 
