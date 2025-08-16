@@ -129,6 +129,7 @@ void pop_stackscope()
 /* Adds doubleword to t */
 StackNode_t *add_l_t(char *label)
 {
+    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
 
@@ -165,6 +166,7 @@ StackNode_t *add_l_t(char *label)
 /* Adds doubleword to x */
 StackNode_t *add_l_x(char *label)
 {
+    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
 
@@ -201,6 +203,7 @@ StackNode_t *add_l_x(char *label)
 /* Adds doubleword to z */
 StackNode_t *add_l_z(char *label)
 {
+    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
 
@@ -246,6 +249,7 @@ RegStack_t *get_reg_stack()
 /* Returns NULL if not found */
 StackNode_t *find_in_temp(char *label)
 {
+    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
 
@@ -261,6 +265,7 @@ StackNode_t *find_in_temp(char *label)
 /* TODO: Does not find variables outside the current scope */
 StackNode_t *find_label(char *label)
 {
+    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
 
@@ -359,6 +364,7 @@ int get_register_64bit(RegStack_t *regstack, char *reg_64, Register_t **return_r
 {
     assert(regstack != NULL);
     assert(reg_64 != NULL);
+    assert(return_reg != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
@@ -397,6 +403,7 @@ int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_r
 {
     assert(regstack != NULL);
     assert(reg_32 != NULL);
+    assert(return_reg != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
@@ -485,6 +492,7 @@ Register_t *front_reg_stack(RegStack_t *reg_stack)
 Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 {
     assert(reg_stack != NULL);
+    fprintf(stderr, "DEBUG: get_free_reg, reg_stack: %p, registers_free: %p\n", (void *)reg_stack, (void *)reg_stack->registers_free);
 
     ListNode_t *register_node;
     Register_t *reg;
@@ -583,6 +591,8 @@ StackScope_t *init_stackscope()
 
 StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
 {
+    assert(cur_scope != NULL);
+    assert(label != NULL);
     ListNode_t *cur_li;
     StackNode_t *cur_node;
 
@@ -603,6 +613,8 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
 
 StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
 {
+    assert(cur_scope != NULL);
+    assert(label != NULL);
     ListNode_t *cur_li;
     StackNode_t *cur_node;
 
@@ -623,6 +635,8 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
 {
+    assert(cur_scope != NULL);
+    assert(label != NULL);
     ListNode_t *cur_li;
     StackNode_t *cur_node;
 

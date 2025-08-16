@@ -18,12 +18,14 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "Grammar.tab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../debug_serializer.h"
 
 
 /* Code generation for expressions */
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(expr != NULL);
+    assert(ctx != NULL);
     expr_node_t *expr_tree = NULL;
     Register_t *target_reg;
 
@@ -85,6 +87,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                                 CodeGenContext *ctx, int *relop_type)
 {
     assert(expr != NULL);
+    assert(ctx != NULL);
+    assert(relop_type != NULL);
     assert(expr->type == EXPR_RELOP);
 
     fprintf(stderr, "DEBUG: Generating simple relop\n");
@@ -108,6 +112,9 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 /* Code generation for non-local variable access */
 ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
 {
+    assert(inst_list != NULL);
+    assert(var_id != NULL);
+    assert(offset != NULL);
     fprintf(stderr, "DEBUG: Generating non-local access for %s\n", var_id);
 
     char buffer[100];
@@ -129,6 +136,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
 {
+    assert(ctx != NULL);
     int arg_num;
     StackNode_t *stack_node;
     Register_t *top_reg;
@@ -143,6 +151,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     arg_num = 0;
     while(args != NULL)
     {
+        assert(args->cur != NULL);
         fprintf(stderr, "DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
         struct Expression *arg_expr = (struct Expression *)args->cur;
         fprintf(stderr, "DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
@@ -192,6 +201,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 /* Helper for codegen_get_nonlocal */
 ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_scope, char *base)
 {
+    assert(inst_list != NULL);
+    assert(cur_scope != NULL);
+    assert(base != NULL);
     char buffer[50];
 
     snprintf(buffer, 50, "\tmovq\t(%s), %s\n", base, NON_LOCAL_REG_64);

@@ -4,6 +4,6 @@
 #include <stdio.h>
 #include "Parser/ParseTree/tree.h"
 
-void serialize_expression(FILE *fp, struct Expression *expr);
+void serialize_expression(FILE *log_file, struct Expression *expr);
 
-#endif
+#endif // DEBUG_SERIALIZER_H

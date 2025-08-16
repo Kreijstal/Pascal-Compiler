@@ -53,15 +53,20 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     switch(expr->type)
     {
         case EXPR_ADDOP:
+            assert(expr->expr_data.addop_data.left_expr != NULL);
+            assert(expr->expr_data.addop_data.right_term != NULL);
             new_node->left_expr = build_expr_tree(expr->expr_data.addop_data.left_expr);
             new_node->right_expr = build_expr_tree(expr->expr_data.addop_data.right_term);
             break;
         case EXPR_MULOP:
+            assert(expr->expr_data.mulop_data.left_term != NULL);
+            assert(expr->expr_data.mulop_data.right_factor != NULL);
             new_node->left_expr = build_expr_tree(expr->expr_data.mulop_data.left_term);
             new_node->right_expr = build_expr_tree(expr->expr_data.mulop_data.right_factor);
             break;
 
         case EXPR_SIGN_TERM:
+            assert(expr->expr_data.sign_term != NULL);
             new_node->left_expr = build_expr_tree(expr->expr_data.sign_term);
             new_node->right_expr = NULL;
             break;
@@ -127,6 +132,8 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 {
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     #ifdef DEBUG_CODEGEN
     fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
@@ -186,6 +193,8 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 // calculates A mod B, stores result in A's location (right)
 ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
 {
+    assert(left != NULL);
+    assert(right != NULL);
     StackNode_t *temp;
     char buffer[50];
 
@@ -276,6 +285,8 @@ void free_expr_tree(expr_node_t *node)
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
     assert(node != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
     assert(node->expr != NULL);
     assert(node->expr->type == EXPR_SIGN_TERM);
 
@@ -296,6 +307,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case0\n");
     #endif
     assert(node != NULL);
+    assert(ctx != NULL);
     assert(node->expr != NULL);
 
     char buffer[50];
@@ -344,6 +356,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case1\n");
     #endif
     assert(node != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
     assert(node->expr != NULL);
     assert(node->right_expr != NULL);
     assert(node->right_expr->expr != NULL);
@@ -370,6 +384,8 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case2\n");
     #endif
     assert(node != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
     assert(node->expr != NULL);
 
     Register_t *temp_reg;
@@ -407,6 +423,8 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case3\n");
     #endif
     assert(node != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
     assert(node->expr != NULL);
 
     Register_t *temp_reg;
@@ -443,6 +461,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     char *buffer, int buf_len)
 {
     assert(expr != NULL);
+    assert(buffer != NULL);
 
     StackNode_t *stack_node;
     int offset;

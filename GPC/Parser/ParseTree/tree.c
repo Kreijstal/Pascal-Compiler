@@ -365,6 +365,7 @@ void destroy_list(ListNode_t *list)
 
 void destroy_tree(Tree_t *tree)
 {
+    assert(tree != NULL);
     switch(tree->type)
     {
         case TREE_PROGRAM_TYPE:
@@ -417,6 +418,7 @@ void destroy_tree(Tree_t *tree)
 
 void destroy_stmt(struct Statement *stmt)
 {
+    assert(stmt != NULL);
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -479,6 +481,7 @@ void destroy_stmt(struct Statement *stmt)
 
 void destroy_expr(struct Expression *expr)
 {
+    assert(expr != NULL);
     switch(expr->type)
     {
         case EXPR_RELOP:
@@ -646,6 +649,8 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, int start, int end
 /************** Statement routines **************/
 struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expression *expr)
 {
+    assert(var != NULL);
+    assert(expr != NULL);
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
 
@@ -659,6 +664,7 @@ struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expr
 
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args)
 {
+    assert(id != NULL);
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
 
@@ -685,6 +691,8 @@ struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statem
 struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct Statement *if_stmt,
                             struct Statement *else_stmt)
 {
+    assert(eval_relop != NULL);
+    assert(if_stmt != NULL);
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
 
@@ -700,6 +708,8 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
 struct Statement *mk_while(int line_num, struct Expression *eval_relop,
                             struct Statement *while_stmt)
 {
+    assert(eval_relop != NULL);
+    assert(while_stmt != NULL);
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
 
@@ -714,6 +724,9 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
 struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struct Expression *to,
                                struct Statement *do_for)
 {
+   assert(for_assign != NULL);
+   assert(to != NULL);
+   assert(do_for != NULL);
    struct Statement *new_stmt;
    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
 
@@ -732,6 +745,9 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
 struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Expression *to,
                               struct Statement *do_for)
 {
+  assert(for_var != NULL);
+  assert(to != NULL);
+  assert(do_for != NULL);
   struct Statement *new_stmt;
   new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
 
@@ -763,6 +779,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
                                 struct Expression *right)
 {
+    assert(left != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -777,6 +794,7 @@ struct Expression *mk_relop(int line_num, int type, struct Expression *left,
 
 struct Expression *mk_signterm(int line_num, struct Expression *sign_term)
 {
+    assert(sign_term != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -790,6 +808,8 @@ struct Expression *mk_signterm(int line_num, struct Expression *sign_term)
 struct Expression *mk_addop(int line_num, int type, struct Expression *left,
                                 struct Expression *right)
 {
+    assert(left != NULL);
+    assert(right != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -805,6 +825,8 @@ struct Expression *mk_addop(int line_num, int type, struct Expression *left,
 struct Expression *mk_mulop(int line_num, int type, struct Expression *left,
                                 struct Expression *right)
 {
+    assert(left != NULL);
+    assert(right != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -819,6 +841,7 @@ struct Expression *mk_mulop(int line_num, int type, struct Expression *left,
 
 struct Expression *mk_varid(int line_num, char *id)
 {
+    assert(id != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -831,6 +854,8 @@ struct Expression *mk_varid(int line_num, char *id)
 
 struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *index_expr)
 {
+    assert(id != NULL);
+    assert(index_expr != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -844,6 +869,7 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
 
 struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
 {
+    assert(id != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 
@@ -869,6 +895,7 @@ struct Expression *mk_inum(int line_num, int i_num)
 
 struct Expression *mk_string(int line_num, char *string)
 {
+    assert(string != NULL);
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
 

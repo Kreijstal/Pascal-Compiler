@@ -217,6 +217,8 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
 /* Removes all variable declarations matching an id */
 void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls)
 {
+    assert(symtab != NULL);
+    assert(id != NULL);
     Tree_t *var_decl;
     ListNode_t *prev, *ids, *temp;
 
@@ -286,6 +288,7 @@ int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt
 /* Decrements the reference counter for the removed expression if removed */
 int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var_assign)
 {
+    assert(symtab != NULL);
     assert(var_assign != NULL);
     assert(var_assign->type == STMT_VAR_ASSIGN);
     assert(id != NULL);
@@ -312,6 +315,7 @@ int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var
 /* Removes all mutation statements from a list of statements */
 int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *body_statement)
 {
+    assert(symtab != NULL);
     assert(body_statement != NULL);
     assert(body_statement->type == STMT_COMPOUND_STATEMENT);
     assert(id != NULL);
@@ -388,6 +392,8 @@ void simplify_stmt_expr(struct Statement *stmt)
 /* TODO: Support modulus */
 int simplify_expr(struct Expression **expr)
 {
+    assert(expr != NULL);
+    assert(*expr != NULL);
     struct Expression *new_expr;
     int return_val, return_val2, new_val;
 
@@ -491,6 +497,8 @@ int simplify_expr(struct Expression **expr)
 /* Decrements references for a specific variable */
 void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *expr)
 {
+    assert(symtab != NULL);
+    assert(id != NULL);
     assert(expr != NULL);
 
     HashNode_t *node;
@@ -541,6 +549,7 @@ void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *
 /* Decrements reference counter for all variables in an expression */
 void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
 {
+    assert(symtab != NULL);
     assert(expr != NULL);
 
     HashNode_t *node;
@@ -591,6 +600,9 @@ void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
 void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_check,
     ListNode_t **vars_to_remove)
 {
+    assert(symtab != NULL);
+    assert(vars_to_check != NULL);
+    assert(vars_to_remove != NULL);
     ListNode_t *check, *remove;
     ListNode_t *ids;
     HashNode_t *node;

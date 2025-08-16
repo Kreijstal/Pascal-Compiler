@@ -149,6 +149,10 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 /* This is the entry function */
 void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    assert(tree != NULL);
+    assert(input_file_name != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
     char *prgm_name;
 
     fprintf(stderr, "DEBUG: ENTERING codegen\n");
@@ -257,6 +261,9 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 /* Returns the program name for use with main */
 char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    assert(prgm != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
     assert(prgm->type == TREE_PROGRAM_TYPE);
 
     char *prgm_name;
@@ -353,6 +360,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
 void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(proc_tree != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
     assert(proc_tree->type == TREE_SUBPROGRAM);
     assert(proc_tree->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC);
 
@@ -382,6 +391,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(func_tree != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
     assert(func_tree->type == TREE_SUBPROGRAM);
     assert(func_tree->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC);
 
