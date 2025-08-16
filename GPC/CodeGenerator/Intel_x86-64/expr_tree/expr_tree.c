@@ -579,7 +579,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
             else if(type == MOD)
             {
-                inst_list = gencode_modulus(left, right, inst_list);
+                inst_list = gencode_modulus(right, left, inst_list);
             }
             else
             {

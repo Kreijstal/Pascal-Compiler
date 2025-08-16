@@ -129,6 +129,13 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
 {
+    fprintf(stderr, "DEBUG: codegen_pass_arguments START\n");
+    if(args != NULL)
+        fprintf(stderr, "DEBUG: args is not NULL\n");
+    if(proc_node != NULL)
+        fprintf(stderr, "DEBUG: proc_node is not NULL, name: %s\n", proc_node->id);
+
+
     int arg_num;
     StackNode_t *stack_node;
     Register_t *top_reg;

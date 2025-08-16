@@ -169,6 +169,36 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_fizzbuzz(self):
+        """Tests the fizzbuzz program."""
+        input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz")
+        expected_output_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.expected")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            expected_output = read_file_content(expected_output_file)
+            self.assertEqual(process.stdout, expected_output)
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+
 
     def test_mod_operator(self):
         """Tests that the mod operator works correctly."""
