@@ -32,6 +32,8 @@
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
+    assert(buf != NULL);
+    assert(ctx != NULL);
     snprintf(buf, buf_len, ".L%d", ++ctx->label_counter);
 }
 
@@ -40,6 +42,8 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 ListNode_t *add_inst(ListNode_t *inst_list, char *inst)
 {
     ListNode_t *new_node;
+
+    assert(inst != NULL);
 
     new_node = CreateListNode(strdup(inst), LIST_STRING);
     if(inst_list == NULL)
@@ -59,6 +63,9 @@ void free_inst_list(ListNode_t *inst_list)
 {
     ListNode_t *cur;
 
+    if(inst_list == NULL)
+        return;
+
     cur = inst_list;
     while(cur != NULL)
     {
@@ -74,6 +81,8 @@ void free_inst_list(ListNode_t *inst_list)
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list)
 {
     char buffer[30], jmp_buf[6];
+
+    assert(label != NULL);
 
     switch(type)
     {
@@ -119,8 +128,8 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unrecognized relop type in jmp generation!\n");
-            exit(1);
+            assert(0 && "Unrecognized relop type in jmp generation!");
+            break;
     }
 
     snprintf(buffer, 30, "\t%s\t%s\n", jmp_buf, label);
@@ -131,6 +140,8 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 /* Generates a function header */
 void codegen_function_header(char *func_name, CodeGenContext *ctx)
 {
+    assert(func_name != NULL);
+    assert(ctx != NULL);
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
     fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
 
@@ -140,6 +151,8 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
 /* Generates a function footer */
 void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 {
+    assert(func_name != NULL);
+    assert(ctx != NULL);
     fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
 
     return;
@@ -149,11 +162,12 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 /* This is the entry function */
 void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    char *prgm_name;
+
     assert(tree != NULL);
     assert(input_file_name != NULL);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    char *prgm_name;
 
     fprintf(stderr, "DEBUG: ENTERING codegen\n");
     init_stackmng();
@@ -174,6 +188,7 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t 
 
 void codegen_rodata(CodeGenContext *ctx)
 {
+    assert(ctx != NULL);
     fprintf(ctx->output_file, ".section .rodata\n");
     fprintf(ctx->output_file, ".format_str_s:\n");
     fprintf(ctx->output_file, ".string \"%%s\"\n");
@@ -191,6 +206,8 @@ void codegen_rodata(CodeGenContext *ctx)
 /* Generates platform-compatible headers */
 void codegen_program_header(char *fname, CodeGenContext *ctx)
 {
+    assert(fname != NULL);
+    assert(ctx != NULL);
     fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
     
 #if PLATFORM_LINUX
@@ -206,6 +223,7 @@ void codegen_program_header(char *fname, CodeGenContext *ctx)
 /* Generates platform-compatible program footer */
 void codegen_program_footer(CodeGenContext *ctx)
 {
+    assert(ctx != NULL);
 #if PLATFORM_LINUX
 #else
     fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
@@ -215,6 +233,8 @@ void codegen_program_footer(CodeGenContext *ctx)
 /* Generates main which calls our program */
 void codegen_main(char *prgm_name, CodeGenContext *ctx)
 {
+    assert(prgm_name != NULL);
+    assert(ctx != NULL);
     fprintf(ctx->output_file, "\t.section\t.text\n");
     fprintf(ctx->output_file, "\t.globl\tmain\n");
     codegen_function_header("main", ctx);
@@ -233,6 +253,9 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
 void codegen_stack_space(CodeGenContext *ctx)
 {
     int needed_space;
+
+    assert(ctx != NULL);
+
     needed_space = get_full_stack_offset();
     assert(needed_space >= 0);
 
@@ -246,6 +269,8 @@ void codegen_stack_space(CodeGenContext *ctx)
 void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 {
     char *inst;
+
+    assert(ctx != NULL);
 
     while(inst_list != NULL)
     {
@@ -261,10 +286,9 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 /* Returns the program name for use with main */
 char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 {
-    assert(prgm != NULL);
+    assert(prgm->type == TREE_PROGRAM_TYPE);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    assert(prgm->type == TREE_PROGRAM_TYPE);
 
     char *prgm_name;
     struct Program *data;
@@ -298,6 +322,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
      ListNode_t *cur, *id_list;
      Tree_t *tree;
 
+    assert(ctx != NULL);
+
      cur = local_decl;
 
      while(cur != NULL)
@@ -326,6 +352,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
 ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
 {
     char buffer[50];
+    assert(inst_list != NULL);
     snprintf(buffer, 50, "\tmovl\t$%d, %%eax\n", num_vec);
     return add_inst(inst_list, buffer);
 }
@@ -334,6 +361,9 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
 void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     Tree_t *sub;
+
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     while(sub_list != NULL)
     {
@@ -350,7 +380,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 codegen_function(sub, ctx, symtab);
                 break;
             default:
-                fprintf(stderr, "ERROR: Unrecognized subprogram type in codegen!\n");
+                assert(0 && "Unrecognized subprogram type in codegen!");
         }
         sub_list = sub_list->next;
     }
@@ -360,10 +390,10 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
 void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(proc_tree != NULL);
-    assert(ctx != NULL);
-    assert(symtab != NULL);
     assert(proc_tree->type == TREE_SUBPROGRAM);
     assert(proc_tree->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     struct Subprogram *proc;
     ListNode_t *inst_list;
@@ -391,10 +421,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(func_tree != NULL);
-    assert(ctx != NULL);
-    assert(symtab != NULL);
     assert(func_tree->type == TREE_SUBPROGRAM);
     assert(func_tree->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     struct Subprogram *func;
     ListNode_t *inst_list;
@@ -433,6 +463,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     char buffer[50];
     StackNode_t *arg_stack;
 
+    assert(ctx != NULL);
+
     while(args != NULL)
     {
         arg_decl = (Tree_t *)args->cur;
@@ -464,8 +496,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 exit(1);
                 break;
             default:
-                fprintf(stderr, "ERROR: Unknown argument type!\n");
-                exit(1);
+                assert(0 && "Unknown argument type!");
+                break;
         }
         args = args->next;
     }

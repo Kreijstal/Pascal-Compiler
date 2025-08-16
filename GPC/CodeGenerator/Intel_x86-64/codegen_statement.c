@@ -15,7 +15,6 @@
 #include "Grammar.tab.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../Parser/List/List.h"
 
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
@@ -47,8 +46,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
         default:
-            fprintf(stderr, "Critical error: Unrecognized statement type in codegen\n");
-            exit(1);
+            assert(0 && "Unrecognized statement type in codegen");
+            break;
     }
     return inst_list;
 }
@@ -56,8 +55,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
-    assert(ctx != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
+    assert(ctx != NULL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -78,9 +77,9 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
 ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(stmt != NULL);
+    assert(stmt->type == STMT_COMPOUND_STATEMENT);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    assert(stmt->type == STMT_COMPOUND_STATEMENT);
 
     ListNode_t *stmt_list;
     struct Statement *cur_stmt;
@@ -99,8 +98,8 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
 ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
-    assert(ctx != NULL);
     assert(stmt->type == STMT_VAR_ASSIGN);
+    assert(ctx != NULL);
 
     StackNode_t *var;
     Register_t *reg;
@@ -138,9 +137,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(stmt != NULL);
+    assert(stmt->type == STMT_PROCEDURE_CALL);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    assert(stmt->type == STMT_PROCEDURE_CALL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -177,9 +176,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(stmt != NULL);
+    assert(stmt->type == STMT_IF_THEN);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    assert(stmt->type == STMT_IF_THEN);
 
     int relop_type, inverse;
     struct Expression *expr;
@@ -220,9 +219,9 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeG
 ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(stmt != NULL);
+    assert(stmt->type == STMT_WHILE);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    assert(stmt->type == STMT_WHILE);
 
     int relop_type, inverse;
     struct Expression *expr;
@@ -255,9 +254,9 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
 ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(stmt != NULL);
+    assert(stmt->type == STMT_FOR);
     assert(ctx != NULL);
     assert(symtab != NULL);
-    assert(stmt->type == STMT_FOR);
 
     int relop_type, inverse;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
@@ -291,9 +290,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 
     snprintf(buffer, 50, "%s:\n", label2);
     inst_list = add_inst(inst_list, buffer);
-
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
-
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
 
@@ -304,5 +301,9 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
 
+    free(comparison_expr);
+    free(one_expr);
+    free(update_expr);
+    free(update_stmt);
     return inst_list;
 }

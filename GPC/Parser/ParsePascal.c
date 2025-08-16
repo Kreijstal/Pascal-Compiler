@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 #include "ParsePascal.h"
 #include "ErrVars.h"
 #include "ParseTree/tree.h"
@@ -21,6 +22,7 @@ void InitParser();
 
 Tree_t *ParsePascalOnly(char *file)
 {
+    assert(file != NULL);
     /**** CREATING THE PARSE TREE ****/
     if(file != NULL)
     {
@@ -48,6 +50,7 @@ Tree_t *ParsePascalOnly(char *file)
 
 Tree_t *ParsePascal(char *file)
 {
+    assert(file != NULL);
     int semcheck_return;
     Tree_t *tree = ParsePascalOnly(file);
 

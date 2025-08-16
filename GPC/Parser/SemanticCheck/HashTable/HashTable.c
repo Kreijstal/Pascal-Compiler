@@ -16,6 +16,7 @@
 HashTable_t *InitHashTable()
 {
     HashTable_t *new_table = (HashTable_t *)malloc(sizeof(HashTable_t));
+    assert(new_table != NULL);
 
     int i;
     for(i = 0; i < TABLE_SIZE; ++i)
@@ -33,11 +34,15 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
     HashNode_t *hash_node;
     int hash;
 
+    assert(table != NULL);
+    assert(id != NULL);
+
     hash = hashpjw(id);
     list = table->table[hash];
     if(list == NULL)
     {
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+        assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = strdup(id);
@@ -71,6 +76,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
 
         /* Success if here */
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+        assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = strdup(id);
@@ -91,6 +97,9 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
     ListNode_t *list;
     HashNode_t *hash_node;
     int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
 
     hash = hashpjw(id);
     list = table->table[hash];
@@ -123,6 +132,9 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
     HashNode_t *hash_node;
     int hash;
 
+    assert(table != NULL);
+    assert(id != NULL);
+
     hash = hashpjw(id);
     list = table->table[hash];
 
@@ -145,6 +157,7 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
 /* Resets hash node mutation and reference status */
 void ResetHashNodeStatus(HashNode_t *hash_node)
 {
+    assert(hash_node != NULL);
     hash_node->mutated = 0;
     hash_node->referenced = 0;
 }
@@ -154,6 +167,8 @@ void DestroyHashTable(HashTable_t *table)
 {
     ListNode_t *cur, *temp;
     HashNode_t *hash_node;
+
+    assert(table != NULL);
 
     int i;
     for(i = 0; i < TABLE_SIZE; ++i)
@@ -192,6 +207,9 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
     ListNode_t *list;
     HashNode_t *hash_node;
 
+    assert(table != NULL);
+    assert(f != NULL);
+
     for(i = 0; i < TABLE_SIZE; ++i)
     {
         list = table->table[i];
@@ -226,6 +244,8 @@ int hashpjw( char *s )
 {
 	char *p;
 	unsigned h = 0, g;
+
+    assert(s != NULL);
 
 	for ( p = s; *p != '\0'; p++ )
 	{

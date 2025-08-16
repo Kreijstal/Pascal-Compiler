@@ -46,6 +46,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     expr_node_t *new_node;
 
     new_node = (expr_node_t *)malloc(sizeof(expr_node_t));
+    assert(new_node != NULL);
     new_node->expr = expr;
     new_node->reg = NULL;
 
@@ -53,20 +54,15 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     switch(expr->type)
     {
         case EXPR_ADDOP:
-            assert(expr->expr_data.addop_data.left_expr != NULL);
-            assert(expr->expr_data.addop_data.right_term != NULL);
             new_node->left_expr = build_expr_tree(expr->expr_data.addop_data.left_expr);
             new_node->right_expr = build_expr_tree(expr->expr_data.addop_data.right_term);
             break;
         case EXPR_MULOP:
-            assert(expr->expr_data.mulop_data.left_term != NULL);
-            assert(expr->expr_data.mulop_data.right_factor != NULL);
             new_node->left_expr = build_expr_tree(expr->expr_data.mulop_data.left_term);
             new_node->right_expr = build_expr_tree(expr->expr_data.mulop_data.right_factor);
             break;
 
         case EXPR_SIGN_TERM:
-            assert(expr->expr_data.sign_term != NULL);
             new_node->left_expr = build_expr_tree(expr->expr_data.sign_term);
             new_node->right_expr = NULL;
             break;
@@ -86,8 +82,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr_tree type: %d\n", expr->type);
-            exit(1);
+            assert(0 && "Unsupported expr_tree type");
+            break;
     }
 
     /* Setting the labels */
@@ -181,8 +177,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     }
     else
     {
-        fprintf(stderr, "ERROR: Unsupported case in codegen!\n");
-        exit(1);
+        assert(0 && "Unsupported case in codegen!");
     }
 
     return inst_list;
@@ -193,10 +188,12 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 // calculates A mod B, stores result in A's location (right)
 ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
 {
-    assert(left != NULL);
-    assert(right != NULL);
     StackNode_t *temp;
     char buffer[50];
+
+    assert(left != NULL);
+    assert(right != NULL);
+    assert(inst_list != NULL);
 
     // Move dividend (A, right) to eax
     snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
@@ -246,6 +243,7 @@ void print_expr_tree(expr_node_t *node, int num_indent, FILE *f)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(f != NULL);
     int i;
 
     for(i=0; i < num_indent; ++i)
@@ -285,10 +283,11 @@ void free_expr_tree(expr_node_t *node)
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
     assert(node != NULL);
-    assert(ctx != NULL);
-    assert(target_reg != NULL);
     assert(node->expr != NULL);
     assert(node->expr->type == EXPR_SIGN_TERM);
+    assert(inst_list != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     char buffer[50];
 
@@ -307,8 +306,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case0\n");
     #endif
     assert(node != NULL);
-    assert(ctx != NULL);
     assert(node->expr != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     char buffer[50];
     char buf_leaf[30];
@@ -356,11 +356,11 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case1\n");
     #endif
     assert(node != NULL);
-    assert(ctx != NULL);
-    assert(target_reg != NULL);
     assert(node->expr != NULL);
     assert(node->right_expr != NULL);
     assert(node->right_expr->expr != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     char name_buf[30];
     struct Expression *expr, *right_expr;
@@ -384,9 +384,10 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case2\n");
     #endif
     assert(node != NULL);
+    assert(node->expr != NULL);
+    assert(inst_list != NULL);
     assert(ctx != NULL);
     assert(target_reg != NULL);
-    assert(node->expr != NULL);
 
     Register_t *temp_reg;
 
@@ -423,9 +424,10 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     fprintf(stderr, "gencode_case3\n");
     #endif
     assert(node != NULL);
+    assert(node->expr != NULL);
+    assert(inst_list != NULL);
     assert(ctx != NULL);
     assert(target_reg != NULL);
-    assert(node->expr != NULL);
 
     Register_t *temp_reg;
 
@@ -500,8 +502,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr type in gencode!\n");
-            exit(1);
+            assert(0 && "Unsupported expr type in gencode!");
+            break;
     }
 
     return inst_list;
@@ -533,8 +535,8 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:
-                    fprintf(stderr, "ERROR: Bad addop type!\n");
-                    exit(1);
+                    assert(0 && "Bad addop type!");
+                    break;
             }
 
             break;
@@ -602,8 +604,8 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
             else
             {
-                fprintf(stderr, "ERROR: Bad mulop type!\n");
-                exit(1);
+                assert(0 && "Bad mulop type!");
+                break;
             }
 
             break;
@@ -615,8 +617,8 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr type in gencode!\n");
-            exit(1);
+            assert(0 && "Unsupported expr type in gencode!");
+            break;
     }
 
     return inst_list;
@@ -641,8 +643,7 @@ ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list
                 snprintf(buffer, buf_len, "subl");
             else
             {
-                fprintf(stderr, "ERROR: Bad addop type!\n");
-                exit(1);
+                assert(0 && "Bad addop type!");
             }
 
             break;
@@ -653,15 +654,14 @@ ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list
                 snprintf(buffer, buf_len, "imull");
             else
             {
-                fprintf(stderr, "ERROR: Bad mulop type!\n");
-                exit(1);
+                assert(0 && "Bad mulop type!");
             }
 
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr type in gencode!\n");
-            exit(1);
+            assert(0 && "Unsupported expr type in gencode!");
+            break;
     }
 
     return inst_list;

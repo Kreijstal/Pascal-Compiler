@@ -33,8 +33,7 @@ gpc_sources = [
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
-  'stacktrace.c',
-  'debug_serializer.c'
+  'stacktrace.c'
 ]
 
 gpc_sources += bison_generated

@@ -73,6 +73,7 @@ void init_stackmng()
 
     num_args_alloced = 0;
     global_stackmng = (stackmng_t *)malloc(sizeof(stackmng_t));
+    assert(global_stackmng != NULL);
 
     global_stackmng->cur_scope = NULL;
     global_stackmng->reg_stack = init_reg_stack();
@@ -129,9 +130,9 @@ void pop_stackscope()
 /* Adds doubleword to t */
 StackNode_t *add_l_t(char *label)
 {
-    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
 
     StackScope_t *cur_scope;
     StackNode_t *new_node;
@@ -166,9 +167,9 @@ StackNode_t *add_l_t(char *label)
 /* Adds doubleword to x */
 StackNode_t *add_l_x(char *label)
 {
-    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
 
     StackScope_t *cur_scope;
     StackNode_t *new_node;
@@ -203,9 +204,9 @@ StackNode_t *add_l_x(char *label)
 /* Adds doubleword to z */
 StackNode_t *add_l_z(char *label)
 {
-    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
 
     StackScope_t *cur_scope;
     StackNode_t *new_node;
@@ -249,9 +250,9 @@ RegStack_t *get_reg_stack()
 /* Returns NULL if not found */
 StackNode_t *find_in_temp(char *label)
 {
-    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
 
     StackScope_t *cur_scope;
     StackNode_t *cur_node;
@@ -265,9 +266,9 @@ StackNode_t *find_in_temp(char *label)
 /* TODO: Does not find variables outside the current scope */
 StackNode_t *find_label(char *label)
 {
-    assert(label != NULL);
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
 
     StackScope_t *cur_scope;
     StackNode_t *cur_node;
@@ -320,16 +321,19 @@ RegStack_t *init_reg_stack()
 
     RegStack_t *reg_stack;
     reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
+    assert(reg_stack != NULL);
 
     /* RBX */
     Register_t *rbx;
     rbx = (Register_t *)malloc(sizeof(Register_t));
+    assert(rbx != NULL);
     rbx->bit_64 = strdup("%rbx");
     rbx->bit_32 = strdup("%ebx");
 
     /* RDI */
     Register_t *rdi;
     rdi = (Register_t *)malloc(sizeof(Register_t));
+    assert(rdi != NULL);
     rdi->bit_64 = strdup("%rdi");
     rdi->bit_32 = strdup("%edi");
 
@@ -364,7 +368,6 @@ int get_register_64bit(RegStack_t *regstack, char *reg_64, Register_t **return_r
 {
     assert(regstack != NULL);
     assert(reg_64 != NULL);
-    assert(return_reg != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
@@ -392,8 +395,7 @@ int get_register_64bit(RegStack_t *regstack, char *reg_64, Register_t **return_r
         cur_reg = cur_reg->next;
     }
 
-    fprintf(stderr, "ERROR: Kicking out values in registers not currently supported!\n");
-    exit(1);
+    assert(0 && "Kicking out values in registers not currently supported!");
 }
 
 /* NOTE: Getters return number greater than 0 if it had to kick a value out to temp */
@@ -403,7 +405,6 @@ int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_r
 {
     assert(regstack != NULL);
     assert(reg_32 != NULL);
-    assert(return_reg != NULL);
 
     ListNode_t *cur_reg, *prev_reg;
     Register_t *reg;
@@ -431,8 +432,7 @@ int get_register_32bit(RegStack_t *regstack, char *reg_32, Register_t **return_r
         cur_reg = cur_reg->next;
     }
 
-    fprintf(stderr, "ERROR: Kicking out values in registers not currently supported!\n");
-    exit(1);
+    assert(0 && "Kicking out values in registers not currently supported!");
 }
 
 void free_reg(RegStack_t *reg_stack, Register_t *reg)
@@ -461,8 +461,7 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
         cur = cur->next;
     }
 
-    fprintf(stderr, "ERROR: Could not find register to push onto stack!\n");
-    exit(1);
+    assert(0 && "Could not find register to push onto stack!");
 }
 
 void swap_reg_stack(RegStack_t *reg_stack)
@@ -492,7 +491,7 @@ Register_t *front_reg_stack(RegStack_t *reg_stack)
 Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 {
     assert(reg_stack != NULL);
-    fprintf(stderr, "DEBUG: get_free_reg, reg_stack: %p, registers_free: %p\n", (void *)reg_stack, (void *)reg_stack->registers_free);
+    assert(inst_list != NULL);
 
     ListNode_t *register_node;
     Register_t *reg;
@@ -517,11 +516,13 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 
 int get_num_registers_free(RegStack_t *reg_stack)
 {
+    assert(reg_stack != NULL);
     return ListLength(reg_stack->registers_free);
 }
 
 int get_num_registers_alloced(RegStack_t *reg_stack)
 {
+    assert(reg_stack != NULL);
     return ListLength(reg_stack->registers_allocated);
 }
 
@@ -591,10 +592,11 @@ StackScope_t *init_stackscope()
 
 StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
 {
-    assert(cur_scope != NULL);
-    assert(label != NULL);
     ListNode_t *cur_li;
     StackNode_t *cur_node;
+
+    assert(cur_scope != NULL);
+    assert(label != NULL);
 
     cur_li = cur_scope->t;
     while(cur_li != NULL)
@@ -613,10 +615,11 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
 
 StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
 {
-    assert(cur_scope != NULL);
-    assert(label != NULL);
     ListNode_t *cur_li;
     StackNode_t *cur_node;
+
+    assert(cur_scope != NULL);
+    assert(label != NULL);
 
     cur_li = cur_scope->x;
     while(cur_li != NULL)
@@ -635,10 +638,11 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
 {
-    assert(cur_scope != NULL);
-    assert(label != NULL);
     ListNode_t *cur_li;
     StackNode_t *cur_node;
+
+    assert(cur_scope != NULL);
+    assert(label != NULL);
 
     cur_li = cur_scope->z;
     while(cur_li != NULL)
@@ -695,6 +699,9 @@ void free_stackscope_list(ListNode_t *li)
     ListNode_t *cur;
     cur = li;
 
+    if(li == NULL)
+        return;
+
     while(cur != NULL)
     {
         destroy_stack_node((StackNode_t *)cur->cur);
@@ -712,6 +719,7 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
 
     StackNode_t *new_node;
     new_node = (StackNode_t *)malloc(sizeof(StackNode_t));
+    assert(new_node != NULL);
 
     new_node->offset = offset;
     new_node->label = strdup(label);

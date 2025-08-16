@@ -3,7 +3,7 @@ import os
 import unittest
 
 # Path to the compiler executable
-GPC_PATH = "builddir/GPC/gpc"
+GPC_PATH = "build/GPC/gpc"
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 
