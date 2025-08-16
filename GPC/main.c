@@ -21,12 +21,18 @@ void set_flags(char **, int);
 
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "stacktrace.h"
+#include "CodeGenerator/Intel_x86-64/stackmng/stackmng.h"
 
 int main(int argc, char **argv)
 {
     install_stack_trace_handler();
     Tree_t *prelude_tree, *user_tree;
     int required_args, args_left;
+
+    if (argc > 1 && strcmp(argv[1], "--init-stack") == 0) {
+        init_stackmng();
+        return 0;
+    }
 
     required_args = 3;
 

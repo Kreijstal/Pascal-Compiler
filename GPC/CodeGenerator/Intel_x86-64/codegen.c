@@ -367,6 +367,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx);
     codegen_function_locals(proc->declarations, ctx);
+
     codegen_subprograms(proc->subprograms, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
     codegen_function_header(sub_id, ctx);
@@ -398,6 +399,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
     return_var = add_l_x(func->id);
     codegen_function_locals(func->declarations, ctx);
+
     codegen_subprograms(func->subprograms, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);

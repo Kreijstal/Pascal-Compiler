@@ -50,6 +50,26 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
+ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_PROCEDURE_CALL);
+
+    char *proc_name;
+    ListNode_t *args_expr;
+    char buffer[50];
+
+    proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+    args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
 /* Returns a list of instructions */
 ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -129,12 +149,19 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
 
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
-    inst_list = codegen_vect_reg(inst_list, 0);
-    snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
-    inst_list = add_inst(inst_list, buffer);
-    free_arg_regs();
-    return inst_list;
+    if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    {
+        return codegen_builtin_proc(stmt, inst_list, ctx);
+    }
+    else
+    {
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+        return inst_list;
+    }
 }
 
 /* Code generation for if-then-else statements */
