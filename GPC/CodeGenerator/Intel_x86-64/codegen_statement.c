@@ -19,7 +19,12 @@
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -44,16 +49,23 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
         default:
-            fprintf(stderr, "Critical error: Unrecognized statement type in codegen\n");
-            exit(1);
+            assert(0 && "Unrecognized statement type in codegen");
+            break;
     }
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
+    assert(ctx != NULL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -67,14 +79,22 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Returns a list of instructions */
 ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_COMPOUND_STATEMENT);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     ListNode_t *stmt_list;
     struct Statement *cur_stmt;
@@ -86,14 +106,21 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = codegen_stmt(cur_stmt, inst_list, ctx, symtab);
         stmt_list = stmt_list->next;
     }
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Code generation for a variable assignment */
 ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_VAR_ASSIGN);
+    assert(ctx != NULL);
 
     StackNode_t *var;
     Register_t *reg;
@@ -124,14 +151,22 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
         exit(1);
     }
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return add_inst(inst_list, buffer);
 }
 
 /* Code generation for a procedure call */
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -160,6 +195,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
         free_arg_regs();
+        #ifdef DEBUG_CODEGEN
+        fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+        #endif
         return inst_list;
     }
 }
@@ -167,8 +205,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 /* Code generation for if-then-else statements */
 ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_IF_THEN);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     int relop_type, inverse;
     struct Expression *expr;
@@ -202,14 +245,22 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeG
         snprintf(buffer, 50, "%s:\n", label2);
         inst_list = add_inst(inst_list, buffer);
     }
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Code generation for while statements */
 ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_WHILE);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     int relop_type, inverse;
     struct Expression *expr;
@@ -235,14 +286,22 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
 
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Code generation for for statements */
 ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_FOR);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     int relop_type, inverse;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
@@ -266,7 +325,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     }
 
     assert(for_var->type == EXPR_VAR_ID);
-    comparison_expr = mk_relop(-1, LT, for_var, expr);
+    comparison_expr = mk_relop(-1, LE, for_var, expr);
     one_expr = mk_inum(-1, 1);
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
@@ -291,5 +350,8 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     free(one_expr);
     free(update_expr);
     free(update_stmt);
+    #ifdef DEBUG_CODEGEN
+    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }

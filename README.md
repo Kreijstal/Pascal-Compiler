@@ -8,12 +8,11 @@ Pascal Compiler written in C. Takes Pascal code and outputs gcc-targeted x86-64 
 ---
 
 ## Dependencies
-This project has a dependency on flex and byacc for the syntax parser. You will want to install them with your OS package manager.  
+This project has a dependency on flex, byacc, and meson for the syntax parser and build system. You will want to install them with your OS package manager.
 
 For example, on Ubuntu, this would be:
 ```
-sudo apt-get install flex
-sudo apt-get install byacc
+sudo apt-get install flex byacc meson
 ```
 
 ## Overview

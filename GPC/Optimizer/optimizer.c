@@ -61,8 +61,8 @@ void optimize(SymTab_t *symtab, Tree_t *tree)
             break;
 
         default:
-            fprintf(stderr, "Non-critical error: Unsupported tree type given to optimizer!\n");
-            return;
+            assert(0 && "Unsupported tree type given to optimizer!");
+            break;
     }
 }
 
@@ -219,6 +219,10 @@ void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls)
 {
     Tree_t *var_decl;
     ListNode_t *prev, *ids, *temp;
+
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(var_decls != NULL);
 
     while(var_decls != NULL)
     {
@@ -391,6 +395,9 @@ int simplify_expr(struct Expression **expr)
     struct Expression *new_expr;
     int return_val, return_val2, new_val;
 
+    assert(expr != NULL);
+    assert(*expr != NULL);
+
     switch((*expr)->type)
     {
         case EXPR_INUM:
@@ -492,6 +499,7 @@ int simplify_expr(struct Expression **expr)
 void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *expr)
 {
     assert(expr != NULL);
+    assert(symtab != NULL);
 
     HashNode_t *node;
 
@@ -542,6 +550,7 @@ void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *
 void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
 {
     assert(expr != NULL);
+    assert(symtab != NULL);
 
     HashNode_t *node;
 
@@ -593,6 +602,10 @@ void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_che
 {
     ListNode_t *check, *remove;
     ListNode_t *ids;
+
+    assert(symtab != NULL);
+    assert(vars_to_check != NULL);
+    assert(vars_to_remove != NULL);
     HashNode_t *node;
     Tree_t *var_decl;
 
@@ -629,6 +642,8 @@ void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_che
 /* Adds to a list */
 void add_to_list(ListNode_t **list, void *obj)
 {
+    assert(list != NULL);
+    assert(obj != NULL);
     if(*list == NULL)
         *list = CreateListNode(obj, LIST_UNSPECIFIED);
     else

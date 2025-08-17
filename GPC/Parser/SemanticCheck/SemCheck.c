@@ -61,6 +61,9 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     SymTab_t *symtab;
     int return_val;
 
+    assert(parse_tree != NULL);
+    assert(sem_result != NULL);
+
     symtab = InitSymTab();
     semcheck_add_builtins(symtab);
     /*PrintSymTab(symtab, stderr, 0);*/
@@ -90,6 +93,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     cur = type_decls;
     while(cur != NULL)
     {
+        assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
@@ -218,13 +222,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
     while(cur != NULL)
     {
         /* Any declaration is always a tree */
+        assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
 
         ids = tree->tree_data.var_decl_data.ids;
 
         while(ids != NULL)
         {
+            assert(ids->cur != NULL);
             assert(ids->type == LIST_STRING);
 
             /* Variable declarations */
@@ -255,6 +262,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Array declarations */
             else
             {
+                assert(tree->type == TREE_ARR_DECL);
                 if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else
@@ -434,6 +442,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     cur = subprograms;
     while(cur != NULL)
     {
+        assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         return_val += semcheck_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev);
         cur = cur->next;
