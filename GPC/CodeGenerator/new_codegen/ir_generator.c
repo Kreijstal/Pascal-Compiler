@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+#include <stdbool.h>
+#include <string.h>
 #include "ir_generator.h"
 #include "../../ir.h"
 #include "../../Parser/ParseTree/tree.h"
@@ -27,9 +29,14 @@ static char *new_label() {
 
 static ListNode_t *generate_expr_ir(struct Expression *expr, SymTab_t *table, ListNode_t *inst_list, IRValue **result);
 static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table, ListNode_t *inst_list);
-
-
 static ListNode_t *generate_subprogram_ir(Tree_t *subprogram, SymTab_t *table, ListNode_t *inst_list);
+
+static bool is_builtin_procedure(const char *name) {
+    if (name == NULL) return false;
+    return strcmp(name, "writeln") == 0 ||
+           strcmp(name, "write") == 0 ||
+           strcmp(name, "read") == 0;
+}
 
 ListNode_t *generate_ir(Tree_t *ast, SymTab_t *table) {
     if (ast->type == TREE_PROGRAM_TYPE) {
@@ -49,6 +56,10 @@ ListNode_t *generate_ir(Tree_t *ast, SymTab_t *table) {
 
 static ListNode_t *generate_subprogram_ir(Tree_t *subprogram, SymTab_t *table, ListNode_t *inst_list) {
     assert(subprogram->type == TREE_SUBPROGRAM);
+
+    if (is_builtin_procedure(subprogram->tree_data.subprogram_data.id)) {
+        return inst_list;
+    }
 
     // New scope for the subprogram
     PushScope(table);
@@ -206,7 +217,11 @@ static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table
         store_inst->dest->name = stmt->stmt_data.var_assign_data.var->expr_data.id;
         store_inst->dest->is_global = (scope_level == 0);
 
-        return PushListNodeBack(inst_list, CreateListNode(store_inst, LIST_UNSPECIFIED));
+        ListNode_t *new_node = CreateListNode(store_inst, LIST_UNSPECIFIED);
+        if (inst_list == NULL)
+            return new_node;
+
+        return PushListNodeBack(inst_list, new_node);
     }
     else if (stmt->type == STMT_COMPOUND_STATEMENT) {
         ListNode_t *stmt_list = stmt->stmt_data.compound_statement;
@@ -225,7 +240,12 @@ static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table
         cmp_inst->opcode = IR_CMP;
         cmp_inst->src1 = left_val;
         cmp_inst->src2 = right_val;
-        inst_list = PushListNodeBack(inst_list, CreateListNode(cmp_inst, LIST_UNSPECIFIED));
+
+        ListNode_t *cmp_node = CreateListNode(cmp_inst, LIST_UNSPECIFIED);
+        if (inst_list == NULL)
+            inst_list = cmp_node;
+        else
+            inst_list = PushListNodeBack(inst_list, cmp_node);
 
         char *else_label = new_label();
         char *endif_label = new_label();
@@ -263,8 +283,12 @@ static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table
         IRInstruction *inst = calloc(1, sizeof(IRInstruction));
         inst->opcode = IR_CALL;
         inst->proc_name = stmt->stmt_data.procedure_call_data.id;
-        inst_list = PushListNodeBack(inst_list, CreateListNode(inst, LIST_UNSPECIFIED));
-        return inst_list;
+
+        ListNode_t *new_node = CreateListNode(inst, LIST_UNSPECIFIED);
+        if (inst_list == NULL)
+            return new_node;
+
+        return PushListNodeBack(inst_list, new_node);
     }
     else if (stmt->type == STMT_WHILE) {
         char *start_label = new_label();
@@ -273,7 +297,12 @@ static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table
         IRInstruction *start_label_inst = calloc(1, sizeof(IRInstruction));
         start_label_inst->opcode = IR_LABEL;
         start_label_inst->label = start_label;
-        inst_list = PushListNodeBack(inst_list, CreateListNode(start_label_inst, LIST_UNSPECIFIED));
+
+        ListNode_t *start_node = CreateListNode(start_label_inst, LIST_UNSPECIFIED);
+        if (inst_list == NULL)
+            inst_list = start_node;
+        else
+            inst_list = PushListNodeBack(inst_list, start_node);
 
         IRValue *left_val, *right_val;
         inst_list = generate_expr_ir(stmt->stmt_data.while_data.relop_expr->expr_data.relop_data.left, table, inst_list, &left_val);

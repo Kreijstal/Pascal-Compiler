@@ -170,7 +170,11 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             fprintf(out, "%s:\n", inst->label);
         }
         else if (inst->opcode == IR_CALL) {
-            fprintf(out, "\tcall\t%s\n", inst->proc_name);
+            if (strcmp(inst->proc_name, "writeln") == 0) {
+                fprintf(out, "\tcall\tprint_integer\n");
+            } else {
+                fprintf(out, "\tcall\t%s\n", inst->proc_name);
+            }
         }
         else if (inst->opcode == IR_RETURN) {
             fprintf(out, "\tleave\n");
@@ -185,19 +189,32 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             fprintf(stderr, "imull: done\n");
         }
         else if (inst->opcode == IR_DIV) {
-            fprintf(stderr, "Generating idivl for %s and %s\n", inst->src1->reg->name, inst->src2->reg->name);
+            // Move dividend into eax. eax and edx are clobbered by idivl.
             fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
-            fprintf(out, "\tcltd\n");
+            fprintf(out, "\tcltd\n"); // Sign-extend %eax into %edx:%eax
             fprintf(out, "\tidivl\t%s\n", inst->src2->reg->name);
+
+            // Free the operand registers now that they've been used
+            new_free_reg(inst->src1->reg);
+            new_free_reg(inst->src2->reg);
+
+            // Allocate a new register for the result (quotient) and move it from %eax
             inst->dest->reg = new_alloc_reg();
-            inst->dest->reg->name = "%eax";
+            fprintf(out, "\tmovl\t%%eax, %s\n", inst->dest->reg->name);
         }
         else if (inst->opcode == IR_MOD) {
+            // Move dividend into eax. eax and edx are clobbered by idivl.
             fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
-            fprintf(out, "\tcltd\n");
+            fprintf(out, "\tcltd\n"); // Sign-extend %eax into %edx:%eax
             fprintf(out, "\tidivl\t%s\n", inst->src2->reg->name);
+
+            // Free the operand registers now that they've been used
+            new_free_reg(inst->src1->reg);
+            new_free_reg(inst->src2->reg);
+
+            // Allocate a new register for the result (remainder) and move it from %edx
             inst->dest->reg = new_alloc_reg();
-            inst->dest->reg->name = "%edx";
+            fprintf(out, "\tmovl\t%%edx, %s\n", inst->dest->reg->name);
         }
         current_ir = current_ir->next;
     }
