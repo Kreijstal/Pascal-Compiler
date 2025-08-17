@@ -15,6 +15,7 @@ ListNode_t *CreateListNode(void *new_obj, enum ListType type)
     ListNode_t *new_node;
 
     new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+    assert(new_node != NULL);
 
     new_node->type = type;
     new_node->cur = new_obj;

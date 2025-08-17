@@ -84,8 +84,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         default:
-            fprintf(stderr, "ERROR: Bad type in semcheck_stmt!\n");
-            exit(1);
+            assert(0 && "Bad type in semcheck_stmt!");
+            break;
     }
 
     return return_val;
@@ -145,6 +145,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
+    assert(mangled_name != NULL);
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
     HashNode_t *resolved_proc = NULL;

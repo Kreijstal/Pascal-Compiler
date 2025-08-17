@@ -20,6 +20,7 @@ SymTab_t *InitSymTab()
     SymTab_t *new_symtab;
 
     new_symtab = (SymTab_t *)malloc(sizeof(SymTab_t));
+    assert(new_symtab != NULL);
     new_symtab->stack_head = NULL;
     new_symtab->builtins = InitHashTable();
 
@@ -66,6 +67,7 @@ int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -86,6 +88,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -107,6 +110,7 @@ int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNod
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -128,6 +132,7 @@ int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum Var
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -149,6 +154,7 @@ int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, List
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -213,6 +219,9 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, char *id)
     ListNode_t *cur_scope;
     ListNode_t *found_nodes = NULL;
 
+    assert(symtab != NULL);
+    assert(id != NULL);
+
     cur_scope = symtab->stack_head;
 
     /* Check builtins first */
@@ -238,6 +247,7 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -292,6 +302,7 @@ void DestroySymTab(SymTab_t *symtab)
 void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent)
 {
     assert(symtab != NULL);
+    assert(f != NULL);
 
     int i, scope;
     ListNode_t *cur;

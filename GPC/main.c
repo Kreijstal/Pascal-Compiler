@@ -22,8 +22,10 @@ void set_flags(char **, int);
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "stacktrace.h"
 
+#include <assert.h>
 int main(int argc, char **argv)
 {
+    assert(argv != NULL);
     install_stack_trace_handler();
     Tree_t *prelude_tree, *user_tree;
     int required_args, args_left;
@@ -117,9 +119,12 @@ void set_flags(char **optional_args, int count)
 {
     int i;
 
+    assert(optional_args != NULL);
+
     i = 0;
     while(count > 0)
     {
+        assert(optional_args[i] != NULL);
         if(strcmp(optional_args[i], "-non-local") == 0)
         {
             fprintf(stderr, "Non-local codegen support enabled\n");

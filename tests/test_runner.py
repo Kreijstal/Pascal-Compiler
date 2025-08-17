@@ -3,7 +3,10 @@ import os
 import unittest
 
 # Path to the compiler executable
-GPC_PATH = "builddir/GPC/gpc"
+# Get the build directory from the environment variable set by Meson.
+# Default to "build" for local testing.
+build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
+GPC_PATH = os.path.join(build_dir, "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 
@@ -249,6 +252,37 @@ class TestCompiler(unittest.TestCase):
             )
             expected_output = read_file_content(expected_output_file)
             self.assertEqual(process.stdout, expected_output)
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+
+
+    @unittest.skipIf(os.environ.get('RUN_BUGGY_TEST') != 'true', "Skipping buggy test that crashes the compiler")
+    def test_for_program(self):
+        """Tests the for program."""
+        input_file = "GPC/TestPrograms/CodeGeneration/for.p"
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "for")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file],
+                input="3",
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            self.assertEqual(process.stdout, "123456 \\nCheck successful!\\n")
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")

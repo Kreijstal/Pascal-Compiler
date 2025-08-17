@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 #include "NameMangling.h"
 #include "../ParseTree/tree.h"
 #include "../List/List.h"
@@ -10,6 +11,7 @@
 
 // Helper to free a list of integers
 static void DestroyIntList(ListNode_t* list) {
+    assert(list != NULL);
     ListNode_t* cur = list;
     while (cur != NULL) {
         free(cur->cur);
@@ -38,6 +40,7 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
 
 // Helper function to flatten argument lists into a list of HASHVAR_ types.
 static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab) { // <-- Add symtab
+    assert(symtab != NULL);
     if (args == NULL) {
         return NULL;
     }
@@ -70,6 +73,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
         ListNode_t* id_cur = ids;
         while (id_cur != NULL) {
             int* type_ptr = malloc(sizeof(int));
+            assert(type_ptr != NULL);
             *type_ptr = resolved_type;
             if (type_list == NULL) {
                 type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
@@ -85,10 +89,12 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
 
 // Core mangling function
 static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_list) {
+    assert(original_name != NULL);
     if (type_list == NULL) {
         // No args, append _void
         const char* suffix = "_void";
         char* mangled_name = malloc(strlen(original_name) + strlen(suffix) + 1);
+        assert(mangled_name != NULL);
         sprintf(mangled_name, "%s%s", original_name, suffix);
         return mangled_name;
     }
@@ -103,6 +109,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     total_len += 1; // Null terminator
 
     char* mangled_name = malloc(total_len);
+    assert(mangled_name != NULL);
     strcpy(mangled_name, original_name);
 
     cur = type_list;
@@ -127,12 +134,15 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
 
 // Update the main function signature and the call
 char* MangleFunctionName(const char* original_name, ListNode_t* args, SymTab_t* symtab) { // <-- Add symtab
+    assert(original_name != NULL);
+    assert(symtab != NULL);
     ListNode_t* type_list = GetFlatTypeListForMangling(args, symtab); // <-- Pass symtab
     return MangleNameFromTypeList(original_name, type_list);
 }
 
 // Helper function to get a flat list of types from a function call's arguments
 static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *symtab, int max_scope_lev) {
+    assert(symtab != NULL);
     if (args_expr == NULL) {
         return NULL;
     }
@@ -144,6 +154,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         semcheck_expr_main(&type, symtab, (struct Expression *)arg_cur->cur, max_scope_lev, NO_MUTATE);
 
         int* type_ptr = malloc(sizeof(int));
+        assert(type_ptr != NULL);
         *type_ptr = ConvertParserTypeToVarType(type);
         if (type_list == NULL) {
             type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
@@ -156,6 +167,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
 }
 
 char* MangleFunctionNameFromCallSite(const char* original_name, ListNode_t* args_expr, SymTab_t *symtab, int max_scope_lev) {
+    assert(original_name != NULL);
+    assert(symtab != NULL);
     ListNode_t* type_list = GetFlatTypeListFromCallSite(args_expr, symtab, max_scope_lev);
     return MangleNameFromTypeList(original_name, type_list);
 }

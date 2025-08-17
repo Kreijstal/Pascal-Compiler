@@ -44,6 +44,7 @@ int semcheck_funccall(int *type_return,
 /* Sets hash meta based on given mutating flag */
 void set_hash_meta(HashNode_t *node, int mutating)
 {
+    assert(node != NULL);
     if(mutating == BOTH_MUTATE_REFERENCE)
     {
         node->referenced += 1;
@@ -92,8 +93,8 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
             *type = UNKNOWN_TYPE;
             break;
         default:
-            fprintf(stderr, "ERROR in set_type_from_hashtype, bad types!\n");
-            exit(1);
+            assert(0 && "Bad type in set_type_from_hashtype!");
+            break;
     }
 }
 
@@ -101,6 +102,7 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
 int semcheck_expr(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
+    assert(type_return != NULL);
     semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
@@ -108,6 +110,7 @@ int semcheck_expr(int *type_return,
 int semcheck_expr_func(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int mutating)
 {
+    assert(type_return != NULL);
     semcheck_expr_main(type_return, symtab, expr, 0, mutating);
 }
 
@@ -118,6 +121,7 @@ int semcheck_expr_main(int *type_return,
     int return_val;
     assert(symtab != NULL);
     assert(expr != NULL);
+    assert(type_return != NULL);
 
     return_val = 0;
     switch(expr->type)
@@ -164,8 +168,8 @@ int semcheck_expr_main(int *type_return,
             break;
 
         default:
-            fprintf(stderr, "ERROR: Bad type in semcheck_expr_main!\n");
-            exit(1);
+            assert(0 && "Bad type in semcheck_expr_main!");
+            break;
     }
 
     return return_val;
