@@ -69,7 +69,8 @@ test('Compiler tests', python,
   args: [meson.project_source_root() / 'tests/test_runner.py'],
   workdir: meson.project_source_root(),
   depends: gpc_exe,
-  env: {
-    'RUN_BUGGY_TEST': get_option('run_buggy_test').to_string()
-  }
+  env: [
+    'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
+    'MESON_BUILD_ROOT=' + meson.build_root()
+    ]
 )

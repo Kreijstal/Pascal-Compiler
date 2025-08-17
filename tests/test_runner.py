@@ -3,7 +3,10 @@ import os
 import unittest
 
 # Path to the compiler executable
-GPC_PATH = "build/GPC/gpc"
+# Get the build directory from the environment variable set by Meson.
+# Default to "build" for local testing.
+build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
+GPC_PATH = os.path.join(build_dir, "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 
