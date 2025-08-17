@@ -68,7 +68,7 @@ void DestroyBuiltin(HashNode_t *);
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 
 /* The well-known symbol hash function
-/* -----------------------------------------------------------------------------
+ * -----------------------------------------------------------------------------
  * hashpjw
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).

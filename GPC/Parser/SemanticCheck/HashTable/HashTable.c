@@ -235,7 +235,7 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
 }
 
 /* The well-known symbol hash function
-/* -----------------------------------------------------------------------------
+ * -----------------------------------------------------------------------------
  * hashpjw
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).
@@ -250,7 +250,7 @@ int hashpjw( char *s )
 	for ( p = s; *p != '\0'; p++ )
 	{
 		h = (h << 4) + (*p);
-		if ( g = h & 0xf0000000 )
+		if ( (g = h & 0xf0000000) )
 		{
 			h = h ^ ( g >> 24 );
 			h = h ^ g;

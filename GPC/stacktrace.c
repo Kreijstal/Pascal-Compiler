@@ -9,7 +9,7 @@
 static void stack_trace_handler(int sig) {
     unw_context_t context;
     unw_cursor_t cursor;
-    unw_word_t ip, sp, off;
+    unw_word_t ip, off;
     char proc_name[256];
 
     fprintf(stderr, "Caught signal %d\n", sig);

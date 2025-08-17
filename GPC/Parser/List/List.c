@@ -81,7 +81,7 @@ ListNode_t *DeleteListNode(ListNode_t *node, ListNode_t *prev)
 
 void DestroyList(ListNode_t *head_node)
 {
-    ListNode_t *cur, *next;
+    ListNode_t *cur;
     cur = head_node;
     while(cur != NULL)
     {

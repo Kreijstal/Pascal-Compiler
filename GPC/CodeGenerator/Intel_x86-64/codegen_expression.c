@@ -173,7 +173,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
     #endif
     int arg_num;
-    StackNode_t *stack_node;
     Register_t *top_reg;
     char buffer[50];
     char *arg_reg_char;
