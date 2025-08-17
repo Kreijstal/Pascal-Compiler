@@ -119,9 +119,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 /*TODO: these should be defined in pascal not in semantic analyzer */
 void semcheck_add_builtins(SymTab_t *symtab)
 {
-    char *id;
-    ListNode_t *args, *arg_ids;
-
     AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
     AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
 
@@ -132,7 +129,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
-    enum VarType var_type;
     assert(tree != NULL);
     assert(symtab != NULL);
     assert(tree->type == TREE_PROGRAM_TYPE);
@@ -293,7 +289,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 /* A return value greater than 0 indicates how many errors occurred */
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 {
-    int return_val, func_return, return_mutated;
+    int return_val, func_return;
     int new_max_scope;
     enum VarType var_type;
     enum TreeType sub_type;

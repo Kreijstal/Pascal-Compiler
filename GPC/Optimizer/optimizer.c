@@ -75,8 +75,7 @@ void optimize_prog(SymTab_t *symtab, Tree_t *prog)
 
     ListNode_t *vars_to_check, *vars_to_remove, *cur;
     struct Program *prog_data;
-    HashNode_t *node;
-    int replace_with, num_removed, done;
+    int num_removed;
 
     prog_data = &prog->tree_data.program_data;
     vars_to_check = vars_to_remove = NULL;
@@ -87,7 +86,7 @@ void optimize_prog(SymTab_t *symtab, Tree_t *prog)
         set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
 
         cur = vars_to_remove;
-        done = num_removed = 0;
+        num_removed = 0;
         while(cur != NULL)
         {
             #ifdef DEBUG_OPTIMIZER
@@ -129,8 +128,7 @@ void optimize_subprog(SymTab_t *symtab, Tree_t *sub)
 
     ListNode_t *vars_to_check, *vars_to_remove, *cur;
     struct Subprogram *sub_data;
-    HashNode_t *node;
-    int replace_with, done, num_removed;
+    int num_removed;
 
     sub_data = &sub->tree_data.subprogram_data;
     vars_to_check = vars_to_remove = NULL;
@@ -141,7 +139,7 @@ void optimize_subprog(SymTab_t *symtab, Tree_t *sub)
         set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
 
         cur = vars_to_remove;
-        done = num_removed = 0;
+        num_removed = 0;
         while(cur != NULL)
         {
             #ifdef DEBUG_OPTIMIZER
@@ -181,7 +179,6 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
     assert(symtab != NULL);
     assert(stmt != NULL);
 
-    HashNode_t *node;
     struct Expression *expr;
     ListNode_t *stmt_list;
     char *id;
@@ -600,7 +597,6 @@ void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
 void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_check,
     ListNode_t **vars_to_remove)
 {
-    ListNode_t *check, *remove;
     ListNode_t *ids;
 
     assert(symtab != NULL);
