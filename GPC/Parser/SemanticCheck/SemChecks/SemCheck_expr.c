@@ -96,6 +96,7 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
             assert(0 && "Bad type in set_type_from_hashtype!");
             break;
     }
+    return 0;
 }
 
 /* Semantic check on a normal expression */
@@ -103,7 +104,7 @@ int semcheck_expr(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
     assert(type_return != NULL);
-    semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
+    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
 /* Semantic check on a function expression (no side effects allowed) */
@@ -111,7 +112,7 @@ int semcheck_expr_func(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int mutating)
 {
     assert(type_return != NULL);
-    semcheck_expr_main(type_return, symtab, expr, 0, mutating);
+    return semcheck_expr_main(type_return, symtab, expr, 0, mutating);
 }
 
 /* Main semantic checking */
