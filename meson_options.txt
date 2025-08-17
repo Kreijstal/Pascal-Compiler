@@ -1,1 +1,2 @@
-option('run_buggy_test', type : 'boolean', value : false, description : 'Enable the buggy test case that crashes the compiler.')
+option('run_buggy_test', type: 'boolean', value: false, description: 'Run tests that are known to be buggy')
+option('new_codegen', type: 'boolean', value: false, description: 'Use the new code generator')

@@ -184,44 +184,34 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 }
 
 /* Gencode for modulus */
-// left is right operand (B), right is left operand (A)
-// calculates A mod B, stores result in A's location (right)
+// left is dividend and destination, right is divisor
 ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
 {
-    StackNode_t *temp;
     char buffer[50];
 
     assert(left != NULL);
     assert(right != NULL);
     assert(inst_list != NULL);
 
-    // Move dividend (A, right) to eax
-    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
+    // Move dividend (left) to eax
+    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
     inst_list = add_inst(inst_list, buffer);
 
     // Sign extend eax to edx
     snprintf(buffer, 50, "\tcltd\n");
     inst_list = add_inst(inst_list, buffer);
 
-    // If divisor (B, left) is a constant, move it to memory
-    if(left[0] == '$')
-    {
-        temp = find_in_temp("TEMP_MOD");
-        if(temp == NULL)
-            temp = add_l_t("TEMP_MOD");
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 50, "\tidivl\t-%d(%%rbp)\n", temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else // Divisor is a register
-    {
-        snprintf(buffer, 50, "\tidivl\t%s\n", left);
-        inst_list = add_inst(inst_list, buffer);
-    }
+    // Divisor is in right, move to a temp register
+    char reg[10];
+    snprintf(reg, 10, "%%r10d");
+    snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, 50, "\tidivl\t%s\n", reg);
+    inst_list = add_inst(inst_list, buffer);
 
-    // Move remainder from edx to the target register (A's location, right)
-    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", right);
+
+    // Move remainder from edx to the target register (left)
+    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
     inst_list = add_inst(inst_list, buffer);
 
     return inst_list;
@@ -546,23 +536,6 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             if(type == STAR)
             {
                 snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == MOD)
-            {
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
-
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
-
-                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
                 inst_list = add_inst(inst_list, buffer);
             }
             /* NOTE: Division and modulus is a more special case */

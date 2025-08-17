@@ -16,6 +16,8 @@ char *file_to_parse = NULL;
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
+#include "CodeGenerator/new_codegen/ir_generator.h"
+#include "CodeGenerator/new_codegen/x86_64_codegen.h"
 
 void set_flags(char **, int);
 
@@ -89,8 +91,12 @@ int main(int argc, char **argv)
             ctx.label_counter = 1;
             ctx.write_label_counter = 1;
 
+#ifdef NEW_CODEGEN
+            ListNode_t *ir_list = generate_ir(user_tree);
+            codegen_x86_64(ir_list, ctx.output_file);
+#else
             codegen(user_tree, argv[1], &ctx, symtab);
-
+#endif
             fclose(ctx.output_file);
         }
         DestroySymTab(symtab);

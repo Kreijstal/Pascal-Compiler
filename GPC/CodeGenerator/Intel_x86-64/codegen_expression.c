@@ -203,7 +203,18 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_args != NULL)
             formal_arg_decl = (Tree_t *)formal_args->cur;
 
-        if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
+        if(arg_expr->type == EXPR_STRING)
+        {
+            char label[20];
+            snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+            char add_rodata[1024];
+            snprintf(add_rodata, 1024, "\t.section\t.rodata\n%s:\n\t.string \"%s\"\n\t.text\n",
+                label, arg_expr->expr_data.string);
+            inst_list = add_inst(inst_list, add_rodata);
+            snprintf(buffer, 50, "\tleaq\t%s(%%rip), %s\n", label, arg_reg_char);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
             assert(arg_expr->type == EXPR_VAR_ID);
@@ -214,14 +225,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         else
         {
             // Pass by value
-            expr_tree = build_expr_tree(arg_expr);
-            top_reg = get_free_reg(get_reg_stack(), &inst_list);
-            fprintf(stderr, "DEBUG: top_reg at %p\n", top_reg);
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
-            free_expr_tree(expr_tree);
-
+            inst_list = codegen_expr(arg_expr, inst_list, ctx);
+            top_reg = front_reg_stack(get_reg_stack());
             snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
-            free_reg(get_reg_stack(), top_reg);
             inst_list = add_inst(inst_list, buffer);
         }
 
