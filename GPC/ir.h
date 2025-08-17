@@ -17,13 +17,18 @@ typedef enum {
     IR_JUMP_IF_NOT_ZERO,
     IR_LABEL,
     IR_CALL,
+    IR_ARG,
     IR_RETURN,
+    IR_RETRIEVE_RETURN_VAL,
     IR_CMP
 } IROpcode;
+
+struct Register;
 
 typedef struct {
     char *name;
     int is_global;
+    struct Register *reg;
 } IRValue;
 
 typedef struct {

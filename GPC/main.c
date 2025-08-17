@@ -15,9 +15,13 @@ int col_num = 1;
 char *file_to_parse = NULL;
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
-#include "CodeGenerator/Intel_x86-64/codegen.h"
+
+#ifdef NEW_CODEGEN
 #include "CodeGenerator/new_codegen/ir_generator.h"
 #include "CodeGenerator/new_codegen/x86_64_codegen.h"
+#else
+#include "CodeGenerator/Intel_x86-64/codegen.h"
+#endif
 
 void set_flags(char **, int);
 
@@ -81,6 +85,16 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "Generating code to file: %s\n", argv[2]);
 
+#ifdef NEW_CODEGEN
+            FILE *out = fopen(argv[2], "w");
+            if (out == NULL) {
+                fprintf(stderr, "ERROR: Failed to open output file: %s\n", argv[2]);
+                exit(1);
+            }
+            ListNode_t *ir_list = generate_ir(user_tree, symtab);
+            codegen_x86_64(ir_list, out);
+            fclose(out);
+#else
             CodeGenContext ctx;
             ctx.output_file = fopen(argv[2], "w");
             if (ctx.output_file == NULL)
@@ -90,14 +104,9 @@ int main(int argc, char **argv)
             }
             ctx.label_counter = 1;
             ctx.write_label_counter = 1;
-
-#ifdef NEW_CODEGEN
-            ListNode_t *ir_list = generate_ir(user_tree);
-            codegen_x86_64(ir_list, ctx.output_file);
-#else
             codegen(user_tree, argv[1], &ctx, symtab);
-#endif
             fclose(ctx.output_file);
+#endif
         }
         DestroySymTab(symtab);
 

@@ -161,7 +161,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         optimize(symtab, tree);
     }
 
-    PopScope(symtab);
+    /* PopScope(symtab); -- We need the symtab for codegen */
     return return_val;
 }
 

@@ -1,27 +1,35 @@
-#include <stdlib.h>
 #include "register_allocator.h"
+#include <stdlib.h>
 
-#define NUM_REGS 4
-static Register regs[NUM_REGS];
-static int next_reg = 0;
+static Register registers[] = {
+    {"%eax", 1},
+    {"%ebx", 1},
+    {"%ecx", 1},
+    {"%edx", 1},
+    {"%esi", 1},
+    {"%edi", 1},
+    // Add more registers as needed
+};
+static int num_registers = sizeof(registers) / sizeof(Register);
 
 void new_init_register_allocator() {
-    regs[0].name = "%eax";
-    regs[1].name = "%ebx";
-    regs[2].name = "%ecx";
-    regs[3].name = "%edx";
-    for (int i = 0; i < NUM_REGS; i++) {
-        regs[i].is_free = 1;
+    for (int i = 0; i < num_registers; i++) {
+        registers[i].is_free = 1;
     }
 }
 
 Register *new_alloc_reg() {
-    // Super simple round-robin allocator for now
-    Register *reg = &regs[next_reg];
-    next_reg = (next_reg + 1) % NUM_REGS;
-    return reg;
+    for (int i = 0; i < num_registers; i++) {
+        if (registers[i].is_free) {
+            registers[i].is_free = 0;
+            return &registers[i];
+        }
+    }
+    return NULL; // No free registers
 }
 
 void new_free_reg(Register *reg) {
-    // Do nothing for now
+    if (reg) {
+        reg->is_free = 1;
+    }
 }

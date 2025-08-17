@@ -26,37 +26,31 @@ gpc_sources = [
   'Parser/SemanticCheck/NameMangling.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_stmt.c',
   'Parser/SemanticCheck/SemChecks/SemCheck_expr.c',
-  'CodeGenerator/Intel_x86-64/codegen.c',
-  'CodeGenerator/Intel_x86-64/codegen_statement.c',
-  'CodeGenerator/Intel_x86-64/codegen_expression.c',
-  'CodeGenerator/Intel_x86-64/codegen_builtins.c',
-  'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
-  'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
-  'stacktrace.c',
-  'CodeGenerator/new_codegen/ir_generator.c',
-  'CodeGenerator/new_codegen/x86_64_codegen.c',
-    'CodeGenerator/new_codegen/register_allocator.c',
-    'CodeGenerator/new_codegen/symbol_table.c'
+  'stacktrace.c'
 ]
 
 gpc_sources += bison_generated
 gpc_sources += flex_generated
 
-inc_dirs = include_directories(
-  '.',
-  'Parser',
-  'Parser/LexAndYacc',
-  'Parser/ParseTree',
-  'Parser/List',
-  'Parser/SemanticCheck/HashTable',
-  'Parser/SemanticCheck/SymTab',
-  'Parser/SemanticCheck',
-  'CodeGenerator/Intel_x86-64',
-  'Optimizer'
-)
-
 if get_option('new_codegen')
+  gpc_sources += [
+    'CodeGenerator/new_codegen/ir_generator.c',
+    'CodeGenerator/new_codegen/x86_64_codegen.c',
+    'CodeGenerator/new_codegen/register_allocator.c'
+  ]
+  inc_dirs = include_directories(
+    '.',
+    'Parser',
+    'Parser/LexAndYacc',
+    'Parser/ParseTree',
+    'Parser/List',
+    'Parser/SemanticCheck/HashTable',
+    'Parser/SemanticCheck/SymTab',
+    'Parser/SemanticCheck',
+    'Optimizer',
+    'CodeGenerator/new_codegen'
+  )
   gpc_exe = executable('gpc', gpc_sources,
     c_args: '-DNEW_CODEGEN',
     include_directories: inc_dirs,
@@ -70,6 +64,26 @@ if get_option('new_codegen')
     ]
   )
 else
+  gpc_sources += [
+    'CodeGenerator/Intel_x86-64/codegen.c',
+    'CodeGenerator/Intel_x86-64/codegen_statement.c',
+    'CodeGenerator/Intel_x86-64/codegen_expression.c',
+    'CodeGenerator/Intel_x86-64/codegen_builtins.c',
+    'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
+    'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c'
+  ]
+  inc_dirs = include_directories(
+    '.',
+    'Parser',
+    'Parser/LexAndYacc',
+    'Parser/ParseTree',
+    'Parser/List',
+    'Parser/SemanticCheck/HashTable',
+    'Parser/SemanticCheck/SymTab',
+    'Parser/SemanticCheck',
+    'CodeGenerator/Intel_x86-64',
+    'Optimizer'
+  )
   gpc_exe = executable('gpc', gpc_sources,
     include_directories: inc_dirs,
     dependencies: [
