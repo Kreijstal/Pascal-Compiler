@@ -254,7 +254,7 @@ class TestCompiler(unittest.TestCase):
             self.fail("Test execution timed out.")
 
 
-    @unittest.skip("Skipping buggy test that crashes the compiler")
+    @unittest.skipIf(os.environ.get('RUN_BUGGY_TEST') != 'true', "Skipping buggy test that crashes the compiler")
     def test_for_program(self):
         """Tests the for program."""
         input_file = "GPC/TestPrograms/CodeGeneration/for.p"
