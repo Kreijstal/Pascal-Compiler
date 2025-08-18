@@ -12,7 +12,15 @@
 #include <stdlib.h>
 #include "ParseTree/tree.h"
 
-Tree_t *ParsePascalOnly(char *file);
-Tree_t *ParsePascal(char *file);
+// The root of the AST
+extern FlatNode *parse_tree;
+
+// Globals defined in ParsePascal.c, needed by lexer/parser
+extern int line_num;
+extern int col_num;
+extern char *file_to_parse;
+
+FlatNode *ParsePascalOnly(char *file);
+FlatNode *ParsePascal(char *file);
 
 #endif

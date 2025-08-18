@@ -11,7 +11,7 @@
 #include "ParseTree/tree.h"
 #include "ParseTree/tree_types.h"
 #include "List/List.h"
-#include "SemanticCheck/SemCheck.h"
+/*#include "SemanticCheck/SemCheck.h"*/
 #include "Grammar.tab.h"
 #include "flat_ast.h"
 
@@ -21,7 +21,15 @@ extern int yyparse();
 /* Initializes parser globals */
 void InitParser();
 
-Tree_t *ParsePascalOnly(char *file)
+// Global that holds the root of the parse tree
+FlatNode *parse_tree = NULL;
+
+// Globals needed by lexer/parser
+int line_num = 1;
+int col_num = 1;
+char *file_to_parse = NULL;
+
+FlatNode *ParsePascalOnly(char *file)
 {
     assert(file != NULL);
     /**** CREATING THE PARSE TREE ****/
@@ -42,21 +50,23 @@ Tree_t *ParsePascalOnly(char *file)
     yyparse();
 
     #ifdef DEBUG_BISON
-        if(parse_tree != NULL)
-            tree_print(parse_tree, stderr, 0);
+        // TODO: Add a flat_ast printer
+        /*if(parse_tree != NULL)
+            tree_print(parse_tree, stderr, 0);*/
     #endif
 
     return parse_tree;
 }
 
-Tree_t *ParsePascal(char *file)
+FlatNode *ParsePascal(char *file)
 {
     assert(file != NULL);
-    int semcheck_return;
-    Tree_t *tree = ParsePascalOnly(file);
+    /*int semcheck_return;*/
+    FlatNode *tree = ParsePascalOnly(file);
 
     /**** SEMANTIC CHECKING ****/
-    if(tree != NULL)
+    // TODO: Re-implement semantic checker for flat AST
+    /*if(tree != NULL)
     {
         int sem_result;
         SymTab_t *symtab = start_semcheck(tree, &sem_result);
@@ -68,7 +78,7 @@ Tree_t *ParsePascal(char *file)
             destroy_tree(tree);
             tree = NULL;
         }
-    }
+    }*/
 
     return tree;
 }

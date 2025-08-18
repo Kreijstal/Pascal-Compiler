@@ -1,15 +1,23 @@
-%{
-#include <stdio.h>
-#include <string.h>
+%code requires {
+#define YYERROR_VERBOSE 1
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
 #include "Parser/flat_ast.h"
+#include "Parser/List/List.h"
+#include "Parser/ParseTree/tree_types.h"
+}
+
+%{
+#include <stdio.h>
+#include <string.h>
 
 extern int yylex(void);
 extern int line_num;
 void yyerror(const char *s);
 
 %}
+
+%define parse.trace
 
 %union {
     int line_num;
@@ -40,12 +48,11 @@ void yyerror(const char *s);
 
 %type <id_bison_union> program_heading id_with_options
 %type <var_decl> declarations variable_declaration_part variable_declaration_list variable_declaration
-%type <list_node> subprogram_declarations identifier_list expression_list optional_parameters parameter_group_list parameter_group
+%type <list_node> subprogram_declarations identifier_list expression_list optional_parameters parameter_group_list parameter_group statement_list
 %type <param> parameter_specification
 %type <type> type standard_type
 %type <type_decl> type_definition_part type_definition_list type_definition
-%type <flat_node> subprogram_declaration subprogram_head statement_seq_opt statement statement_list compound_statement for_statement if_statement while_statement assignment_statement procedure_statement variable_access expression simple_expression term factor
-%type <token> relop addop mulop
+%type <flat_node> subprogram_declaration subprogram_head statement_seq_opt statement compound_statement for_statement if_statement while_statement assignment_statement procedure_statement variable_access expression simple_expression term factor
 
 %start program
 
@@ -53,17 +60,18 @@ void yyerror(const char *s);
 
 program:
       program_heading SEMI declarations subprogram_declarations compound_statement DOT
-        { parse_tree = mk_flat_program($1.line_num, $1.id, $3, $4, $5); }
+        { parse_tree = mk_flat_program($1.line_num, $1.id, $1.args, $3, $4, $5); }
     | program_heading SEMI declarations compound_statement DOT
-        { parse_tree = mk_flat_program($1.line_num, $1.id, $3, NULL, $4); }
+        { parse_tree = mk_flat_program($1.line_num, $1.id, $1.args, $3, NULL, $4); }
     | program_heading SEMI subprogram_declarations compound_statement DOT
-        { parse_tree = mk_flat_program($1.line_num, $1.id, NULL, $3, $4); }
+        { parse_tree = mk_flat_program($1.line_num, $1.id, $1.args, NULL, $3, $4); }
     | program_heading SEMI compound_statement DOT
-        { parse_tree = mk_flat_program($1.line_num, $1.id, NULL, NULL, $3); }
+        { parse_tree = mk_flat_program($1.line_num, $1.id, $1.args, NULL, NULL, $3); }
     ;
 
 program_heading:
-    PROGRAM ID { $$ = $2; }
+      PROGRAM ID { $$.id = $2.id; $$.line_num = $2.line_num; $$.args = NULL; }
+    | PROGRAM ID LPAREN identifier_list RPAREN { $$.id = $2.id; $$.line_num = $2.line_num; $$.args = $4; }
     ;
 
 identifier_list:
@@ -90,19 +98,20 @@ variable_declaration_part:
     ;
 
 variable_declaration_list:
-      variable_declaration SEMI
+      variable_declaration
         { $$ = $1; }
-    | variable_declaration_list variable_declaration SEMI
-        { $$ = Chain($1, $2); }
+    | variable_declaration_list variable_declaration
+        { $$ = ChainVarDecl($1, $2); }
     ;
 
 variable_declaration:
-      identifier_list COLON type
-        { $$ = mk_vardecl(line_num, $1, $3, NULL); }
+      identifier_list COLON type SEMI
+        { $$ = mk_var_decl($1, $3); }
     ;
 
 type_definition_part:
       TYPE type_definition_list
+        { /* TODO: Handle type defs */ }
     ;
 
 type_definition_list:
@@ -112,24 +121,24 @@ type_definition_list:
 
 type_definition:
       ID EQUAL type
-        { $$ = mk_typedecl(line_num, $1.id, $3, NULL); }
+        { $$ = mk_type_decl($1.id, $3); }
     ;
 
 type:
       standard_type
         { $$ = $1; }
     | ID
-        { $$ = mk_type(TYPE_ID, 0, 0, 0); $$->id = $1.id; }
+        { $$ = mk_type(TYPE_ID, 0, 0, NULL); $$->id = $1.id; }
     | ARRAY LBRACKET INUM DOT DOT INUM RBRACKET OF standard_type
-        { $$ = mk_type(ARRAY_TYPE, $3, $6, $9->base_type); }
+        { $$ = mk_type(TYPE_ARRAY, $3, $6, $9); }
     ;
 
 standard_type:
-      INTEGER { $$ = mk_type(INTEGER_TYPE, 0, 0, 0); }
-    | REAL { $$ = mk_type(REAL_TYPE, 0, 0, 0); }
-    | PCHAR { $$ = mk_type(PCHAR_TYPE, 0, 0, 0); }
-    | BOOLEAN { $$ = mk_type(BOOLEAN_TYPE, 0, 0, 0); }
-    | STRING_TYPE { $$ = mk_type(STRING_TYPE, 0, 0, 0); }
+      INTEGER { $$ = mk_type(TYPE_INTEGER, 0, 0, NULL); }
+    | REAL { $$ = mk_type(TYPE_REAL, 0, 0, NULL); }
+    | PCHAR { $$ = mk_type(TYPE_PCHAR, 0, 0, NULL); }
+    | BOOLEAN { $$ = mk_type(TYPE_BOOLEAN, 0, 0, NULL); }
+    | STRING_TYPE { $$ = mk_type(TYPE_STRING, 0, 0, NULL); }
     ;
 
 subprogram_declarations:
@@ -223,7 +232,7 @@ parameter_group_list:
 
 parameter_group:
       parameter_specification
-        { $$ = $1; }
+        { $$ = CreateListNode($1, LIST_UNSPECIFIED); }
     ;
 
 parameter_specification:
@@ -308,31 +317,31 @@ expression_list:
 
 expression:
       simple_expression
-    | simple_expression relop simple_expression
-        { $$ = mk_flat_relop(line_num, $2, $1, $3); }
+    | simple_expression EQUAL simple_expression { $$ = mk_flat_relop(line_num, EQUAL, $1, $3); }
+    | simple_expression NOTEQUAL simple_expression { $$ = mk_flat_relop(line_num, NOTEQUAL, $1, $3); }
+    | simple_expression LESSTHAN simple_expression { $$ = mk_flat_relop(line_num, LESSTHAN, $1, $3); }
+    | simple_expression GREATERTHAN simple_expression { $$ = mk_flat_relop(line_num, GREATERTHAN, $1, $3); }
+    | simple_expression LESSEQUAL simple_expression { $$ = mk_flat_relop(line_num, LESSEQUAL, $1, $3); }
+    | simple_expression GREATEREQUAL simple_expression { $$ = mk_flat_relop(line_num, GREATEREQUAL, $1, $3); }
     ;
-
-relop: EQUAL {$$=$1;} | NOTEQUAL {$$=$1;} | LESSTHAN {$$=$1;} | GREATERTHAN {$$=$1;} | LESSEQUAL {$$=$1;} | GREATEREQUAL {$$=$1;} ;
 
 simple_expression:
       term
-    | MINUS term
-        { $$ = mk_flat_unop(line_num, OP_U_MINUS, $2); }
-    | PLUS term
-        { $$ = $2; }
-    | simple_expression addop term
-        { $$ = mk_flat_addop(line_num, $2, $1, $3); }
+    | MINUS term { $$ = mk_flat_unop(line_num, OP_U_MINUS, $2); }
+    | PLUS term { $$ = $2; }
+    | simple_expression PLUS term { $$ = mk_flat_addop(line_num, PLUS, $1, $3); }
+    | simple_expression MINUS term { $$ = mk_flat_addop(line_num, MINUS, $1, $3); }
+    | simple_expression OR term { $$ = mk_flat_addop(line_num, OR, $1, $3); }
     ;
-
-addop: PLUS {$$=$1;} | MINUS {$$=$1;} | OR {$$=$1;} ;
 
 term:
       factor
-    | term mulop factor
-        { $$ = mk_flat_mulop(line_num, $2, $1, $3); }
+    | term STAR factor { $$ = mk_flat_mulop(line_num, STAR, $1, $3); }
+    | term SLASH factor { $$ = mk_flat_mulop(line_num, SLASH, $1, $3); }
+    | term DIV factor { $$ = mk_flat_mulop(line_num, DIV, $1, $3); }
+    | term MOD factor { $$ = mk_flat_mulop(line_num, MOD, $1, $3); }
+    | term AND factor { $$ = mk_flat_mulop(line_num, AND, $1, $3); }
     ;
-
-mulop: STAR {$$=$1;} | SLASH {$$=$1;} | DIV {$$=$1;} | MOD {$$=$1;} | AND {$$=$1;} ;
 
 factor:
       variable_access

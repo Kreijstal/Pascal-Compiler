@@ -6,6 +6,7 @@
 #ifndef FLAGS_H
 #define FLAGS_H
 
+void init_flags();
 void set_nonlocal_flag();
 void set_o1_flag();
 void set_o2_flag();

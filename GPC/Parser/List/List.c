@@ -134,3 +134,21 @@ ListNode_t *ReverseList(ListNode_t *head) {
     }
     return prev;
 }
+
+ListNode_t *Cons(void *data, ListNode_t *next_node)
+{
+    ListNode_t *new_node = CreateListNode(data, LIST_UNSPECIFIED);
+    new_node->next = next_node;
+    return new_node;
+}
+
+ListNode_t *Chain(ListNode_t *head, ListNode_t *tail)
+{
+    if (head == NULL) return tail;
+    ListNode_t *cur = head;
+    while (cur->next != NULL) {
+        cur = cur->next;
+    }
+    cur->next = tail;
+    return head;
+}

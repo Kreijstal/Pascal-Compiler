@@ -37,6 +37,7 @@ typedef struct FlatNode FlatNode;
 
 typedef struct Program {
     char *id;
+    ListNode_t *args;
     VarDecl_t *declarations;
     ListNode_t *subprograms; // list of FlatNode*
     FlatNode *compound_statement;

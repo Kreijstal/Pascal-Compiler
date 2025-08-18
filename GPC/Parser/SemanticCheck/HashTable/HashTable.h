@@ -14,9 +14,10 @@
 #include <stdio.h>
 #include "../../List/List.h"
 
+#include "../../ParseTree/tree_types.h"
+
 enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
     HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
-enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR};
 
 /* Items we put in the hash table */
 typedef struct HashNode
@@ -24,7 +25,7 @@ typedef struct HashNode
     char *id;
     char *mangled_id;
     enum HashType hash_type;
-    enum VarType var_type;
+    Type_t *type;
     ListNode_t *args; /* NULL when no args (or not applicable to given type) */
 
     /* Symbol table resources */
@@ -45,7 +46,7 @@ HashTable_t *InitHashTable();
 
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
+int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, Type_t *type,
     enum HashType hash_type, ListNode_t *args);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */

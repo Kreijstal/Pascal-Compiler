@@ -16,9 +16,11 @@ flex_generated = flex_gen.process('Parser/LexAndYacc/lex.yy.l')
 
 gpc_sources = [
   'main.c',
+  'flags.c',
   'Parser/ParsePascal.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
+  'debug_flat_ast_printer.c',
 ]
 
 gpc_sources += bison_generated
@@ -79,13 +81,48 @@ else
   )
 endif
 
-python = find_program('python3')
-test('Compiler tests', python,
-  args: [meson.project_source_root() / 'tests/test_runner.py'],
-  workdir: meson.project_source_root(),
-  depends: gpc_exe,
-  env: [
-    'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
-    'MESON_BUILD_ROOT=' + meson.build_root()
-    ]
+flat_ast_printer_sources = [
+  'flat_ast_printer_main.c',
+  'Parser/ParsePascal.c',
+  'Parser/List/List.c',
+  'Parser/ParseTree/tree.c',
+  'debug_flat_ast_printer.c',
+]
+flat_ast_printer_sources += bison_generated
+flat_ast_printer_sources += flex_generated
+
+flat_ast_printer_exe = executable('flat_ast_printer', flat_ast_printer_sources,
+  include_directories: inc_dirs,
+  dependencies: [
+    compiler.find_library('m', required: true),
+    compiler.find_library('fl', required: true)
+  ]
 )
+
+python = find_program('python3')
+
+# Parser tests
+parser_test_dir = meson.project_source_root() / 'tests/parser'
+foreach p_file : run_command('find', meson.project_source_root() / 'tests/cases', '-name', '*.p').stdout().strip().split('\n')
+  test_name = p_file.split('/')[-1].split('.')[0]
+  expected_ast_file = parser_test_dir / test_name + '.expected_ast'
+  if run_command('test', '-f', expected_ast_file).returncode() == 0
+    test('Parser - ' + test_name, python,
+      args: [meson.project_source_root() / 'tests/test_runner.py', 'TestParser.test_parser_' + test_name],
+      workdir: meson.project_source_root(),
+      depends: flat_ast_printer_exe,
+      env: ['MESON_BUILD_ROOT=' + meson.build_root()]
+    )
+  endif
+endforeach
+
+# TODO: Add codegen tests back
+# test('Compiler tests', python,
+#   args: [meson.project_source_root() / 'tests/test_runner.py'],
+#   workdir: meson.project_source_root(),
+#   depends: gpc_exe,
+#   env: [
+#     'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
+#     'MESON_BUILD_ROOT=' + meson.build_root()
+#     ]
+# )

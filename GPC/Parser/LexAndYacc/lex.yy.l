@@ -8,12 +8,10 @@
     #include <stdlib.h>
     #include <string.h>
     #include "ErrVars.h"
-#include "tree.h"
-#include "Grammar.tab.h"
-#include "../flat_ast.h"
-    #include "List.h"
+    #include "../flat_ast.h"
+    #include "Parser/ParseTree/tree_types.h"
+    #include "Grammar.tab.h"
 
-    char asm_buffer[1024];
     int if_stack[100];
     int if_stack_ptr = 0;
 
@@ -148,7 +146,7 @@ pascal_string \'([^\']|\'\')*\'
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[EOF]\n");
     #endif
-    return END_OF_FILE;
+    return 0;
 }
 
 "program"   {
@@ -186,47 +184,6 @@ pascal_string \'([^\']|\'\')*\'
     return END;
 }
 
-"asm" {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[ASM] ");
-    #endif
-    asm_buffer[0] = '\0';
-    BEGIN(ASM_MODE);
-    return ASM;
-}
-
-<ASM_MODE>end {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[ENDASM] ");
-    #endif
-    yylval.str = strdup(asm_buffer);
-    BEGIN(INITIAL);
-    return ENDASM;
-}
-
-<ASM_MODE>(.|\n) {
-    if (strlen(asm_buffer) + strlen(yytext) < sizeof(asm_buffer)) {
-        strcat(asm_buffer, yytext);
-    } else {
-        fprintf(stderr, "ASM buffer overflow\n");
-        exit(1);
-    }
-}
-
-
-"assembler" {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[ASSEMBLER] ");
-    #endif
-    return ASSEMBLER;
-}
-
-"const" {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[CONST] ");
-    #endif
-    return CONST;
-}
 
 "type" {
     #ifdef DEBUG_FLEX
@@ -239,7 +196,7 @@ pascal_string \'([^\']|\'\')*\'
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[VAR] ");
     #endif
-    return VARIABLE;
+    return VAR;
 }
 
 "array" {
@@ -247,13 +204,6 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "[ARRAY] ");
     #endif
     return ARRAY;
-}
-
-".." {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[DOTDOT] ");
-    #endif
-    return DOTDOT;
 }
 
 "of" {
@@ -326,6 +276,15 @@ pascal_string \'([^\']|\'\')*\'
     return WHILE;
 }
 
+";" { return SEMI; }
+":" { return COLON; }
+"." { return DOT; }
+"," { return COMMA; }
+"(" { return LPAREN; }
+")" { return RPAREN; }
+"[" { return LBRACKET; }
+"]" { return RBRACKET; }
+
 ":="   {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[ASSIGNOP] ");
@@ -335,50 +294,44 @@ pascal_string \'([^\']|\'\')*\'
 
 ">"   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[RELOP:%s] ", yytext);
+        fprintf(stderr, "[GREATERTHAN] ");
     #endif
-    yylval.op_val = GT;
-    return RELOP;
+    return GREATERTHAN;
 }
 
 ">="   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[RELOP:%s] ", yytext);
+        fprintf(stderr, "[GREATEREQUAL] ");
     #endif
-    yylval.op_val = GE;
-    return RELOP;
+    return GREATEREQUAL;
 }
 
 "<"   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[RELOP:%s] ", yytext);
+        fprintf(stderr, "[LESSTHAN] ");
     #endif
-    yylval.op_val = LT;
-    return RELOP;
+    return LESSTHAN;
 }
 
 "<="   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[RELOP:%s] ", yytext);
+        fprintf(stderr, "[LESSEQUAL] ");
     #endif
-    yylval.op_val = LE;
-    return RELOP;
+    return LESSEQUAL;
 }
 
 "="   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[RELOP:%s] ", yytext);
+        fprintf(stderr, "[EQUAL] ");
     #endif
-    yylval.op_val = EQ;
-    return RELOP;
+    return EQUAL;
 }
 
 "!="   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[RELOP:%s] ", yytext);
+        fprintf(stderr, "[NOTEQUAL] ");
     #endif
-    yylval.op_val = NE;
-    return RELOP;
+    return NOTEQUAL;
 }
 
 "and"   {
@@ -397,64 +350,60 @@ pascal_string \'([^\']|\'\')*\'
 
 "*" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[MULOP:%s] ", yytext);
+        fprintf(stderr, "[STAR] ");
     #endif
-    yylval.op_val = STAR;
-    return MULOP;
+    return STAR;
 }
 
-"div"|"/" {
+"div" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[MULOP:%s] ", yytext);
+        fprintf(stderr, "[DIV] ");
     #endif
-    yylval.op_val = SLASH;
-    return MULOP;
+    return DIV;
+}
+
+"/" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[SLASH] ");
+    #endif
+    return SLASH;
 }
 
 "mod" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[MULOP:%s] ", yytext);
+        fprintf(stderr, "[MOD] ");
     #endif
-    yylval.op_val = MOD;
-    return MULOP;
+    return MOD;
 }
 
 "+" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[ADDOP:%s] ", yytext);
+        fprintf(stderr, "[PLUS] ");
     #endif
-    yylval.op_val = PLUS;
-    return ADDOP;
+    return PLUS;
 }
 
 "-" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[ADDOP:%s] ", yytext);
+        fprintf(stderr, "[MINUS] ");
     #endif
-    yylval.op_val = MINUS;
-    return ADDOP;
+    return MINUS;
 }
 
 "integer" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[INT_TYPE] ");
+        fprintf(stderr, "[INTEGER] ");
     #endif
-    return INT_TYPE;
+    return INTEGER;
 }
 
 "real" {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[REAL_TYPE] ");
+        fprintf(stderr, "[REAL] ");
     #endif
-    return REAL_TYPE;
+    return REAL;
 }
 
-"longint" {
-    #ifdef DEBUG_FLEX
-        fprintf(stderr, "[LONGINT_TYPE] ");
-    #endif
-    return LONGINT_TYPE;
-}
 
 "string" {
     #ifdef DEBUG_FLEX
@@ -466,26 +415,28 @@ pascal_string \'([^\']|\'\')*\'
 
 {integer}   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[INT_NUM:%d] ", atoi(yytext));
+        fprintf(stderr, "[INUM:%d] ", atoi(yytext));
     #endif
-    yylval.i_val = atoi(yytext);
-
-    return INT_NUM;
+    yylval.inum = atoi(yytext);
+    return INUM;
 }
 
 {real}   {
     #ifdef DEBUG_FLEX
-        fprintf(stderr, "[REAL_NUM:%f] ", atof(yytext));
+        fprintf(stderr, "[RNUM:%f] ", atof(yytext));
     #endif
-    yylval.f_val = atof(yytext);
-    return REAL_NUM;
+    yylval.rnum = atof(yytext);
+    return RNUM;
 }
 
 {id}   {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[ID:%s] ", yytext);
     #endif
-    yylval.id = strdup(yytext);
+    yylval.id_bison_union.id = strdup(yytext);
+    yylval.id_bison_union.line_num = line_num;
+    yylval.id_bison_union.cname_flag = 0;
+    yylval.id_bison_union.overload_flag = 0;
     return ID;
 }
 

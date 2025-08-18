@@ -54,4 +54,8 @@ int ListLength(ListNode_t *head_node);
 
 ListNode_t *ReverseList(ListNode_t *head);
 
+// Helper functions for the grammar
+ListNode_t *Cons(void *data, ListNode_t *next_node);
+ListNode_t *Chain(ListNode_t *head, ListNode_t *tail);
+
 #endif

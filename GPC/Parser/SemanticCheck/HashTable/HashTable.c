@@ -27,7 +27,7 @@ HashTable_t *InitHashTable()
 
 /* Adds an identifier to the table */
 /* Returns 1 if successfully added, 0 if the identifier already exists */
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
+int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, Type_t *type,
     enum HashType hash_type, ListNode_t *args)
 {
     ListNode_t *list, *cur;
@@ -44,7 +44,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
         assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
-        hash_node->var_type = var_type;
+        hash_node->type = type;
         hash_node->id = strdup(id);
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
@@ -78,7 +78,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
         assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
-        hash_node->var_type = var_type;
+        hash_node->type = type;
         hash_node->id = strdup(id);
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
@@ -218,8 +218,10 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
             for(j = 0; j < num_indent; ++j)
                 fprintf(f, "  ");
             hash_node = (HashNode_t *)list->cur;
-            fprintf(f, "ID: %s  HASH_TYPE: %d  VAR_TYPE: %d  HASH: %d\n",
-            hash_node->id, hash_node->hash_type, hash_node->var_type, i);
+            fprintf(f, "ID: %s  HASH_TYPE: %d  HASH: %d\n",
+            hash_node->id, hash_node->hash_type, i);
+            // TODO: Print type information from hash_node->type
+            // TODO: Print type information from hash_node->type
 
             if(hash_node->args != NULL)
             {

@@ -5,6 +5,11 @@
 
 #include "flags.h"
 
+void init_flags()
+{
+    // TODO: Initialize flags if needed
+}
+
 /* Flag for turning on non-local variable chasing */
 /* Set with '-non-local' */
 /* WARNING: Currently buggy */

@@ -7,7 +7,12 @@ import unittest
 # Default to "build" for local testing.
 build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
 GPC_PATH = os.path.join(build_dir, "GPC/gpc")
-TEST_CASES_DIR = "tests/test_cases"
+FLAT_AST_PRINTER_PATH = os.path.join(build_dir, "GPC/flat_ast_printer")
+
+# Test directories
+TEST_CASES_DIR = "tests/cases"
+PARSER_TEST_DIR = "tests/parser"
+CODEGEN_TEST_DIR = "tests/codegen"
 TEST_OUTPUT_DIR = "tests/output"
 
 # The compiler is built by Meson now, so this function is not needed.
@@ -46,7 +51,6 @@ class TestCompiler(unittest.TestCase):
         # The compiler is already built by Meson.
         # Create output directories
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
-        os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
@@ -100,7 +104,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
-        input_file = "GPC/TestPrograms/sign_test.p"
+        input_file = os.path.join(TEST_CASES_DIR, "sign_test.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "sign_test.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "sign_test")
 
@@ -171,7 +175,7 @@ class TestCompiler(unittest.TestCase):
         input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz")
-        expected_output_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.expected")
+        expected_output_file = os.path.join(CODEGEN_TEST_DIR, "fizzbuzz.expected")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -351,7 +355,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_for_program(self):
         """Tests the for program."""
-        input_file = "GPC/TestPrograms/CodeGeneration/for.p"
+        input_file = os.path.join(TEST_CASES_DIR, "for.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "for")
 
@@ -377,6 +381,50 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+
+def run_flat_ast_printer(input_file):
+    """Runs the flat_ast_printer on the given file and returns the output."""
+    command = [FLAT_AST_PRINTER_PATH, input_file]
+    print(f"--- Running flat_ast_printer: {' '.join(command)} ---")
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"--- flat_ast_printer execution failed ---")
+        print(f"--- stdout: {e.stdout} ---")
+        print(f"--- stderr: {e.stderr} ---")
+        raise
+
+class TestParser(unittest.TestCase):
+    pass
+
+def make_test_function(pascal_file, expected_ast_file):
+    def test(self):
+        # Run the flat_ast_printer to get the actual AST
+        actual_ast = run_flat_ast_printer(pascal_file)
+
+        # Read the expected AST
+        expected_ast = read_file_content(expected_ast_file)
+
+        # Compare the actual and expected ASTs
+        self.assertEqual(actual_ast.strip(), expected_ast.strip())
+    return test
+
+# Discover and create tests dynamically
+def populate_parser_tests():
+    if os.path.exists(TEST_CASES_DIR):
+        for filename in os.listdir(TEST_CASES_DIR):
+            if filename.endswith(".p"):
+                pascal_file = os.path.join(TEST_CASES_DIR, filename)
+                expected_ast_file = os.path.join(PARSER_TEST_DIR, filename.replace(".p", ".expected_ast"))
+
+                if os.path.exists(expected_ast_file):
+                    test_name = f"test_parser_{filename.replace('.p', '')}"
+                    test_method = make_test_function(pascal_file, expected_ast_file)
+                    setattr(TestParser, test_name, test_method)
+
+populate_parser_tests()
 
 
 if __name__ == "__main__":

@@ -39,10 +39,10 @@ int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type);
 void PushScope(SymTab_t *symtab);
 
 /* Pushes a new variable onto the current scope (head) */
-int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
+int PushVarOntoScope(SymTab_t *symtab, Type_t *type, char *id);
 
 /* Pushes a new array onto the current scope (head) */
-int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
+int PushArrayOntoScope(SymTab_t *symtab, Type_t *type, char *id);
 
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
@@ -50,14 +50,14 @@ int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNod
 
 /* Pushes a new function onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum VarType var_type, ListNode_t *args);
+int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, Type_t *type, ListNode_t *args);
 
 /* Pushes a new function return type var onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args);
+int PushFuncRetOntoScope(SymTab_t *symtab, char *id, Type_t *type, ListNode_t *args);
 
 /* Pushes a new type onto the current scope (head) */
-int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type);
+int PushTypeOntoScope(SymTab_t *symtab, char *id, Type_t *type);
 
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */

@@ -3,12 +3,23 @@
 
 #include "List/List.h"
 
+typedef enum {
+    TYPE_INTEGER,
+    TYPE_REAL,
+    TYPE_PCHAR,
+    TYPE_BOOLEAN,
+    TYPE_STRING,
+    TYPE_ARRAY,
+    TYPE_ID
+} BaseType;
+
 // For %union in Grammar.y
 typedef struct IdBisonUnion {
     char *id;
     int line_num;
     int cname_flag;
     int overload_flag;
+    ListNode_t *args;
 } IdBisonUnion;
 
 // For type declarations
@@ -40,55 +51,6 @@ typedef struct Param {
 } Param_t;
 
 
-// Old AST definitions (to be removed)
-// These are here to allow the old code to compile for now.
-// I will remove them once the refactoring is complete.
-struct Statement;
-struct Expression;
-typedef struct Tree {
-    int line_num;
-    int type;
-    union {
-        struct {
-            char *program_id;
-            ListNode_t *args_char;
-            ListNode_t *var_declaration;
-            ListNode_t *type_declaration;
-            ListNode_t *subprograms;
-            struct Statement *body_statement;
-        } program_data;
-        struct {
-            int sub_type;
-            char *id;
-            char *mangled_id;
-            ListNode_t *args_var;
-            int return_type;
-            char *return_type_id;
-            int cname_flag;
-            int overload_flag;
-            ListNode_t *declarations;
-            ListNode_t *subprograms;
-            struct Statement *statement_list;
-        } subprogram_data;
-        struct {
-            ListNode_t *ids;
-            int type;
-            char *type_id;
-            int is_var_param;
-        } var_decl_data;
-        struct {
-            ListNode_t *ids;
-            int type;
-            int s_range;
-            int e_range;
-        } arr_decl_data;
-        struct {
-            char *id;
-            int start;
-            int end;
-        } type_decl_data;
-    } tree_data;
-} Tree_t;
 
 
 #endif // TREE_TYPES_H
