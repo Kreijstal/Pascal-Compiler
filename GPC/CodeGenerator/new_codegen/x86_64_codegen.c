@@ -103,10 +103,29 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
 
     fprintf(out, ".text\n");
 
+    // Second pass: find all local variables to determine stack size
+    current_ir = ir_list;
+    while (current_ir) {
+        IRInstruction *inst = current_ir->cur;
+        if (inst->opcode == IR_STORE_VAR && !inst->dest->is_global) {
+            add_local(inst->dest->name);
+        }
+        if (inst->opcode == IR_READ_INT) {
+            add_local(inst->dest->name);
+        }
+        current_ir = current_ir->next;
+    }
+
     fprintf(out, ".globl new_codegen_simple\n");
     fprintf(out, "new_codegen_simple:\n");
     fprintf(out, "\tpushq\t%%rbp\n");
     fprintf(out, "\tmovq\t%%rsp, %%rbp\n");
+
+    // Allocate space for local variables
+    int stack_size = (local_stack_offset + 15) & -16; // Round up to nearest 16
+    if (stack_size > 0) {
+        fprintf(out, "\tsubq\t$%d, %%rsp\n", stack_size);
+    }
 
     new_init_register_allocator();
 
@@ -135,15 +154,18 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
                 int offset = add_local(inst->dest->name);
                 fprintf(out, "\tmovl\t%s, -%d(%%rbp)\n", inst->src1->reg->name, offset);
             }
+            new_free_reg(inst->src1->reg);
         }
         else if (inst->opcode == IR_ADD) {
             Register *reg = inst->src1->reg;
             fprintf(out, "\taddl\t%s, %s\n", inst->src2->reg->name, reg->name);
+            new_free_reg(inst->src2->reg);
             inst->dest->reg = reg;
         }
         else if (inst->opcode == IR_SUB) {
             Register *reg = inst->src1->reg;
             fprintf(out, "\tsubl\t%s, %s\n", inst->src2->reg->name, reg->name);
+            new_free_reg(inst->src2->reg);
             inst->dest->reg = reg;
         }
         else if (inst->opcode == IR_CMP) {
@@ -163,18 +185,81 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             }
             fprintf(out, "\t%s\t%s\n", jmp_buf, inst->label);
         }
+        else if (inst->opcode == IR_JUMP_IF_TRUE) {
+            char jmp_buf[4];
+            switch(inst->relop_type)
+            {
+                case EQ: strncpy(jmp_buf, "je", 4); break;
+                case NE: strncpy(jmp_buf, "jne", 4); break;
+                case LT: strncpy(jmp_buf, "jl", 4); break;
+                case LE: strncpy(jmp_buf, "jle", 4); break;
+                case GT: strncpy(jmp_buf, "jg", 4); break;
+                case GE: strncpy(jmp_buf, "jge", 4); break;
+                default: assert(0 && "Unknown relop type");
+            }
+            fprintf(out, "\t%s\t%s\n", jmp_buf, inst->label);
+        }
         else if (inst->opcode == IR_JUMP) {
             fprintf(out, "\tjmp\t%s\n", inst->label);
         }
         else if (inst->opcode == IR_LABEL) {
             fprintf(out, "%s:\n", inst->label);
         }
+        else if (inst->opcode == IR_LOAD_STRING) {
+            // Create a label for the string
+            static int string_count = 0;
+            char label[20];
+            sprintf(label, "S%d", string_count++);
+
+            // Add the string to the data section
+            fprintf(out, ".section .rodata\n");
+            fprintf(out, "%s:\n", label);
+            fprintf(out, "\t.string \"%s\"\n", inst->src1->name);
+            fprintf(out, ".text\n");
+
+            // Load the address of the string into a register
+            Register *reg = new_alloc_reg();
+            fprintf(out, "\tleaq\t%s(%%rip), %s\n", label, reg->name64);
+            inst->dest->reg = reg;
+        }
         else if (inst->opcode == IR_CALL) {
-            if (strcmp(inst->proc_name, "writeln") == 0) {
-                fprintf(out, "\tcall\tprint_integer\n");
+            ListNode_t *allocated_regs = new_get_allocated_regs();
+            ListNode_t *p = allocated_regs;
+            while(p) {
+                Register *r = p->cur;
+                fprintf(out, "\tpushq\t%s\n", r->name64);
+                p = p->next;
+            }
+
+            if (strcmp(inst->proc_name, "writeln") == 0 || strcmp(inst->proc_name, "write") == 0) {
+                if (inst->arg_type == EXPR_STRING) {
+                    fprintf(out, "\tmovq\t%s, %%rdi\n", inst->src1->reg->name64);
+                    fprintf(out, "\tcall\tprint_string\n");
+                } else {
+                    fprintf(out, "\tmovl\t%s, %%edi\n", inst->src1->reg->name);
+                    if (inst->newline)
+                        fprintf(out, "\tcall\tprint_integer\n");
+                    else
+                        fprintf(out, "\tcall\tprint_integer_no_newline\n");
+                }
+                new_free_reg(inst->src1->reg);
             } else {
                 fprintf(out, "\tcall\t%s\n", inst->proc_name);
             }
+
+            ListNode_t *reversed_regs = ReverseList(allocated_regs);
+            p = reversed_regs;
+            while(p) {
+                Register *r = p->cur;
+                fprintf(out, "\tpopq\t%s\n", r->name64);
+                p = p->next;
+            }
+            DestroyList(reversed_regs);
+        }
+        else if (inst->opcode == IR_READ_INT) {
+            fprintf(out, "\tcall\tread_integer\n");
+            int offset = add_local(inst->dest->name);
+            fprintf(out, "\tmovl\t%%eax, -%d(%%rbp)\n", offset);
         }
         else if (inst->opcode == IR_RETURN) {
             fprintf(out, "\tleave\n");
@@ -185,6 +270,7 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             Register *reg = inst->src1->reg;
             fprintf(stderr, "imull: reg: %s\n", reg->name);
             fprintf(out, "\timull\t%s, %s\n", inst->src2->reg->name, reg->name);
+            new_free_reg(inst->src2->reg);
             inst->dest->reg = reg;
             fprintf(stderr, "imull: done\n");
         }

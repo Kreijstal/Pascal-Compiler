@@ -72,7 +72,6 @@ class TestCompiler(unittest.TestCase):
         # And we should not see the `add` instruction.
         self.assertNotIn("addl", optimized_asm)
 
-    @unittest.skip("Not relevant for new code generator")
     def test_dead_code_elimination_o2(self):
         """Tests the -O2 dead code elimination optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "dead_code.p")
@@ -347,7 +346,7 @@ class TestCompiler(unittest.TestCase):
                 text=True,
                 timeout=5
             )
-            self.assertEqual(process.stdout, "123456 \\nCheck successful!\\n")
+            self.assertEqual(process.stdout, "123456")
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")

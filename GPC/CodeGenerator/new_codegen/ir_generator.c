@@ -193,6 +193,20 @@ static ListNode_t *generate_expr_ir(struct Expression *expr, SymTab_t *table, Li
         PushListNodeBack(inst_list, new_node);
         return inst_list;
     }
+    else if (expr->type == EXPR_STRING) {
+        IRInstruction *inst = calloc(1, sizeof(IRInstruction));
+        inst->opcode = IR_LOAD_STRING;
+        inst->dest = new_temp_var();
+        inst->src1 = malloc(sizeof(IRValue));
+        inst->src1->name = expr->expr_data.string;
+        inst->src2 = NULL;
+        *result = inst->dest;
+        ListNode_t *new_node = CreateListNode(inst, LIST_UNSPECIFIED);
+        if (inst_list == NULL)
+            return new_node;
+        PushListNodeBack(inst_list, new_node);
+        return inst_list;
+    }
     return inst_list;
 }
 
@@ -284,11 +298,101 @@ static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table
         inst->opcode = IR_CALL;
         inst->proc_name = stmt->stmt_data.procedure_call_data.id;
 
+        if (strcmp(stmt->stmt_data.procedure_call_data.id, "read") == 0) {
+            inst->opcode = IR_READ_INT;
+            ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+            if (args) {
+                struct Expression *arg_expr = args->cur;
+                inst->dest = malloc(sizeof(IRValue));
+                inst->dest->name = arg_expr->expr_data.id;
+                inst->dest->is_global = 0; // Assume local for now
+            }
+        }
+        else if (strcmp(stmt->stmt_data.procedure_call_data.id, "writeln") == 0 ||
+                 strcmp(stmt->stmt_data.procedure_call_data.id, "write") == 0) {
+            inst->newline = (strcmp(stmt->stmt_data.procedure_call_data.id, "writeln") == 0);
+            ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+            if (args) {
+                struct Expression *arg_expr = args->cur;
+                IRValue *arg_val;
+                inst_list = generate_expr_ir(arg_expr, table, inst_list, &arg_val);
+                inst->src1 = arg_val;
+                inst->arg_type = arg_expr->type;
+            }
+        }
+
         ListNode_t *new_node = CreateListNode(inst, LIST_UNSPECIFIED);
         if (inst_list == NULL)
             return new_node;
 
         return PushListNodeBack(inst_list, new_node);
+    }
+    else if (stmt->type == STMT_FOR) {
+        // Initial assignment
+        if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_ASSIGN_VAR) {
+            inst_list = generate_statement_ir(stmt->stmt_data.for_data.for_assign_data.var_assign, table, inst_list);
+        }
+
+        char *start_label = new_label();
+        char *end_label = new_label();
+
+        IRInstruction *start_label_inst = calloc(1, sizeof(IRInstruction));
+        start_label_inst->opcode = IR_LABEL;
+        start_label_inst->label = start_label;
+        inst_list = PushListNodeBack(inst_list, CreateListNode(start_label_inst, LIST_UNSPECIFIED));
+
+        // Loop condition
+        IRValue *loop_var, *to_val;
+        inst_list = generate_expr_ir(stmt->stmt_data.for_data.for_assign_data.var, table, inst_list, &loop_var);
+        inst_list = generate_expr_ir(stmt->stmt_data.for_data.to, table, inst_list, &to_val);
+
+        IRInstruction *cmp_inst = calloc(1, sizeof(IRInstruction));
+        cmp_inst->opcode = IR_CMP;
+        cmp_inst->src1 = loop_var;
+        cmp_inst->src2 = to_val;
+        inst_list = PushListNodeBack(inst_list, CreateListNode(cmp_inst, LIST_UNSPECIFIED));
+
+        IRInstruction *jump_inst = calloc(1, sizeof(IRInstruction));
+        jump_inst->opcode = IR_JUMP_IF_TRUE;
+        jump_inst->label = end_label;
+        jump_inst->relop_type = GT;
+        inst_list = PushListNodeBack(inst_list, CreateListNode(jump_inst, LIST_UNSPECIFIED));
+
+        // Loop body
+        inst_list = generate_statement_ir(stmt->stmt_data.for_data.do_for, table, inst_list);
+
+        // Increment
+        IRValue *one;
+        inst_list = generate_expr_ir(mk_inum(0, 1), table, inst_list, &one);
+
+        IRInstruction *add_inst = calloc(1, sizeof(IRInstruction));
+        add_inst->opcode = IR_ADD;
+        add_inst->src1 = loop_var;
+        add_inst->src2 = one;
+        add_inst->dest = loop_var;
+        inst_list = PushListNodeBack(inst_list, CreateListNode(add_inst, LIST_UNSPECIFIED));
+
+        IRInstruction *store_inst = calloc(1, sizeof(IRInstruction));
+        store_inst->opcode = IR_STORE_VAR;
+        store_inst->src1 = loop_var;
+        store_inst->dest = malloc(sizeof(IRValue));
+        store_inst->dest->name = stmt->stmt_data.for_data.for_assign_data.var->expr_data.id;
+        store_inst->dest->is_global = 0; // Assume local for now
+        inst_list = PushListNodeBack(inst_list, CreateListNode(store_inst, LIST_UNSPECIFIED));
+
+        // Jump to start
+        IRInstruction *loop_jump_inst = calloc(1, sizeof(IRInstruction));
+        loop_jump_inst->opcode = IR_JUMP;
+        loop_jump_inst->label = start_label;
+        inst_list = PushListNodeBack(inst_list, CreateListNode(loop_jump_inst, LIST_UNSPECIFIED));
+
+        // End label
+        IRInstruction *end_label_inst = calloc(1, sizeof(IRInstruction));
+        end_label_inst->opcode = IR_LABEL;
+        end_label_inst->label = end_label;
+        inst_list = PushListNodeBack(inst_list, CreateListNode(end_label_inst, LIST_UNSPECIFIED));
+
+        return inst_list;
     }
     else if (stmt->type == STMT_WHILE) {
         char *start_label = new_label();
