@@ -13,6 +13,7 @@
 #include "List/List.h"
 #include "SemanticCheck/SemCheck.h"
 #include "Grammar.tab.h"
+#include "flat_ast.h"
 
 extern FILE *yyin;
 extern int yyparse();

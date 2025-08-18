@@ -5,6 +5,7 @@
 #include "NameMangling.h"
 #include "../ParseTree/tree.h"
 #include "../List/List.h"
+#include "../flat_ast.h"
 #include "Grammar.tab.h"
 #include "SemChecks/SemCheck_expr.h"
 #include "SymTab/SymTab.h"
@@ -151,7 +152,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
     ListNode_t* arg_cur = args_expr;
     while (arg_cur != NULL) {
         int type;
-        semcheck_expr_main(&type, symtab, (struct Expression *)arg_cur->cur, max_scope_lev, NO_MUTATE);
+        semcheck_expr_main(&type, symtab, (struct Expression *)arg_cur->cur, max_scope_lev, NO_MUTATE, NULL);
 
         int* type_ptr = malloc(sizeof(int));
         assert(type_ptr != NULL);

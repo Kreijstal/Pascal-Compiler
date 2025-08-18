@@ -132,6 +132,8 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
     current_ir = ir_list;
     while (current_ir) {
         IRInstruction *inst = current_ir->cur;
+        fprintf(stderr, "DEBUG: opcode=%d\n", inst->opcode);
+        fflush(stderr);
         if (inst->opcode == IR_LOAD_CONST) {
             Register *reg = new_alloc_reg();
             fprintf(out, "\tmovl\t$%s, %s\n", inst->src1->name, reg->name);
@@ -260,6 +262,18 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             fprintf(out, "\tcall\tread_integer\n");
             int offset = add_local(inst->dest->name);
             fprintf(out, "\tmovl\t%%eax, -%d(%%rbp)\n", offset);
+        }
+        else if (inst->opcode == IR_STORE_RETURN_VAR) {
+            fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
+            new_free_reg(inst->src1->reg);
+        }
+        else if (inst->opcode == IR_STORE_RETURN_VAR) {
+            fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
+            new_free_reg(inst->src1->reg);
+        }
+        else if (inst->opcode == IR_STORE_RETURN_VAR) {
+            fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
+            new_free_reg(inst->src1->reg);
         }
         else if (inst->opcode == IR_RETURN) {
             fprintf(out, "\tleave\n");

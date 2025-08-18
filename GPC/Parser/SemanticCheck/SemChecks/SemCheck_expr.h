@@ -19,15 +19,15 @@
 
 /* Semantic check on a normal expression */
 int semcheck_expr(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating, char *current_func_name);
 
 /* Semantic check on a function expression (no side effects allowed) */
 int semcheck_expr_func(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int mutating);
+    SymTab_t *symtab, struct Expression *expr, int mutating, char *current_func_name);
 
 /* Main semantic checking */
 /* NOTE: Using one of the above two functions is more readable */
 int semcheck_expr_main(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating, char *current_func_name);
 
 #endif

@@ -98,7 +98,6 @@ class TestCompiler(unittest.TestCase):
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
 
 
-    @unittest.skip("Skipping broken test: sign_test.p fails to compile correctly")
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
         input_file = "GPC/TestPrograms/sign_test.p"
@@ -321,6 +320,34 @@ class TestCompiler(unittest.TestCase):
         with open(asm_file, "r") as f:
             asm = f.read()
             self.assertIn("call\tset_x_to_10", asm)
+
+    def test_simple_func(self):
+        """Tests a simple function with a return value."""
+        input_file = os.path.join(TEST_CASES_DIR, "simple_func.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "simple_func.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "simple_func")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            self.assertEqual(process.stdout, "5\n")
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
 
     def test_for_program(self):
         """Tests the for program."""

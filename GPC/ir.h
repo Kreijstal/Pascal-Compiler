@@ -23,7 +23,8 @@ typedef enum {
     IR_RETURN,
     IR_RETRIEVE_RETURN_VAL,
     IR_CMP,
-    IR_READ_INT
+    IR_READ_INT,
+    IR_STORE_RETURN_VAR
 } IROpcode;
 
 struct Register;

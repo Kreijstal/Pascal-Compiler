@@ -20,6 +20,7 @@
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
 #include "./SymTab/SymTab.h"
+#include "../flat_ast.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
@@ -47,8 +48,8 @@ int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 
-int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
-int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
+int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, char *current_func_name);
+int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, char *current_func_name);
 
 /* The main function for checking a tree */
 /* Return values:
@@ -152,9 +153,9 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
 
-    return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0);
+    return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
 
-    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, 0);
+    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, 0, NULL);
 
     if(optimize_flag() > 0 && return_val == 0)
     {
@@ -291,7 +292,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
 /* Semantic check on an entire subprogram */
 /* A return value greater than 0 indicates how many errors occurred */
-int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
+int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, char *current_func_name)
 {
     int return_val, func_return, return_mutated;
     int new_max_scope;
@@ -393,15 +394,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
 
-    return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
-                    new_max_scope);
+    return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms, new_max_scope, subprogram->tree_data.subprogram_data.id);
 
     /* Functions cannot have side effects, so need to call a special function in that case */
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         return_val += semcheck_stmt(symtab,
                 subprogram->tree_data.subprogram_data.statement_list,
-                new_max_scope);
+                new_max_scope, NULL);
     }
     else
     {
@@ -410,7 +410,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         ResetHashNodeStatus(hash_return);
         return_val += semcheck_func_stmt(symtab,
-                subprogram->tree_data.subprogram_data.statement_list);
+                subprogram->tree_data.subprogram_data.statement_list, subprogram->tree_data.subprogram_data.id);
         if(hash_return->mutated == NO_MUTATE)
         {
             fprintf(stderr,
@@ -432,7 +432,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
 /* Semantic check on multiple subprograms */
 /* A return value greater than 0 indicates how many errors occurred */
-int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev)
+int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, char *current_func_name)
 {
     ListNode_t *cur;
     int return_val;
@@ -444,7 +444,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     {
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
-        return_val += semcheck_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev);
+        return_val += semcheck_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev, current_func_name);
         cur = cur->next;
     }
 

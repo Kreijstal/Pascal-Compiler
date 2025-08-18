@@ -216,7 +216,10 @@ static ListNode_t *generate_statement_ir(struct Statement *stmt, SymTab_t *table
         inst_list = generate_expr_ir(stmt->stmt_data.var_assign_data.expr, table, inst_list, &result);
 
         IRInstruction *store_inst = calloc(1, sizeof(IRInstruction));
-        store_inst->opcode = IR_STORE_VAR;
+        if(stmt->stmt_data.var_assign_data.is_function_return)
+            store_inst->opcode = IR_STORE_RETURN_VAR;
+        else
+            store_inst->opcode = IR_STORE_VAR;
         store_inst->src1 = result;
 
         HashNode_t *hash_node;

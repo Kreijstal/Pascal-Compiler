@@ -8,9 +8,10 @@
     #include <stdlib.h>
     #include <string.h>
     #include "ErrVars.h"
-    #include "tree.h"
+#include "tree.h"
+#include "Grammar.tab.h"
+#include "../flat_ast.h"
     #include "List.h"
-    #include "Grammar.tab.h"
 
     char asm_buffer[1024];
     int if_stack[100];

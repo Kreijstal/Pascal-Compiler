@@ -16,29 +16,15 @@ flex_generated = flex_gen.process('Parser/LexAndYacc/lex.yy.l')
 
 gpc_sources = [
   'main.c',
-  'flags.c',
   'Parser/ParsePascal.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
-  'Parser/SemanticCheck/SemCheck.c',
-  'Parser/SemanticCheck/HashTable/HashTable.c',
-  'Parser/SemanticCheck/SymTab/SymTab.c',
-  'Parser/SemanticCheck/NameMangling.c',
-  'Parser/SemanticCheck/SemChecks/SemCheck_stmt.c',
-  'Parser/SemanticCheck/SemChecks/SemCheck_expr.c',
-  'Optimizer/optimizer.c',
-  'stacktrace.c'
 ]
 
 gpc_sources += bison_generated
 gpc_sources += flex_generated
 
 if get_option('new_codegen')
-  gpc_sources += [
-    'CodeGenerator/new_codegen/ir_generator.c',
-    'CodeGenerator/new_codegen/x86_64_codegen.c',
-    'CodeGenerator/new_codegen/register_allocator.c'
-  ]
   inc_dirs = include_directories(
     '.',
     'Parser',
@@ -56,11 +42,7 @@ if get_option('new_codegen')
     include_directories: inc_dirs,
     dependencies: [
       compiler.find_library('m', required: true),
-      compiler.find_library('fl', required: true),
-      compiler.find_library('unwind', required: true),
-      compiler.find_library('unwind-x86_64', required: true),
-      compiler.find_library('dl', required: true),
-      compiler.find_library('pthread', required: true),
+      compiler.find_library('fl', required: true)
     ]
   )
 else

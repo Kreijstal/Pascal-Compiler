@@ -15,9 +15,9 @@
 #include "../../ParseTree/tree_types.h"
 
 /* Semantic check on a normal statement */
-int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, char *current_func_name);
 
 /* Semantic check on a function statement (no side effects allowed) */
-int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt);
+int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, char *current_func_name);
 
 #endif
