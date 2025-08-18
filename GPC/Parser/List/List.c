@@ -121,3 +121,16 @@ int ListLength(ListNode_t *head_node)
     }
     return length;
 }
+
+ListNode_t *ReverseList(ListNode_t *head) {
+    ListNode_t *prev = NULL;
+    ListNode_t *current = head;
+    ListNode_t *next = NULL;
+    while (current != NULL) {
+        next = current->next;
+        current->next = prev;
+        prev = current;
+        current = next;
+    }
+    return prev;
+}
