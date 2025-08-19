@@ -83,6 +83,7 @@ semantic_checker_sources = [
   'Parser/SemanticCheck/flat_sem_check.c',
   'Parser/SemanticCheck/SymTab/SymTab.c',
   'Parser/SemanticCheck/HashTable/HashTable.c',
+  'Parser/SemanticCheck/mangle.c'
 ]
 semantic_checker_sources += bison_generated
 semantic_checker_sources += flex_generated

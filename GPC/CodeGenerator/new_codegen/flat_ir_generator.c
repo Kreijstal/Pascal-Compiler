@@ -56,22 +56,19 @@ static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **
     switch (node->node_type) {
         case FL_PROGRAM:
             {
-                // Generate IR for subprograms first
+                IRInstruction *main_label_inst = create_ir_instruction(IR_LABEL);
+                main_label_inst->label = node->data.program.id;
+                *ir_list = Cons(main_label_inst, *ir_list);
+
+                generate_ir_for_node(node->data.program.compound_statement, symtab, ir_list, NULL);
+
+                *ir_list = Cons(create_ir_instruction(IR_RETURN), *ir_list);
+
                 ListNode_t *current_sub = node->data.program.subprograms;
                 while (current_sub != NULL) {
                     generate_ir_for_node((FlatNode *)current_sub->cur, symtab, ir_list, (FlatNode *)current_sub->cur);
                     current_sub = current_sub->next;
                 }
-                // Then generate IR for the main program body
-                generate_ir_for_node(node->data.program.compound_statement, symtab, ir_list, NULL);
-
-                // Add a return for the main block
-                *ir_list = Cons(create_ir_instruction(IR_RETURN), *ir_list);
-
-                // Add a label for the main program entry point
-                IRInstruction *main_label_inst = create_ir_instruction(IR_LABEL);
-                main_label_inst->label = node->data.program.id;
-                *ir_list = Cons(main_label_inst, *ir_list);
             }
             break;
         case FL_PROCEDURE:
@@ -235,7 +232,18 @@ static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **
                     case OP_ADD:
                         inst = create_ir_instruction(IR_ADD);
                         break;
-                    // TODO: Add other operators
+                    case OP_SUB:
+                        inst = create_ir_instruction(IR_SUB);
+                        break;
+                    case OP_MUL:
+                        inst = create_ir_instruction(IR_MUL);
+                        break;
+                    case OP_DIV:
+                        inst = create_ir_instruction(IR_DIV);
+                        break;
+                    case OP_MOD:
+                        inst = create_ir_instruction(IR_MOD);
+                        break;
                     default:
                         // For now, do nothing for other ops
                         break;

@@ -1,0 +1,999 @@
+ninja: Entering directory `/app/build'
+ninja: no work to do.
+ 1/15 Codegen - constant_folding_o1      RUNNING
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=218 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_constant_folding_o1
+
+ 2/15 Codegen - dead_code_elimination_o2 RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=247 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_dead_code_elimination_o2
+
+ 3/15 Codegen - fizzbuzz                 RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=216 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_fizzbuzz
+
+ 4/15 Codegen - for_program              RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=16 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_for_program
+
+ 1/15 Codegen - constant_folding_o1      FAIL            0.43s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/simple_expr.p tests/output/simple_expr_unoptimized.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 302
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=5
+DEBUG: opcode=0
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+--- Running compiler: /app/build/GPC/gpc tests/cases/simple_expr.p tests/output/simple_expr_optimized_o1.s -O1 ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 302
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=5
+DEBUG: opcode=0
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_constant_folding_o1 (tests.test_runner.TestCompiler.test_constant_folding_o1)
+Tests the -O1 constant folding optimization.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 77, in test_constant_folding_o1
+    self.assertIn("movl\t$5", optimized_asm)
+AssertionError: 'movl\t$5' not found in '\t.file\t"new_codegen.p"\n.section .rodata\n.format_str_s:\n\t.string "%s"\n.format_str_d:\n\t.string "%d"\n.format_str_sn:\n\t.string "%s\\n"\n.format_str_dn:\n\t.string "%d\\n"\n.format_str_n:\n\t.string "\\n"\n.text\n.globl SimpleExpr\nSimpleExpr:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tsubq\t$16, %rsp\n\tmovl\t$2, %eax\n\tmovl\t$3, %ebx\n\taddl\t%ebx, %eax\n\tmovl\t%eax, -4(%rbp)\n\tleave\n\tret\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_l\nread_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_i\nread_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_newline\n    \n\tleave\n\tret\n.globl writeln\nwriteln:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_l\nwriteln_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_i\nwriteln_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl writeln_s\nwriteln_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer_no_newline\n    \n\tleave\n\tret\n.globl write_i\nwrite_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl write_s\nwrite_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n.globl main\nmain:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tcall\tSimpleExpr\n\tmovl\t$0, %eax\n\tleave\n\tret\n'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.006s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 5/15 Codegen - helloworld               RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=15 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_helloworld
+
+ 2/15 Codegen - dead_code_elimination_o2 FAIL            0.43s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/dead_code.p tests/output/dead_code_unoptimized.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+--- Running compiler: /app/build/GPC/gpc tests/cases/dead_code.p tests/output/dead_code_optimized_o2.s -O2 ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_dead_code_elimination_o2 (tests.test_runner.TestCompiler.test_dead_code_elimination_o2)
+Tests the -O2 dead code elimination optimization.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 104, in test_dead_code_elimination_o2
+    self.assertLess(len(optimized_asm), len(unoptimized_asm))
+AssertionError: 1204 not less than 1204
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 6/15 Codegen - mod_operator             RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=226 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_mod_operator
+
+ 3/15 Codegen - fizzbuzz                 OK              0.43s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stderr:
+s
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK (skipped=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 7/15 Codegen - new_codegen_add          RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=212 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_add
+
+ 4/15 Codegen - for_program              FAIL            0.47s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/for.p tests/output/for.s ---
+--- Compiler execution failed ---
+--- stdout:  ---
+--- stderr: [MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 305
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+Semantic Error on line 8: Undeclared procedure
+Semantic Error on line 4: Undeclared procedure
+[MAIN] Compilation aborted due to 2 semantic errors.
+ ---
+stderr:
+F
+======================================================================
+FAIL: test_for_program (tests.test_runner.TestCompiler.test_for_program)
+Tests the for program.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 369, in test_for_program
+    subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gcc', '-no-pie', '-o', 'tests/output/for', 'tests/output/for.s', 'GPC/runtime.c']' returned non-zero exit status 1.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 371, in test_for_program
+    self.fail(f"gcc compilation failed: {e.stderr}")
+AssertionError: gcc compilation failed: Assembler messages:
+Error: can't open tests/output/for.s for reading: No such file or directory
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.048s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 8/15 Codegen - new_codegen_arithmetic   RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=89 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_arithmetic
+
+ 7/15 Codegen - new_codegen_add          OK              0.51s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_add.p tests/output/new_codegen_add.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 302
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=5
+DEBUG: opcode=0
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 9/15 Codegen - new_codegen_global       RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=250 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_global
+
+ 8/15 Codegen - new_codegen_arithmetic   OK              0.49s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_arithmetic.p tests/output/new_codegen_arithmetic.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 303
+DEBUG: token_to_optype received token 305
+DEBUG: token_to_optype received token 306
+DEBUG: token_to_optype received token 308
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+Getting offset for x
+Getting offset for x
+Getting offset for x
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=7
+Getting offset for x
+DEBUG: opcode=5
+DEBUG: opcode=1
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=7
+Getting offset for x
+DEBUG: opcode=5
+DEBUG: opcode=2
+imull: src1: %eax, src2: %ebx
+imull: reg: %eax
+imull: done
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=7
+Getting offset for x
+DEBUG: opcode=5
+DEBUG: opcode=3
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=7
+Getting offset for x
+DEBUG: opcode=5
+DEBUG: opcode=4
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+10/15 Codegen - new_codegen_if           RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=22 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_if
+
+ 5/15 Codegen - helloworld               FAIL            0.56s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/helloworld.p tests/output/helloworld.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+DEBUG: opcode=13
+DEBUG: opcode=6
+DEBUG: opcode=14
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_helloworld (tests.test_runner.TestCompiler.test_helloworld)
+Tests that the helloworld program prints 'Hello, World!'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 169, in test_helloworld
+    self.assertEqual(process.stdout, "Hello, World!\n")
+AssertionError: '4202516' != 'Hello, World!\n'
+- 4202516
++ Hello, World!
++
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.069s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+11/15 Codegen - new_codegen_proc         RUNNING
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=128 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_proc
+
+ 6/15 Codegen - mod_operator             FAIL            0.66s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/mod_test.p tests/output/mod_test.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 308
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=5
+DEBUG: opcode=4
+DEBUG: opcode=14
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_mod_operator (tests.test_runner.TestCompiler.test_mod_operator)
+Tests that the mod operator works correctly.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 229, in test_mod_operator
+    self.assertEqual(process.stdout, "1\n")
+AssertionError: '' != '1\n'
++ 1
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.072s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+12/15 Codegen - new_codegen_simple       RUNNING
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=218 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_simple
+
+ 9/15 Codegen - new_codegen_global       OK              0.43s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_global.p tests/output/new_codegen_global.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+13/15 Codegen - new_codegen_while        RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=245 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_while
+
+10/15 Codegen - new_codegen_if           FAIL            0.43s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_if.p tests/output/new_codegen_if.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 299
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_new_codegen_if (tests.test_runner.TestCompiler.test_new_codegen_if)
+Tests the new code generator with an if-then-else statement.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 286, in test_new_codegen_if
+    self.assertIn("jle", asm)
+AssertionError: 'jle' not found in '\t.file\t"new_codegen.p"\n.section .rodata\n.format_str_s:\n\t.string "%s"\n.format_str_d:\n\t.string "%d"\n.format_str_sn:\n\t.string "%s\\n"\n.format_str_dn:\n\t.string "%d\\n"\n.format_str_n:\n\t.string "\\n"\n.text\n.globl new_codegen_if\nnew_codegen_if:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tsubq\t$16, %rsp\n\tmovl\t$10, %eax\n\tmovl\t%eax, -4(%rbp)\n\tleave\n\tret\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_l\nread_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_i\nread_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_newline\n    \n\tleave\n\tret\n.globl writeln\nwriteln:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_l\nwriteln_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_i\nwriteln_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl writeln_s\nwriteln_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer_no_newline\n    \n\tleave\n\tret\n.globl write_i\nwrite_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl write_s\nwrite_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n.globl main\nmain:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tcall\tnew_codegen_if\n\tmovl\t$0, %eax\n\tleave\n\tret\n'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+14/15 Codegen - sign_function            RUNNING
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=225 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_sign_function
+
+11/15 Codegen - new_codegen_proc         OK              0.43s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_proc.p tests/output/new_codegen_proc.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=14
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+OK
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+15/15 Codegen - simple_func              RUNNING
+>>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=13 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_simple_func
+
+12/15 Codegen - new_codegen_simple       OK              0.43s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_simple.p tests/output/new_codegen_simple.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.002s
+
+OK
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+13/15 Codegen - new_codegen_while        FAIL            0.42s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_while.p tests/output/new_codegen_while.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+DEBUG: token_to_optype received token 298
+DEBUG: token_to_optype received token 302
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_new_codegen_while (tests.test_runner.TestCompiler.test_new_codegen_while)
+Tests the new code generator with a while statement.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 300, in test_new_codegen_while
+    self.assertIn("jge", asm)
+AssertionError: 'jge' not found in '\t.file\t"new_codegen.p"\n.section .rodata\n.format_str_s:\n\t.string "%s"\n.format_str_d:\n\t.string "%d"\n.format_str_sn:\n\t.string "%s\\n"\n.format_str_dn:\n\t.string "%d\\n"\n.format_str_n:\n\t.string "\\n"\n.text\n.globl new_codegen_while\nnew_codegen_while:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tsubq\t$16, %rsp\n\tmovl\t$0, %eax\n\tmovl\t%eax, -4(%rbp)\n\tleave\n\tret\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_l\nread_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_i\nread_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_newline\n    \n\tleave\n\tret\n.globl writeln\nwriteln:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_l\nwriteln_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_i\nwriteln_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl writeln_s\nwriteln_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer_no_newline\n    \n\tleave\n\tret\n.globl write_i\nwrite_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl write_s\nwrite_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n.globl main\nmain:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tcall\tnew_codegen_while\n\tmovl\t$0, %eax\n\tleave\n\tret\n'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+14/15 Codegen - sign_function            FAIL            0.45s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/sign_test.p tests/output/sign_test.s ---
+--- Compiler execution failed ---
+--- stdout:  ---
+--- stderr: [MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+Parse error on line 4: syntax error
+Parsing failed for tests/cases/sign_test.p.
+ ---
+stderr:
+F
+======================================================================
+FAIL: test_sign_function (tests.test_runner.TestCompiler.test_sign_function)
+Tests the sign function with positive, negative, and zero inputs.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 118, in test_sign_function
+    subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+  File "/home/jules/.pyenv/versions/3.12.11/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gcc', '-no-pie', '-o', 'tests/output/sign_test', 'tests/output/sign_test.s', 'GPC/runtime.c']' returned non-zero exit status 1.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 120, in test_sign_function
+    self.fail(f"gcc compilation failed: {e.stderr}")
+AssertionError: gcc compilation failed: Assembler messages:
+Error: can't open tests/output/sign_test.s for reading: No such file or directory
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.039s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+15/15 Codegen - simple_func              FAIL            0.49s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/simple_func.p tests/output/simple_func.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+Getting offset for x
+DEBUG: opcode=13
+DEBUG: opcode=14
+DEBUG: opcode=17
+DEBUG: opcode=8
+Getting offset for x
+DEBUG: opcode=7
+Getting offset for x
+DEBUG: opcode=14
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=5
+DEBUG: opcode=20
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_simple_func (tests.test_runner.TestCompiler.test_simple_func)
+Tests a simple function with a return value.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 353, in test_simple_func
+    self.assertEqual(process.stdout, "5\n")
+AssertionError: '' != '5\n'
++ 5
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.076s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+
+Summary of Failures:
+
+ 1/15 Codegen - constant_folding_o1      FAIL            0.43s   exit status 1
+ 2/15 Codegen - dead_code_elimination_o2 FAIL            0.43s   exit status 1
+ 4/15 Codegen - for_program              FAIL            0.47s   exit status 1
+ 5/15 Codegen - helloworld               FAIL            0.56s   exit status 1
+ 6/15 Codegen - mod_operator             FAIL            0.66s   exit status 1
+10/15 Codegen - new_codegen_if           FAIL            0.43s   exit status 1
+13/15 Codegen - new_codegen_while        FAIL            0.42s   exit status 1
+14/15 Codegen - sign_function            FAIL            0.45s   exit status 1
+15/15 Codegen - simple_func              FAIL            0.49s   exit status 1
+
+Ok:                 6
+Expected Fail:      0
+Fail:               9
+Unexpected Pass:    0
+Skipped:            0
+Timeout:            0
+
+Full log written to /app/build/meson-logs/testlog.txt
