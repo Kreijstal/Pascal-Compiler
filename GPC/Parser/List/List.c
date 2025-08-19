@@ -152,3 +152,15 @@ ListNode_t *Chain(ListNode_t *head, ListNode_t *tail)
     cur->next = tail;
     return head;
 }
+
+void destroy_list(ListNode_t *head) {
+    ListNode_t *current = head;
+    ListNode_t *next;
+    while (current != NULL) {
+        next = current->next;
+        // Note: This does not free the `cur` pointer content,
+        // which is the responsibility of the caller.
+        free(current);
+        current = next;
+    }
+}

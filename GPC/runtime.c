@@ -17,3 +17,7 @@ int read_integer() {
     scanf("%d", &n);
     return n;
 }
+
+void print_newline() {
+    printf("\n");
+}

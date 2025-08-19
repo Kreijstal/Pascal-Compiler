@@ -1,0 +1,12 @@
+(L1) PROGRAM SimpleFunc
+  DECLARATIONS:
+  SUBPROGRAMS:
+  BODY:
+    (L13) COMPOUND_STATEMENT
+      (null)
+      (L12) PROCEDURE_CALL writeln
+        ARGS:
+          (L12) VAR_ID: x
+      (L11) ASSIGN
+        (L11) VAR_ID: x
+        (L11) VAR_ID: get_five

@@ -8,10 +8,12 @@ import unittest
 build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
 GPC_PATH = os.path.join(build_dir, "GPC/gpc")
 FLAT_AST_PRINTER_PATH = os.path.join(build_dir, "GPC/flat_ast_printer")
+SEMANTIC_CHECKER_PATH = os.path.join(build_dir, "GPC/semantic_checker")
 
 # Test directories
 TEST_CASES_DIR = "tests/cases"
 PARSER_TEST_DIR = "tests/parser"
+SEMANTIC_TEST_DIR = "tests/semantic"
 CODEGEN_TEST_DIR = "tests/codegen"
 TEST_OUTPUT_DIR = "tests/output"
 
@@ -425,6 +427,44 @@ def populate_parser_tests():
                     setattr(TestParser, test_name, test_method)
 
 populate_parser_tests()
+
+
+def run_semantic_checker(input_file):
+    """Runs the semantic_checker on the given file and returns the stderr."""
+    command = [SEMANTIC_CHECKER_PATH, input_file]
+    print(f"--- Running semantic_checker: {' '.join(command)} ---")
+    # We expect this to fail, so we don't check for success
+    result = subprocess.run(command, capture_output=True, text=True)
+    return result.stderr
+
+class TestSemantic(unittest.TestCase):
+    pass
+
+def make_semantic_test_function(pascal_file, expected_error_file):
+    def test(self):
+        # Run the semantic_checker to get the actual error output
+        actual_error = run_semantic_checker(pascal_file)
+
+        # Read the expected error
+        expected_error = read_file_content(expected_error_file)
+
+        # Compare the actual and expected errors
+        self.assertEqual(actual_error.strip(), expected_error.strip())
+    return test
+
+def populate_semantic_tests():
+    if os.path.exists(SEMANTIC_TEST_DIR):
+        for filename in os.listdir(SEMANTIC_TEST_DIR):
+            if filename.endswith(".p"):
+                pascal_file = os.path.join(SEMANTIC_TEST_DIR, filename)
+                expected_error_file = pascal_file.replace(".p", ".expected_err")
+
+                if os.path.exists(expected_error_file):
+                    test_name = f"test_semantic_{filename.replace('.p', '')}"
+                    test_method = make_semantic_test_function(pascal_file, expected_error_file)
+                    setattr(TestSemantic, test_name, test_method)
+
+populate_semantic_tests()
 
 
 if __name__ == "__main__":

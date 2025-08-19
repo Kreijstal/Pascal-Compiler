@@ -10,7 +10,8 @@ typedef enum {
     TYPE_BOOLEAN,
     TYPE_STRING,
     TYPE_ARRAY,
-    TYPE_ID
+    TYPE_ID,
+    TYPE_LONGINT
 } BaseType;
 
 // For %union in Grammar.y

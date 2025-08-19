@@ -1,0 +1,12 @@
+eeee(L1) PROGRAM SimpleAsm
+  DECLARATIONS:
+  SUBPROGRAMS:
+  BODY:
+    (L8) COMPOUND_STATEMENT
+      (null)
+      (L7) ASM_BLOCK:
+        "
+    mov ax, 1
+    mov bx, 2
+    add ax, bx
+  "

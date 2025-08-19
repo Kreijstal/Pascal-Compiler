@@ -40,16 +40,17 @@ void yyerror(const char *s);
 %token <rnum> RNUM
 %token <token> PROGRAM VAR TYPE PROCEDURE FUNCTION BBEGIN END ARRAY OF
 %token <token> IF THEN ELSE WHILE DO FOR TO DOWNTO
-%token <token> INTEGER REAL PCHAR BOOLEAN STRING_TYPE
+%token <token> INTEGER REAL PCHAR BOOLEAN STRING_TYPE LONGINT
 %token <token> ASSIGNOP COLON SEMI DOT COMMA LPAREN RPAREN LBRACKET RBRACKET
 %token <token> EQUAL NOTEQUAL LESSTHAN GREATERTHAN LESSEQUAL GREATEREQUAL
 %token <token> PLUS MINUS OR STAR SLASH DIV MOD AND NOT
-%token <token> FORWARD
+%token <token> FORWARD ASSEMBLER
+%token <str> ASM_BLOCK_STR
 
 %type <id_bison_union> program_heading id_with_options
 %type <var_decl> declarations variable_declaration_part variable_declaration_list variable_declaration
-%type <list_node> subprogram_declarations identifier_list expression_list optional_parameters parameter_group_list parameter_group statement_list
-%type <param> parameter_specification
+%type <list_node> subprogram_declarations identifier_list expression_list optional_parameters parameter_group_list statement_list
+%type <param> parameter_specification parameter_group
 %type <type> type standard_type
 %type <type_decl> type_definition_part type_definition_list type_definition
 %type <flat_node> subprogram_declaration subprogram_head statement_seq_opt statement compound_statement for_statement if_statement while_statement assignment_statement procedure_statement variable_access expression simple_expression term factor
@@ -139,6 +140,7 @@ standard_type:
     | PCHAR { $$ = mk_type(TYPE_PCHAR, 0, 0, NULL); }
     | BOOLEAN { $$ = mk_type(TYPE_BOOLEAN, 0, 0, NULL); }
     | STRING_TYPE { $$ = mk_type(TYPE_STRING, 0, 0, NULL); }
+    | LONGINT { $$ = mk_type(TYPE_LONGINT, 0, 0, NULL); }
     ;
 
 subprogram_declarations:
@@ -220,6 +222,7 @@ id_with_options:
 
 optional_parameters:
       LPAREN parameter_group_list RPAREN { $$ = $2; }
+    | LPAREN RPAREN { $$ = NULL; }
     | empty { $$ = NULL; }
     ;
 
@@ -232,7 +235,7 @@ parameter_group_list:
 
 parameter_group:
       parameter_specification
-        { $$ = CreateListNode($1, LIST_UNSPECIFIED); }
+        { $$ = $1; }
     ;
 
 parameter_specification:
@@ -263,6 +266,7 @@ statement:
     | if_statement
     | while_statement
     | for_statement
+    | ASSEMBLER SEMI ASM_BLOCK_STR { $$ = mk_flat_asm_block(line_num, $3); }
     | empty { $$ = NULL; }
     ;
 
@@ -277,6 +281,8 @@ assignment_statement:
 
 procedure_statement:
       ID
+        { $$ = mk_flat_procedurecall($1.line_num, $1.id, NULL); }
+    | ID LPAREN RPAREN
         { $$ = mk_flat_procedurecall($1.line_num, $1.id, NULL); }
     | ID LPAREN expression_list RPAREN
         { $$ = mk_flat_procedurecall($1.line_num, $1.id, $3); }
@@ -348,6 +354,8 @@ factor:
         { $$ = $1; }
     | ID LPAREN expression_list RPAREN
         { $$ = mk_flat_functioncall($1.line_num, $1.id, $3); }
+    | ID LPAREN RPAREN
+        { $$ = mk_flat_functioncall($1.line_num, $1.id, NULL); }
     | INUM
         { $$ = mk_flat_inum(line_num, $1); }
     | RNUM

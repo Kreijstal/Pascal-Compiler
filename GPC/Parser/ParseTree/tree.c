@@ -247,4 +247,9 @@ FlatNode *mk_flat_unop(int line_num, OpType op, FlatNode *operand) {
     return node;
 }
 
+FlatNode *mk_flat_asm_block(int line_num, char *code) {
+    FlatNode *node = new_flat_node(line_num, FL_ASM_BLOCK);
+    node->data.asm_block.code = code;
+    return node;
+}
 

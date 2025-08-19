@@ -4,10 +4,12 @@
 #include <assert.h>
 #include "SymTab/SymTab.h"
 #include "../flat_ast.h"
+#include "mangle.h"
 
 // Forward declarations
 Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count);
-static int sem_check_declarations(VarDecl_t *decls, SymTab_t *symtab, int *error_count);
+static int sem_check_var_declarations(VarDecl_t *decls, SymTab_t *symtab, int *error_count);
+static int sem_check_parameters(ListNode_t *params, SymTab_t *symtab, int *error_count);
 
 // Helper for creating basic types
 static Type_t *create_basic_type(BaseType base_type) {
@@ -37,7 +39,7 @@ int sem_check(FlatNode *ast) {
     return errors;
 }
 
-static int sem_check_declarations(VarDecl_t *decls, SymTab_t *symtab, int *error_count) {
+static int sem_check_var_declarations(VarDecl_t *decls, SymTab_t *symtab, int *error_count) {
     VarDecl_t *current_decl = decls;
     while (current_decl != NULL) {
         ListNode_t *current_id = current_decl->id_list;
@@ -55,6 +57,26 @@ static int sem_check_declarations(VarDecl_t *decls, SymTab_t *symtab, int *error
     return *error_count;
 }
 
+static int sem_check_parameters(ListNode_t *params, SymTab_t *symtab, int *error_count) {
+    ListNode_t* current_param_group = params;
+    while(current_param_group != NULL) {
+        Param_t* param_group = (Param_t*)current_param_group->cur;
+
+        ListNode_t* current_id = param_group->id_list;
+        while(current_id != NULL) {
+            char *id = (char *)current_id->cur;
+            Type_t *type = create_basic_type(param_group->type);
+            if (PushVarOntoScope(symtab, type, id) != 0) {
+                sem_error(0, "Redeclaration of parameter");
+                (*error_count)++;
+            }
+            current_id = current_id->next;
+        }
+        current_param_group = current_param_group->next;
+    }
+    return *error_count;
+}
+
 Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
     if (node == NULL) {
         return NULL;
@@ -65,10 +87,59 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
     switch (node->node_type) {
         case FL_PROGRAM:
             PushScope(symtab);
-            sem_check_declarations(node->data.program.declarations, symtab, error_count);
-            // sem_check_subprograms(node->data.program.subprograms, symtab, error_count);
+            sem_check_var_declarations(node->data.program.declarations, symtab, error_count);
+
+            // Process subprogram declarations
+            ListNode_t *current_sub = node->data.program.subprograms;
+            while (current_sub != NULL) {
+                sem_check_node((FlatNode *)current_sub->cur, symtab, error_count);
+                current_sub = current_sub->next;
+            }
+
             sem_check_node(node->data.program.compound_statement, symtab, error_count);
             PopScope(symtab);
+            break;
+        case FL_PROCEDURE:
+            {
+                char *mangled_name = get_mangled_name(node->data.procedure.id, node->data.procedure.params);
+                PushProcedureOntoScope(symtab, mangled_name, node->data.procedure.id, node->data.procedure.params);
+
+                PushScope(symtab);
+
+                // Add to own scope for recursion
+                PushProcedureOntoScope(symtab, mangled_name, node->data.procedure.id, node->data.procedure.params);
+
+                sem_check_parameters(node->data.procedure.params, symtab, error_count);
+                sem_check_var_declarations(node->data.procedure.local_vars, symtab, error_count);
+                sem_check_node(node->data.procedure.compound_statement, symtab, error_count);
+
+                PopScope(symtab);
+                free(mangled_name);
+            }
+            break;
+        case FL_FUNCTION:
+            {
+                char *mangled_name = get_mangled_name(node->data.function.id, node->data.function.params);
+                Type_t *return_type = create_basic_type(node->data.function.return_type);
+                PushFunctionOntoScope(symtab, mangled_name, node->data.function.id, return_type, node->data.function.params);
+
+                PushScope(symtab);
+
+                // Add to own scope for recursion
+                PushFunctionOntoScope(symtab, mangled_name, node->data.function.id, return_type, node->data.function.params);
+
+                // Add function return variable to scope
+                PushVarOntoScope(symtab, return_type, node->data.function.id);
+
+                sem_check_parameters(node->data.function.params, symtab, error_count);
+                sem_check_var_declarations(node->data.function.local_vars, symtab, error_count);
+                sem_check_node(node->data.function.compound_statement, symtab, error_count);
+
+                // TODO: Check for a return assignment
+
+                PopScope(symtab);
+                free(mangled_name);
+            }
             break;
         case FL_COMPOUND_STATEMENT:
             {
@@ -131,6 +202,77 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
                 } else {
                     result_type = lhs_type; // Result type is the same as operands
                 }
+            }
+            break;
+        case FL_IF_THEN:
+            {
+                Type_t *condition_type = sem_check_node(node->data.if_then.condition, symtab, error_count);
+                if (condition_type != NULL && condition_type->base_type != TYPE_BOOLEAN) {
+                    sem_error(node->line_num, "IF condition must be a boolean expression");
+                    (*error_count)++;
+                }
+                sem_check_node(node->data.if_then.then_stmt, symtab, error_count);
+                if (node->data.if_then.else_stmt) {
+                    sem_check_node(node->data.if_then.else_stmt, symtab, error_count);
+                }
+            }
+            break;
+        case FL_WHILE_LOOP:
+            {
+                Type_t *condition_type = sem_check_node(node->data.while_loop.condition, symtab, error_count);
+                if (condition_type != NULL && condition_type->base_type != TYPE_BOOLEAN) {
+                    sem_error(node->line_num, "WHILE condition must be a boolean expression");
+                    (*error_count)++;
+                }
+                sem_check_node(node->data.while_loop.while_stmt, symtab, error_count);
+            }
+            break;
+        case FL_FOR_LOOP:
+            {
+                // The assignment part of the for loop also serves as the loop variable declaration
+                Type_t *loop_var_type = sem_check_node(node->data.for_loop.for_assign, symtab, error_count);
+                if (loop_var_type != NULL && loop_var_type->base_type != TYPE_INTEGER) {
+                    sem_error(node->line_num, "FOR loop control variable must be an integer");
+                    (*error_count)++;
+                }
+
+                Type_t *to_type = sem_check_node(node->data.for_loop.to_expr, symtab, error_count);
+                if (to_type != NULL && to_type->base_type != TYPE_INTEGER) {
+                    sem_error(node->line_num, "FOR loop end expression must be an integer");
+                    (*error_count)++;
+                }
+
+                sem_check_node(node->data.for_loop.for_stmt, symtab, error_count);
+            }
+            break;
+        case FL_PROCEDURE_CALL:
+            {
+                HashNode_t *hash_node;
+                if (FindIdent(&hash_node, symtab, node->data.procedure_call.id) == -1) {
+                    sem_error(node->line_num, "Undeclared procedure");
+                    (*error_count)++;
+                } else if (hash_node->hash_type != HASHTYPE_PROCEDURE && hash_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE) {
+                    sem_error(node->line_num, "Identifier is not a procedure");
+                    (*error_count)++;
+                }
+                // TODO: Check arguments
+            }
+            break;
+        case FL_FUNCTION_CALL:
+            {
+                HashNode_t *hash_node;
+                if (FindIdent(&hash_node, symtab, node->data.function_call.id) == -1) {
+                    sem_error(node->line_num, "Undeclared function");
+                    (*error_count)++;
+                    result_type = create_basic_type(TYPE_ID); // Dummy type
+                } else if (hash_node->hash_type != HASHTYPE_FUNCTION) {
+                    sem_error(node->line_num, "Identifier is not a function");
+                    (*error_count)++;
+                    result_type = create_basic_type(TYPE_ID); // Dummy type
+                } else {
+                    result_type = hash_node->type;
+                }
+                // TODO: Check arguments
             }
             break;
         default:

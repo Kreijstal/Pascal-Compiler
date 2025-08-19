@@ -57,5 +57,6 @@ ListNode_t *ReverseList(ListNode_t *head);
 // Helper functions for the grammar
 ListNode_t *Cons(void *data, ListNode_t *next_node);
 ListNode_t *Chain(ListNode_t *head, ListNode_t *tail);
+void destroy_list(ListNode_t *head);
 
 #endif

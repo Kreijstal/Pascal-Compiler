@@ -8,6 +8,6 @@ begin
 end;
 
 begin
-  x := get_five;
+  x := get_five();
   writeln(x);
 end.

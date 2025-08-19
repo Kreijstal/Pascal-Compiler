@@ -33,7 +33,7 @@ SymTab_t *InitSymTab();
 int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args);
 
 /* Adds a built-in type */
-int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type);
+int AddBuiltinType(SymTab_t *symtab, char *id, Type_t *type);
 
 /* Pushes a new scope onto the stack (FIFO) */
 void PushScope(SymTab_t *symtab);

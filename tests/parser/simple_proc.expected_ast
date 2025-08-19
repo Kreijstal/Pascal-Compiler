@@ -1,0 +1,7 @@
+(L1) PROGRAM SimpleProc
+  DECLARATIONS:
+  SUBPROGRAMS:
+  BODY:
+    (L8) COMPOUND_STATEMENT
+      (null)
+      (L7) PROCEDURE_CALL DoSomething

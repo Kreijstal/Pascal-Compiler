@@ -23,7 +23,8 @@ typedef enum {
     FL_INUM,
     FL_RNUM,
     FL_STRING,
-    FL_UNOP
+    FL_UNOP,
+    FL_ASM_BLOCK
 } FlatNodeType;
 
 typedef enum {
@@ -122,6 +123,10 @@ typedef struct UnOp {
     FlatNode *operand;
 } UnOp;
 
+typedef struct AsmBlock {
+    char *code;
+} AsmBlock;
+
 struct FlatNode {
     FlatNodeType node_type;
     int line_num;
@@ -140,6 +145,7 @@ struct FlatNode {
         FunctionCall function_call;
         BinOp bin_op;
         UnOp un_op;
+        AsmBlock asm_block;
         int inum;
         float rnum;
         char *string;

@@ -24,7 +24,8 @@ typedef enum {
     IR_RETRIEVE_RETURN_VAL,
     IR_CMP,
     IR_READ_INT,
-    IR_STORE_RETURN_VAR
+    IR_STORE_RETURN_VAR,
+    IR_ASM
 } IROpcode;
 
 struct Register;
@@ -43,6 +44,7 @@ typedef struct {
     char *label;
     char *proc_name;
     ListNode_t *args;
+    char *asm_string; // For inline assembly
     int relop_type;
     int arg_type;
     int newline;

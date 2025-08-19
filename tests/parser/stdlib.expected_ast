@@ -1,0 +1,21 @@
+eeneeneneneneneneneneneeneenennnnnnnnnnnne(L1) PROGRAM stdlib
+  DECLARATIONS:
+  SUBPROGRAMS:
+  BODY:
+    (L107) COMPOUND_STATEMENT
+      (L106) ASM_BLOCK:
+        "
+        .sctio .rodata
+    .format_str_s:
+        .strig "%s"
+    .format_str_d:
+        .strig "%d"
+    .format_str_s:
+        .strig "%s\"
+    .format_str_d:
+        .strig "%d\"
+    .format_str_:
+        .strig "\"
+        .txt
+    "
+      (L92) PROCEDURE_CALL assembler

@@ -12,6 +12,7 @@
     #include "Parser/ParseTree/tree_types.h"
     #include "Grammar.tab.h"
 
+    char asm_buffer[1024];
     int if_stack[100];
     int if_stack_ptr = 0;
 
@@ -182,6 +183,44 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "[END] ");
     #endif
     return END;
+}
+
+"assembler" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[ASSEMBLER] ");
+    #endif
+    return ASSEMBLER;
+}
+
+"asm" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[ASM] ");
+    #endif
+    asm_buffer[0] = '\0';
+    BEGIN(ASM_MODE);
+}
+
+<ASM_MODE>"\n" {
+    strcat(asm_buffer, yytext);
+    line_num++;
+}
+
+<ASM_MODE>[Ee][Nn][Dd] {
+    // Check if "end" is followed by a semicolon or a newline
+    // This is a simple lookahead. A more robust solution would be better.
+    char next_char = input();
+    unput(next_char);
+    if (next_char == ';' || next_char == '\n' || next_char == EOF) {
+        yylval.str = strdup(asm_buffer);
+        BEGIN(INITIAL);
+        return ASM_BLOCK_STR;
+    } else {
+        strcat(asm_buffer, yytext);
+    }
+}
+
+<ASM_MODE>. {
+    strcat(asm_buffer, yytext);
 }
 
 
@@ -410,6 +449,13 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "[STRING_TYPE] ");
     #endif
     return STRING_TYPE;
+}
+
+"longint" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[LONGINT] ");
+    #endif
+    return LONGINT;
 }
 
 

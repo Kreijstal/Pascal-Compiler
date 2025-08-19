@@ -34,5 +34,6 @@ FlatNode *mk_flat_inum(int line_num, int val);
 FlatNode *mk_flat_rnum(int line_num, float val);
 FlatNode *mk_flat_string(int line_num, char *str);
 FlatNode *mk_flat_unop(int line_num, OpType op, FlatNode *operand);
+FlatNode *mk_flat_asm_block(int line_num, char *code);
 
 #endif

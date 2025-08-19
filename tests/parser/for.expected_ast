@@ -1,0 +1,12 @@
+(L1) PROGRAM boo
+  DECLARATIONS:
+  SUBPROGRAMS:
+  BODY:
+    (L10) COMPOUND_STATEMENT
+      (L9) UNKNOWN_NODE_TYPE: 5
+      (L5) ASSIGN
+        (L5) VAR_ID: y
+        (L5) INUM: 1
+      (L4) PROCEDURE_CALL read
+        ARGS:
+          (L4) VAR_ID: x

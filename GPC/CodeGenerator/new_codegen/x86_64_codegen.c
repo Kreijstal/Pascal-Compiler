@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
-#include "Grammar.tab.h"
+#include "../../Parser/flat_ast.h"
 #include "../../Parser/List/List.h"
 
 typedef struct {
@@ -69,7 +69,7 @@ static void add_global(char *name) {
 }
 
 
-void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
+void codegen_x86_64(ListNode_t *ir_list, FILE *out, char* program_name) {
     // First pass: find all global variables
     ListNode_t *current_ir = ir_list;
     while (current_ir) {
@@ -85,8 +85,16 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
 
     fprintf(out, "\t.file\t\"new_codegen.p\"\n");
     fprintf(out, ".section .rodata\n");
+    fprintf(out, ".format_str_s:\n");
+    fprintf(out, "\t.string \"%%s\"\n");
     fprintf(out, ".format_str_d:\n");
-    fprintf(out, ".string \"%%d\\n\"\n");
+    fprintf(out, "\t.string \"%%d\"\n");
+    fprintf(out, ".format_str_sn:\n");
+    fprintf(out, "\t.string \"%%s\\n\"\n");
+    fprintf(out, ".format_str_dn:\n");
+    fprintf(out, "\t.string \"%%d\\n\"\n");
+    fprintf(out, ".format_str_n:\n");
+    fprintf(out, "\t.string \"\\n\"\n");
 
     // Emit global variables
     if (globals) {
@@ -103,35 +111,52 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
 
     fprintf(out, ".text\n");
 
-    // Second pass: find all local variables to determine stack size
-    current_ir = ir_list;
-    while (current_ir) {
-        IRInstruction *inst = current_ir->cur;
-        if (inst->opcode == IR_STORE_VAR && !inst->dest->is_global) {
-            add_local(inst->dest->name);
-        }
-        if (inst->opcode == IR_READ_INT) {
-            add_local(inst->dest->name);
-        }
-        current_ir = current_ir->next;
-    }
-
-    fprintf(out, ".globl new_codegen_simple\n");
-    fprintf(out, "new_codegen_simple:\n");
-    fprintf(out, "\tpushq\t%%rbp\n");
-    fprintf(out, "\tmovq\t%%rsp, %%rbp\n");
-
-    // Allocate space for local variables
-    int stack_size = (local_stack_offset + 15) & -16; // Round up to nearest 16
-    if (stack_size > 0) {
-        fprintf(out, "\tsubq\t$%d, %%rsp\n", stack_size);
-    }
-
     new_init_register_allocator();
 
     current_ir = ir_list;
     while (current_ir) {
         IRInstruction *inst = current_ir->cur;
+
+        if (inst->opcode == IR_LABEL) {
+            // Start of a new function/procedure
+            // Pass 1: Find all local variables in this subprogram to calculate stack size
+            local_stack_offset = 0;
+            if (locals != NULL) {
+                ListNode_t *current = locals;
+                while (current) {
+                    LocalSymbol *sym = current->cur;
+                    free(sym->name);
+                    free(sym);
+                    current = current->next;
+                }
+                DestroyList(locals);
+                locals = NULL;
+            }
+
+            ListNode_t *inner_ir = current_ir->next;
+            while(inner_ir) {
+                IRInstruction *inner_inst = inner_ir->cur;
+                if (inner_inst->opcode == IR_LABEL) break; // Reached next subprogram
+                if (inner_inst->opcode == IR_STORE_VAR && !inner_inst->dest->is_global) {
+                    add_local(inner_inst->dest->name);
+                }
+                if (inner_inst->opcode == IR_READ_INT) {
+                    add_local(inner_inst->dest->name);
+                }
+                inner_ir = inner_ir->next;
+            }
+
+            // Now emit the prologue
+            fprintf(out, ".globl %s\n", inst->label);
+            fprintf(out, "%s:\n", inst->label);
+            fprintf(out, "\tpushq\t%%rbp\n");
+            fprintf(out, "\tmovq\t%%rsp, %%rbp\n");
+            int stack_size = (local_stack_offset + 15) & -16;
+            if (stack_size > 0) {
+                fprintf(out, "\tsubq\t$%d, %%rsp\n", stack_size);
+            }
+        }
+
         fprintf(stderr, "DEBUG: opcode=%d\n", inst->opcode);
         fflush(stderr);
         if (inst->opcode == IR_LOAD_CONST) {
@@ -153,7 +178,9 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             if (inst->dest->is_global) {
                 fprintf(out, "\tmovl\t%s, %s(%%rip)\n", inst->src1->reg->name, inst->dest->name);
             } else {
-                int offset = add_local(inst->dest->name);
+                // We should have already added the local in the first pass
+                int offset = get_local_offset(inst->dest->name);
+                assert(offset != -1);
                 fprintf(out, "\tmovl\t%s, -%d(%%rbp)\n", inst->src1->reg->name, offset);
             }
             new_free_reg(inst->src1->reg);
@@ -177,12 +204,12 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             char jmp_buf[4];
             switch(inst->relop_type)
             {
-                case EQ: strncpy(jmp_buf, "jne", 4); break;
-                case NE: strncpy(jmp_buf, "je", 4); break;
-                case LT: strncpy(jmp_buf, "jge", 4); break;
-                case LE: strncpy(jmp_buf, "jg", 4); break;
-                case GT: strncpy(jmp_buf, "jle", 4); break;
-                case GE: strncpy(jmp_buf, "jl", 4); break;
+                case OP_EQ: strncpy(jmp_buf, "jne", 4); break;
+                case OP_NE: strncpy(jmp_buf, "je", 4); break;
+                case OP_LT: strncpy(jmp_buf, "jge", 4); break;
+                case OP_LE: strncpy(jmp_buf, "jg", 4); break;
+                case OP_GT: strncpy(jmp_buf, "jle", 4); break;
+                case OP_GE: strncpy(jmp_buf, "jl", 4); break;
                 default: assert(0 && "Unknown relop type");
             }
             fprintf(out, "\t%s\t%s\n", jmp_buf, inst->label);
@@ -191,12 +218,12 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             char jmp_buf[4];
             switch(inst->relop_type)
             {
-                case EQ: strncpy(jmp_buf, "je", 4); break;
-                case NE: strncpy(jmp_buf, "jne", 4); break;
-                case LT: strncpy(jmp_buf, "jl", 4); break;
-                case LE: strncpy(jmp_buf, "jle", 4); break;
-                case GT: strncpy(jmp_buf, "jg", 4); break;
-                case GE: strncpy(jmp_buf, "jge", 4); break;
+                case OP_EQ: strncpy(jmp_buf, "je", 4); break;
+                case OP_NE: strncpy(jmp_buf, "jne", 4); break;
+                case OP_LT: strncpy(jmp_buf, "jl", 4); break;
+                case OP_LE: strncpy(jmp_buf, "jle", 4); break;
+                case OP_GT: strncpy(jmp_buf, "jg", 4); break;
+                case OP_GE: strncpy(jmp_buf, "jge", 4); break;
                 default: assert(0 && "Unknown relop type");
             }
             fprintf(out, "\t%s\t%s\n", jmp_buf, inst->label);
@@ -205,7 +232,7 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             fprintf(out, "\tjmp\t%s\n", inst->label);
         }
         else if (inst->opcode == IR_LABEL) {
-            fprintf(out, "%s:\n", inst->label);
+            // Prologue was already generated above
         }
         else if (inst->opcode == IR_LOAD_STRING) {
             // Create a label for the string
@@ -233,21 +260,11 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
                 p = p->next;
             }
 
-            if (strcmp(inst->proc_name, "writeln") == 0 || strcmp(inst->proc_name, "write") == 0) {
-                if (inst->arg_type == EXPR_STRING) {
-                    fprintf(out, "\tmovq\t%s, %%rdi\n", inst->src1->reg->name64);
-                    fprintf(out, "\tcall\tprint_string\n");
-                } else {
-                    fprintf(out, "\tmovl\t%s, %%edi\n", inst->src1->reg->name);
-                    if (inst->newline)
-                        fprintf(out, "\tcall\tprint_integer\n");
-                    else
-                        fprintf(out, "\tcall\tprint_integer_no_newline\n");
-                }
+            if (inst->src1 != NULL) {
+                fprintf(out, "\tmovq\t%s, %%rdi\n", inst->src1->reg->name64);
                 new_free_reg(inst->src1->reg);
-            } else {
-                fprintf(out, "\tcall\t%s\n", inst->proc_name);
             }
+            fprintf(out, "\tcall\t%s\n", inst->proc_name);
 
             ListNode_t *reversed_regs = ReverseList(allocated_regs);
             p = reversed_regs;
@@ -258,18 +275,16 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
             }
             DestroyList(reversed_regs);
         }
+        else if (inst->opcode == IR_RETRIEVE_RETURN_VAL) {
+            Register *reg = new_alloc_reg();
+            inst->dest->reg = reg;
+            fprintf(out, "\tmovl\t%%eax, %s\n", reg->name);
+        }
         else if (inst->opcode == IR_READ_INT) {
             fprintf(out, "\tcall\tread_integer\n");
-            int offset = add_local(inst->dest->name);
+            int offset = get_local_offset(inst->dest->name);
+            assert(offset != -1);
             fprintf(out, "\tmovl\t%%eax, -%d(%%rbp)\n", offset);
-        }
-        else if (inst->opcode == IR_STORE_RETURN_VAR) {
-            fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
-            new_free_reg(inst->src1->reg);
-        }
-        else if (inst->opcode == IR_STORE_RETURN_VAR) {
-            fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
-            new_free_reg(inst->src1->reg);
         }
         else if (inst->opcode == IR_STORE_RETURN_VAR) {
             fprintf(out, "\tmovl\t%s, %%eax\n", inst->src1->reg->name);
@@ -278,6 +293,9 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
         else if (inst->opcode == IR_RETURN) {
             fprintf(out, "\tleave\n");
             fprintf(out, "\tret\n");
+        }
+        else if (inst->opcode == IR_ASM) {
+            fprintf(out, "%s\n", inst->asm_string);
         }
         else if (inst->opcode == IR_MUL) {
             fprintf(stderr, "imull: src1: %s, src2: %s\n", inst->src1->reg->name, inst->src2->reg->name);
@@ -319,15 +337,13 @@ void codegen_x86_64(ListNode_t *ir_list, FILE *out) {
         current_ir = current_ir->next;
     }
 
-    fprintf(out, "\tnop\n");
-    fprintf(out, "\tleave\n");
-    fprintf(out, "\tret\n");
-
+    // A proper implementation would have the entry point be the main program block.
+    // For now, we generate a `main` that calls the pascal program's main block.
     fprintf(out, ".globl main\n");
     fprintf(out, "main:\n");
     fprintf(out, "\tpushq\t%%rbp\n");
     fprintf(out, "\tmovq\t%%rsp, %%rbp\n");
-    fprintf(out, "\tcall\tnew_codegen_simple\n");
+    fprintf(out, "\tcall\t%s\n", program_name);
     fprintf(out, "\tmovl\t$0, %%eax\n");
     fprintf(out, "\tleave\n");
     fprintf(out, "\tret\n");

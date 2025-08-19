@@ -84,6 +84,11 @@ static void print_flat_ast_recursive(FlatNode *node, FILE *f, int indent) {
             print_flat_ast_recursive(node->data.bin_op.left, f, indent + 1);
             print_flat_ast_recursive(node->data.bin_op.right, f, indent + 1);
             break;
+        case FL_ASM_BLOCK:
+            fprintf(f, "ASM_BLOCK:\n");
+            print_indent(f, indent + 1);
+            fprintf(f, "\"%s\"\n", node->data.asm_block.code);
+            break;
         default:
             fprintf(f, "UNKNOWN_NODE_TYPE: %d\n", node->node_type);
             break;
