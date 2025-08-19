@@ -8,7 +8,6 @@ import os
 # when the script is run from a subdirectory (like GPC/).
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-
 def discover_tests(class_name, module_name):
     """
     Discovers test methods in a given class from a module.

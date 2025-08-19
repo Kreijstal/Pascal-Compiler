@@ -1,18 +1,18 @@
 ninja: Entering directory `/app/build'
 ninja: no work to do.
  1/15 Codegen - constant_folding_o1      RUNNING
->>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=218 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_constant_folding_o1
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=15 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_constant_folding_o1
 
  2/15 Codegen - dead_code_elimination_o2 RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=247 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_dead_code_elimination_o2
+>>> MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=107 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_dead_code_elimination_o2
 
  3/15 Codegen - fizzbuzz                 RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=216 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_fizzbuzz
+>>> MALLOC_PERTURB_=23 MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_fizzbuzz
 
  4/15 Codegen - for_program              RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=16 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_for_program
+>>> MALLOC_PERTURB_=211 MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_for_program
 
- 1/15 Codegen - constant_folding_o1      FAIL            0.43s   exit status 1
+ 1/15 Codegen - constant_folding_o1      FAIL            0.68s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/simple_expr.p tests/output/simple_expr_unoptimized.s ---
@@ -115,15 +115,28 @@ Traceback (most recent call last):
 AssertionError: 'movl\t$5' not found in '\t.file\t"new_codegen.p"\n.section .rodata\n.format_str_s:\n\t.string "%s"\n.format_str_d:\n\t.string "%d"\n.format_str_sn:\n\t.string "%s\\n"\n.format_str_dn:\n\t.string "%d\\n"\n.format_str_n:\n\t.string "\\n"\n.text\n.globl SimpleExpr\nSimpleExpr:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tsubq\t$16, %rsp\n\tmovl\t$2, %eax\n\tmovl\t$3, %ebx\n\taddl\t%ebx, %eax\n\tmovl\t%eax, -4(%rbp)\n\tleave\n\tret\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_l\nread_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_i\nread_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_newline\n    \n\tleave\n\tret\n.globl writeln\nwriteln:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_l\nwriteln_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_i\nwriteln_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl writeln_s\nwriteln_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer_no_newline\n    \n\tleave\n\tret\n.globl write_i\nwrite_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl write_s\nwrite_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n.globl main\nmain:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tcall\tSimpleExpr\n\tmovl\t$0, %eax\n\tleave\n\tret\n'
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.006s
+Ran 1 test in 0.017s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
  5/15 Codegen - helloworld               RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=15 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_helloworld
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=208 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_helloworld
 
- 2/15 Codegen - dead_code_elimination_o2 FAIL            0.43s   exit status 1
+ 3/15 Codegen - fizzbuzz                 OK              0.68s
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stderr:
+s
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+OK (skipped=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 6/15 Codegen - mod_operator             RUNNING
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=229 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_mod_operator
+
+ 2/15 Codegen - dead_code_elimination_o2 FAIL            0.69s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/dead_code.p tests/output/dead_code_unoptimized.s ---
@@ -220,28 +233,15 @@ Traceback (most recent call last):
 AssertionError: 1204 not less than 1204
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.005s
+Ran 1 test in 0.010s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
- 6/15 Codegen - mod_operator             RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=226 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_mod_operator
-
- 3/15 Codegen - fizzbuzz                 OK              0.43s
-――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
-stderr:
-s
-----------------------------------------------------------------------
-Ran 1 test in 0.000s
-
-OK (skipped=1)
-――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-
  7/15 Codegen - new_codegen_add          RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=212 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_add
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=93 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_add
 
- 4/15 Codegen - for_program              FAIL            0.47s   exit status 1
+ 4/15 Codegen - for_program              FAIL            0.75s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/for.p tests/output/for.s ---
@@ -280,15 +280,81 @@ Error: can't open tests/output/for.s for reading: No such file or directory
 
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.048s
+Ran 1 test in 0.057s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
  8/15 Codegen - new_codegen_arithmetic   RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=89 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_arithmetic
+>>> MALLOC_PERTURB_=204 MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_arithmetic
 
- 7/15 Codegen - new_codegen_add          OK              0.51s
+ 5/15 Codegen - helloworld               FAIL            0.62s   exit status 1
+――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
+stdout:
+--- Running compiler: /app/build/GPC/gpc tests/cases/helloworld.p tests/output/helloworld.s ---
+[MAIN] Parsing stdlib...
+[MAIN] Parsing user program...
+[MAIN] Merging ASTs...
+[MAIN] Merged ASTs.
+[MAIN] Running semantic check...
+[MAIN] Semantic check passed.
+[MAIN] Generating IR...
+[MAIN] Generated IR. Generating code...
+DEBUG: opcode=13
+DEBUG: opcode=6
+DEBUG: opcode=14
+DEBUG: opcode=16
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+DEBUG: opcode=21
+DEBUG: opcode=16
+DEBUG: opcode=13
+[MAIN] Generated code.
+
+stderr:
+F
+======================================================================
+FAIL: test_helloworld (tests.test_runner.TestCompiler.test_helloworld)
+Tests that the helloworld program prints 'Hello, World!'.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/app/tests/test_runner.py", line 169, in test_helloworld
+    self.assertEqual(process.stdout, "Hello, World!\n")
+AssertionError: '4202516' != 'Hello, World!\n'
+- 4202516
++ Hello, World!
++
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.082s
+
+FAILED (failures=1)
+――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+
+ 9/15 Codegen - new_codegen_global       RUNNING
+>>> MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=59 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_global
+
+ 7/15 Codegen - new_codegen_add          OK              0.63s
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_add.p tests/output/new_codegen_add.s ---
@@ -338,15 +404,15 @@ DEBUG: opcode=13
 stderr:
 .
 ----------------------------------------------------------------------
-Ran 1 test in 0.003s
+Ran 1 test in 0.004s
 
 OK
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
- 9/15 Codegen - new_codegen_global       RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=250 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_global
+10/15 Codegen - new_codegen_if           RUNNING
+>>> MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 MALLOC_PERTURB_=19 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_if
 
- 8/15 Codegen - new_codegen_arithmetic   OK              0.49s
+ 8/15 Codegen - new_codegen_arithmetic   OK              0.57s
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_arithmetic.p tests/output/new_codegen_arithmetic.s ---
@@ -433,76 +499,10 @@ Ran 1 test in 0.003s
 OK
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
-10/15 Codegen - new_codegen_if           RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=22 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_if
-
- 5/15 Codegen - helloworld               FAIL            0.56s   exit status 1
-――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
-stdout:
---- Running compiler: /app/build/GPC/gpc tests/cases/helloworld.p tests/output/helloworld.s ---
-[MAIN] Parsing stdlib...
-[MAIN] Parsing user program...
-[MAIN] Merging ASTs...
-[MAIN] Merged ASTs.
-[MAIN] Running semantic check...
-[MAIN] Semantic check passed.
-[MAIN] Generating IR...
-[MAIN] Generated IR. Generating code...
-DEBUG: opcode=13
-DEBUG: opcode=6
-DEBUG: opcode=14
-DEBUG: opcode=16
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-DEBUG: opcode=21
-DEBUG: opcode=16
-DEBUG: opcode=13
-[MAIN] Generated code.
-
-stderr:
-F
-======================================================================
-FAIL: test_helloworld (tests.test_runner.TestCompiler.test_helloworld)
-Tests that the helloworld program prints 'Hello, World!'.
-----------------------------------------------------------------------
-Traceback (most recent call last):
-  File "/app/tests/test_runner.py", line 169, in test_helloworld
-    self.assertEqual(process.stdout, "Hello, World!\n")
-AssertionError: '4202516' != 'Hello, World!\n'
-- 4202516
-+ Hello, World!
-+
-
-
-----------------------------------------------------------------------
-Ran 1 test in 0.069s
-
-FAILED (failures=1)
-――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
-
 11/15 Codegen - new_codegen_proc         RUNNING
->>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=128 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_proc
+>>> MALLOC_PERTURB_=57 MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_proc
 
- 6/15 Codegen - mod_operator             FAIL            0.66s   exit status 1
+ 6/15 Codegen - mod_operator             FAIL            0.70s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/mod_test.p tests/output/mod_test.s ---
@@ -561,15 +561,15 @@ AssertionError: '' != '1\n'
 
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.072s
+Ran 1 test in 0.086s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
 12/15 Codegen - new_codegen_simple       RUNNING
->>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=218 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_simple
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=176 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_simple
 
- 9/15 Codegen - new_codegen_global       OK              0.43s
+ 9/15 Codegen - new_codegen_global       OK              0.54s
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_global.p tests/output/new_codegen_global.s ---
@@ -616,15 +616,15 @@ DEBUG: opcode=13
 stderr:
 .
 ----------------------------------------------------------------------
-Ran 1 test in 0.003s
+Ran 1 test in 0.005s
 
 OK
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
 13/15 Codegen - new_codegen_while        RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=245 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_while
+>>> MALLOC_PERTURB_=146 MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_new_codegen_while
 
-10/15 Codegen - new_codegen_if           FAIL            0.43s   exit status 1
+10/15 Codegen - new_codegen_if           FAIL            0.53s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_if.p tests/output/new_codegen_if.s ---
@@ -681,15 +681,15 @@ Traceback (most recent call last):
 AssertionError: 'jle' not found in '\t.file\t"new_codegen.p"\n.section .rodata\n.format_str_s:\n\t.string "%s"\n.format_str_d:\n\t.string "%d"\n.format_str_sn:\n\t.string "%s\\n"\n.format_str_dn:\n\t.string "%d\\n"\n.format_str_n:\n\t.string "\\n"\n.text\n.globl new_codegen_if\nnew_codegen_if:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tsubq\t$16, %rsp\n\tmovl\t$10, %eax\n\tmovl\t%eax, -4(%rbp)\n\tleave\n\tret\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_l\nread_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_i\nread_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_newline\n    \n\tleave\n\tret\n.globl writeln\nwriteln:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_l\nwriteln_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_i\nwriteln_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl writeln_s\nwriteln_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer_no_newline\n    \n\tleave\n\tret\n.globl write_i\nwrite_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl write_s\nwrite_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n.globl main\nmain:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tcall\tnew_codegen_if\n\tmovl\t$0, %eax\n\tleave\n\tret\n'
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.004s
+Ran 1 test in 0.008s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
 14/15 Codegen - sign_function            RUNNING
->>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=225 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_sign_function
+>>> MESON_BUILD_ROOT=/app/build MALLOC_PERTURB_=58 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_sign_function
 
-11/15 Codegen - new_codegen_proc         OK              0.43s
+11/15 Codegen - new_codegen_proc         OK              0.54s
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_proc.p tests/output/new_codegen_proc.s ---
@@ -743,15 +743,15 @@ DEBUG: opcode=13
 stderr:
 .
 ----------------------------------------------------------------------
-Ran 1 test in 0.003s
+Ran 1 test in 0.009s
 
 OK
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
 15/15 Codegen - simple_func              RUNNING
->>> MESON_BUILD_ROOT=/app/build ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=13 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_simple_func
+>>> MESON_BUILD_ROOT=/app/build UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1:print_stacktrace=1 MALLOC_PERTURB_=20 ASAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_summary=1 /home/jules/.pyenv/shims/python3 -m unittest tests.test_runner.TestCompiler.test_simple_func
 
-12/15 Codegen - new_codegen_simple       OK              0.43s
+12/15 Codegen - new_codegen_simple       OK              0.52s
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_simple.p tests/output/new_codegen_simple.s ---
@@ -798,12 +798,12 @@ DEBUG: opcode=13
 stderr:
 .
 ----------------------------------------------------------------------
-Ran 1 test in 0.002s
+Ran 1 test in 0.004s
 
 OK
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
-13/15 Codegen - new_codegen_while        FAIL            0.42s   exit status 1
+13/15 Codegen - new_codegen_while        FAIL            0.50s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/new_codegen_while.p tests/output/new_codegen_while.s ---
@@ -861,12 +861,12 @@ Traceback (most recent call last):
 AssertionError: 'jge' not found in '\t.file\t"new_codegen.p"\n.section .rodata\n.format_str_s:\n\t.string "%s"\n.format_str_d:\n\t.string "%d"\n.format_str_sn:\n\t.string "%s\\n"\n.format_str_dn:\n\t.string "%d\\n"\n.format_str_n:\n\t.string "\\n"\n.text\n.globl new_codegen_while\nnew_codegen_while:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tsubq\t$16, %rsp\n\tmovl\t$0, %eax\n\tmovl\t%eax, -4(%rbp)\n\tleave\n\tret\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_l\nread_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call read_integer\n    \n\tleave\n\tret\n.globl read_i\nread_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_newline\n    \n\tleave\n\tret\n.globl writeln\nwriteln:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_l\nwriteln_l:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer\n    \n\tleave\n\tret\n.globl writeln_i\nwriteln_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl writeln_s\nwriteln_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_integer_no_newline\n    \n\tleave\n\tret\n.globl write_i\nwrite_i:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\n        call print_string\n    \n\tleave\n\tret\n.globl write_s\nwrite_s:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n.globl main\nmain:\n\tpushq\t%rbp\n\tmovq\t%rsp, %rbp\n\tcall\tnew_codegen_while\n\tmovl\t$0, %eax\n\tleave\n\tret\n'
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.003s
+Ran 1 test in 0.005s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
-14/15 Codegen - sign_function            FAIL            0.45s   exit status 1
+14/15 Codegen - sign_function            FAIL            0.57s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/sign_test.p tests/output/sign_test.s ---
@@ -900,12 +900,12 @@ Error: can't open tests/output/sign_test.s for reading: No such file or director
 
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.039s
+Ran 1 test in 0.056s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 
-15/15 Codegen - simple_func              FAIL            0.49s   exit status 1
+15/15 Codegen - simple_func              FAIL            0.61s   exit status 1
 ――――――――――――――――――――――――――――――――――――― ✀  ―――――――――――――――――――――――――――――――――――――
 stdout:
 --- Running compiler: /app/build/GPC/gpc tests/cases/simple_func.p tests/output/simple_func.s ---
@@ -971,7 +971,7 @@ AssertionError: '' != '5\n'
 
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.076s
+Ran 1 test in 0.105s
 
 FAILED (failures=1)
 ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
@@ -979,15 +979,15 @@ FAILED (failures=1)
 
 Summary of Failures:
 
- 1/15 Codegen - constant_folding_o1      FAIL            0.43s   exit status 1
- 2/15 Codegen - dead_code_elimination_o2 FAIL            0.43s   exit status 1
- 4/15 Codegen - for_program              FAIL            0.47s   exit status 1
- 5/15 Codegen - helloworld               FAIL            0.56s   exit status 1
- 6/15 Codegen - mod_operator             FAIL            0.66s   exit status 1
-10/15 Codegen - new_codegen_if           FAIL            0.43s   exit status 1
-13/15 Codegen - new_codegen_while        FAIL            0.42s   exit status 1
-14/15 Codegen - sign_function            FAIL            0.45s   exit status 1
-15/15 Codegen - simple_func              FAIL            0.49s   exit status 1
+ 1/15 Codegen - constant_folding_o1      FAIL            0.68s   exit status 1
+ 2/15 Codegen - dead_code_elimination_o2 FAIL            0.69s   exit status 1
+ 4/15 Codegen - for_program              FAIL            0.75s   exit status 1
+ 5/15 Codegen - helloworld               FAIL            0.62s   exit status 1
+ 6/15 Codegen - mod_operator             FAIL            0.70s   exit status 1
+10/15 Codegen - new_codegen_if           FAIL            0.53s   exit status 1
+13/15 Codegen - new_codegen_while        FAIL            0.50s   exit status 1
+14/15 Codegen - sign_function            FAIL            0.57s   exit status 1
+15/15 Codegen - simple_func              FAIL            0.61s   exit status 1
 
 Ok:                 6
 Expected Fail:      0

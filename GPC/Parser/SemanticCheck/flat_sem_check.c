@@ -102,12 +102,12 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
         case FL_PROCEDURE:
             {
                 char *mangled_name = get_mangled_name(node->data.procedure.id, node->data.procedure.params);
-                PushProcedureOntoScope(symtab, mangled_name, node->data.procedure.id, node->data.procedure.params);
+                PushProcedureOntoScope(symtab, node->data.procedure.id, mangled_name, node->data.procedure.params);
 
                 PushScope(symtab);
 
                 // Add to own scope for recursion
-                PushProcedureOntoScope(symtab, mangled_name, node->data.procedure.id, node->data.procedure.params);
+                PushProcedureOntoScope(symtab, node->data.procedure.id, mangled_name, node->data.procedure.params);
 
                 sem_check_parameters(node->data.procedure.params, symtab, error_count);
                 sem_check_var_declarations(node->data.procedure.local_vars, symtab, error_count);
@@ -121,12 +121,12 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
             {
                 char *mangled_name = get_mangled_name(node->data.function.id, node->data.function.params);
                 Type_t *return_type = create_basic_type(node->data.function.return_type);
-                PushFunctionOntoScope(symtab, mangled_name, node->data.function.id, return_type, node->data.function.params);
+                PushFunctionOntoScope(symtab, node->data.function.id, mangled_name, return_type, node->data.function.params);
 
                 PushScope(symtab);
 
                 // Add to own scope for recursion
-                PushFunctionOntoScope(symtab, mangled_name, node->data.function.id, return_type, node->data.function.params);
+                PushFunctionOntoScope(symtab, node->data.function.id, mangled_name, return_type, node->data.function.params);
 
                 // Add function return variable to scope
                 PushVarOntoScope(symtab, return_type, node->data.function.id);

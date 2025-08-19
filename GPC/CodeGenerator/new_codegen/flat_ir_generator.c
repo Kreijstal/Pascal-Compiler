@@ -47,6 +47,13 @@ static IRValue* create_temp_reg() {
     return create_ir_value(name, 0);
 }
 
+static int label_count = 0;
+static char* create_label() {
+    char *label = malloc(10);
+    sprintf(label, "L%d", label_count++);
+    return label;
+}
+
 
 static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **ir_list, FlatNode* current_subprogram) {
     if (node == NULL) {
@@ -73,30 +80,26 @@ static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **
             break;
         case FL_PROCEDURE:
             {
-                // Similar to function, but no return value handling needed yet
+                IRInstruction *label_inst = create_ir_instruction(IR_LABEL);
+                label_inst->label = get_mangled_name(node->data.procedure.id, node->data.procedure.params);
+                *ir_list = Cons(label_inst, *ir_list);
+
                 generate_ir_for_node(node->data.procedure.compound_statement, symtab, ir_list, node);
 
                 IRInstruction *ret_inst = create_ir_instruction(IR_RETURN);
                 *ir_list = Cons(ret_inst, *ir_list);
-
-                IRInstruction *label_inst = create_ir_instruction(IR_LABEL);
-                label_inst->label = get_mangled_name(node->data.procedure.id, node->data.procedure.params);
-                *ir_list = Cons(label_inst, *ir_list);
             }
             break;
         case FL_FUNCTION:
             {
-                // Generate IR for the function body first
-                generate_ir_for_node(node->data.function.compound_statement, symtab, ir_list, node);
-
-                // Add the function return instruction
-                IRInstruction *ret_inst = create_ir_instruction(IR_RETURN);
-                *ir_list = Cons(ret_inst, *ir_list);
-
-                // Add the function label (entry point)
                 IRInstruction *label_inst = create_ir_instruction(IR_LABEL);
                 label_inst->label = get_mangled_name(node->data.function.id, node->data.function.params);
                 *ir_list = Cons(label_inst, *ir_list);
+
+                generate_ir_for_node(node->data.function.compound_statement, symtab, ir_list, node);
+
+                IRInstruction *ret_inst = create_ir_instruction(IR_RETURN);
+                *ir_list = Cons(ret_inst, *ir_list);
             }
             break;
         case FL_COMPOUND_STATEMENT:
@@ -119,7 +122,73 @@ static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **
             // TODO
             break;
         case FL_FOR_LOOP:
-            // TODO
+            {
+                char *start_label = create_label();
+                char *end_label = create_label();
+
+                // Initial assignment
+                generate_ir_for_node(node->data.for_loop.for_assign, symtab, ir_list, current_subprogram);
+
+                // Start of loop
+                IRInstruction *start_label_inst = create_ir_instruction(IR_LABEL);
+                start_label_inst->label = start_label;
+                *ir_list = Cons(start_label_inst, *ir_list);
+
+                // Condition check
+                generate_ir_for_node(node->data.for_loop.to_expr, symtab, ir_list, current_subprogram);
+                IRInstruction *to_expr_inst = (IRInstruction *)(*ir_list)->cur;
+
+                IRInstruction *load_loop_var = create_ir_instruction(IR_LOAD_VAR);
+                load_loop_var->src1 = create_ir_value(node->data.for_loop.for_assign->data.var_assign.var->data.var_id.id, 0);
+                load_loop_var->dest = create_temp_reg();
+                *ir_list = Cons(load_loop_var, *ir_list);
+
+                IRInstruction *cmp_inst = create_ir_instruction(IR_CMP);
+                cmp_inst->src1 = load_loop_var->dest;
+                cmp_inst->src2 = to_expr_inst->dest;
+                cmp_inst->relop_type = OP_LE;
+                *ir_list = Cons(cmp_inst, *ir_list);
+
+                IRInstruction *jump_inst = create_ir_instruction(IR_JUMP_IF_ZERO);
+                jump_inst->label = end_label;
+                jump_inst->relop_type = OP_GT;
+                *ir_list = Cons(jump_inst, *ir_list);
+
+                // Loop body
+                generate_ir_for_node(node->data.for_loop.for_stmt, symtab, ir_list, current_subprogram);
+
+                // Increment
+                IRInstruction *load_loop_var2 = create_ir_instruction(IR_LOAD_VAR);
+                load_loop_var2->src1 = create_ir_value(node->data.for_loop.for_assign->data.var_assign.var->data.var_id.id, 0);
+                load_loop_var2->dest = create_temp_reg();
+                *ir_list = Cons(load_loop_var2, *ir_list);
+
+                IRInstruction *load_const_1 = create_ir_instruction(IR_LOAD_CONST);
+                load_const_1->src1 = create_ir_value("1", 0);
+                load_const_1->dest = create_temp_reg();
+                *ir_list = Cons(load_const_1, *ir_list);
+
+                IRInstruction *add_inst = create_ir_instruction(IR_ADD);
+                add_inst->src1 = load_loop_var2->dest;
+                add_inst->src2 = load_const_1->dest;
+                add_inst->dest = create_temp_reg();
+                *ir_list = Cons(add_inst, *ir_list);
+
+                IRInstruction *store_inst = create_ir_instruction(IR_STORE_VAR);
+                store_inst->dest = create_ir_value(node->data.for_loop.for_assign->data.var_assign.var->data.var_id.id, 0);
+                store_inst->src1 = add_inst->dest;
+                *ir_list = Cons(store_inst, *ir_list);
+
+                // Jump to start
+                IRInstruction *jump_to_start = create_ir_instruction(IR_JUMP);
+                jump_to_start->label = start_label;
+                *ir_list = Cons(jump_to_start, *ir_list);
+
+                // End label
+                IRInstruction *end_label_inst = create_ir_instruction(IR_LABEL);
+                end_label_inst->label = end_label;
+                *ir_list = Cons(end_label_inst, *ir_list);
+            }
             break;
         case FL_IF_THEN:
             // TODO
@@ -284,7 +353,7 @@ static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **
         case FL_ASM_BLOCK:
             {
                 IRInstruction *inst = create_ir_instruction(IR_ASM);
-                inst->asm_string = node->data.asm_block.code;
+                inst->asm_string = strdup(node->data.asm_block.code);
                 *ir_list = Cons(inst, *ir_list);
             }
             break;
