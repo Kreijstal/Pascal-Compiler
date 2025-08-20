@@ -15,3 +15,7 @@ GPC/Parser/LexAndYacc/Grammar.output
 
 # Test output
 tests/output/
+
+# Python cache
+__pycache__/
+*.pyc

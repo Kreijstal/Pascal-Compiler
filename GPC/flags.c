@@ -3,6 +3,7 @@
     Flags for turning on different compiler functionalities
 */
 
+#include <stdio.h>
 #include "flags.h"
 
 void init_flags()
@@ -31,6 +32,7 @@ void set_o1_flag()
 
 void set_o2_flag()
 {
+    fprintf(stderr, "Optimizer O2 flag set\n");
     if(FLAG_OPTIMIZE < 2)
         FLAG_OPTIMIZE = 2;
 }
