@@ -13,8 +13,8 @@
             are removed
 */
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <assert.h>
 #include <string.h>
 #include "optimizer.h"
@@ -31,7 +31,7 @@ void optimize_subprog(SymTab_t *symtab, Tree_t *sub);
 void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls);
 int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt);
 int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var_assign);
-int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *);
+int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *body_statement);
 
 void simplify_stmt_expr(struct Statement *);
 int simplify_expr(struct Expression **);
@@ -320,42 +320,39 @@ int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statem
     assert(body_statement->type == STMT_COMPOUND_STATEMENT);
     assert(id != NULL);
 
-    ListNode_t *statement_list, *prev, *temp;
-    struct Statement *stmt;
-    int return_val;
+    ListNode_t **head = &body_statement->stmt_data.compound_statement;
+    ListNode_t *current = *head;
+    ListNode_t *prev = NULL;
+    int return_val = 0;
 
-    statement_list = body_statement->stmt_data.compound_statement;
-    prev = NULL;
-    return_val = 0;
-    while(statement_list != NULL)
+    while(current != NULL)
     {
-        stmt = (struct Statement *)statement_list->cur;
+        struct Statement *stmt = (struct Statement *)current->cur;
         if(remove_mutation_statement(symtab, id, stmt) > 0)
         {
             ++return_val;
-
-            temp = statement_list->next;
-            free(statement_list);
-            statement_list = temp;
-
+            ListNode_t *temp = current;
             if(prev == NULL)
             {
-                body_statement->stmt_data.compound_statement = statement_list;
+                *head = current->next;
             }
             else
             {
-                prev->next = statement_list;
+                prev->next = current->next;
             }
+            current = current->next;
+            free(temp);
         }
         else
         {
-            prev = statement_list;
-            statement_list = statement_list->next;
+            prev = current;
+            current = current->next;
         }
     }
 
     return return_val;
 }
+
 
 /* Simplifies expressions by combining operations on constant numbers */
 void simplify_stmt_expr(struct Statement *stmt)

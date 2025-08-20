@@ -35,6 +35,7 @@ FlatNode *ParsePascalOnly(char *file)
     /**** CREATING THE PARSE TREE ****/
     if(file != NULL)
     {
+        fprintf(stderr, "FLAT_AST_PRINTER: Opening file %s\n", file);
         yyin = fopen(file, "r");
         if(yyin == NULL)
         {

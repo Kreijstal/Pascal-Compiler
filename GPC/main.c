@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 #include "Parser/ParsePascal.h"
 #include "flags.h"
 #include "CodeGenerator/new_codegen/flat_ir_generator.h"
@@ -21,28 +20,6 @@ int main(int argc, char **argv)
 
     init_flags();
 
-    char *input_file = NULL;
-    char *output_file = NULL;
-
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-O1") == 0) {
-            set_o1_flag();
-        } else if (strcmp(argv[i], "-O2") == 0) {
-            set_o2_flag();
-        } else {
-            if (input_file == NULL) {
-                input_file = argv[i];
-            } else if (output_file == NULL) {
-                output_file = argv[i];
-            }
-        }
-    }
-
-    if (input_file == NULL) {
-        fprintf(stderr, "Usage: gpc <input file> [output file] [-O1] [-O2]\n");
-        return 1;
-    }
-
     fprintf(stderr, "[MAIN] Parsing stdlib...\n"); fflush(stderr);
     FlatNode *stdlib_ast = ParsePascalOnly(STDLIB_PATH);
     if (stdlib_ast == NULL) {
@@ -51,9 +28,9 @@ int main(int argc, char **argv)
     }
 
     fprintf(stderr, "[MAIN] Parsing user program...\n"); fflush(stderr);
-    FlatNode *user_ast = ParsePascal(input_file);
+    FlatNode *user_ast = ParsePascal(argv[1]);
     if (user_ast == NULL) {
-        fprintf(stderr, "Parsing failed for %s.\n", input_file);
+        fprintf(stderr, "Parsing failed for %s.\n", argv[1]);
         return 1;
     }
 
@@ -80,8 +57,8 @@ int main(int argc, char **argv)
     fprintf(stderr, "[MAIN] Semantic check passed.\n"); fflush(stderr);
 
     FILE *out;
-    if (output_file != NULL) {
-        out = fopen(output_file, "w");
+    if (argc > 2) {
+        out = fopen(argv[2], "w");
         if (out == NULL) {
             perror("Error opening output file");
             return 1;

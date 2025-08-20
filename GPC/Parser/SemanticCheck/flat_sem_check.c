@@ -5,6 +5,7 @@
 #include "SymTab/SymTab.h"
 #include "../flat_ast.h"
 #include "mangle.h"
+#include "../List/List.h"
 
 // Forward declarations
 Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count);
@@ -83,6 +84,8 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
     }
 
     Type_t *result_type = NULL;
+
+    fprintf(stderr, "SEM_CHECK: Visiting node type %d on line %d\\n", node->node_type, node->line_num);
 
     switch (node->node_type) {
         case FL_PROGRAM:
@@ -247,21 +250,79 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
             break;
         case FL_PROCEDURE_CALL:
             {
+                // To support overloading, we must mangle the name at the call site
+                // based on the types of the arguments.
+                ListNode_t *params_for_mangling = NULL;
+                ListNode_t *current_arg = node->data.procedure_call.args;
+                while (current_arg != NULL) {
+                    FlatNode *arg_expr = (FlatNode *)current_arg->cur;
+                    Type_t *arg_type = sem_check_node(arg_expr, symtab, error_count);
+                    if (arg_type != NULL) {
+                        Param_t *p = (Param_t *)malloc(sizeof(Param_t));
+                        assert(p != NULL);
+                        p->id_list = NULL; // Not needed for mangling at call site
+                        p->type = arg_type->base_type;
+
+                        if (params_for_mangling == NULL) {
+                            params_for_mangling = CreateListNode(p, LIST_UNSPECIFIED);
+                        } else {
+                            PushListNodeBack(params_for_mangling, CreateListNode(p, LIST_UNSPECIFIED));
+                        }
+                    }
+                    current_arg = current_arg->next;
+                }
+
+                char *mangled_name = get_mangled_name(node->data.procedure_call.id, params_for_mangling);
+
                 HashNode_t *hash_node;
-                if (FindIdent(&hash_node, symtab, node->data.procedure_call.id) == -1) {
+                if (FindIdent(&hash_node, symtab, mangled_name) == -1) {
                     sem_error(node->line_num, "Undeclared procedure");
                     (*error_count)++;
                 } else if (hash_node->hash_type != HASHTYPE_PROCEDURE && hash_node->hash_type != HASHTYPE_BUILTIN_PROCEDURE) {
                     sem_error(node->line_num, "Identifier is not a procedure");
                     (*error_count)++;
                 }
-                // TODO: Check arguments
+                // TODO: Check arguments more thoroughly (e.g. var parameters)
+
+                free(mangled_name);
+                // Free the temporary list
+                ListNode_t *curr = params_for_mangling;
+                while (curr != NULL) {
+                    free(curr->cur); // Free the Param_t struct
+                    ListNode_t *next = curr->next;
+                    free(curr);
+                    curr = next;
+                }
             }
             break;
         case FL_FUNCTION_CALL:
             {
+                // To support overloading, we must mangle the name at the call site
+                // based on the types of the arguments.
+                ListNode_t *params_for_mangling = NULL;
+                ListNode_t *current_arg = node->data.function_call.args;
+                while (current_arg != NULL) {
+                    FlatNode *arg_expr = (FlatNode *)current_arg->cur;
+                    Type_t *arg_type = sem_check_node(arg_expr, symtab, error_count);
+                    if (arg_type != NULL) {
+                        Param_t *p = (Param_t *)malloc(sizeof(Param_t));
+                        assert(p != NULL);
+                        p->id_list = NULL; // Not needed for mangling at call site
+                        p->type = arg_type->base_type;
+
+                        if (params_for_mangling == NULL) {
+                            params_for_mangling = CreateListNode(p, LIST_UNSPECIFIED);
+                        } else {
+                            PushListNodeBack(params_for_mangling, CreateListNode(p, LIST_UNSPECIFIED));
+                        }
+                    }
+                    current_arg = current_arg->next;
+                }
+
+                char *mangled_name = get_mangled_name(node->data.function_call.id, params_for_mangling);
+
                 HashNode_t *hash_node;
-                if (FindIdent(&hash_node, symtab, node->data.function_call.id) == -1) {
+                if (FindIdent(&hash_node, symtab, mangled_name) == -1) {
                     sem_error(node->line_num, "Undeclared function");
                     (*error_count)++;
                     result_type = create_basic_type(TYPE_ID); // Dummy type
@@ -272,7 +333,17 @@ Type_t *sem_check_node(FlatNode *node, SymTab_t *symtab, int *error_count) {
                 } else {
                     result_type = hash_node->type;
                 }
-                // TODO: Check arguments
+                // TODO: Check arguments more thoroughly
+
+                free(mangled_name);
+                // Free the temporary list
+                ListNode_t *curr = params_for_mangling;
+                while (curr != NULL) {
+                    free(curr->cur); // Free the Param_t struct
+                    ListNode_t *next = curr->next;
+                    free(curr);
+                    curr = next;
+                }
             }
             break;
         default:

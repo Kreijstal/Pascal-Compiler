@@ -48,7 +48,7 @@ inc_dirs = include_directories(
 'CodeGenerator/new_codegen'
 )
 gpc_exe = executable('gpc', gpc_sources,
-c_args: '-DNEW_CODEGEN',
+c_args: ['-DNEW_CODEGEN', '-DDEBUG_OPTIMIZER'],
 include_directories: inc_dirs,
 dependencies: [
   compiler.find_library('m', required: true),

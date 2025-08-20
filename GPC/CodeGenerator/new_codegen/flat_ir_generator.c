@@ -129,7 +129,6 @@ static void generate_ir_for_node(FlatNode *node, SymTab_t *symtab, ListNode_t **
             break;
         case FL_VAR_ASSIGN:
             {
-                fprintf(stderr, "IR_GEN: var assign for %s\n", node->data.var_assign.var->data.var_id.id);
                 // Generate IR for the expression on the right side of the assignment
                 generate_ir_for_node(node->data.var_assign.expr, symtab, ir_list, current_subprogram);
                 IRInstruction *expr_inst = (IRInstruction *)(*ir_list)->cur;
