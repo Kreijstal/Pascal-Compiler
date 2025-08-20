@@ -781,6 +781,7 @@ sign
 %%
 
 void yyerror(const char *s) {
+    fprintf(stderr, "PARSER ERROR!\n");
     // Debug output
     fprintf(stderr, "Debug yyerror: s = \"%s\", yytext = \"%s\", yyleng = %d, line_num = %d, col_num = %d, file_to_parse = %s\n",
         s, (yytext ? yytext : "null"), yyleng, line_num, col_num, (file_to_parse ? file_to_parse : "null"));

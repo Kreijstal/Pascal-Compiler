@@ -2,10 +2,11 @@
 program main( input, output );
 
   (* local variables *)
-  var x, y: integer;
-  var a, b: real;
-  var c: array[ 1..10 ] of integer;
-  var d: array[ 11..20 ] of real;
+  var
+    x, y: integer;
+    a, b: real;
+    c: array[ 1..10 ] of integer;
+    d: array[ 11..20 ] of real;
 
   (* local function: mixed argument types *)
   function foo( a: integer; x: real; z: integer ): integer;

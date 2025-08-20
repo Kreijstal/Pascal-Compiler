@@ -45,7 +45,7 @@ debug_flex:
 parser: $(ALL_OBJS) ParsePascal.o
 
 ParsePascal.o: $(PARSER_OBJS) $(TREE_OBJS) ParsePascal.h ParsePascal.c
-	$(CC) $(CCFLAGS) -c ParsePascal.c
+	$(CC) $(CCFLAGS) -I LexAndYacc -c ParsePascal.c
 
 #ParsePascal.o: $(PARSER_OBJS) $(TREE_OBJS) ParsePascal.h ParsePascal.c
 #	$(CC) $(CCFLAGS) -DDEBUG_BISON -c ParsePascal.c
@@ -69,7 +69,7 @@ SymTab.o: $(GRAMMAR_DIR)/Grammar.tab.h HashTable.o
 	$(CC) $(CCFLAGS) -c SemanticCheck/SymTab/SymTab.c
 
 $(TREE_DIR)/tree.o:
-	$(CC) $(CCFLAGS) -c $(TREE_DIR)/tree.c
+	$(CC) $(CCFLAGS) -I LexAndYacc -c $(TREE_DIR)/tree.c
 
 lexAndYacc:
 	cd $(GRAMMAR_DIR) && $(MAKE)

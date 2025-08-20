@@ -1,6 +1,7 @@
 program main(input, output);
-    var a,b: integer;
-    var x,y,z: real;
+    var
+      a,b: integer;
+      x,y,z: real;
 
     (* Functions return stuff *)
     (* Illegal to change non-local variables *)
@@ -13,8 +14,9 @@ program main(input, output);
     (* Procedures do not return stuff *)
     (* Procedures can edit non-local variables *)
     procedure boo(p: integer; q: real);
-        var a: real;
-        var z: integer;
+        var
+          a: real;
+          z: integer;
     begin
         writeln(p + 13); (* Semicolons are seperaters, don't need one below this *)
         writeln(q)

@@ -170,5 +170,7 @@ struct Expression *mk_rnum(int line_num, float r_num);
 
 struct Expression *mk_string(int line_num, char *string);
 
+void print_flat_ast(Tree_t *tree);
+
 
 #endif

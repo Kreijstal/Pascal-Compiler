@@ -30,19 +30,28 @@ int main(int argc, char **argv)
     Tree_t *prelude_tree, *user_tree;
     int required_args, args_left;
 
-    required_args = 3;
+    required_args = 2;
+
+    for (int i = 0; i < argc; i++) {
+        fprintf(stderr, "argv[%d]: %s\n", i, argv[i]);
+    }
 
     if(argc < required_args)
     {
-        fprintf(stderr, "USAGE: [exec] [INPUT_FILE] [OUTPUT_FILE] [OPTIONAL_FLAG_1] ...\n");
+        fprintf(stderr, "USAGE: [exec] [INPUT_FILE] [OPTIONAL_OUTPUT_FILE] [OPTIONAL_FLAG_1] ...\n");
         exit(1);
     }
 
+    int output_file_arg = 0;
+    if (argc > 2 && argv[2][0] != '-') {
+        output_file_arg = 1;
+    }
+
     /* Setting flags */
-    args_left = argc - required_args;
+    args_left = argc - required_args - output_file_arg;
     if(args_left > 0)
     {
-        set_flags(argv + required_args, args_left);
+        set_flags(argv + required_args + output_file_arg, args_left);
     }
 
     file_to_parse = "GPC/stdlib.p";
@@ -75,7 +84,7 @@ int main(int argc, char **argv)
 
         int sem_result;
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
-        if(sem_result == 0)
+        if(sem_result == 0 && output_file_arg)
         {
             fprintf(stderr, "Generating code to file: %s\n", argv[2]);
 

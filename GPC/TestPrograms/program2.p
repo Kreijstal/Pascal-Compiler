@@ -3,8 +3,9 @@ Damon Gwinn
 Testing out type semantics
 *)
 program main(input, output);
-    var a,b: integer;
-    var c,d: real;
+    var
+      a,b: integer;
+      c,d: real;
 begin
     (* Should pass *)
     a := 5;
