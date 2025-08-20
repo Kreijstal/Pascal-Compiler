@@ -80,6 +80,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         case HASHVAR_INTEGER:
             *type = INT_TYPE;
             break;
+        case HASHVAR_LONGINT:
+            *type = LONGINT_TYPE;
+            break;
         case HASHVAR_REAL:
             *type = REAL_TYPE;
             break;
@@ -465,26 +468,6 @@ int semcheck_funccall(int *type_return,
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, id);
-    mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
-
-    HashNode_t *resolved_func = NULL;
-    int match_count = 0;
-
-    if (overload_candidates != NULL)
-    {
-        ListNode_t *cur = overload_candidates;
-        while(cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
-            {
-                resolved_func = candidate;
-                match_count++;
-            }
-            cur = cur->next;
-        }
-    }
-
     HashNode_t *best_match = NULL;
     int best_score = 9999;
     int num_best_matches = 0;
@@ -508,11 +491,14 @@ int semcheck_funccall(int *type_return,
                     int formal_type = formal_decl->tree_data.var_decl_data.type;
 
                     int call_type;
-                    semcheck_expr_main(&call_type, symtab, (struct Expression *)call_args->cur, max_scope_lev, NO_MUTATE);
+                    int is_var = formal_decl->tree_data.var_decl_data.is_var_param;
+                    semcheck_expr_main(&call_type, symtab, (struct Expression *)call_args->cur, max_scope_lev, is_var);
 
                     if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
+                        current_score += 1;
+                    else if (formal_type == INT_TYPE && call_type == LONGINT_TYPE)
                         current_score += 1;
                     else
                         current_score += 1000; // Mismatch
@@ -592,8 +578,9 @@ int semcheck_funccall(int *type_return,
             ++cur_arg;
             assert(args_given->type == LIST_EXPR);
             assert(true_args->type == LIST_TREE);
+            int is_var = arg_decl->tree_data.var_decl_data.is_var_param;
             return_val += semcheck_expr_main(&arg_type,
-                symtab, (struct Expression *)args_given->cur, max_scope_lev, NO_MUTATE);
+                symtab, (struct Expression *)args_given->cur, max_scope_lev, is_var);
 
             arg_decl = (Tree_t *)true_args->cur;
             assert(arg_decl->type == TREE_VAR_DECL);

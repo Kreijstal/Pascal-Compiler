@@ -400,9 +400,7 @@ void destroy_tree(Tree_t *tree)
           break;
 
         case TREE_ARR_DECL:
-          destroy_list(tree->tree_data.var_decl_data.ids);
-          if (tree->tree_data.var_decl_data.type_id != NULL)
-            free(tree->tree_data.var_decl_data.type_id);
+          destroy_list(tree->tree_data.arr_decl_data.ids);
           break;
 
         case TREE_TYPE_DECL:
@@ -791,6 +789,29 @@ struct Expression *mk_relop(int line_num, int type, struct Expression *left,
     new_expr->expr_data.relop_data.right = right;
 
     return new_expr;
+}
+
+void print_flat_list(ListNode_t *list);
+void print_flat_stmt(struct Statement *stmt);
+void print_flat_expr(struct Expression *expr);
+
+void print_flat_ast(Tree_t *tree)
+{
+    if (tree == NULL) return;
+
+    printf("TREE:%d\n", tree->type);
+}
+
+void print_flat_list(ListNode_t *list)
+{
+}
+
+void print_flat_stmt(struct Statement *stmt)
+{
+}
+
+void print_flat_expr(struct Expression *expr)
+{
 }
 
 struct Expression *mk_signterm(int line_num, struct Expression *sign_term)

@@ -248,8 +248,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = type_node->var_type;
                     }
                 }
-                else if(tree->tree_data.var_decl_data.type == INT_TYPE || tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if (tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 
@@ -259,8 +261,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                if(tree->tree_data.arr_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if (tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 

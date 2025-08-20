@@ -1,6 +1,7 @@
 program boo( input, output );
- var n,i,sum: integer;
- var a: array[1 .. 10] of integer;
+ var
+  n,i,sum: integer;
+  a: array[1 .. 10] of integer;
 begin
  n := 13;
  i := 23;

@@ -1,0 +1,2413 @@
+Terminals unused in grammar
+
+    ASMMODE
+    SINGLE
+    EQ
+    NE
+    LT
+    LE
+    GT
+    GE
+    PLUS
+    MINUS
+    STAR
+    SLASH
+    MOD
+    DIV
+    PAREN
+    VAR_ASSIGN
+    VAR
+    BUILTIN_ANY_TYPE
+    BOOL
+    UNKNOWN_TYPE
+
+
+Grammar
+
+    0 $accept: program $end
+
+    1 optional_program_parameters: '(' identifier_list ')'
+    2                            | ε
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations compound_statement '.' END_OF_FILE
+
+    4 ident: ID
+
+    5 int_num: INT_NUM
+
+    6 real_num: REAL_NUM
+
+    7 string_literal: STRING
+
+    8 relop: RELOP
+
+    9 addop: ADDOP
+
+   10 mulop: MULOP
+
+   11 identifier_list: ident
+   12                | identifier_list ',' ident
+
+   13 declarations: VARIABLE declaration_list
+   14             | ε
+
+   15 declaration_list: declaration_list identifier_list ':' type ';'
+   16                 | identifier_list ':' type ';'
+
+   17 type_declarations_opt: TYPE type_declaration_list
+   18                      | ε
+
+   19 type_declaration_list: type_declaration
+   20                      | type_declaration_list type_declaration
+
+   21 type_declaration: ident relop signed_int DOTDOT signed_int ';'
+
+   22 signed_int: int_num
+   23           | addop int_num
+
+   24 type: standard_type
+   25     | ARRAY '[' int_num DOTDOT int_num ']' OF standard_type
+   26     | ident
+
+   27 standard_type: INT_TYPE
+   28              | REAL_TYPE
+   29              | LONGINT_TYPE
+   30              | STRING_TYPE
+
+   31 subprogram_declarations: subprogram_declarations subprogram_declaration ';'
+   32                        | ε
+
+   33 subprogram_declaration: subprogram_head declarations subprogram_declarations compound_statement
+
+   34 subprogram_head: FUNCTION ident arguments ':' type ';'
+   35                | FUNCTION ident arguments ':' type OVERLOAD ';'
+   36                | FUNCTION ident arguments ':' type CNAME ';'
+   37                | FUNCTION ident arguments ':' type CNAME OVERLOAD ';'
+   38                | PROCEDURE ident arguments ';'
+   39                | PROCEDURE ident arguments OVERLOAD ';'
+   40                | PROCEDURE ident arguments CNAME ';'
+   41                | PROCEDURE ident arguments CNAME OVERLOAD ';'
+
+   42 arguments: '(' parameter_list ')'
+   43          | ε
+
+   44 optional_const: CONST
+   45               | ε
+
+   46 parameter_list: parameter_list ';' parameter_item
+   47               | parameter_item
+
+   48 parameter_item: optional_const identifier_list ':' type
+   49               | VARIABLE optional_const identifier_list ':' type
+
+   50 compound_statement: BBEGIN statement_seq_opt END
+   51                   | ASSEMBLER ';' ASM ENDASM
+
+   52 statement_seq_opt: ε
+   53                  | statement_seq
+   54                  | statement_seq ';'
+
+   55 statement_seq: statement
+   56              | statement_seq ';' statement
+
+   57 statement: variable_assignment
+   58          | procedure_statement
+   59          | compound_statement
+   60          | if_statement
+   61          | WHILE relop_expression DO statement
+   62          | FOR for_assign TO expression DO statement
+
+   63 if_statement: IF relop_expression THEN statement
+   64             | IF relop_expression THEN statement ELSE statement
+
+   65 variable_assignment: variable ASSIGNOP expression
+
+   66 for_assign: variable_assignment
+   67           | variable
+
+   68 variable: ident
+   69         | ident '[' expression ']'
+
+   70 procedure_statement: ident
+   71                    | ident '(' expression_list ')'
+
+   72 relop_expression: relop_expression OR relop_and
+   73                 | relop_and
+
+   74 relop_and: relop_and AND relop_not
+   75          | relop_not
+
+   76 relop_not: NOT relop_not
+   77          | relop_paren
+
+   78 relop_paren: '(' relop_expression ')'
+   79            | relop_expression_single
+
+   80 relop_expression_single: expression relop expression
+
+   81 expression_list: expression
+   82                | expression_list ',' expression
+
+   83 expression: term
+   84           | expression addop term
+
+   85 term: factor
+   86     | term mulop factor
+
+   87 factor: ident
+   88       | ident '[' expression ']'
+   89       | ident '(' expression_list ')'
+   90       | int_num
+   91       | real_num
+   92       | string_literal
+   93       | sign factor
+   94       | '(' expression ')'
+
+   95 sign: ADDOP
+
+
+Terminals, with rules where they appear
+
+    $end (0) 0
+    '(' (40) 1 42 71 78 89 94
+    ')' (41) 1 42 71 78 89 94
+    ',' (44) 12 82
+    '.' (46) 3
+    ':' (58) 15 16 34 35 36 37 48 49
+    ';' (59) 3 15 16 21 31 34 35 36 37 38 39 40 41 46 51 54 56
+    '[' (91) 25 69 88
+    ']' (93) 25 69 88
+    error (256)
+    PROGRAM (258) 3
+    VARIABLE (259) 13 49
+    PROCEDURE (260) 38 39 40 41
+    FUNCTION (261) 34 35 36 37
+    OVERLOAD (262) 35 37 39 41
+    BBEGIN (263) 50
+    END (264) 50
+    INT_NUM (265) 5
+    REAL_NUM (266) 6
+    INT_TYPE (267) 27
+    REAL_TYPE (268) 28
+    LONGINT_TYPE (269) 29
+    STRING_TYPE (270) 30
+    STRING <str> (271) 7
+    ENDASM <str> (272) 51
+    ID (273) 4
+    TYPE (274) 17
+    ARRAY (275) 25
+    ASSEMBLER (276) 51
+    ASM (277) 51
+    CONST (278) 44
+    ASMMODE (279)
+    SINGLE (280)
+    OF (281) 25
+    DOTDOT (282) 21 25
+    IF (283) 63 64
+    THEN (284) 63 64
+    ELSE (285) 64
+    WHILE (286) 61
+    DO (287) 61 62
+    NOT (288) 76
+    FOR (289) 62
+    TO (290) 62
+    CNAME (291) 36 37 40 41
+    END_OF_FILE (292) 3
+    ASSIGNOP (293) 65
+    RELOP (294) 8
+    EQ <op_val> (295)
+    NE <op_val> (296)
+    LT <op_val> (297)
+    LE <op_val> (298)
+    GT <op_val> (299)
+    GE <op_val> (300)
+    ADDOP (301) 9 95
+    PLUS <op_val> (302)
+    MINUS <op_val> (303)
+    OR <op_val> (304) 72
+    MULOP (305) 10
+    STAR <op_val> (306)
+    SLASH <op_val> (307)
+    AND <op_val> (308) 74
+    MOD <op_val> (309)
+    DIV <op_val> (310)
+    PAREN (311)
+    VAR_ASSIGN (312)
+    VAR (313)
+    BUILTIN_ANY_TYPE (314)
+    BOOL (315)
+    UNKNOWN_TYPE (316)
+
+
+Nonterminals, with rules where they appear
+
+    $accept (70)
+        on left: 0
+    optional_program_parameters <list> (71)
+        on left: 1 2
+        on right: 3
+    program (72)
+        on left: 3
+        on right: 0
+    ident <ident> (73)
+        on left: 4
+        on right: 3 11 12 21 26 34 35 36 37 38 39 40 41 68 69 70 71 87 88 89
+    int_num <i_val> (74)
+        on left: 5
+        on right: 22 23 25 90
+    real_num <f_val> (75)
+        on left: 6
+        on right: 91
+    string_literal <str> (76)
+        on left: 7
+        on right: 92
+    relop <op_val> (77)
+        on left: 8
+        on right: 21 80
+    addop <op_val> (78)
+        on left: 9
+        on right: 23 84
+    mulop <op_val> (79)
+        on left: 10
+        on right: 86
+    identifier_list <ident_list> (80)
+        on left: 11 12
+        on right: 1 12 15 16 48 49
+    declarations <list> (81)
+        on left: 13 14
+        on right: 3 33
+    declaration_list <list> (82)
+        on left: 15 16
+        on right: 13 15
+    type_declarations_opt <list> (83)
+        on left: 17 18
+        on right: 3
+    type_declaration_list <list> (84)
+        on left: 19 20
+        on right: 17 20
+    type_declaration <tree> (85)
+        on left: 21
+        on right: 19 20
+    signed_int <i_val> (86)
+        on left: 22 23
+        on right: 21
+    type <type_s> (87)
+        on left: 24 25 26
+        on right: 15 16 34 35 36 37 48 49
+    standard_type <i_val> (88)
+        on left: 27 28 29 30
+        on right: 24 25
+    subprogram_declarations <list> (89)
+        on left: 31 32
+        on right: 3 31 33
+    subprogram_declaration <tree> (90)
+        on left: 33
+        on right: 31
+    subprogram_head <subprogram_head_s> (91)
+        on left: 34 35 36 37 38 39 40 41
+        on right: 33
+    arguments <list> (92)
+        on left: 42 43
+        on right: 34 35 36 37 38 39 40 41
+    optional_const (93)
+        on left: 44 45
+        on right: 48 49
+    parameter_list <list> (94)
+        on left: 46 47
+        on right: 42 46
+    parameter_item <tree> (95)
+        on left: 48 49
+        on right: 46 47
+    compound_statement <stmt> (96)
+        on left: 50 51
+        on right: 3 33 59
+    statement_seq_opt <list> (97)
+        on left: 52 53 54
+        on right: 50
+    statement_seq <list> (98)
+        on left: 55 56
+        on right: 53 54 56
+    statement <stmt> (99)
+        on left: 57 58 59 60 61 62
+        on right: 55 56 61 62 63 64
+    if_statement <stmt> (100)
+        on left: 63 64
+        on right: 60
+    variable_assignment <stmt> (101)
+        on left: 65
+        on right: 57 66
+    for_assign <for_assign_bison> (102)
+        on left: 66 67
+        on right: 62
+    variable <expr> (103)
+        on left: 68 69
+        on right: 65 67
+    procedure_statement <stmt> (104)
+        on left: 70 71
+        on right: 58
+    relop_expression <expr> (105)
+        on left: 72 73
+        on right: 61 63 64 72 78
+    relop_and <expr> (106)
+        on left: 74 75
+        on right: 72 73 74
+    relop_not <expr> (107)
+        on left: 76 77
+        on right: 74 75 76
+    relop_paren <expr> (108)
+        on left: 78 79
+        on right: 77
+    relop_expression_single <expr> (109)
+        on left: 80
+        on right: 79
+    expression_list <list> (110)
+        on left: 81 82
+        on right: 71 82 89
+    expression <expr> (111)
+        on left: 83 84
+        on right: 62 65 69 80 81 82 84 88 94
+    term <expr> (112)
+        on left: 85 86
+        on right: 83 84 86
+    factor <expr> (113)
+        on left: 87 88 89 90 91 92 93 94
+        on right: 85 86 93
+    sign <op_val> (114)
+        on left: 95
+        on right: 93
+
+
+State 0
+
+    0 $accept: • program $end
+
+    PROGRAM  shift, and go to state 1
+
+    program  go to state 2
+
+
+State 1
+
+    3 program: PROGRAM • ident optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations compound_statement '.' END_OF_FILE
+
+    ID  shift, and go to state 3
+
+    ident  go to state 4
+
+
+State 2
+
+    0 $accept: program • $end
+
+    $end  shift, and go to state 5
+
+
+State 3
+
+    4 ident: ID •
+
+    $default  reduce using rule 4 (ident)
+
+
+State 4
+
+    3 program: PROGRAM ident • optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations compound_statement '.' END_OF_FILE
+
+    '('  shift, and go to state 6
+
+    $default  reduce using rule 2 (optional_program_parameters)
+
+    optional_program_parameters  go to state 7
+
+
+State 5
+
+    0 $accept: program $end •
+
+    $default  accept
+
+
+State 6
+
+    1 optional_program_parameters: '(' • identifier_list ')'
+
+    ID  shift, and go to state 3
+
+    ident            go to state 8
+    identifier_list  go to state 9
+
+
+State 7
+
+    3 program: PROGRAM ident optional_program_parameters • ';' type_declarations_opt declarations subprogram_declarations compound_statement '.' END_OF_FILE
+
+    ';'  shift, and go to state 10
+
+
+State 8
+
+   11 identifier_list: ident •
+
+    $default  reduce using rule 11 (identifier_list)
+
+
+State 9
+
+    1 optional_program_parameters: '(' identifier_list • ')'
+   12 identifier_list: identifier_list • ',' ident
+
+    ')'  shift, and go to state 11
+    ','  shift, and go to state 12
+
+
+State 10
+
+    3 program: PROGRAM ident optional_program_parameters ';' • type_declarations_opt declarations subprogram_declarations compound_statement '.' END_OF_FILE
+
+    TYPE  shift, and go to state 13
+
+    $default  reduce using rule 18 (type_declarations_opt)
+
+    type_declarations_opt  go to state 14
+
+
+State 11
+
+    1 optional_program_parameters: '(' identifier_list ')' •
+
+    $default  reduce using rule 1 (optional_program_parameters)
+
+
+State 12
+
+   12 identifier_list: identifier_list ',' • ident
+
+    ID  shift, and go to state 3
+
+    ident  go to state 15
+
+
+State 13
+
+   17 type_declarations_opt: TYPE • type_declaration_list
+
+    ID  shift, and go to state 3
+
+    ident                  go to state 16
+    type_declaration_list  go to state 17
+    type_declaration       go to state 18
+
+
+State 14
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt • declarations subprogram_declarations compound_statement '.' END_OF_FILE
+
+    VARIABLE  shift, and go to state 19
+
+    $default  reduce using rule 14 (declarations)
+
+    declarations  go to state 20
+
+
+State 15
+
+   12 identifier_list: identifier_list ',' ident •
+
+    $default  reduce using rule 12 (identifier_list)
+
+
+State 16
+
+   21 type_declaration: ident • relop signed_int DOTDOT signed_int ';'
+
+    RELOP  shift, and go to state 21
+
+    relop  go to state 22
+
+
+State 17
+
+   17 type_declarations_opt: TYPE type_declaration_list •
+   20 type_declaration_list: type_declaration_list • type_declaration
+
+    ID  shift, and go to state 3
+
+    $default  reduce using rule 17 (type_declarations_opt)
+
+    ident             go to state 16
+    type_declaration  go to state 23
+
+
+State 18
+
+   19 type_declaration_list: type_declaration •
+
+    $default  reduce using rule 19 (type_declaration_list)
+
+
+State 19
+
+   13 declarations: VARIABLE • declaration_list
+
+    ID  shift, and go to state 3
+
+    ident             go to state 8
+    identifier_list   go to state 24
+    declaration_list  go to state 25
+
+
+State 20
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt declarations • subprogram_declarations compound_statement '.' END_OF_FILE
+
+    $default  reduce using rule 32 (subprogram_declarations)
+
+    subprogram_declarations  go to state 26
+
+
+State 21
+
+    8 relop: RELOP •
+
+    $default  reduce using rule 8 (relop)
+
+
+State 22
+
+   21 type_declaration: ident relop • signed_int DOTDOT signed_int ';'
+
+    INT_NUM  shift, and go to state 27
+    ADDOP    shift, and go to state 28
+
+    int_num     go to state 29
+    addop       go to state 30
+    signed_int  go to state 31
+
+
+State 23
+
+   20 type_declaration_list: type_declaration_list type_declaration •
+
+    $default  reduce using rule 20 (type_declaration_list)
+
+
+State 24
+
+   12 identifier_list: identifier_list • ',' ident
+   16 declaration_list: identifier_list • ':' type ';'
+
+    ','  shift, and go to state 12
+    ':'  shift, and go to state 32
+
+
+State 25
+
+   13 declarations: VARIABLE declaration_list •
+   15 declaration_list: declaration_list • identifier_list ':' type ';'
+
+    ID  shift, and go to state 3
+
+    $default  reduce using rule 13 (declarations)
+
+    ident            go to state 8
+    identifier_list  go to state 33
+
+
+State 26
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations • compound_statement '.' END_OF_FILE
+   31 subprogram_declarations: subprogram_declarations • subprogram_declaration ';'
+
+    PROCEDURE  shift, and go to state 34
+    FUNCTION   shift, and go to state 35
+    BBEGIN     shift, and go to state 36
+    ASSEMBLER  shift, and go to state 37
+
+    subprogram_declaration  go to state 38
+    subprogram_head         go to state 39
+    compound_statement      go to state 40
+
+
+State 27
+
+    5 int_num: INT_NUM •
+
+    $default  reduce using rule 5 (int_num)
+
+
+State 28
+
+    9 addop: ADDOP •
+
+    $default  reduce using rule 9 (addop)
+
+
+State 29
+
+   22 signed_int: int_num •
+
+    $default  reduce using rule 22 (signed_int)
+
+
+State 30
+
+   23 signed_int: addop • int_num
+
+    INT_NUM  shift, and go to state 27
+
+    int_num  go to state 41
+
+
+State 31
+
+   21 type_declaration: ident relop signed_int • DOTDOT signed_int ';'
+
+    DOTDOT  shift, and go to state 42
+
+
+State 32
+
+   16 declaration_list: identifier_list ':' • type ';'
+
+    INT_TYPE      shift, and go to state 43
+    REAL_TYPE     shift, and go to state 44
+    LONGINT_TYPE  shift, and go to state 45
+    STRING_TYPE   shift, and go to state 46
+    ID            shift, and go to state 3
+    ARRAY         shift, and go to state 47
+
+    ident          go to state 48
+    type           go to state 49
+    standard_type  go to state 50
+
+
+State 33
+
+   12 identifier_list: identifier_list • ',' ident
+   15 declaration_list: declaration_list identifier_list • ':' type ';'
+
+    ','  shift, and go to state 12
+    ':'  shift, and go to state 51
+
+
+State 34
+
+   38 subprogram_head: PROCEDURE • ident arguments ';'
+   39                | PROCEDURE • ident arguments OVERLOAD ';'
+   40                | PROCEDURE • ident arguments CNAME ';'
+   41                | PROCEDURE • ident arguments CNAME OVERLOAD ';'
+
+    ID  shift, and go to state 3
+
+    ident  go to state 52
+
+
+State 35
+
+   34 subprogram_head: FUNCTION • ident arguments ':' type ';'
+   35                | FUNCTION • ident arguments ':' type OVERLOAD ';'
+   36                | FUNCTION • ident arguments ':' type CNAME ';'
+   37                | FUNCTION • ident arguments ':' type CNAME OVERLOAD ';'
+
+    ID  shift, and go to state 3
+
+    ident  go to state 53
+
+
+State 36
+
+   50 compound_statement: BBEGIN • statement_seq_opt END
+
+    BBEGIN     shift, and go to state 36
+    ID         shift, and go to state 3
+    ASSEMBLER  shift, and go to state 37
+    IF         shift, and go to state 54
+    WHILE      shift, and go to state 55
+    FOR        shift, and go to state 56
+
+    $default  reduce using rule 52 (statement_seq_opt)
+
+    ident                go to state 57
+    compound_statement   go to state 58
+    statement_seq_opt    go to state 59
+    statement_seq        go to state 60
+    statement            go to state 61
+    if_statement         go to state 62
+    variable_assignment  go to state 63
+    variable             go to state 64
+    procedure_statement  go to state 65
+
+
+State 37
+
+   51 compound_statement: ASSEMBLER • ';' ASM ENDASM
+
+    ';'  shift, and go to state 66
+
+
+State 38
+
+   31 subprogram_declarations: subprogram_declarations subprogram_declaration • ';'
+
+    ';'  shift, and go to state 67
+
+
+State 39
+
+   33 subprogram_declaration: subprogram_head • declarations subprogram_declarations compound_statement
+
+    VARIABLE  shift, and go to state 19
+
+    $default  reduce using rule 14 (declarations)
+
+    declarations  go to state 68
+
+
+State 40
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations compound_statement • '.' END_OF_FILE
+
+    '.'  shift, and go to state 69
+
+
+State 41
+
+   23 signed_int: addop int_num •
+
+    $default  reduce using rule 23 (signed_int)
+
+
+State 42
+
+   21 type_declaration: ident relop signed_int DOTDOT • signed_int ';'
+
+    INT_NUM  shift, and go to state 27
+    ADDOP    shift, and go to state 28
+
+    int_num     go to state 29
+    addop       go to state 30
+    signed_int  go to state 70
+
+
+State 43
+
+   27 standard_type: INT_TYPE •
+
+    $default  reduce using rule 27 (standard_type)
+
+
+State 44
+
+   28 standard_type: REAL_TYPE •
+
+    $default  reduce using rule 28 (standard_type)
+
+
+State 45
+
+   29 standard_type: LONGINT_TYPE •
+
+    $default  reduce using rule 29 (standard_type)
+
+
+State 46
+
+   30 standard_type: STRING_TYPE •
+
+    $default  reduce using rule 30 (standard_type)
+
+
+State 47
+
+   25 type: ARRAY • '[' int_num DOTDOT int_num ']' OF standard_type
+
+    '['  shift, and go to state 71
+
+
+State 48
+
+   26 type: ident •
+
+    $default  reduce using rule 26 (type)
+
+
+State 49
+
+   16 declaration_list: identifier_list ':' type • ';'
+
+    ';'  shift, and go to state 72
+
+
+State 50
+
+   24 type: standard_type •
+
+    $default  reduce using rule 24 (type)
+
+
+State 51
+
+   15 declaration_list: declaration_list identifier_list ':' • type ';'
+
+    INT_TYPE      shift, and go to state 43
+    REAL_TYPE     shift, and go to state 44
+    LONGINT_TYPE  shift, and go to state 45
+    STRING_TYPE   shift, and go to state 46
+    ID            shift, and go to state 3
+    ARRAY         shift, and go to state 47
+
+    ident          go to state 48
+    type           go to state 73
+    standard_type  go to state 50
+
+
+State 52
+
+   38 subprogram_head: PROCEDURE ident • arguments ';'
+   39                | PROCEDURE ident • arguments OVERLOAD ';'
+   40                | PROCEDURE ident • arguments CNAME ';'
+   41                | PROCEDURE ident • arguments CNAME OVERLOAD ';'
+
+    '('  shift, and go to state 74
+
+    $default  reduce using rule 43 (arguments)
+
+    arguments  go to state 75
+
+
+State 53
+
+   34 subprogram_head: FUNCTION ident • arguments ':' type ';'
+   35                | FUNCTION ident • arguments ':' type OVERLOAD ';'
+   36                | FUNCTION ident • arguments ':' type CNAME ';'
+   37                | FUNCTION ident • arguments ':' type CNAME OVERLOAD ';'
+
+    '('  shift, and go to state 74
+
+    $default  reduce using rule 43 (arguments)
+
+    arguments  go to state 76
+
+
+State 54
+
+   63 if_statement: IF • relop_expression THEN statement
+   64             | IF • relop_expression THEN statement ELSE statement
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    NOT       shift, and go to state 79
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 81
+
+    ident                    go to state 82
+    int_num                  go to state 83
+    real_num                 go to state 84
+    string_literal           go to state 85
+    relop_expression         go to state 86
+    relop_and                go to state 87
+    relop_not                go to state 88
+    relop_paren              go to state 89
+    relop_expression_single  go to state 90
+    expression               go to state 91
+    term                     go to state 92
+    factor                   go to state 93
+    sign                     go to state 94
+
+
+State 55
+
+   61 statement: WHILE • relop_expression DO statement
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    NOT       shift, and go to state 79
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 81
+
+    ident                    go to state 82
+    int_num                  go to state 83
+    real_num                 go to state 84
+    string_literal           go to state 85
+    relop_expression         go to state 95
+    relop_and                go to state 87
+    relop_not                go to state 88
+    relop_paren              go to state 89
+    relop_expression_single  go to state 90
+    expression               go to state 91
+    term                     go to state 92
+    factor                   go to state 93
+    sign                     go to state 94
+
+
+State 56
+
+   62 statement: FOR • for_assign TO expression DO statement
+
+    ID  shift, and go to state 3
+
+    ident                go to state 96
+    variable_assignment  go to state 97
+    for_assign           go to state 98
+    variable             go to state 99
+
+
+State 57
+
+   68 variable: ident •
+   69         | ident • '[' expression ']'
+   70 procedure_statement: ident •
+   71                    | ident • '(' expression_list ')'
+
+    '('  shift, and go to state 100
+    '['  shift, and go to state 101
+
+    ASSIGNOP  reduce using rule 68 (variable)
+    $default  reduce using rule 70 (procedure_statement)
+
+
+State 58
+
+   59 statement: compound_statement •
+
+    $default  reduce using rule 59 (statement)
+
+
+State 59
+
+   50 compound_statement: BBEGIN statement_seq_opt • END
+
+    END  shift, and go to state 102
+
+
+State 60
+
+   53 statement_seq_opt: statement_seq •
+   54                  | statement_seq • ';'
+   56 statement_seq: statement_seq • ';' statement
+
+    ';'  shift, and go to state 103
+
+    $default  reduce using rule 53 (statement_seq_opt)
+
+
+State 61
+
+   55 statement_seq: statement •
+
+    $default  reduce using rule 55 (statement_seq)
+
+
+State 62
+
+   60 statement: if_statement •
+
+    $default  reduce using rule 60 (statement)
+
+
+State 63
+
+   57 statement: variable_assignment •
+
+    $default  reduce using rule 57 (statement)
+
+
+State 64
+
+   65 variable_assignment: variable • ASSIGNOP expression
+
+    ASSIGNOP  shift, and go to state 104
+
+
+State 65
+
+   58 statement: procedure_statement •
+
+    $default  reduce using rule 58 (statement)
+
+
+State 66
+
+   51 compound_statement: ASSEMBLER ';' • ASM ENDASM
+
+    ASM  shift, and go to state 105
+
+
+State 67
+
+   31 subprogram_declarations: subprogram_declarations subprogram_declaration ';' •
+
+    $default  reduce using rule 31 (subprogram_declarations)
+
+
+State 68
+
+   33 subprogram_declaration: subprogram_head declarations • subprogram_declarations compound_statement
+
+    $default  reduce using rule 32 (subprogram_declarations)
+
+    subprogram_declarations  go to state 106
+
+
+State 69
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations compound_statement '.' • END_OF_FILE
+
+    END_OF_FILE  shift, and go to state 107
+
+
+State 70
+
+   21 type_declaration: ident relop signed_int DOTDOT signed_int • ';'
+
+    ';'  shift, and go to state 108
+
+
+State 71
+
+   25 type: ARRAY '[' • int_num DOTDOT int_num ']' OF standard_type
+
+    INT_NUM  shift, and go to state 27
+
+    int_num  go to state 109
+
+
+State 72
+
+   16 declaration_list: identifier_list ':' type ';' •
+
+    $default  reduce using rule 16 (declaration_list)
+
+
+State 73
+
+   15 declaration_list: declaration_list identifier_list ':' type • ';'
+
+    ';'  shift, and go to state 110
+
+
+State 74
+
+   42 arguments: '(' • parameter_list ')'
+
+    VARIABLE  shift, and go to state 111
+    CONST     shift, and go to state 112
+
+    $default  reduce using rule 45 (optional_const)
+
+    optional_const  go to state 113
+    parameter_list  go to state 114
+    parameter_item  go to state 115
+
+
+State 75
+
+   38 subprogram_head: PROCEDURE ident arguments • ';'
+   39                | PROCEDURE ident arguments • OVERLOAD ';'
+   40                | PROCEDURE ident arguments • CNAME ';'
+   41                | PROCEDURE ident arguments • CNAME OVERLOAD ';'
+
+    OVERLOAD  shift, and go to state 116
+    CNAME     shift, and go to state 117
+    ';'       shift, and go to state 118
+
+
+State 76
+
+   34 subprogram_head: FUNCTION ident arguments • ':' type ';'
+   35                | FUNCTION ident arguments • ':' type OVERLOAD ';'
+   36                | FUNCTION ident arguments • ':' type CNAME ';'
+   37                | FUNCTION ident arguments • ':' type CNAME OVERLOAD ';'
+
+    ':'  shift, and go to state 119
+
+
+State 77
+
+    6 real_num: REAL_NUM •
+
+    $default  reduce using rule 6 (real_num)
+
+
+State 78
+
+    7 string_literal: STRING •
+
+    $default  reduce using rule 7 (string_literal)
+
+
+State 79
+
+   76 relop_not: NOT • relop_not
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    NOT       shift, and go to state 79
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 81
+
+    ident                    go to state 82
+    int_num                  go to state 83
+    real_num                 go to state 84
+    string_literal           go to state 85
+    relop_not                go to state 120
+    relop_paren              go to state 89
+    relop_expression_single  go to state 90
+    expression               go to state 91
+    term                     go to state 92
+    factor                   go to state 93
+    sign                     go to state 94
+
+
+State 80
+
+   95 sign: ADDOP •
+
+    $default  reduce using rule 95 (sign)
+
+
+State 81
+
+   78 relop_paren: '(' • relop_expression ')'
+   94 factor: '(' • expression ')'
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    NOT       shift, and go to state 79
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 81
+
+    ident                    go to state 82
+    int_num                  go to state 83
+    real_num                 go to state 84
+    string_literal           go to state 85
+    relop_expression         go to state 121
+    relop_and                go to state 87
+    relop_not                go to state 88
+    relop_paren              go to state 89
+    relop_expression_single  go to state 90
+    expression               go to state 122
+    term                     go to state 92
+    factor                   go to state 93
+    sign                     go to state 94
+
+
+State 82
+
+   87 factor: ident •
+   88       | ident • '[' expression ']'
+   89       | ident • '(' expression_list ')'
+
+    '('  shift, and go to state 123
+    '['  shift, and go to state 124
+
+    $default  reduce using rule 87 (factor)
+
+
+State 83
+
+   90 factor: int_num •
+
+    $default  reduce using rule 90 (factor)
+
+
+State 84
+
+   91 factor: real_num •
+
+    $default  reduce using rule 91 (factor)
+
+
+State 85
+
+   92 factor: string_literal •
+
+    $default  reduce using rule 92 (factor)
+
+
+State 86
+
+   63 if_statement: IF relop_expression • THEN statement
+   64             | IF relop_expression • THEN statement ELSE statement
+   72 relop_expression: relop_expression • OR relop_and
+
+    THEN  shift, and go to state 125
+    OR    shift, and go to state 126
+
+
+State 87
+
+   73 relop_expression: relop_and •
+   74 relop_and: relop_and • AND relop_not
+
+    AND  shift, and go to state 127
+
+    $default  reduce using rule 73 (relop_expression)
+
+
+State 88
+
+   75 relop_and: relop_not •
+
+    $default  reduce using rule 75 (relop_and)
+
+
+State 89
+
+   77 relop_not: relop_paren •
+
+    $default  reduce using rule 77 (relop_not)
+
+
+State 90
+
+   79 relop_paren: relop_expression_single •
+
+    $default  reduce using rule 79 (relop_paren)
+
+
+State 91
+
+   80 relop_expression_single: expression • relop expression
+   84 expression: expression • addop term
+
+    RELOP  shift, and go to state 21
+    ADDOP  shift, and go to state 28
+
+    relop  go to state 128
+    addop  go to state 129
+
+
+State 92
+
+   83 expression: term •
+   86 term: term • mulop factor
+
+    MULOP  shift, and go to state 130
+
+    $default  reduce using rule 83 (expression)
+
+    mulop  go to state 131
+
+
+State 93
+
+   85 term: factor •
+
+    $default  reduce using rule 85 (term)
+
+
+State 94
+
+   93 factor: sign • factor
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    factor          go to state 133
+    sign            go to state 94
+
+
+State 95
+
+   61 statement: WHILE relop_expression • DO statement
+   72 relop_expression: relop_expression • OR relop_and
+
+    DO  shift, and go to state 134
+    OR  shift, and go to state 126
+
+
+State 96
+
+   68 variable: ident •
+   69         | ident • '[' expression ']'
+
+    '['  shift, and go to state 101
+
+    $default  reduce using rule 68 (variable)
+
+
+State 97
+
+   66 for_assign: variable_assignment •
+
+    $default  reduce using rule 66 (for_assign)
+
+
+State 98
+
+   62 statement: FOR for_assign • TO expression DO statement
+
+    TO  shift, and go to state 135
+
+
+State 99
+
+   65 variable_assignment: variable • ASSIGNOP expression
+   67 for_assign: variable •
+
+    ASSIGNOP  shift, and go to state 104
+
+    $default  reduce using rule 67 (for_assign)
+
+
+State 100
+
+   71 procedure_statement: ident '(' • expression_list ')'
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident            go to state 82
+    int_num          go to state 83
+    real_num         go to state 84
+    string_literal   go to state 85
+    expression_list  go to state 136
+    expression       go to state 137
+    term             go to state 92
+    factor           go to state 93
+    sign             go to state 94
+
+
+State 101
+
+   69 variable: ident '[' • expression ']'
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 138
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 102
+
+   50 compound_statement: BBEGIN statement_seq_opt END •
+
+    $default  reduce using rule 50 (compound_statement)
+
+
+State 103
+
+   54 statement_seq_opt: statement_seq ';' •
+   56 statement_seq: statement_seq ';' • statement
+
+    BBEGIN     shift, and go to state 36
+    ID         shift, and go to state 3
+    ASSEMBLER  shift, and go to state 37
+    IF         shift, and go to state 54
+    WHILE      shift, and go to state 55
+    FOR        shift, and go to state 56
+
+    $default  reduce using rule 54 (statement_seq_opt)
+
+    ident                go to state 57
+    compound_statement   go to state 58
+    statement            go to state 139
+    if_statement         go to state 62
+    variable_assignment  go to state 63
+    variable             go to state 64
+    procedure_statement  go to state 65
+
+
+State 104
+
+   65 variable_assignment: variable ASSIGNOP • expression
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 140
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 105
+
+   51 compound_statement: ASSEMBLER ';' ASM • ENDASM
+
+    ENDASM  shift, and go to state 141
+
+
+State 106
+
+   31 subprogram_declarations: subprogram_declarations • subprogram_declaration ';'
+   33 subprogram_declaration: subprogram_head declarations subprogram_declarations • compound_statement
+
+    PROCEDURE  shift, and go to state 34
+    FUNCTION   shift, and go to state 35
+    BBEGIN     shift, and go to state 36
+    ASSEMBLER  shift, and go to state 37
+
+    subprogram_declaration  go to state 38
+    subprogram_head         go to state 39
+    compound_statement      go to state 142
+
+
+State 107
+
+    3 program: PROGRAM ident optional_program_parameters ';' type_declarations_opt declarations subprogram_declarations compound_statement '.' END_OF_FILE •
+
+    $default  reduce using rule 3 (program)
+
+
+State 108
+
+   21 type_declaration: ident relop signed_int DOTDOT signed_int ';' •
+
+    $default  reduce using rule 21 (type_declaration)
+
+
+State 109
+
+   25 type: ARRAY '[' int_num • DOTDOT int_num ']' OF standard_type
+
+    DOTDOT  shift, and go to state 143
+
+
+State 110
+
+   15 declaration_list: declaration_list identifier_list ':' type ';' •
+
+    $default  reduce using rule 15 (declaration_list)
+
+
+State 111
+
+   49 parameter_item: VARIABLE • optional_const identifier_list ':' type
+
+    CONST  shift, and go to state 112
+
+    $default  reduce using rule 45 (optional_const)
+
+    optional_const  go to state 144
+
+
+State 112
+
+   44 optional_const: CONST •
+
+    $default  reduce using rule 44 (optional_const)
+
+
+State 113
+
+   48 parameter_item: optional_const • identifier_list ':' type
+
+    ID  shift, and go to state 3
+
+    ident            go to state 8
+    identifier_list  go to state 145
+
+
+State 114
+
+   42 arguments: '(' parameter_list • ')'
+   46 parameter_list: parameter_list • ';' parameter_item
+
+    ')'  shift, and go to state 146
+    ';'  shift, and go to state 147
+
+
+State 115
+
+   47 parameter_list: parameter_item •
+
+    $default  reduce using rule 47 (parameter_list)
+
+
+State 116
+
+   39 subprogram_head: PROCEDURE ident arguments OVERLOAD • ';'
+
+    ';'  shift, and go to state 148
+
+
+State 117
+
+   40 subprogram_head: PROCEDURE ident arguments CNAME • ';'
+   41                | PROCEDURE ident arguments CNAME • OVERLOAD ';'
+
+    OVERLOAD  shift, and go to state 149
+    ';'       shift, and go to state 150
+
+
+State 118
+
+   38 subprogram_head: PROCEDURE ident arguments ';' •
+
+    $default  reduce using rule 38 (subprogram_head)
+
+
+State 119
+
+   34 subprogram_head: FUNCTION ident arguments ':' • type ';'
+   35                | FUNCTION ident arguments ':' • type OVERLOAD ';'
+   36                | FUNCTION ident arguments ':' • type CNAME ';'
+   37                | FUNCTION ident arguments ':' • type CNAME OVERLOAD ';'
+
+    INT_TYPE      shift, and go to state 43
+    REAL_TYPE     shift, and go to state 44
+    LONGINT_TYPE  shift, and go to state 45
+    STRING_TYPE   shift, and go to state 46
+    ID            shift, and go to state 3
+    ARRAY         shift, and go to state 47
+
+    ident          go to state 48
+    type           go to state 151
+    standard_type  go to state 50
+
+
+State 120
+
+   76 relop_not: NOT relop_not •
+
+    $default  reduce using rule 76 (relop_not)
+
+
+State 121
+
+   72 relop_expression: relop_expression • OR relop_and
+   78 relop_paren: '(' relop_expression • ')'
+
+    OR   shift, and go to state 126
+    ')'  shift, and go to state 152
+
+
+State 122
+
+   80 relop_expression_single: expression • relop expression
+   84 expression: expression • addop term
+   94 factor: '(' expression • ')'
+
+    RELOP  shift, and go to state 21
+    ADDOP  shift, and go to state 28
+    ')'    shift, and go to state 153
+
+    relop  go to state 128
+    addop  go to state 129
+
+
+State 123
+
+   89 factor: ident '(' • expression_list ')'
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident            go to state 82
+    int_num          go to state 83
+    real_num         go to state 84
+    string_literal   go to state 85
+    expression_list  go to state 154
+    expression       go to state 137
+    term             go to state 92
+    factor           go to state 93
+    sign             go to state 94
+
+
+State 124
+
+   88 factor: ident '[' • expression ']'
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 155
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 125
+
+   63 if_statement: IF relop_expression THEN • statement
+   64             | IF relop_expression THEN • statement ELSE statement
+
+    BBEGIN     shift, and go to state 36
+    ID         shift, and go to state 3
+    ASSEMBLER  shift, and go to state 37
+    IF         shift, and go to state 54
+    WHILE      shift, and go to state 55
+    FOR        shift, and go to state 56
+
+    ident                go to state 57
+    compound_statement   go to state 58
+    statement            go to state 156
+    if_statement         go to state 62
+    variable_assignment  go to state 63
+    variable             go to state 64
+    procedure_statement  go to state 65
+
+
+State 126
+
+   72 relop_expression: relop_expression OR • relop_and
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    NOT       shift, and go to state 79
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 81
+
+    ident                    go to state 82
+    int_num                  go to state 83
+    real_num                 go to state 84
+    string_literal           go to state 85
+    relop_and                go to state 157
+    relop_not                go to state 88
+    relop_paren              go to state 89
+    relop_expression_single  go to state 90
+    expression               go to state 91
+    term                     go to state 92
+    factor                   go to state 93
+    sign                     go to state 94
+
+
+State 127
+
+   74 relop_and: relop_and AND • relop_not
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    NOT       shift, and go to state 79
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 81
+
+    ident                    go to state 82
+    int_num                  go to state 83
+    real_num                 go to state 84
+    string_literal           go to state 85
+    relop_not                go to state 158
+    relop_paren              go to state 89
+    relop_expression_single  go to state 90
+    expression               go to state 91
+    term                     go to state 92
+    factor                   go to state 93
+    sign                     go to state 94
+
+
+State 128
+
+   80 relop_expression_single: expression relop • expression
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 159
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 129
+
+   84 expression: expression addop • term
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    term            go to state 160
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 130
+
+   10 mulop: MULOP •
+
+    $default  reduce using rule 10 (mulop)
+
+
+State 131
+
+   86 term: term mulop • factor
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    factor          go to state 161
+    sign            go to state 94
+
+
+State 132
+
+   94 factor: '(' • expression ')'
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 162
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 133
+
+   93 factor: sign factor •
+
+    $default  reduce using rule 93 (factor)
+
+
+State 134
+
+   61 statement: WHILE relop_expression DO • statement
+
+    BBEGIN     shift, and go to state 36
+    ID         shift, and go to state 3
+    ASSEMBLER  shift, and go to state 37
+    IF         shift, and go to state 54
+    WHILE      shift, and go to state 55
+    FOR        shift, and go to state 56
+
+    ident                go to state 57
+    compound_statement   go to state 58
+    statement            go to state 163
+    if_statement         go to state 62
+    variable_assignment  go to state 63
+    variable             go to state 64
+    procedure_statement  go to state 65
+
+
+State 135
+
+   62 statement: FOR for_assign TO • expression DO statement
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 164
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 136
+
+   71 procedure_statement: ident '(' expression_list • ')'
+   82 expression_list: expression_list • ',' expression
+
+    ')'  shift, and go to state 165
+    ','  shift, and go to state 166
+
+
+State 137
+
+   81 expression_list: expression •
+   84 expression: expression • addop term
+
+    ADDOP  shift, and go to state 28
+
+    $default  reduce using rule 81 (expression_list)
+
+    addop  go to state 129
+
+
+State 138
+
+   69 variable: ident '[' expression • ']'
+   84 expression: expression • addop term
+
+    ADDOP  shift, and go to state 28
+    ']'    shift, and go to state 167
+
+    addop  go to state 129
+
+
+State 139
+
+   56 statement_seq: statement_seq ';' statement •
+
+    $default  reduce using rule 56 (statement_seq)
+
+
+State 140
+
+   65 variable_assignment: variable ASSIGNOP expression •
+   84 expression: expression • addop term
+
+    ADDOP  shift, and go to state 28
+
+    $default  reduce using rule 65 (variable_assignment)
+
+    addop  go to state 129
+
+
+State 141
+
+   51 compound_statement: ASSEMBLER ';' ASM ENDASM •
+
+    $default  reduce using rule 51 (compound_statement)
+
+
+State 142
+
+   33 subprogram_declaration: subprogram_head declarations subprogram_declarations compound_statement •
+
+    $default  reduce using rule 33 (subprogram_declaration)
+
+
+State 143
+
+   25 type: ARRAY '[' int_num DOTDOT • int_num ']' OF standard_type
+
+    INT_NUM  shift, and go to state 27
+
+    int_num  go to state 168
+
+
+State 144
+
+   49 parameter_item: VARIABLE optional_const • identifier_list ':' type
+
+    ID  shift, and go to state 3
+
+    ident            go to state 8
+    identifier_list  go to state 169
+
+
+State 145
+
+   12 identifier_list: identifier_list • ',' ident
+   48 parameter_item: optional_const identifier_list • ':' type
+
+    ','  shift, and go to state 12
+    ':'  shift, and go to state 170
+
+
+State 146
+
+   42 arguments: '(' parameter_list ')' •
+
+    $default  reduce using rule 42 (arguments)
+
+
+State 147
+
+   46 parameter_list: parameter_list ';' • parameter_item
+
+    VARIABLE  shift, and go to state 111
+    CONST     shift, and go to state 112
+
+    $default  reduce using rule 45 (optional_const)
+
+    optional_const  go to state 113
+    parameter_item  go to state 171
+
+
+State 148
+
+   39 subprogram_head: PROCEDURE ident arguments OVERLOAD ';' •
+
+    $default  reduce using rule 39 (subprogram_head)
+
+
+State 149
+
+   41 subprogram_head: PROCEDURE ident arguments CNAME OVERLOAD • ';'
+
+    ';'  shift, and go to state 172
+
+
+State 150
+
+   40 subprogram_head: PROCEDURE ident arguments CNAME ';' •
+
+    $default  reduce using rule 40 (subprogram_head)
+
+
+State 151
+
+   34 subprogram_head: FUNCTION ident arguments ':' type • ';'
+   35                | FUNCTION ident arguments ':' type • OVERLOAD ';'
+   36                | FUNCTION ident arguments ':' type • CNAME ';'
+   37                | FUNCTION ident arguments ':' type • CNAME OVERLOAD ';'
+
+    OVERLOAD  shift, and go to state 173
+    CNAME     shift, and go to state 174
+    ';'       shift, and go to state 175
+
+
+State 152
+
+   78 relop_paren: '(' relop_expression ')' •
+
+    $default  reduce using rule 78 (relop_paren)
+
+
+State 153
+
+   94 factor: '(' expression ')' •
+
+    $default  reduce using rule 94 (factor)
+
+
+State 154
+
+   82 expression_list: expression_list • ',' expression
+   89 factor: ident '(' expression_list • ')'
+
+    ')'  shift, and go to state 176
+    ','  shift, and go to state 166
+
+
+State 155
+
+   84 expression: expression • addop term
+   88 factor: ident '[' expression • ']'
+
+    ADDOP  shift, and go to state 28
+    ']'    shift, and go to state 177
+
+    addop  go to state 129
+
+
+State 156
+
+   63 if_statement: IF relop_expression THEN statement •
+   64             | IF relop_expression THEN statement • ELSE statement
+
+    ELSE  shift, and go to state 178
+
+    $default  reduce using rule 63 (if_statement)
+
+
+State 157
+
+   72 relop_expression: relop_expression OR relop_and •
+   74 relop_and: relop_and • AND relop_not
+
+    AND  shift, and go to state 127
+
+    $default  reduce using rule 72 (relop_expression)
+
+
+State 158
+
+   74 relop_and: relop_and AND relop_not •
+
+    $default  reduce using rule 74 (relop_and)
+
+
+State 159
+
+   80 relop_expression_single: expression relop expression •
+   84 expression: expression • addop term
+
+    ADDOP  shift, and go to state 28
+
+    $default  reduce using rule 80 (relop_expression_single)
+
+    addop  go to state 129
+
+
+State 160
+
+   84 expression: expression addop term •
+   86 term: term • mulop factor
+
+    MULOP  shift, and go to state 130
+
+    $default  reduce using rule 84 (expression)
+
+    mulop  go to state 131
+
+
+State 161
+
+   86 term: term mulop factor •
+
+    $default  reduce using rule 86 (term)
+
+
+State 162
+
+   84 expression: expression • addop term
+   94 factor: '(' expression • ')'
+
+    ADDOP  shift, and go to state 28
+    ')'    shift, and go to state 153
+
+    addop  go to state 129
+
+
+State 163
+
+   61 statement: WHILE relop_expression DO statement •
+
+    $default  reduce using rule 61 (statement)
+
+
+State 164
+
+   62 statement: FOR for_assign TO expression • DO statement
+   84 expression: expression • addop term
+
+    DO     shift, and go to state 179
+    ADDOP  shift, and go to state 28
+
+    addop  go to state 129
+
+
+State 165
+
+   71 procedure_statement: ident '(' expression_list ')' •
+
+    $default  reduce using rule 71 (procedure_statement)
+
+
+State 166
+
+   82 expression_list: expression_list ',' • expression
+
+    INT_NUM   shift, and go to state 27
+    REAL_NUM  shift, and go to state 77
+    STRING    shift, and go to state 78
+    ID        shift, and go to state 3
+    ADDOP     shift, and go to state 80
+    '('       shift, and go to state 132
+
+    ident           go to state 82
+    int_num         go to state 83
+    real_num        go to state 84
+    string_literal  go to state 85
+    expression      go to state 180
+    term            go to state 92
+    factor          go to state 93
+    sign            go to state 94
+
+
+State 167
+
+   69 variable: ident '[' expression ']' •
+
+    $default  reduce using rule 69 (variable)
+
+
+State 168
+
+   25 type: ARRAY '[' int_num DOTDOT int_num • ']' OF standard_type
+
+    ']'  shift, and go to state 181
+
+
+State 169
+
+   12 identifier_list: identifier_list • ',' ident
+   49 parameter_item: VARIABLE optional_const identifier_list • ':' type
+
+    ','  shift, and go to state 12
+    ':'  shift, and go to state 182
+
+
+State 170
+
+   48 parameter_item: optional_const identifier_list ':' • type
+
+    INT_TYPE      shift, and go to state 43
+    REAL_TYPE     shift, and go to state 44
+    LONGINT_TYPE  shift, and go to state 45
+    STRING_TYPE   shift, and go to state 46
+    ID            shift, and go to state 3
+    ARRAY         shift, and go to state 47
+
+    ident          go to state 48
+    type           go to state 183
+    standard_type  go to state 50
+
+
+State 171
+
+   46 parameter_list: parameter_list ';' parameter_item •
+
+    $default  reduce using rule 46 (parameter_list)
+
+
+State 172
+
+   41 subprogram_head: PROCEDURE ident arguments CNAME OVERLOAD ';' •
+
+    $default  reduce using rule 41 (subprogram_head)
+
+
+State 173
+
+   35 subprogram_head: FUNCTION ident arguments ':' type OVERLOAD • ';'
+
+    ';'  shift, and go to state 184
+
+
+State 174
+
+   36 subprogram_head: FUNCTION ident arguments ':' type CNAME • ';'
+   37                | FUNCTION ident arguments ':' type CNAME • OVERLOAD ';'
+
+    OVERLOAD  shift, and go to state 185
+    ';'       shift, and go to state 186
+
+
+State 175
+
+   34 subprogram_head: FUNCTION ident arguments ':' type ';' •
+
+    $default  reduce using rule 34 (subprogram_head)
+
+
+State 176
+
+   89 factor: ident '(' expression_list ')' •
+
+    $default  reduce using rule 89 (factor)
+
+
+State 177
+
+   88 factor: ident '[' expression ']' •
+
+    $default  reduce using rule 88 (factor)
+
+
+State 178
+
+   64 if_statement: IF relop_expression THEN statement ELSE • statement
+
+    BBEGIN     shift, and go to state 36
+    ID         shift, and go to state 3
+    ASSEMBLER  shift, and go to state 37
+    IF         shift, and go to state 54
+    WHILE      shift, and go to state 55
+    FOR        shift, and go to state 56
+
+    ident                go to state 57
+    compound_statement   go to state 58
+    statement            go to state 187
+    if_statement         go to state 62
+    variable_assignment  go to state 63
+    variable             go to state 64
+    procedure_statement  go to state 65
+
+
+State 179
+
+   62 statement: FOR for_assign TO expression DO • statement
+
+    BBEGIN     shift, and go to state 36
+    ID         shift, and go to state 3
+    ASSEMBLER  shift, and go to state 37
+    IF         shift, and go to state 54
+    WHILE      shift, and go to state 55
+    FOR        shift, and go to state 56
+
+    ident                go to state 57
+    compound_statement   go to state 58
+    statement            go to state 188
+    if_statement         go to state 62
+    variable_assignment  go to state 63
+    variable             go to state 64
+    procedure_statement  go to state 65
+
+
+State 180
+
+   82 expression_list: expression_list ',' expression •
+   84 expression: expression • addop term
+
+    ADDOP  shift, and go to state 28
+
+    $default  reduce using rule 82 (expression_list)
+
+    addop  go to state 129
+
+
+State 181
+
+   25 type: ARRAY '[' int_num DOTDOT int_num ']' • OF standard_type
+
+    OF  shift, and go to state 189
+
+
+State 182
+
+   49 parameter_item: VARIABLE optional_const identifier_list ':' • type
+
+    INT_TYPE      shift, and go to state 43
+    REAL_TYPE     shift, and go to state 44
+    LONGINT_TYPE  shift, and go to state 45
+    STRING_TYPE   shift, and go to state 46
+    ID            shift, and go to state 3
+    ARRAY         shift, and go to state 47
+
+    ident          go to state 48
+    type           go to state 190
+    standard_type  go to state 50
+
+
+State 183
+
+   48 parameter_item: optional_const identifier_list ':' type •
+
+    $default  reduce using rule 48 (parameter_item)
+
+
+State 184
+
+   35 subprogram_head: FUNCTION ident arguments ':' type OVERLOAD ';' •
+
+    $default  reduce using rule 35 (subprogram_head)
+
+
+State 185
+
+   37 subprogram_head: FUNCTION ident arguments ':' type CNAME OVERLOAD • ';'
+
+    ';'  shift, and go to state 191
+
+
+State 186
+
+   36 subprogram_head: FUNCTION ident arguments ':' type CNAME ';' •
+
+    $default  reduce using rule 36 (subprogram_head)
+
+
+State 187
+
+   64 if_statement: IF relop_expression THEN statement ELSE statement •
+
+    $default  reduce using rule 64 (if_statement)
+
+
+State 188
+
+   62 statement: FOR for_assign TO expression DO statement •
+
+    $default  reduce using rule 62 (statement)
+
+
+State 189
+
+   25 type: ARRAY '[' int_num DOTDOT int_num ']' OF • standard_type
+
+    INT_TYPE      shift, and go to state 43
+    REAL_TYPE     shift, and go to state 44
+    LONGINT_TYPE  shift, and go to state 45
+    STRING_TYPE   shift, and go to state 46
+
+    standard_type  go to state 192
+
+
+State 190
+
+   49 parameter_item: VARIABLE optional_const identifier_list ':' type •
+
+    $default  reduce using rule 49 (parameter_item)
+
+
+State 191
+
+   37 subprogram_head: FUNCTION ident arguments ':' type CNAME OVERLOAD ';' •
+
+    $default  reduce using rule 37 (subprogram_head)
+
+
+State 192
+
+   25 type: ARRAY '[' int_num DOTDOT int_num ']' OF standard_type •
+
+    $default  reduce using rule 25 (type)

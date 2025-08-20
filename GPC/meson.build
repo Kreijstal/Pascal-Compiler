@@ -64,6 +64,46 @@ gpc_exe = executable('gpc', gpc_sources,
   ]
 )
 
+
+semcheck_sources = [
+  'semcheck_main.c',
+  'flags.c',
+  'Parser/ParsePascal.c',
+  'Parser/List/List.c',
+  'Parser/ParseTree/tree.c',
+  'Parser/SemanticCheck/SemCheck.c',
+  'Parser/SemanticCheck/HashTable/HashTable.c',
+  'Parser/SemanticCheck/SymTab/SymTab.c',
+  'Parser/SemanticCheck/NameMangling.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_stmt.c',
+  'Parser/SemanticCheck/SemChecks/SemCheck_expr.c',
+  'Optimizer/optimizer.c',
+]
+semcheck_sources += bison_generated
+semcheck_sources += flex_generated
+
+semcheck_exe = executable('semcheck', semcheck_sources,
+  include_directories: inc_dirs,
+  dependencies: [
+    compiler.find_library('m', required: true),
+    compiler.find_library('fl', required: true),
+  ]
+)
+
+test_programs = run_command('find', meson.project_source_root() / 'GPC/TestPrograms', '-name', '*.p').stdout().strip().split('\n')
+
+test('Semantic check for sign_test.p', semcheck_exe,
+  args: [meson.project_source_root() / 'GPC/TestPrograms/sign_test.p']
+)
+
+semcheck_test_programs = run_command('find', meson.project_source_root() / 'GPC/TestPrograms/Semantic', '-name', '*.p').stdout().strip().split('\n')
+foreach prog : semcheck_test_programs
+    test_name = 'Semantic check for ' + prog.split('/')[-1]
+    test(test_name, semcheck_exe,
+        args: [prog]
+    )
+endforeach
+
 python = find_program('python3')
 test('Compiler tests', python,
   args: [meson.project_source_root() / 'tests/test_runner.py'],

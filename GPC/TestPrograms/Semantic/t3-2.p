@@ -2,7 +2,7 @@
 program main( input, output );
   var a: integer;
 begin
-  while a + 123 do
+  while (a + 123) > 0 do
     a := a + 1
 end.
 

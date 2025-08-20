@@ -10,9 +10,9 @@ all: lex.yy.o Grammar.tab.o
 flexDebug: debug_lex.yy.o Grammar.tab.o
 
 lex.yy.o: lex.yy.c Grammar.tab.h
-	$(CC) $(CCFLAGS) -I. -c lex.yy.c
+	$(CC) $(CCFLAGS) -I. -I.. -I../ParseTree -I../List -c lex.yy.c
 Grammar.tab.o: Grammar.tab.c Grammar.tab.h
-	$(CC) $(CCFLAGS) -c Grammar.tab.c
+	$(CC) $(CCFLAGS) -I.. -I../ParseTree -I../List -c Grammar.tab.c
 
 debug_lex.yy.o: lex.yy.c Grammar.tab.h
 	$(CC) $(CCFLAGS) $(FLEX_DEBUG) -c lex.yy.c

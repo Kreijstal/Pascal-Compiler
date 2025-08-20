@@ -1,7 +1,8 @@
 (* ERROR: procedure passed wrong number/type of arguments *)
 program main( input, output );
-  var b: integer;
-  var y: real;
+  var
+    b: integer;
+    y: real;
 
   procedure boo(a: integer; x: real);
   begin

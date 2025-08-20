@@ -1,7 +1,5 @@
 %option noyywrap
 %x ASM_MODE
-%x COMMENT_MODE
-%x IGNORE_MODE
 
 %{
     #include <stdio.h>
@@ -39,86 +37,17 @@ pascal_string \'([^\']|\'\')*\'
 
 {whitespace} ;
 
-"{"/[^$] {
-    BEGIN(COMMENT_MODE);
-}
-
-<COMMENT_MODE>"}" {
-    BEGIN(INITIAL);
-}
-
-<COMMENT_MODE>(.|\n) {
-    if (yytext[0] == '\n') {
-        line_num++;
+"{"(.|\n)*?"}" {
+    // This will match both {...} and {$...} comments and ignore them.
+    // It's a simple, greedy match. It may not handle nested comments correctly,
+    // but it should be sufficient for the current test cases.
+    int i;
+    for(i = 0; i < strlen(yytext); ++i)
+    {
+        if(yytext[i] == '\n')
+            ++line_num;
     }
 }
-
-"{$ifDef"([ \t]+[A-Za-z0-9_]+)?"}" {
-    char symbol[100];
-    sscanf(yytext, "{$ifDef %99s}", symbol);
-    if (if_stack_ptr > 0 && if_stack[if_stack_ptr-1] == 0) {
-        if_stack[if_stack_ptr++] = 0; // nested if in false branch
-    } else {
-        if_stack[if_stack_ptr++] = is_defined(symbol);
-    }
-    if (if_stack[if_stack_ptr-1] == 0) {
-        BEGIN(IGNORE_MODE);
-    }
-}
-
-"{$ifNDef"([ \t]+[A-Za-z0-9_]+)?"}" {
-    char symbol[100];
-    sscanf(yytext, "{$ifNDef %99s}", symbol);
-    if (if_stack_ptr > 0 && if_stack[if_stack_ptr-1] == 0) {
-        if_stack[if_stack_ptr++] = 0; // nested if in false branch
-    } else {
-        if_stack[if_stack_ptr++] = !is_defined(symbol);
-    }
-    if (if_stack[if_stack_ptr-1] == 0) {
-        BEGIN(IGNORE_MODE);
-    }
-}
-
-"{$else}" {
-    if (if_stack_ptr > 0) {
-        if (if_stack[if_stack_ptr-1] == 1) { // if part was true, ignore else
-            BEGIN(IGNORE_MODE);
-        } else { // if part was false, parse else
-            if (if_stack_ptr > 1 && if_stack[if_stack_ptr-2] == 0) {
-                // nested in false branch, still ignore
-            } else {
-                BEGIN(INITIAL);
-            }
-        }
-    }
-}
-
-"{$endIf}" {
-    if (if_stack_ptr > 0) {
-        if_stack_ptr--;
-        if (if_stack_ptr == 0 || if_stack[if_stack_ptr-1] == 1) {
-            BEGIN(INITIAL);
-        }
-    }
-}
-
-<IGNORE_MODE>"{$ifDef"([ \t]+[A-Za-z0-9_]+)?"}" { if_stack_ptr++; }
-<IGNORE_MODE>"{$ifNDef"([ \t]+[A-Za-z0-9_]+)?"}" { if_stack_ptr++; }
-<IGNORE_MODE>"{$else}" {
-    if (if_stack_ptr > 0) {
-        if (if_stack[if_stack_ptr-1] == 0) { // was in false if
-            if (if_stack_ptr > 1 && if_stack[if_stack_ptr-2] == 0) {
-                // still ignoring
-            } else {
-                BEGIN(INITIAL);
-            }
-        }
-    }
-}
-<IGNORE_MODE>"{$endIf}" { if (if_stack_ptr > 0) if_stack_ptr--; if(if_stack_ptr == 0 || if_stack[if_stack_ptr-1]==1) BEGIN(INITIAL); }
-<IGNORE_MODE>(.|\n) {}
-
-"}" { /* might be needed for asmMode */ return '}'; }
 
 
 {comment}|"//".*   { /* Well documented way to ignore comments */

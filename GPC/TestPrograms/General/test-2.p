@@ -3,15 +3,17 @@
 
 program main( input, output );
 
- var x,y: integer;
- var p,q: real;
- var a: array [ 1..10 ] of integer;
- var b: array [ 10..15 ] of real;
+ var
+  x,y: integer;
+  p,q: real;
+  a: array [ 1..10 ] of integer;
+  b: array [ 10..15 ] of real;
 
  function foo( i: integer; u: real; j: integer; v: real ) : integer;
 
-  var k: integer;
-  var w: real;
+  var
+    k: integer;
+    w: real;
 
   procedure boo( r: real; s: integer );
   begin (* boo *)

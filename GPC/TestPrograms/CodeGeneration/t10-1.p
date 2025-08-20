@@ -1,6 +1,7 @@
 program boo( input, output );
- var n,i: integer;
- var a: array[1 .. 10] of integer;
+ var
+  n,i: integer;
+  a: array[1 .. 10] of integer;
  function foo( n: integer ) : integer;
  begin
 	if ( n <= 1 ) then

@@ -12,7 +12,7 @@ TEST_OUTPUT_DIR = "tests/output"
 
 # The compiler is built by Meson now, so this function is not needed.
 
-def run_compiler(input_file, output_file, flags=None):
+def run_compiler(input_file, output_file, flags=None, syntax_only=False):
     """Runs the GPC compiler with the given arguments."""
     if flags is None:
         flags = []
@@ -20,7 +20,10 @@ def run_compiler(input_file, output_file, flags=None):
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    command = [GPC_PATH, input_file, output_file] + flags
+    command = [GPC_PATH, input_file]
+    if not syntax_only:
+        command.append(output_file)
+    command += flags
     print(f"--- Running compiler: {' '.join(command)} ---")
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -98,7 +101,6 @@ class TestCompiler(unittest.TestCase):
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
 
 
-    @unittest.skip("Skipping broken test: sign_test.p fails to compile correctly")
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
         input_file = "GPC/TestPrograms/sign_test.p"
@@ -106,7 +108,7 @@ class TestCompiler(unittest.TestCase):
         executable_file = os.path.join(TEST_OUTPUT_DIR, "sign_test")
 
         # Compile the pascal program to assembly
-        run_compiler(input_file, asm_file)
+        run_compiler(input_file, asm_file, syntax_only=True)
 
         # Compile the assembly to an executable
         try:

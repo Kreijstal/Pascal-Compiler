@@ -55,6 +55,7 @@ Tree_t *ParsePascal(char *file)
     Tree_t *tree = ParsePascalOnly(file);
 
     /**** SEMANTIC CHECKING ****/
+    #ifndef PARSER_ONLY
     if(tree != NULL)
     {
         int sem_result;
@@ -68,6 +69,7 @@ Tree_t *ParsePascal(char *file)
             tree = NULL;
         }
     }
+    #endif
 
     return tree;
 }
