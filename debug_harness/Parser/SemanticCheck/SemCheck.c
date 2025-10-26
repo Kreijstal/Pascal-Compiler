@@ -23,7 +23,7 @@
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
-#include "Grammar.tab.h"
+#include "../ParseTree/type_tags.h"
 #include "NameMangling.h"
 
 /* Adds built-in functions */
@@ -118,8 +118,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
     char *id;
     ListNode_t *args, *arg_ids;
 
-    AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
-    AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
+    char *pchar_name = strdup("PChar");
+    if (pchar_name != NULL) {
+        AddBuiltinType(symtab, pchar_name, HASHVAR_PCHAR);
+        free(pchar_name);
+    }
+    char *string_name = strdup("string");
+    if (string_name != NULL) {
+        AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
+        free(string_name);
+    }
 
     /* Builtins are now in stdlib.p */
 }

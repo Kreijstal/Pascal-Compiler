@@ -19,7 +19,7 @@
 #include "../../../Parser/List/List.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../../Parser/ParseTree/type_tags.h"
 
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);

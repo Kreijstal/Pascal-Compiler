@@ -3,7 +3,7 @@
 #include <string.h>
 #include "debug_deserializer.h"
 #include "Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "Parser/ParseTree/type_tags.h"
 #include "Parser/ParseTree/tree.h"
 
 struct Expression *deserialize_expression(FILE *fp) {

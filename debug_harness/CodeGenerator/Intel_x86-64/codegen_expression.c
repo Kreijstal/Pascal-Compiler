@@ -16,7 +16,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 

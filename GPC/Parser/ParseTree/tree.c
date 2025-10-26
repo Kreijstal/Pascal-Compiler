@@ -5,7 +5,7 @@
 
 #include "tree.h"
 #include "tree_types.h"
-#include "Grammar.tab.h"
+#include "type_tags.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -428,6 +428,8 @@ void destroy_stmt(struct Statement *stmt)
 
         case STMT_PROCEDURE_CALL:
           free(stmt->stmt_data.procedure_call_data.id);
+          if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
           destroy_list(stmt->stmt_data.procedure_call_data.expr_args);
           break;
 
@@ -676,7 +678,9 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_PROCEDURE_CALL;
     new_stmt->stmt_data.procedure_call_data.id = id;
+    new_stmt->stmt_data.procedure_call_data.mangled_id = NULL;
     new_stmt->stmt_data.procedure_call_data.expr_args = expr_args;
+    new_stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
 
     return new_stmt;
 }
@@ -874,7 +878,9 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->line_num = line_num;
     new_expr->type = EXPR_FUNCTION_CALL;
     new_expr->expr_data.function_call_data.id = id;
+    new_expr->expr_data.function_call_data.mangled_id = NULL;
     new_expr->expr_data.function_call_data.args_expr = args;
+    new_expr->expr_data.function_call_data.resolved_func = NULL;
 
     return new_expr;
 }
@@ -900,11 +906,7 @@ struct Expression *mk_string(int line_num, char *string)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_STRING;
-    new_expr->expr_data.string = strdup(string);
-    if(new_expr->expr_data.string == NULL) {
-        free(new_expr);
-        return NULL;
-    }
+    new_expr->expr_data.string = string;
 
     return new_expr;
 }

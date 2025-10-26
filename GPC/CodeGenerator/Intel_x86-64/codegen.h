@@ -107,7 +107,14 @@
 #error "Unsupported platform"
 #endif
 
+#ifdef GPC_DEBUG_CODEGEN
 #define DEBUG_CODEGEN
+#endif
+#ifdef DEBUG_CODEGEN
+#define CODEGEN_DEBUG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define CODEGEN_DEBUG(...) ((void)0)
+#endif
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
@@ -154,12 +161,12 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
 ListNode_t *add_inst(ListNode_t *, char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
-void codegen_program_header(char *, CodeGenContext *ctx);
+void codegen_program_header(const char *, CodeGenContext *ctx);
 void codegen_rodata(CodeGenContext *ctx);
 void codegen_program_footer(CodeGenContext *ctx);
 void codegen_main(char *prgm_name, CodeGenContext *ctx);

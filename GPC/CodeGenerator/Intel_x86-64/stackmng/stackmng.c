@@ -158,7 +158,7 @@ StackNode_t *add_l_t(char *label)
     }
 
     #ifdef DEBUG_CODEGEN
-        fprintf(stderr, "DEBUG: Added %s to t_offset %d\n", label, offset);
+        CODEGEN_DEBUG("DEBUG: Added %s to t_offset %d\n", label, offset);
     #endif
 
     return new_node;
@@ -195,7 +195,7 @@ StackNode_t *add_l_x(char *label)
     }
 
     #ifdef DEBUG_CODEGEN
-        fprintf(stderr, "DEBUG: Added %s to x_offset %d\n", new_node->label, new_node->offset);
+        CODEGEN_DEBUG("DEBUG: Added %s to x_offset %d\n", new_node->label, new_node->offset);
     #endif
 
     return new_node;
@@ -232,7 +232,7 @@ StackNode_t *add_l_z(char *label)
     }
 
     #ifdef DEBUG_CODEGEN
-        fprintf(stderr, "DEBUG: Added %s to z_offset %d\n", label, offset);
+        CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d\n", label, offset);
     #endif
 
     return new_node;
