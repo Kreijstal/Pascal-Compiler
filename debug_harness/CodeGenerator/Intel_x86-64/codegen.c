@@ -20,7 +20,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../Parser/ParseTree/type_tags.h"
 
 /* Platform detection */
 #if defined(__linux__) || defined(__unix__)
@@ -203,6 +203,7 @@ void codegen_program_header(char *fname, CodeGenContext *ctx)
 void codegen_program_footer(CodeGenContext *ctx)
 {
 #if PLATFORM_LINUX
+    fprintf(ctx->output_file, "\t.section\t.note.GNU-stack,\"\",@progbits\n");
 #else
     fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
 #endif

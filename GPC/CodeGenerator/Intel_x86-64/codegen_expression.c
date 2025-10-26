@@ -16,7 +16,7 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 
@@ -24,75 +24,75 @@
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(expr != NULL);
     assert(ctx != NULL);
     expr_node_t *expr_tree = NULL;
     Register_t *target_reg;
 
-    fprintf(stderr, "DEBUG: Generating code for expression type %d\n", expr->type);
+    CODEGEN_DEBUG("DEBUG: Generating code for expression type %d\n", expr->type);
 
     switch(expr->type) {
         case EXPR_VAR_ID:
-            fprintf(stderr, "DEBUG: Processing variable ID expression\n");
+            CODEGEN_DEBUG("DEBUG: Processing variable ID expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_MULOP:
-            fprintf(stderr, "DEBUG: Processing mulop expression\n");
+            CODEGEN_DEBUG("DEBUG: Processing mulop expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_INUM:
-            fprintf(stderr, "DEBUG: Processing integer constant expression\n");
+            CODEGEN_DEBUG("DEBUG: Processing integer constant expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_RELOP:
-            fprintf(stderr, "DEBUG: Processing relational operator expression\n");
+            CODEGEN_DEBUG("DEBUG: Processing relational operator expression\n");
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return codegen_simple_relop(expr, inst_list, ctx, NULL);
         case EXPR_ADDOP:
-            fprintf(stderr, "DEBUG: Processing addop expression\n");
+            CODEGEN_DEBUG("DEBUG: Processing addop expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_SIGN_TERM:
-            fprintf(stderr, "DEBUG: Processing sign term expression\n");
+            CODEGEN_DEBUG("DEBUG: Processing sign term expression\n");
             expr_tree = build_expr_tree(expr);
             target_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         default:
@@ -107,14 +107,14 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                                 CodeGenContext *ctx, int *relop_type)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(expr != NULL);
     assert(expr->type == EXPR_RELOP);
     assert(inst_list != NULL);
     assert(ctx != NULL);
 
-    fprintf(stderr, "DEBUG: Generating simple relop\n");
+    CODEGEN_DEBUG("DEBUG: Generating simple relop\n");
 
     *relop_type = expr->expr_data.relop_data.type;
     inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
@@ -128,9 +128,9 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     free_reg(get_reg_stack(), left_reg);
     inst_list = add_inst(inst_list, buffer);
 
-    fprintf(stderr, "DEBUG: Simple relop generated\n");
+    CODEGEN_DEBUG("DEBUG: Simple relop generated\n");
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
 }
@@ -139,9 +139,9 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
-    fprintf(stderr, "DEBUG: Generating non-local access for %s\n", var_id);
+    CODEGEN_DEBUG("DEBUG: Generating non-local access for %s\n", var_id);
 
     assert(inst_list != NULL);
     assert(var_id != NULL);
@@ -159,9 +159,9 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", NON_LOCAL_REG_64);
     inst_list = add_inst(inst_list, buffer);
 
-    fprintf(stderr, "DEBUG: Non-local access generated\n");
+    CODEGEN_DEBUG("DEBUG: Non-local access generated\n");
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
 }
@@ -170,7 +170,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     int arg_num;
     Register_t *top_reg;
@@ -187,9 +187,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     arg_num = 0;
     while(args != NULL)
     {
-        fprintf(stderr, "DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
+        CODEGEN_DEBUG("DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
         struct Expression *arg_expr = (struct Expression *)args->cur;
-        fprintf(stderr, "DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
+        CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
 
         arg_reg_char = get_arg_reg64_num(arg_num);
         if(arg_reg_char == NULL)
@@ -215,7 +215,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             // Pass by value
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
-            fprintf(stderr, "DEBUG: top_reg at %p\n", top_reg);
+            CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
@@ -231,7 +231,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     }
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
 }
@@ -240,7 +240,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_scope, char *base)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char buffer[50];
 
@@ -252,7 +252,7 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
     inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
 }

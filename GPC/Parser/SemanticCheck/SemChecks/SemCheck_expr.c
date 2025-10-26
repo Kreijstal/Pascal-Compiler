@@ -20,7 +20,7 @@
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../ParseTree/type_tags.h"
 
 int is_type_ir(int *type);
 int is_and_or(int *type);

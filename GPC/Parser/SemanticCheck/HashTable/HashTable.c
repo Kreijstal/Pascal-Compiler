@@ -177,6 +177,8 @@ void DestroyHashTable(HashTable_t *table)
         while(cur != NULL)
         {
             hash_node = (HashNode_t *)cur->cur;
+            if (hash_node->id != NULL)
+                free(hash_node->id);
             if(hash_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
                 DestroyBuiltin(hash_node);
 
@@ -196,7 +198,6 @@ void DestroyBuiltin(HashNode_t *node)
     assert(node != NULL);
     assert(node->hash_type == HASHTYPE_BUILTIN_PROCEDURE);
 
-    free(node->id);
     destroy_list(node->args);
 }
 

@@ -14,8 +14,8 @@ combinator_t* create_pascal_param_parser(void) {
     combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
         optional(multi(new_combinator(), PASCAL_T_NONE,     // only one modifier allowed
-            token(keyword_ci("const")),              // const modifier
-            token(keyword_ci("var")),                // var modifier
+            token(create_keyword_parser("const", PASCAL_T_IDENTIFIER)),  // const modifier
+            token(create_keyword_parser("var", PASCAL_T_IDENTIFIER)),    // var modifier
             NULL
         )),
         param_name_list,                             // parameter name(s) - can be multiple comma-separated
@@ -640,28 +640,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* standalone_function_body = seq(new_combinator(), PASCAL_T_NONE,
-        optional(local_var_section),                 // optional local var section
-        lazy(stmt_parser),                           // begin-end block handled by statement parser
-        NULL
-    );
-
     // Use the nested function body parser for complete programs to support nested functions
-    // Use the standalone function body for standalone parsing
     combinator_t* program_function_body = nested_function_body;
 
-    // Procedure declaration: procedure name [(params)] ; body
-    combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(keyword_ci("procedure")),                // procedure keyword (case-insensitive)
-        token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
-        param_list,                                  // optional parameter list
-        token(match(";")),                           // semicolon after parameters
-        program_function_body,                       // procedure body with terminating semicolon for programs
-        NULL
-    );
-
-    // Create simple working function and procedure parsers based on the standalone versions
-    // These work because they use the simpler statement parsing approach
+    // Create simple working function and procedure parsers based on the nested version
+    // These work because they use the recursive statement parser for bodies
 
     // Working function parser: function name [(params)] : return_type ; body ;
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
@@ -755,18 +738,24 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    // Complete program: program Name(params); [uses clause] [type section] [const section] [var section] [procedures/functions] [var section] begin end.
+    combinator_t* pre_subprogram_sections = many(multi(new_combinator(), PASCAL_T_NONE,
+        const_section,
+        type_section,
+        var_section,
+        NULL));
+
+    combinator_t* post_subprogram_var_sections = many(var_section);
+
+    // Complete program: program Name(params); optional uses clause; declaration sections; subprograms; optional trailing vars; optional main block.
     seq(*p, PASCAL_T_PROGRAM_DECL,
         token(keyword_ci("program")),                   // program keyword (with word boundary check)
         token(cident(PASCAL_T_IDENTIFIER)),          // program name
         program_param_list,                          // optional parameter list
         token(match(";")),                           // semicolon
-        optional(uses_section),                      // optional uses section
-        optional(type_section),                      // optional type section
-        optional(const_section),                     // optional const section
-        optional(var_section),                       // optional var section (before functions)
+        optional(uses_section),                      // optional uses clause
+        pre_subprogram_sections,                     // const/type/var sections in any order
         many(all_declarations),                      // zero or more procedure/function/method declarations
-        optional(var_section),                       // optional var section (after functions) - Pascal allows this
+        post_subprogram_var_sections,                // additional var sections allowed after subprograms
         optional(main_block),                        // optional main program block
         token(match(".")),                           // final period
         NULL

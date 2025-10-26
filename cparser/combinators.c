@@ -129,6 +129,7 @@ static ParseResult sep_by_fn(input_t * in, void * args, char* parser_name) {
         ParseResult sep_res = parse(in, sargs->sep);
         if (!sep_res.is_success) {
             restore_input_state(in, &state);
+            free_error(sep_res.value.error);
             break;
         }
         free_ast(sep_res.value.ast);
@@ -136,6 +137,7 @@ static ParseResult sep_by_fn(input_t * in, void * args, char* parser_name) {
         ParseResult p_res = parse(in, sargs->p);
         if (!p_res.is_success) {
             restore_input_state(in, &state);
+            free_error(p_res.value.error);
             break;
         }
         tail->next = p_res.value.ast;
@@ -162,6 +164,7 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
         ParseResult sep_res = parse(in, sargs->sep);
         if (!sep_res.is_success) {
             restore_input_state(in, &state);
+            free_error(sep_res.value.error);
             break;
         }
         free_ast(sep_res.value.ast);
@@ -169,6 +172,7 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
         ParseResult p_res = parse(in, sargs->p);
         if (!p_res.is_success) {
             restore_input_state(in, &state);
+            free_error(p_res.value.error);
             break;
         }
         tail->next = p_res.value.ast;
@@ -180,6 +184,7 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
     ParseResult final_sep_res = parse(in, sargs->sep);
     if (!final_sep_res.is_success) {
         restore_input_state(in, &final_sep_state);
+        free_error(final_sep_res.value.error);
     } else {
         free_ast(final_sep_res.value.ast);
     }
@@ -327,30 +332,28 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
             __func__, __FILE__, __LINE__);
         abort();
     }
-    ParseResult res;
-    // Initialize res with the failure of the first alternative, in case all fail.
-    res = parse(in, seq->comb);
-    if (res.is_success) {
-        if (sa->typ != 0) res.value.ast = ast1(sa->typ, res.value.ast);
-        return res;
-    }
 
-    // Backtrack and try the rest
     InputState state;
     save_input_state(in, &state);
 
-    while (seq->next != NULL) {
-        restore_input_state(in, &state); // Restore for next attempt
-        free_error(res.value.error);     // Free the error from the previous failed attempt
-        seq = seq->next;
-        res = parse(in, seq->comb);
+    ParseResult last_res;
+    for (seq_list *current = seq; current != NULL; current = current->next) {
+        restore_input_state(in, &state);
+        ParseResult res = parse(in, current->comb);
         if (res.is_success) {
-            if (sa->typ != 0) res.value.ast = ast1(sa->typ, res.value.ast);
+            if (sa->typ != 0) {
+                res.value.ast = ast1(sa->typ, res.value.ast);
+            }
             return res;
         }
+        if (current->next == NULL) {
+            last_res = res;
+        } else {
+            free_error(res.value.error);
+        }
     }
-    // Return the failure from the last alternative
-    return res;
+
+    return last_res;
 }
 
 static ParseResult flatMap_fn(input_t * in, void * args, char* parser_name) {

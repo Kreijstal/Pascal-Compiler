@@ -19,7 +19,7 @@
 #include "../../../Parser/List/List.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../../Parser/ParseTree/type_tags.h"
 
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
@@ -341,7 +341,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     inst_list = gencode_leaf_var(expr, inst_list, buf_leaf, 30);
 
 #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
+    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
 #endif
 
     snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
@@ -472,11 +472,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     {
         case EXPR_VAR_ID:
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
+            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
             #endif
             stack_node = find_label(expr->expr_data.id);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
+            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
             #endif
 
             if(stack_node != NULL)
@@ -569,7 +569,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             else if(type == SLASH || type == DIV)
             {
                 #ifdef DEBUG_CODEGEN
-                fprintf(stderr, "DEBUG: gencode_op: left = %s, right = %s\n", left, right);
+                CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
                 #endif
                 // left is the dividend, right is the divisor
                 snprintf(buffer, 50, "\tpushq\t%%rax\n");

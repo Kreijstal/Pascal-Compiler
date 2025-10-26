@@ -1,4 +1,11 @@
 #define _GNU_SOURCE
+#if defined(__has_include)
+#  if __has_include(<libunwind.h>)
+#    define HAVE_LIBUNWIND 1
+#  endif
+#endif
+
+#ifdef HAVE_LIBUNWIND
 #include <libunwind.h>
 #include <signal.h>
 #include <stdio.h>
@@ -45,3 +52,18 @@ void install_stack_trace_handler(void) {
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
 }
+
+#else
+
+#include <signal.h>
+
+#include "stacktrace.h"
+
+void install_stack_trace_handler(void) {
+    /* libunwind not available; no-op handler */
+    signal(SIGSEGV, SIG_DFL);
+    signal(SIGFPE, SIG_DFL);
+    signal(SIGABRT, SIG_DFL);
+}
+
+#endif

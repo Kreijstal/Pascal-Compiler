@@ -1,68 +1,40 @@
 #include "pascal_type.h"
 #include "pascal_parser.h"
 #include "pascal_keywords.h"
+#include "pascal_expression.h"
 #include "pascal_declaration.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
-// Range type parser: start..end (e.g., -1..1)
+// Range type parser: reuse expression parser and re-tag range AST nodes
 static ParseResult range_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
     InputState state;
     save_input_state(in, &state);
 
-    // Try parsing integer (including negative) or identifier for start value
-    combinator_t* start_parser = multi(new_combinator(), PASCAL_T_NONE,
-        integer(PASCAL_T_INTEGER),
-        seq(new_combinator(), PASCAL_T_INTEGER,
-            match("-"),
-            integer(PASCAL_T_INTEGER),
-            NULL),
-        cident(PASCAL_T_IDENTIFIER),
-        NULL);
+    combinator_t* expr_parser = new_combinator();
+    init_pascal_expression_parser(&expr_parser);
 
-    ParseResult start_result = parse(in, start_parser);
-    if (!start_result.is_success) {
-        free_combinator(start_parser);
+    ParseResult expr_result = parse(in, expr_parser);
+    free_combinator(expr_parser);
+
+    if (!expr_result.is_success) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected range start value"), NULL);
+        return make_failure_v2(in, parser_name, strdup("Expected range expression"), NULL);
     }
 
-    // Parse the ".." separator with whitespace handling
-    combinator_t* range_sep = token(match(".."));
-    ParseResult sep_result = parse(in, range_sep);
-    if (!sep_result.is_success) {
-        free_ast(start_result.value.ast);
-        free_combinator(start_parser);
-        free_combinator(range_sep);
+    ast_t* expr_ast = expr_result.value.ast;
+    if (expr_ast == NULL || expr_ast->typ != PASCAL_T_RANGE || expr_ast->child == NULL || expr_ast->child->next == NULL) {
+        free_ast(expr_ast);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '..' in range type"), NULL);
-    }
-    free_combinator(range_sep);
-    free_ast(sep_result.value.ast);
-
-    // Parse end value using the same parser
-    ParseResult end_result = parse(in, start_parser);
-    if (!end_result.is_success) {
-        free_ast(start_result.value.ast);
-        free_combinator(start_parser);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected range end value"), NULL);
+        return make_failure_v2(in, parser_name, strdup("Invalid range expression"), NULL);
     }
 
-    // Create range AST
-    ast_t* range_ast = new_ast();
-    range_ast->typ = pargs->tag;
-    range_ast->child = start_result.value.ast;
-    start_result.value.ast->next = end_result.value.ast;
-    range_ast->sym = NULL;
-    range_ast->next = NULL;
-
-    free_combinator(start_parser);
-    set_ast_position(range_ast, in);
-    return make_success(range_ast);
+    expr_ast->typ = pargs->tag;
+    set_ast_position(expr_ast, in);
+    return make_success(expr_ast);
 }
 
 combinator_t* range_type(tag_t tag) {
@@ -374,19 +346,18 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(record_res.value.ast);
     free_combinator(record_keyword);
 
-    // Field declaration: field_name: Type;
-    combinator_t* field_name = token(cident(PASCAL_T_IDENTIFIER));
+    // Field declaration: field_name[, field_name]* : Type
+    combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* field_type = token(cident(PASCAL_T_IDENTIFIER)); // simplified type for now
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-        field_name,
+        field_name_list,
         token(match(":")),
         field_type,
-        token(match(";")),
         NULL
     );
 
-    // Parse field list - many field declarations
-    combinator_t* field_list = many(field_decl);
+    // Parse field list separated by semicolons (allow trailing semicolon)
+    combinator_t* field_list = sep_end_by(field_decl, token(match(";")));
     ParseResult fields_res = parse(in, field_list);
     ast_t* fields_ast = NULL;
     if (fields_res.is_success) {

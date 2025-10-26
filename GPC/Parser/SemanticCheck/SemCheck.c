@@ -19,11 +19,11 @@
 #include "../../Optimizer/optimizer.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
+#include "../ParseTree/type_tags.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
-#include "Grammar.tab.h"
 #include "NameMangling.h"
 
 /* Adds built-in functions */
@@ -119,8 +119,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 /*TODO: these should be defined in pascal not in semantic analyzer */
 void semcheck_add_builtins(SymTab_t *symtab)
 {
-    AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
-    AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
+    char *pchar_name = strdup("PChar");
+    if (pchar_name != NULL) {
+        AddBuiltinType(symtab, pchar_name, HASHVAR_PCHAR);
+        free(pchar_name);
+    }
+    char *string_name = strdup("string");
+    if (string_name != NULL) {
+        AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
+        free(string_name);
+    }
 
     /* Builtins are now in stdlib.p */
 }
@@ -157,7 +165,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         optimize(symtab, tree);
     }
 
-    PopScope(symtab);
+    /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
     return return_val;
 }
 

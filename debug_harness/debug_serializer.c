@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include "debug_serializer.h"
 #include "Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "Parser/ParseTree/type_tags.h"
 
 void serialize_expression_recursive(FILE *fp, struct Expression *expr) {
     if (expr == NULL) {
