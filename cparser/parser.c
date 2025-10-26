@@ -38,6 +38,8 @@ static ast_t* ensure_ast_nil_initialized();
 
 ast_t * ast_nil = NULL;
 
+static void register_lazy_target(combinator_t** parser_ptr);
+
 // --- Result & Error Helpers ---
 ParseResult make_success(ast_t* ast) {
     return (ParseResult){ .is_success = true, .value.ast = ast };
@@ -56,7 +58,15 @@ ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char*
 }
 
 ParseResult make_failure(input_t* in, char* message) {
-    return make_failure_v2(in, NULL, message, NULL);
+    char* owned_message = NULL;
+    if (message != NULL) {
+        owned_message = strdup(message);
+        if (owned_message == NULL) {
+            fprintf(stderr, "FATAL: Failed to duplicate error message in %s:%d\n", __FILE__, __LINE__);
+            abort();
+        }
+    }
+    return make_failure_v2(in, NULL, owned_message, NULL);
 }
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
@@ -651,6 +661,7 @@ ParseResult parse(input_t * in, combinator_t * comb) {
 combinator_t * lazy(combinator_t** parser_ptr) {
     lazy_args* args = (lazy_args*)safe_malloc(sizeof(lazy_args));
     args->parser_ptr = parser_ptr;
+    register_lazy_target(parser_ptr);
     combinator_t * comb = new_combinator();
     comb->type = COMB_LAZY;
     comb->fn = lazy_fn;
@@ -711,6 +722,68 @@ void parser_walk_ast(ast_t* ast, ast_visitor_fn visitor, void* context) {
 typedef struct visited_node { const void* ptr; struct visited_node* next; } visited_node;
 typedef struct extra_node { void* ptr; struct extra_node* next; } extra_node;
 
+typedef struct lazy_registry_node {
+    combinator_t** parser_ptr;
+    struct lazy_registry_node* next;
+} lazy_registry_node;
+
+static lazy_registry_node* lazy_registry = NULL;
+
+static bool is_visited(const void* ptr, visited_node* list);
+void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra_node** extras);
+
+static void detach_lazy_references(combinator_t* target) {
+    if (target == NULL) {
+        return;
+    }
+
+    lazy_registry_node** current = &lazy_registry;
+    while (*current != NULL) {
+        lazy_registry_node* node = *current;
+        combinator_t** parser_ptr = node->parser_ptr;
+        if (parser_ptr != NULL && *parser_ptr == target) {
+            *parser_ptr = NULL;
+            node->parser_ptr = NULL;
+            *current = node->next;
+            free(node);
+        } else {
+            current = &node->next;
+        }
+    }
+}
+
+static void register_lazy_target(combinator_t** parser_ptr) {
+    if (parser_ptr == NULL) {
+        return;
+    }
+    for (lazy_registry_node* current = lazy_registry; current != NULL; current = current->next) {
+        if (current->parser_ptr == parser_ptr) {
+            return;
+        }
+    }
+    lazy_registry_node* node = (lazy_registry_node*)safe_malloc(sizeof(lazy_registry_node));
+    node->parser_ptr = parser_ptr;
+    node->next = lazy_registry;
+    lazy_registry = node;
+}
+
+static void cleanup_lazy_registry(visited_node** visited, extra_node** extras) {
+    (void)visited;
+    (void)extras;
+
+    lazy_registry_node** current = &lazy_registry;
+    while (*current != NULL) {
+        lazy_registry_node* node = *current;
+        combinator_t** parser_ptr = node->parser_ptr;
+        if (parser_ptr == NULL || *parser_ptr == NULL) {
+            *current = node->next;
+            free(node);
+        } else {
+            current = &node->next;
+        }
+    }
+}
+
 void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra_node** extras);
 
 bool is_visited(const void* ptr, visited_node* list) {
@@ -724,6 +797,7 @@ void free_combinator(combinator_t* comb) {
     visited_node* visited = NULL;
     extra_node* extras = NULL;
     free_combinator_recursive(comb, &visited, &extras);
+    cleanup_lazy_registry(&visited, &extras);
     visited_node* current = visited;
     while (current != NULL) {
         visited_node* temp = current;
@@ -740,6 +814,8 @@ void free_combinator(combinator_t* comb) {
 
 void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra_node** extras) {
     if (comb == NULL || is_visited(comb, *visited)) return;
+
+    detach_lazy_references(comb);
     visited_node* new_visited = (visited_node*)safe_malloc(sizeof(visited_node));
     new_visited->ptr = comb;
     new_visited->next = *visited;
