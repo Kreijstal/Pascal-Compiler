@@ -51,7 +51,7 @@ Tree_t* parse_pascal_file_with_cparser(const char* filename) {
 
     // Initialize cparser
     combinator_t *parser = new_combinator();
-    init_pascal_program_parser(&parser);
+    init_pascal_complete_program_parser(&parser);
     
     input_t *in = new_input();
     in->buffer = file_content;
