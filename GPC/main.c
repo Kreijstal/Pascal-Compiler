@@ -13,11 +13,8 @@ int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
-int use_cparser = 0; /* Flag to use cparser instead of flex/bison */
-
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
-#include "cparser_frontend.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 
 void set_flags(char **, int);
@@ -49,18 +46,9 @@ int main(int argc, char **argv)
     }
 
     file_to_parse = "GPC/stdlib.p";
-    if (use_cparser) {
-        prelude_tree = parse_pascal_file_with_cparser("GPC/stdlib.p");
-    } else {
-        prelude_tree = ParsePascalOnly("GPC/stdlib.p");
-    }
-    
+    prelude_tree = ParsePascalOnly("GPC/stdlib.p");
     file_to_parse = argv[1];
-    if (use_cparser) {
-        user_tree = parse_pascal_file_with_cparser(argv[1]);
-    } else {
-        user_tree = ParsePascalOnly(argv[1]);
-    }
+    user_tree = ParsePascalOnly(argv[1]);
 
     if(prelude_tree != NULL && user_tree != NULL)
     {
@@ -137,12 +125,7 @@ void set_flags(char **optional_args, int count)
     while(count > 0)
     {
         assert(optional_args[i] != NULL);
-        if(strcmp(optional_args[i], "-cparser") == 0)
-        {
-            fprintf(stderr, "Using cparser frontend instead of flex/bison\n\n");
-            use_cparser = 1;
-        }
-        else if(strcmp(optional_args[i], "-non-local") == 0)
+        if(strcmp(optional_args[i], "-non-local") == 0)
         {
             fprintf(stderr, "Non-local codegen support enabled\n");
             fprintf(stderr, "WARNING: Non-local is still in development and is very buggy!\n\n");
