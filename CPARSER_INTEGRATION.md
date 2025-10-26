@@ -12,7 +12,7 @@ Repository: https://github.com/Kreijstal/cparser
 
 ## Integration Architecture
 
-The integration follows a layered architecture:
+The integration uses a clean, direct approach:
 
 ```
 Pascal Source File
@@ -21,13 +21,9 @@ Pascal Source File
        ↓
    cparser AST
        ↓
-   Adapter Layer (cparser_adapter.c)
+   New Semantic Checker (works directly with cparser AST)
        ↓
-   GPC Parse Tree
-       ↓
-   Semantic Checker (unchanged)
-       ↓
-   Code Generator (unchanged)
+   New Code Generator (works directly with cparser AST)
        ↓
    x86-64 Assembly
 ```
@@ -37,133 +33,132 @@ Pascal Source File
 ### 1. cparser Library (vendored in `/cparser`)
 - Core parser combinator implementation
 - Pascal grammar in `/cparser/examples/pascal_parser/`
-- Built as static library `libcparser.a`
+- Built using Meson build system
 
-### 2. Adapter Layer
-- **cparser_adapter.c/h**: Converts cparser AST to GPC parse tree format
-- **cparser_frontend.c/h**: High-level interface for parsing Pascal files with cparser
+### 2. New Semantic Checker
+- **GPC/NewSemanticChecker/**: Rewritten to work directly with cparser AST
+- Eliminates the need for AST conversion
+- Cleaner, more maintainable code
 
-### 3. Modified GPC Files
-- **main.c**: Added `-cparser` flag to enable cparser frontend
-- **flags.h**: Added `use_cparser` global flag
-- **makefile**: Integrated cparser library build
+### 3. New Code Generator  
+- **GPC/NewCodeGenerator/**: Rewritten to work directly with cparser AST
+- Generates x86-64 assembly from cparser AST nodes
+- No intermediate parse tree conversion needed
 
 ## Usage
 
-To compile Pascal code using cparser instead of the traditional flex/bison parser:
+The compiler now uses cparser by default:
 
 ```bash
-./gpc input.p output.s -cparser
+./gpc input.p output.s
 ```
 
-Without the `-cparser` flag, the compiler uses the original flex/bison parser.
+## Build System - Meson
+
+The project uses Meson as its build system. To build:
+
+```bash
+meson setup builddir
+meson compile -C builddir
+```
+
+The Meson build configuration:
+- Automatically compiles cparser library
+- Builds the new semantic checker and code generator
+- Integrates flex/bison for legacy support (if needed)
+- Runs test suite
 
 ## Current Status
 
-### Working
-- ✅ Build system integration
-- ✅ Basic AST conversion for simple expressions
-- ✅ Basic statement conversion (assignments, compound statements)
-- ✅ Basic program structure parsing
+### Implemented
+- ✅ Meson build integration for cparser
+- ✅ cparser library compilation
 
-### Partially Implemented
-- ⚠️ Variable declarations
-- ⚠️ Procedure/function declarations
-- ⚠️ Control flow statements (if, while, for)
+### In Progress
+- 🔄 New semantic checker working directly with cparser AST
+- 🔄 New code generator working directly with cparser AST
 
-### Not Yet Implemented
-- ❌ Complete type system conversion
-- ❌ Array declarations and access
-- ❌ Record types
-- ❌ Comprehensive error handling
-- ❌ All Pascal language constructs
+### Benefits of This Approach
+
+1. **No Conversion Overhead**: Direct use of cparser AST eliminates conversion step
+2. **Cleaner Code**: No adapter layer means less code to maintain
+3. **Better Error Messages**: Direct access to cparser's error information
+4. **Type Safety**: Work with actual cparser AST types instead of converted structures
+5. **Proper Build System**: Uses existing Meson infrastructure
 
 ## Architecture Details
 
-### AST Conversion
+### cparser AST Structure
 
-The cparser produces an AST with nodes of type `ast_t` that have:
+The cparser produces an AST with nodes of type `ast_t`:
 - `typ`: Node type (from `pascal_tag_t` enum)
 - `sym`: Symbol information (identifier, value, etc.)
 - `child`: First child node
 - `next`: Next sibling node
 
-The GPC compiler expects a parse tree with nodes of type `Tree_t` that represent:
-- Program declarations
-- Variable declarations
-- Subprogram (procedure/function) declarations
-- Statements and expressions
+### New Semantic Checker
 
-The adapter converts between these two representations by:
-1. Recursively traversing the cparser AST
-2. Mapping cparser node types to GPC node types
-3. Converting expressions, statements, and declarations
-4. Building appropriate GPC list structures
+Will implement symbol table and type checking directly on cparser AST:
+- Symbol table management
+- Type checking
+- Scope resolution
+- Function/procedure validation
 
-### Key Functions
+### New Code Generator
 
-- `cparser_ast_to_tree(ast_t* root)`: Main conversion entry point
-- `convert_expression(ast_t* ast)`: Converts expressions
-- `convert_statement(ast_t* ast)`: Converts statements
-- `convert_var_declaration(ast_t* ast)`: Converts variable declarations
-- `convert_subprogram(ast_t* ast)`: Converts procedure/function declarations
-
-## Benefits of cparser
-
-1. **Modern Parser Design**: Parser combinators are more composable and maintainable than traditional yacc/bison grammars
-2. **Better Error Messages**: Parser combinators can provide more detailed error information
-3. **Flexible Grammar**: Easier to extend and modify the Pascal grammar
-4. **No External Dependencies**: Pure C implementation, no need for flex/bison tools
+Will generate assembly directly from cparser AST:
+- Expression code generation
+- Statement code generation
+- Function/procedure code generation
+- Register allocation
 
 ## Future Work
 
-To complete the integration:
+1. **Complete Implementation**:
+   - Finish semantic checker for all Pascal constructs
+   - Finish code generator for all Pascal constructs
+   - Implement all operators and statements
 
-1. **Complete AST Conversion**: Implement all Pascal language constructs
-   - Array types and access
-   - Record types
-   - Pointer types
-   - All expression operators
-   - All statement types
+2. **Testing**:
+   - Comprehensive test suite
+   - Compare with reference implementations
+   - Performance benchmarks
 
-2. **Improve Error Handling**: 
-   - Better error messages from cparser
-   - Proper line/column number tracking
-   - Error recovery
+3. **Optimization**:
+   - AST-level optimizations
+   - Register allocation improvements
+   - Code generation optimizations
 
-3. **Testing**:
-   - Create comprehensive test suite
-   - Test all Pascal language features
-   - Compare output with flex/bison parser
-
-4. **Optimization**:
-   - The semantic checker and code generator remain unchanged
-   - Could potentially optimize for the new AST structure
-
-5. **Documentation**:
-   - Document all supported Pascal constructs
-   - Add examples
-   - Update user guide
+4. **Documentation**:
+   - API documentation
+   - Usage examples
+   - Architecture guides
 
 ## Development Notes
 
-- The original flex/bison parser remains functional and is used by default
-- The `-cparser` flag enables the new parser for testing
-- Both parsers can coexist, allowing gradual migration
-- The semantic checker and code generator are parser-agnostic
+- The build uses Meson, not makefiles
+- Original flex/bison parser can be kept for reference
+- New implementation is cleaner and more maintainable
+- Direct AST usage is more efficient
 
 ## Building
 
-The cparser library is automatically built as part of the GPC build process:
+Build with Meson:
 
 ```bash
-cd GPC
-make clean
-make release
+meson setup builddir
+meson compile -C builddir
+```
+
+Run tests:
+
+```bash
+meson test -C builddir
 ```
 
 This will:
-1. Build cparser static library
-2. Build flex/bison parser
-3. Build code generator
+1. Build cparser library
+2. Build new semantic checker
+3. Build new code generator
 4. Link everything into the `gpc` executable
+5. Run test suite

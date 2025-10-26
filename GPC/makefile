@@ -1,24 +1,23 @@
 CC = gcc
 FLAGS = -g
 OPTIMIZE =
-LIBS = -lunwind -lunwind-x86_64 -L../cparser -lcparser
+LIBS =
 
 PARSER_DIR = Parser
 GRAMMAR_DIR = Parser/LexAndYacc
 TREE_DIR = Parser/ParseTree
 CODEGEN_DIR = CodeGenerator
 OPTIMIZER_DIR = Optimizer
-CPARSER_DIR = ../cparser
 
 # Base CCFLAGS without debug flags
-CCFLAGS_BASE = $(FLAGS) $(OPTIMIZE) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -I$(PARSER_DIR)/List -I$(CODEGEN_DIR)/Intel_x86-64/stackmng -I$(CODEGEN_DIR)/Intel_x86-64/expr_tree -I$(CPARSER_DIR) -I$(CPARSER_DIR)/examples/pascal_parser
+CCFLAGS_BASE = $(FLAGS) $(OPTIMIZE)
 # Extra flags that can be passed from command line
 EXTRA_CCFLAGS ?=
 # Final CCFLAGS used in compilation
 CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
-GPC_OBJS = main.o flags.o stacktrace.o cparser_adapter.o cparser_frontend.o
+GPC_OBJS = main.o flags.o
 PARSER_OBJS = $(PARSER_DIR)/ParsePascal.o
 TREE_OBJS = $(PARSER_DIR)/List.o $(PARSER_DIR)/tree.o
 SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o $(PARSER_DIR)/NameMangling.o
@@ -32,7 +31,6 @@ BIN = gpc
 
 ######## THE MAIN BUILD RULES ###########
 release:
-	cd $(CPARSER_DIR) && $(MAKE)
 	cd Parser && $(MAKE) release debug_flexbison
 	$(MAKE) codegen
 	$(MAKE) bin
@@ -54,15 +52,6 @@ main.o: $(PARSER_OBJS) main.c
 flags.o:
 	$(CC) $(CCFLAGS) -c flags.c
 
-stacktrace.o:
-	$(CC) $(CCFLAGS) -c stacktrace.c
-
-cparser_adapter.o: cparser_adapter.c cparser_adapter.h
-	$(CC) $(CCFLAGS) -c cparser_adapter.c
-
-cparser_frontend.o: cparser_frontend.c cparser_frontend.h
-	$(CC) $(CCFLAGS) -c cparser_frontend.c
-
 optimizer.o:
 	$(CC) $(CCFLAGS) -c $(OPTIMIZER_DIR)/optimizer.c
 
@@ -70,10 +59,6 @@ parser:
 	cd $(PARSER_DIR) && $(MAKE)
 
 codegen:
-	cd $(CODEGEN_DIR) && $(MAKE)
-
-# Explicit rules for codegen objects to prevent implicit make rules from being used
-$(CODEGEN_OBJS):
 	cd $(CODEGEN_DIR) && $(MAKE)
 
 debugFlexBison:
@@ -88,12 +73,10 @@ bisonDebug:
 
 
 ############ CLEANING ##########3
-clean: clean_gpc clean_LexYacc clean_CodeGen clean_cparser
+clean: clean_gpc clean_LexYacc clean_CodeGen
 clean_gpc:
 	rm -f *.o $(BIN)
 clean_LexYacc:
 	cd $(PARSER_DIR) && $(MAKE) clean
 clean_CodeGen:
 	cd $(CODEGEN_DIR) && $(MAKE) clean
-clean_cparser:
-	cd $(CPARSER_DIR) && $(MAKE) clean
