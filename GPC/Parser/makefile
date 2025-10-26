@@ -45,31 +45,31 @@ debug_flex:
 parser: $(ALL_OBJS) ParsePascal.o
 
 ParsePascal.o: $(PARSER_OBJS) $(TREE_OBJS) ParsePascal.h ParsePascal.c
-	$(CC) $(CCFLAGS) -c ParsePascal.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -IList -c ParsePascal.c
 
 #ParsePascal.o: $(PARSER_OBJS) $(TREE_OBJS) ParsePascal.h ParsePascal.c
 #	$(CC) $(CCFLAGS) -DDEBUG_BISON -c ParsePascal.c
 
 List/List.o:
-	$(CC) $(CCFLAGS) -c List/List.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -c List/List.c
 
 SemCheck.o: $(PARSER_OBJS) $(TREE_OBJS) SemCheck_stmt.o SemCheck_expr.o SymTab.o HashTable.o
-	$(CC) $(CCFLAGS) -c SemanticCheck/SemCheck.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -IList -ISemanticCheck/SymTab -ISemanticCheck/HashTable -c SemanticCheck/SemCheck.c
 
 SemCheck_stmt.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
-	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_stmt.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -IList -ISemanticCheck/SymTab -ISemanticCheck/HashTable -c SemanticCheck/SemChecks/SemCheck_stmt.c
 
 SemCheck_expr.o: $(PARSER_OBJS) $(TREE_OBJS) SymTab.o HashTable.o
-	$(CC) $(CCFLAGS) -c SemanticCheck/SemChecks/SemCheck_expr.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -IList -ISemanticCheck/SymTab -ISemanticCheck/HashTable -c SemanticCheck/SemChecks/SemCheck_expr.c
 
 HashTable.o: $(GRAMMAR_DIR)/Grammar.tab.h
-	$(CC) $(CCFLAGS) -c SemanticCheck/HashTable/HashTable.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -c SemanticCheck/HashTable/HashTable.c
 
 SymTab.o: $(GRAMMAR_DIR)/Grammar.tab.h HashTable.o
-	$(CC) $(CCFLAGS) -c SemanticCheck/SymTab/SymTab.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -ISemanticCheck/HashTable -c SemanticCheck/SymTab/SymTab.c
 
 $(TREE_DIR)/tree.o:
-	$(CC) $(CCFLAGS) -c $(TREE_DIR)/tree.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -c $(TREE_DIR)/tree.c
 
 lexAndYacc:
 	cd $(GRAMMAR_DIR) && $(MAKE)
@@ -87,4 +87,4 @@ clean_LexYacc:
 	cd $(GRAMMAR_DIR) && $(MAKE) clean
 
 NameMangling.o: $(GRAMMAR_DIR)/Grammar.tab.h SemCheck_expr.o
-	$(CC) $(CCFLAGS) -c SemanticCheck/NameMangling.c
+	$(CC) $(CCFLAGS) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -IList -ISemanticCheck/SymTab -ISemanticCheck/HashTable -c SemanticCheck/NameMangling.c

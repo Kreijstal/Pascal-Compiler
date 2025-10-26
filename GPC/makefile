@@ -1,7 +1,7 @@
 CC = gcc
 FLAGS = -g
 OPTIMIZE =
-LIBS =
+LIBS = -lunwind -lunwind-x86_64
 
 PARSER_DIR = Parser
 GRAMMAR_DIR = Parser/LexAndYacc
@@ -10,14 +10,14 @@ CODEGEN_DIR = CodeGenerator
 OPTIMIZER_DIR = Optimizer
 
 # Base CCFLAGS without debug flags
-CCFLAGS_BASE = $(FLAGS) $(OPTIMIZE)
+CCFLAGS_BASE = $(FLAGS) $(OPTIMIZE) -I$(GRAMMAR_DIR) -I$(TREE_DIR) -I$(PARSER_DIR)/List -I$(CODEGEN_DIR)/Intel_x86-64/stackmng -I$(CODEGEN_DIR)/Intel_x86-64/expr_tree
 # Extra flags that can be passed from command line
 EXTRA_CCFLAGS ?=
 # Final CCFLAGS used in compilation
 CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
-GPC_OBJS = main.o flags.o
+GPC_OBJS = main.o flags.o stacktrace.o
 PARSER_OBJS = $(PARSER_DIR)/ParsePascal.o
 TREE_OBJS = $(PARSER_DIR)/List.o $(PARSER_DIR)/tree.o
 SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o $(PARSER_DIR)/NameMangling.o
@@ -52,6 +52,9 @@ main.o: $(PARSER_OBJS) main.c
 flags.o:
 	$(CC) $(CCFLAGS) -c flags.c
 
+stacktrace.o:
+	$(CC) $(CCFLAGS) -c stacktrace.c
+
 optimizer.o:
 	$(CC) $(CCFLAGS) -c $(OPTIMIZER_DIR)/optimizer.c
 
@@ -59,6 +62,10 @@ parser:
 	cd $(PARSER_DIR) && $(MAKE)
 
 codegen:
+	cd $(CODEGEN_DIR) && $(MAKE)
+
+# Explicit rules for codegen objects to prevent implicit make rules from being used
+$(CODEGEN_OBJS):
 	cd $(CODEGEN_DIR) && $(MAKE)
 
 debugFlexBison:
