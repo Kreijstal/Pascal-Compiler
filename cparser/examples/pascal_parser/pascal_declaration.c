@@ -78,22 +78,22 @@ void init_pascal_program_parser(combinator_t** p) {
     // Create the base statement parser
     combinator_t** base_stmt = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *base_stmt = new_combinator();
-    (*base_stmt)->extra_to_free = base_stmt;
     init_pascal_statement_parser(base_stmt);
 
     // Terminated statement: statement followed by semicolon
     seq(*p, PASCAL_T_NONE,
-        lazy(base_stmt),                       // any statement
+        lazy_owned(base_stmt),                 // any statement
         token(match(";")),                     // followed by semicolon
         NULL
     );
+
+    (*p)->extra_to_free = base_stmt;
 }
 
 // Pascal Unit Parser
 void init_pascal_unit_parser(combinator_t** p) {
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Uses section: uses unit1, unit2, unit3;
@@ -194,7 +194,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             type_section,                              // local types
             NULL
         )),
-        lazy(stmt_parser),                          // main statement block
+        lazy_owned(stmt_parser),                    // main statement block
         NULL
     );
 
@@ -325,20 +325,15 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(match(".")),
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Procedure/Function Declaration Parser
 void init_pascal_procedure_parser(combinator_t** p) {
-    // Create expression parser for default values and type references
-    combinator_t** expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *expr_parser = new_combinator();
-    (*expr_parser)->extra_to_free = expr_parser;
-    init_pascal_expression_parser(expr_parser);
-
     // Create statement parser for procedure/function bodies
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Parameter: [const|var] identifier1,identifier2,... : type
@@ -372,7 +367,7 @@ void init_pascal_procedure_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),      // procedure name
         param_list,                              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy(stmt_parser),                       // procedure body
+        lazy_owned(stmt_parser),                 // procedure body
         NULL
     );
 
@@ -393,6 +388,8 @@ void init_pascal_procedure_parser(combinator_t** p) {
         procedure_decl,                          // procedure declarations second
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Method Implementation Parser - for constructor/destructor/procedure implementations
@@ -400,7 +397,6 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     // Create statement parser for method bodies
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Parameter: [const|var] identifier1,identifier2,... : type
@@ -435,7 +431,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         method_name_with_class,                  // ClassName.MethodName
         param_list,                              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy(stmt_parser),                       // method body
+        lazy_owned(stmt_parser),                 // method body
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
@@ -469,6 +465,8 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         procedure_impl,
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Complete Program Parser - for full Pascal programs
@@ -587,7 +585,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Need to create a modified procedure parser that supports var parameters
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Enhanced parameter: [const|var] identifier1,identifier2,... : type
@@ -631,7 +628,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     (*nested_proc_or_func)->extra_to_free = nested_proc_or_func;
 
     // Forward declaration for nested functions - these will refer to working_function and working_procedure below
-    combinator_t* nested_function_decl = lazy(nested_proc_or_func);
+    combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
 
     combinator_t* nested_function_body = seq(new_combinator(), PASCAL_T_NONE,
         optional(local_var_section),                 // optional local var section
@@ -760,4 +757,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(".")),                           // final period
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
