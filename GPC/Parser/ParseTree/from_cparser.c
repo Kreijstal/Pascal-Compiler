@@ -252,6 +252,7 @@ static ListNode_t *convert_expression_list(ast_t *arg_node);
 static struct Expression *convert_expression(ast_t *expr_node);
 static struct Statement *convert_statement(ast_t *stmt_node);
 static struct Statement *convert_block(ast_t *block_node);
+static Tree_t *convert_function(ast_t *func_node);
 
 static int map_relop_tag(int tag) {
     switch (tag) {
