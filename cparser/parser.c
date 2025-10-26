@@ -649,6 +649,12 @@ ParseResult parse(input_t * in, combinator_t * comb) {
 }
 
 static combinator_t* create_lazy(combinator_t** parser_ptr, bool owns_parser) {
+    if (parser_ptr == NULL) {
+        exception("create_lazy called with NULL parser_ptr");
+    }
+    if (owns_parser && *parser_ptr == NULL) {
+        exception("create_lazy called with NULL owned parser");
+    }
     lazy_args* args = (lazy_args*)safe_malloc(sizeof(lazy_args));
     args->parser_ptr = parser_ptr;
     args->owns_parser = owns_parser;
@@ -733,19 +739,16 @@ bool is_visited(const void* ptr, visited_node* list) {
     return false;
 }
 
+static void release_extra_nodes(extra_node** extras, visited_node** visited);
+
 void free_combinator(combinator_t* comb) {
     visited_node* visited = NULL;
     extra_node* extras = NULL;
     free_combinator_recursive(comb, &visited, &extras);
-    while (extras != NULL) {
-        extra_node* node = extras;
-        extras = extras->next;
-        if (node->comb != NULL) {
-            free_combinator_recursive(node->comb, &visited, &extras);
-        }
-        free(node->ptr);
-        free(node);
-    }
+    // Drain any heap-allocated pointer wrappers that were deferred during the
+    // recursive walk. These nodes own both the wrapper pointer itself and, when
+    // present, the combinator the pointer referenced at creation time.
+    release_extra_nodes(&extras, &visited);
     visited_node* current = visited;
     while (current != NULL) {
         visited_node* temp = current;
@@ -960,4 +963,20 @@ void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra
         comb->extra_to_free = NULL;
     }
     free(comb);
+}
+
+static void release_extra_nodes(extra_node** extras, visited_node** visited) {
+    while (*extras != NULL) {
+        extra_node* node = *extras;
+        *extras = node->next;
+        if (node->comb != NULL) {
+            // Recursively release the combinator captured when the wrapper was
+            // enqueued. Any additional extra_to_free entries discovered during
+            // this call are appended to the shared list referenced by
+            // `extras` so they can be drained in-order.
+            free_combinator_recursive(node->comb, visited, extras);
+        }
+        free(node->ptr);
+        free(node);
+    }
 }

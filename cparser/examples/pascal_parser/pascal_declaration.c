@@ -82,7 +82,7 @@ void init_pascal_program_parser(combinator_t** p) {
 
     // Terminated statement: statement followed by semicolon
     seq(*p, PASCAL_T_NONE,
-        lazy_owned(base_stmt),                 // any statement
+        lazy(base_stmt),                       // any statement
         token(match(";")),                     // followed by semicolon
         NULL
     );
@@ -194,7 +194,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             type_section,                              // local types
             NULL
         )),
-        lazy_owned(stmt_parser),                    // main statement block
+        lazy(stmt_parser),                         // main statement block
         NULL
     );
 
@@ -367,7 +367,7 @@ void init_pascal_procedure_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),      // procedure name
         param_list,                              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy_owned(stmt_parser),                 // procedure body
+        lazy(stmt_parser),                       // procedure body
         NULL
     );
 
@@ -431,7 +431,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         method_name_with_class,                  // ClassName.MethodName
         param_list,                              // optional parameter list
         token(match(";")),                       // semicolon
-        lazy_owned(stmt_parser),                 // method body
+        lazy(stmt_parser),                       // method body
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
@@ -628,7 +628,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     (*nested_proc_or_func)->extra_to_free = nested_proc_or_func;
 
     // Forward declaration for nested functions - these will refer to working_function and working_procedure below
-    combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
+    combinator_t* nested_function_decl = lazy(nested_proc_or_func);
 
     combinator_t* nested_function_body = seq(new_combinator(), PASCAL_T_NONE,
         optional(local_var_section),                 // optional local var section
