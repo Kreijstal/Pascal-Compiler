@@ -9,6 +9,7 @@
 #include "parser.h"
 #include "combinators.h"
 #include "pascal_parser.h"
+#include "pascal_declaration.h"
 #include "Parser/ParseTree/tree.h"
 
 // Convert cparser AST to GPC parse tree

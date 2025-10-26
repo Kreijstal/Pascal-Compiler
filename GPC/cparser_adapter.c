@@ -16,6 +16,9 @@ extern ast_t* ast_nil;
 // Helper function to append to a list (convenience wrapper)
 static ListNode_t* list_append(ListNode_t* head, void* data, enum ListType type) {
     ListNode_t* new_node = CreateListNode(data, type);
+    if (head == NULL) {
+        return new_node;
+    }
     return PushListNodeBack(head, new_node);
 }
 
