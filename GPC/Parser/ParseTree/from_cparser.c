@@ -388,7 +388,11 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
 
 static struct Expression *convert_unary_expr(ast_t *node) {
     struct Expression *inner = convert_expression(node->child);
-    return mk_signterm(node->line, inner);
+    // Only negate for PASCAL_T_NEG, unary plus (PASCAL_T_POS) returns the inner expression as-is
+    if (node->typ == PASCAL_T_NEG) {
+        return mk_signterm(node->line, inner);
+    }
+    return inner;
 }
 
 static struct Expression *convert_expression(ast_t *expr_node) {
@@ -613,7 +617,9 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         case PASCAL_T_PROCEDURE_DECL:
         case PASCAL_T_FUNCTION_DECL: {
-            Tree_t *sub = convert_procedure(cur);
+            Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
+                              ? convert_procedure(cur)
+                              : convert_function(cur);
             if (sub != NULL)
                 append_node(&nested_subs, sub, LIST_TREE);
             break;
@@ -683,7 +689,9 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         case PASCAL_T_PROCEDURE_DECL:
         case PASCAL_T_FUNCTION_DECL: {
-            Tree_t *sub = convert_procedure(cur);
+            Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
+                              ? convert_procedure(cur)
+                              : convert_function(cur);
             if (sub != NULL)
                 append_node(&nested_subs, sub, LIST_TREE);
             break;
