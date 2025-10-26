@@ -873,11 +873,8 @@ void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra
             case COMB_LAZY: {
                 lazy_args* args = (lazy_args*)comb->args;
                 if (args != NULL) {
-                    combinator_t **target_ptr = args->parser_ptr;
-                    combinator_t *target = (target_ptr != NULL) ? *target_ptr : NULL;
-                    if (target != NULL) {
-                        free_combinator_recursive(target, visited, extras);
-                    }
+                    // Don't free the target parser - lazy is just a reference, not an owner
+                    // The target parser will be freed by whoever actually owns it
                     free(args);
                 }
                 break;
