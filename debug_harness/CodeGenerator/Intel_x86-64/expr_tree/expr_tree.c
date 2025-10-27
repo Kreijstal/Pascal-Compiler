@@ -27,7 +27,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
-ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, char *, int );
+ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
 ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     ListNode_t *inst_list);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
@@ -46,6 +46,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     expr_node_t *new_node;
 
     new_node = (expr_node_t *)malloc(sizeof(expr_node_t));
+    assert(new_node != NULL);
     new_node->expr = expr;
     new_node->reg = NULL;
 
@@ -67,6 +68,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
             break;
 
         case EXPR_VAR_ID:
+        case EXPR_ARRAY_ACCESS:
         case EXPR_INUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
@@ -81,8 +83,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr_tree type: %d\n", expr->type);
-            exit(1);
+            assert(0 && "Unsupported expr_tree type");
+            break;
     }
 
     /* Setting the labels */
@@ -127,6 +129,8 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 {
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     #ifdef DEBUG_CODEGEN
     fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
@@ -174,8 +178,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     }
     else
     {
-        fprintf(stderr, "ERROR: Unsupported case in codegen!\n");
-        exit(1);
+        assert(0 && "Unsupported case in codegen!");
     }
 
     return inst_list;
@@ -188,6 +191,10 @@ ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
 {
     StackNode_t *temp;
     char buffer[50];
+
+    assert(left != NULL);
+    assert(right != NULL);
+    assert(inst_list != NULL);
 
     // Move dividend (A, right) to eax
     snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
@@ -237,6 +244,7 @@ void print_expr_tree(expr_node_t *node, int num_indent, FILE *f)
 {
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(f != NULL);
     int i;
 
     for(i=0; i < num_indent; ++i)
@@ -278,6 +286,9 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(node != NULL);
     assert(node->expr != NULL);
     assert(node->expr->type == EXPR_SIGN_TERM);
+    assert(inst_list != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     char buffer[50];
 
@@ -297,6 +308,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     char buffer[50];
     char buf_leaf[30];
@@ -314,6 +327,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
     }
+    else if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        return codegen_array_access(expr, inst_list, ctx, target_reg);
+    }
     else if (expr->type == EXPR_STRING)
     {
         char label[20];
@@ -326,10 +343,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         return add_inst(inst_list, buffer);
     }
 
-    inst_list = gencode_leaf_var(expr, inst_list, buf_leaf, 30);
+    inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
 
 #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
+    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
 #endif
 
     snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
@@ -347,6 +364,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(node->expr != NULL);
     assert(node->right_expr != NULL);
     assert(node->right_expr->expr != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     char name_buf[30];
     struct Expression *expr, *right_expr;
@@ -356,7 +375,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     expr = node->expr;
     right_expr = node->right_expr->expr;
     assert(right_expr != NULL);
-    inst_list = gencode_leaf_var(right_expr, inst_list, name_buf, 30);
+    inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
     inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
 
@@ -371,6 +390,9 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(inst_list != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     Register_t *temp_reg;
 
@@ -408,6 +430,9 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     #endif
     assert(node != NULL);
     assert(node->expr != NULL);
+    assert(inst_list != NULL);
+    assert(ctx != NULL);
+    assert(target_reg != NULL);
 
     Register_t *temp_reg;
 
@@ -440,9 +465,10 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 /* Returns the corresponding string and instructions for a leaf */
 /* TODO: Only supports var_id and i_num */
 ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
-    char *buffer, int buf_len)
+    CodeGenContext *ctx, char *buffer, int buf_len)
 {
     assert(expr != NULL);
+    assert(buffer != NULL);
 
     StackNode_t *stack_node;
     int offset;
@@ -451,11 +477,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     {
         case EXPR_VAR_ID:
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
+            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
             #endif
             stack_node = find_label(expr->expr_data.id);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
+            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
             #endif
 
             if(stack_node != NULL)
@@ -469,9 +495,19 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             }
             else
             {
-                fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
-                fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                exit(1);
+                HashNode_t *node = NULL;
+                if (ctx != NULL && ctx->symtab != NULL &&
+                    FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    node != NULL && node->hash_type == HASHTYPE_CONST)
+                {
+                    snprintf(buffer, buf_len, "$%d", node->const_int_value);
+                }
+                else
+                {
+                    fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+                    fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+                    exit(1);
+                }
             }
 
             break;
@@ -481,8 +517,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr type in gencode!\n");
-            exit(1);
+            assert(0 && "Unsupported expr type in gencode!");
+            break;
     }
 
     return inst_list;
@@ -514,8 +550,8 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:
-                    fprintf(stderr, "ERROR: Bad addop type!\n");
-                    exit(1);
+                    assert(0 && "Bad addop type!");
+                    break;
             }
 
             break;
@@ -548,7 +584,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             else if(type == SLASH || type == DIV)
             {
                 #ifdef DEBUG_CODEGEN
-                fprintf(stderr, "DEBUG: gencode_op: left = %s, right = %s\n", left, right);
+                CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
                 #endif
                 // left is the dividend, right is the divisor
                 snprintf(buffer, 50, "\tpushq\t%%rax\n");
@@ -583,8 +619,8 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
             else
             {
-                fprintf(stderr, "ERROR: Bad mulop type!\n");
-                exit(1);
+                assert(0 && "Bad mulop type!");
+                break;
             }
 
             break;
@@ -596,8 +632,8 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr type in gencode!\n");
-            exit(1);
+            assert(0 && "Unsupported expr type in gencode!");
+            break;
     }
 
     return inst_list;
@@ -622,8 +658,7 @@ ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list
                 snprintf(buffer, buf_len, "subl");
             else
             {
-                fprintf(stderr, "ERROR: Bad addop type!\n");
-                exit(1);
+                assert(0 && "Bad addop type!");
             }
 
             break;
@@ -634,15 +669,14 @@ ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list
                 snprintf(buffer, buf_len, "imull");
             else
             {
-                fprintf(stderr, "ERROR: Bad mulop type!\n");
-                exit(1);
+                assert(0 && "Bad mulop type!");
             }
 
             break;
 
         default:
-            fprintf(stderr, "ERROR: Unsupported expr type in gencode!\n");
-            exit(1);
+            assert(0 && "Unsupported expr type in gencode!");
+            break;
     }
 
     return inst_list;

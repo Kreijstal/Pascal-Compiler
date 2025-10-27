@@ -208,6 +208,8 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     assert(ctx != NULL);
     assert(symtab != NULL);
 
+    ctx->symtab = symtab;
+
     CODEGEN_DEBUG("DEBUG: ENTERING codegen\n");
     init_stackmng();
 
@@ -418,19 +420,36 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
      {
          tree = (Tree_t *)cur->cur;
          assert(tree != NULL);
-         assert(tree->type == TREE_VAR_DECL);
 
-         id_list = tree->tree_data.var_decl_data.ids;
-         if(tree->tree_data.var_decl_data.type == REAL_TYPE)
+         if (tree->type == TREE_VAR_DECL)
          {
-             fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
+             id_list = tree->tree_data.var_decl_data.ids;
+             if(tree->tree_data.var_decl_data.type == REAL_TYPE)
+             {
+                 fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
+             }
+
+             while(id_list != NULL)
+             {
+                 add_l_x((char *)id_list->cur);
+                 id_list = id_list->next;
+             };
          }
-
-         while(id_list != NULL)
+         else if (tree->type == TREE_ARR_DECL)
          {
-             add_l_x((char *)id_list->cur);
-             id_list = id_list->next;
-         };
+             id_list = tree->tree_data.arr_decl_data.ids;
+             int length = tree->tree_data.arr_decl_data.e_range - tree->tree_data.arr_decl_data.s_range + 1;
+             if (length < 0)
+                 length = 0;
+             int total_size = length * DOUBLEWORD;
+             if (total_size <= 0)
+                 total_size = DOUBLEWORD;
+             while (id_list != NULL)
+             {
+                 add_array((char *)id_list->cur, total_size, DOUBLEWORD, tree->tree_data.arr_decl_data.s_range);
+                 id_list = id_list->next;
+             }
+         }
 
          cur = cur->next;
      }

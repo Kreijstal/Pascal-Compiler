@@ -51,6 +51,12 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->record_type = record_type;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
+        hash_node->is_constant = 0;
+        hash_node->const_int_value = 0;
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
 
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -86,6 +92,12 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->record_type = record_type;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
+        hash_node->is_constant = 0;
+        hash_node->const_int_value = 0;
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
 
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;

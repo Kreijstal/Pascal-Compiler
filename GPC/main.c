@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
+#include "Parser/ParsePascal.h"
 
 typedef struct
 {

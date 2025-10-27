@@ -377,9 +377,16 @@ int semcheck_varid(int *type_return,
         if(hash_return->hash_type != HASHTYPE_VAR &&
             hash_return->hash_type != HASHTYPE_FUNCTION_RETURN)
         {
-            fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
-                expr->line_num, id);
-            ++return_val;
+            if(hash_return->hash_type == HASHTYPE_CONST && mutating == 0)
+            {
+                /* Constants are readable values. */
+            }
+            else
+            {
+                fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
+                    expr->line_num, id);
+                ++return_val;
+            }
         }
         set_type_from_hashtype(type_return, hash_return);
     }

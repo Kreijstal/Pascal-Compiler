@@ -202,6 +202,28 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_array_consts(self):
+        """Tests that const declarations and array indexing work together."""
+        input_file = os.path.join(TEST_CASES_DIR, "array_const.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "array_const.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "array_const")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("array_const execution timed out")
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "5\n6\n7\n8\n")
+
     def test_record_type_declaration(self):
         """Tests that a program declaring a record type compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
