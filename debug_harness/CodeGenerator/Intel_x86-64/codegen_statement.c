@@ -144,7 +144,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if(nonlocal_flag() == 1)
         {
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
-            snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, NON_LOCAL_REG_64);
+            snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
         }
         else
         {

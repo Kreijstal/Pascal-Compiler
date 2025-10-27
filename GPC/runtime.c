@@ -10,23 +10,11 @@
 #include <unistd.h>
 #endif
 
-#ifdef _WIN32
-int gpc_target_windows = 1;
-#else
-int gpc_target_windows = 0;
-#endif
-
-#if defined(_WIN32) && defined(__GNUC__)
-#define GPC_SYSV_ABI __attribute__((sysv_abi))
-#else
-#define GPC_SYSV_ABI
-#endif
-
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }
 
-int GPC_SYSV_ABI gpc_printf(const char *format, ...) {
+int gpc_printf(const char *format, ...) {
     va_list args;
     va_start(args, format);
     int result = gpc_vprintf_impl(format, args);
@@ -42,7 +30,7 @@ static int gpc_vscanf_impl(const char *format, va_list args) {
 #endif
 }
 
-int GPC_SYSV_ABI gpc_scanf(const char *format, ...) {
+int gpc_scanf(const char *format, ...) {
     va_list args;
     va_start(args, format);
     int result = gpc_vscanf_impl(format, args);

@@ -13,55 +13,21 @@
 #include "../../../Parser/List/List.h"
 
 /* Sets num_args_alloced to 0 */
-void free_arg_regs()
+void free_arg_regs(void)
 {
     num_args_alloced = 0;
 }
 
 /* Helpers for getting special registers */
 /* TODO: Support loading arguments into temp if needed */
-char *get_arg_reg64_num(int num)
+const char *get_arg_reg64_num(int num)
 {
-    if(num == 0)
-    {
-        return ARG_REG_1_64;
-    }
-    else if(num == 1)
-    {
-        return ARG_REG_2_64;
-    }
-    else if(num == 2)
-    {
-        return ARG_REG_3_64;
-    }
-    else if(num == 3)
-    {
-        return ARG_REG_4_64;
-    }
-
-    return NULL;
+    return current_arg_reg64(num);
 }
 
-char *get_arg_reg32_num(int num)
+const char *get_arg_reg32_num(int num)
 {
-    if(num == 0)
-    {
-        return ARG_REG_1_32;
-    }
-    else if(num == 1)
-    {
-        return ARG_REG_2_32;
-    }
-    else if(num == 2)
-    {
-        return ARG_REG_3_32;
-    }
-    else if(num == 3)
-    {
-        return ARG_REG_4_32;
-    }
-
-    return NULL;
+    return current_arg_reg32(num);
 }
 
 /******** stackmng *********/
@@ -94,7 +60,7 @@ int get_full_stack_offset()
 
     scope = global_stackmng->cur_scope;
 
-    actual_offset = CONST_STACK_OFFSET_BYTES +
+    actual_offset = current_stack_home_space() +
                         scope->t_offset + scope->x_offset + scope->z_offset;
 
     /* x86_64 requires stack offsets to avoid undefined behavior */
@@ -142,7 +108,7 @@ StackNode_t *add_l_t(char *label)
 
     cur_scope->t_offset += DOUBLEWORD;
 
-    offset = CONST_STACK_OFFSET_BYTES +
+    offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
     new_node = init_stack_node(offset, label, DOUBLEWORD);
@@ -179,7 +145,7 @@ StackNode_t *add_l_x(char *label)
 
     cur_scope->x_offset += DOUBLEWORD;
 
-    offset = CONST_STACK_OFFSET_BYTES +
+    offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset;
 
     new_node = init_stack_node(offset, label, DOUBLEWORD);
@@ -211,7 +177,7 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
 
     cur_scope->x_offset += total_size;
 
-    int offset = CONST_STACK_OFFSET_BYTES +
+    int offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset;
 
     StackNode_t *new_node = init_stack_node(offset, label, total_size);
@@ -251,7 +217,7 @@ StackNode_t *add_l_z(char *label)
 
     cur_scope->z_offset += DOUBLEWORD;
 
-    offset = CONST_STACK_OFFSET_BYTES +
+    offset = current_stack_home_space() +
         cur_scope->z_offset;
 
     new_node = init_stack_node(offset, label, DOUBLEWORD);
@@ -358,12 +324,12 @@ RegStack_t *init_reg_stack()
     reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
     assert(reg_stack != NULL);
 
-    /* RBX */
-    Register_t *rbx;
-    rbx = (Register_t *)malloc(sizeof(Register_t));
-    assert(rbx != NULL);
-    rbx->bit_64 = strdup("%rbx");
-    rbx->bit_32 = strdup("%ebx");
+    /* RAX */
+    Register_t *rax;
+    rax = (Register_t *)malloc(sizeof(Register_t));
+    assert(rax != NULL);
+    rax->bit_64 = strdup("%rax");
+    rax->bit_32 = strdup("%eax");
 
     /* R10 */
     Register_t *r10;
@@ -373,7 +339,7 @@ RegStack_t *init_reg_stack()
     r10->bit_32 = strdup("%r10d");
 
 
-    registers = CreateListNode(rbx, LIST_UNSPECIFIED);
+    registers = CreateListNode(rax, LIST_UNSPECIFIED);
     registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
 
     /*

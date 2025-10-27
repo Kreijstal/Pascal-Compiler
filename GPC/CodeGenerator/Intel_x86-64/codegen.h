@@ -38,8 +38,8 @@
         - Function return "variable" pushed to x stack portion (SemCheck makes sure there's no issues)
 
     GENERAL PURPOSE REGISTERS:
-        - RBX
-        - RDI
+        - RAX
+        - R10
 
     SPECIAL REGISTERS:
         - RSP (Stack pointer)
@@ -95,16 +95,10 @@
 #ifndef CODE_GEN_H
 #define CODE_GEN_H
 
-/* Platform detection */
-#ifdef __linux__
-#define PLATFORM_LINUX 1
-#define PLATFORM_WINDOWS 0
-#elif defined(_WIN32) || defined(_WIN64)
-#define PLATFORM_LINUX 0
-#define PLATFORM_WINDOWS 1
-#else
-#error "Unsupported platform"
-#endif
+#include "../../flags.h"
+
+extern gpc_target_abi_t g_current_codegen_abi;
+extern int g_stack_home_space_bytes;
 
 #ifdef GPC_DEBUG_CODEGEN
 #define DEBUG_CODEGEN
@@ -117,20 +111,10 @@
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
-/* Linux-specific defines */
-#if PLATFORM_LINUX
-#define WRITE_SYSCALL_NUM 1
-#define STDOUT_FD 1
-#define EXIT_SYSCALL_NUM 60
-#define SCANF_CALL "gpc_scanf"
-#define SCANF_REGISTER ".LC1(%rip)"
-#elif defined(_WIN32) || defined(_WIN64)
-#define PLATFORM_WINDOWS 1
-#define SCANF_CALL "gpc_scanf@PLT"
-#define SCANF_REGISTER ".LC1"
-#else
-#error "Unsupported platform"
-#endif
+static inline int codegen_target_is_windows(void)
+{
+    return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS;
+}
 
 #define NORMAL_JMP -1
 
@@ -152,6 +136,7 @@ typedef struct {
     int write_label_counter;
     FILE *output_file;
     SymTab_t *symtab;
+    gpc_target_abi_t target_abi;
 } CodeGenContext;
 
 /* Generates a label */
