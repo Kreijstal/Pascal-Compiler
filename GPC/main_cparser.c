@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -211,6 +212,38 @@ static char *read_file(const char *path, size_t *out_len)
     return buffer;
 }
 
+static void mark_stdlib_var_params(ListNode_t *subprograms)
+{
+    for (ListNode_t *node = subprograms; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_TREE || node->cur == NULL)
+            continue;
+
+        Tree_t *sub = (Tree_t *)node->cur;
+        if (sub->type != TREE_SUBPROGRAM)
+            continue;
+
+        if (sub->tree_data.subprogram_data.sub_type != TREE_SUBPROGRAM_PROC ||
+            sub->tree_data.subprogram_data.id == NULL)
+            continue;
+
+        if (strcasecmp(sub->tree_data.subprogram_data.id, "read") != 0)
+            continue;
+
+        ListNode_t *params = sub->tree_data.subprogram_data.args_var;
+        while (params != NULL)
+        {
+            if (params->type == LIST_TREE && params->cur != NULL)
+            {
+                Tree_t *param_decl = (Tree_t *)params->cur;
+                if (param_decl->type == TREE_VAR_DECL)
+                    param_decl->tree_data.var_decl_data.is_var_param = 1;
+            }
+            params = params->next;
+        }
+    }
+}
+
 static void report_parse_error(const char *path, ParseError *err)
 {
     if (err == NULL)
@@ -319,6 +352,8 @@ int main(int argc, char **argv)
 
     ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
+    if (prelude_subs != NULL)
+        mark_stdlib_var_params(prelude_subs);
     if (prelude_subs != NULL)
     {
         ListNode_t *last = prelude_subs;

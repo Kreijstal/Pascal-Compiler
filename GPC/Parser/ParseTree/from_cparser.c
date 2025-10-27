@@ -679,18 +679,23 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_while(stmt_node->line, condition, body_stmt);
     }
     case PASCAL_T_FOR_STMT: {
-        ast_t *var_node = unwrap_pascal_node(stmt_node->child);
-        ast_t *start_node = unwrap_pascal_node(var_node != NULL ? var_node->next : NULL);
-        ast_t *end_node = unwrap_pascal_node(start_node != NULL ? start_node->next : NULL);
-        ast_t *body_node = unwrap_pascal_node(end_node != NULL ? end_node->next : NULL);
+        ast_t *init_node = unwrap_pascal_node(stmt_node->child);
+        ast_t *limit_wrapper = init_node != NULL ? init_node->next : NULL;
+        ast_t *end_node = unwrap_pascal_node(limit_wrapper);
+        ast_t *body_node = unwrap_pascal_node(limit_wrapper != NULL ? limit_wrapper->next : NULL);
 
-        struct Expression *var_expr = convert_expression(var_node);
-        struct Expression *start_expr = convert_expression(start_node);
         struct Expression *end_expr = convert_expression(end_node);
         struct Statement *body_stmt = convert_statement(body_node);
 
-        struct Statement *assign_stmt = mk_varassign(stmt_node->line, var_expr, start_expr);
-        return mk_forassign(stmt_node->line, assign_stmt, end_expr, body_stmt);
+        if (init_node != NULL && init_node->typ == PASCAL_T_ASSIGNMENT) {
+            struct Statement *assign_stmt = convert_assignment(init_node);
+            return mk_forassign(stmt_node->line, assign_stmt, end_expr, body_stmt);
+        }
+
+        struct Expression *var_expr = convert_expression(init_node);
+        if (var_expr == NULL)
+            return NULL;
+        return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt);
     }
     default:
         break;
