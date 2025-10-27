@@ -7,7 +7,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_s(%rip), %rdi
         movl $0, %eax
-        call printf
+        call gpc_printf
     end
 end;
 
@@ -18,7 +18,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_d(%rip), %rdi
         movl $0, %eax
-        call printf
+        call gpc_printf
     end
 end;
 
@@ -29,7 +29,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_sn(%rip), %rdi
         movl $0, %eax
-        call printf
+        call gpc_printf
     end
 end;
 
@@ -40,7 +40,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_dn(%rip), %rdi
         movl $0, %eax
-        call printf
+        call gpc_printf
     end
 end;
 
@@ -51,7 +51,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_dn(%rip), %rdi
         movl $0, %eax
-        call printf
+        call gpc_printf
     end
 end;
 
@@ -61,7 +61,7 @@ begin
     asm
         leaq .format_str_n(%rip), %rdi
         movl $0, %eax
-        call printf
+        call gpc_printf
     end
 end;
 
@@ -72,7 +72,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_d(%rip), %rdi
         movl $0, %eax
-        call __isoc99_scanf
+        call gpc_scanf
     end
 end;
 
@@ -83,7 +83,7 @@ begin
         movq %rdi, %rsi
         leaq .format_str_d(%rip), %rdi
         movl $0, %eax
-        call __isoc99_scanf
+        call gpc_scanf
     end
 end;
 
