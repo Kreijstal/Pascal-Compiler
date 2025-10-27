@@ -364,6 +364,40 @@ class TestCompiler(unittest.TestCase):
         except subprocess.CalledProcessError as e:
             self.fail(f"zahlen.p compilation failed: {e}")
 
+    def test_zahlen_program_runs(self):
+        """Ensures the zahlen classification demo compiles and executes with dynamic arrays."""
+        input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        zahlen_input = "5\n12\n-7\n0\n3\n4\n"
+        process = subprocess.run(
+            [executable_file],
+            input=zahlen_input,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        expected_output = (
+            "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n"
+            "         gerade       ungerade       Positive       Negative\n"
+            "Gerade Zahlen\n"
+            "4 0 12 \n"
+            "Ungerade Zahlen\n"
+            "\n"
+            "Positive Zahlen\n"
+            "4 3 0 12 \n"
+            "Negative Zahlen\n"
+            "-7 \n"
+        )
+
+        self.assertEqual(process.stdout, expected_output)
+        self.assertEqual(process.returncode, 0)
+
 
     def test_for_program(self):
         """Tests the for program."""

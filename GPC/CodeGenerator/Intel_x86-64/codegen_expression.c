@@ -297,6 +297,12 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
+    if (expr->resolved_type == LONGINT_TYPE)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", target_reg->bit_32, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     free_reg(get_reg_stack(), addr_reg);
     return inst_list;
 }
@@ -413,46 +419,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             }
             else if (arg_expr->type == EXPR_ARRAY_ACCESS)
             {
-                // For array access, compute the address of the array element
-                StackNode_t *array_node = find_label(arg_expr->expr_data.array_access_data.id);
-                
-                // Evaluate the index expression
-                struct Expression *index_expr = arg_expr->expr_data.array_access_data.array_expr;
-                expr_node_t *index_tree = build_expr_tree(index_expr);
-                Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
-                inst_list = gencode_expr_tree(index_tree, inst_list, ctx, index_reg);
-                free_expr_tree(index_tree);
-                
-                // Compute address: base + (index - array_lower_bound) * element_size
-                int element_size = array_node->element_size;
-                int array_lower_bound = array_node->array_lower_bound;
-                
-                // Get register names for 32-bit and 64-bit operations
-                const char *reg_name_32 = index_reg->bit_32;
-                const char *reg_name_64 = index_reg->bit_64;
-                
-                if (array_lower_bound != 0)
-                {
-                    snprintf(buffer, 256, "\tsubl\t$%d, %s\n", array_lower_bound, reg_name_32);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                
-                // Multiply by element_size
-                if (element_size != 1)
-                {
-                    snprintf(buffer, 256, "\timull\t$%d, %s, %s\n", element_size, reg_name_32, reg_name_32);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                
-                // Sign extend to 64-bit if needed
-                snprintf(buffer, 256, "\tmovslq\t%s, %s\n", reg_name_32, reg_name_64);
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
+                snprintf(buffer, 256, "\tmovq\t%s, %s\n", addr_reg->bit_64, arg_reg_char);
                 inst_list = add_inst(inst_list, buffer);
-                
-                // Compute final address: leaq -offset(%rbp, index_reg, 1), arg_reg
-                snprintf(buffer, 256, "\tleaq\t-%d(%%rbp,%s,1), %s\n", array_node->offset, reg_name_64, arg_reg_char);
-                inst_list = add_inst(inst_list, buffer);
-                
-                free_reg(get_reg_stack(), index_reg);
+                free_reg(get_reg_stack(), addr_reg);
             }
             else
             {
