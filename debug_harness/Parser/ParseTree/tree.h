@@ -18,8 +18,8 @@ typedef struct Tree Tree_t;
 
 /* Enum for readability */
 enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
-    TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC, TREE_TYPE_DECL,
-    TREE_UNIT};
+    TREE_CONST_DECL, TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC,
+    TREE_TYPE_DECL, TREE_UNIT};
 
 typedef struct Tree
 {
@@ -34,12 +34,14 @@ typedef struct Tree
 
             ListNode_t *args_char;
             ListNode_t *uses_units;
+            ListNode_t *const_declaration;
             ListNode_t *var_declaration;
             ListNode_t *type_declaration;
             ListNode_t *subprograms;
             struct Statement *body_statement;
         } program_data;
 
+        /* Pascal unit */
         struct Unit
         {
             char *unit_id;
@@ -77,6 +79,7 @@ typedef struct Tree
             char *id;
             char *mangled_id; // <-- ADD THIS LINE
             ListNode_t *args_var;
+            ListNode_t *const_declarations;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
             int cname_flag;
@@ -103,10 +106,19 @@ typedef struct Tree
         {
             ListNode_t *ids;
             int type; /* Int, or real */
+            char *type_id;
 
             int s_range;
             int e_range;
         } arr_decl_data;
+
+        /* A constant declaration */
+        struct Const
+        {
+            char *id;
+            char *type_id;
+            struct Expression *value;
+        } const_decl_data;
 
         /* A single statement (Can be made up of multiple statements) */
         /* See "tree_types.h" for details */
@@ -139,7 +151,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
-    ListNode_t *var_decl, ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement);
+    ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
+    ListNode_t *subprograms, struct Statement *compound_statement);
 
 Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     ListNode_t *interface_type_decls, ListNode_t *interface_var_decls,
@@ -150,15 +163,19 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
-Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag, int overload_flag);
+Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
+    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    int cname_flag, int overload_flag);
 
-Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag, int overload_flag);
+Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
+    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    int return_type, char *return_type_id, int cname_flag, int overload_flag);
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param);
 
-Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, int start, int end);
+Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end);
+
+Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value);
 
 /* Statement routines */
 struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expression *expr);

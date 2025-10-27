@@ -14,6 +14,8 @@ ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
 
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_array_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
+ListNode_t *codegen_array_element_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 
 /* (DEPRECATED) */

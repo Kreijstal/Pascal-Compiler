@@ -4,10 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#endif
 #include <ctype.h>
 #include <stdbool.h>
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
+#include "Parser/ParsePascal.h"
 
 typedef struct
 {
@@ -315,6 +321,8 @@ int main(int argc, char **argv)
             }
             ctx.label_counter = 1;
             ctx.write_label_counter = 1;
+            ctx.symtab = symtab;
+            ctx.target_abi = current_target_abi();
 
             codegen(user_tree, argv[1], &ctx, symtab);
 
@@ -352,25 +360,76 @@ void set_flags(char **optional_args, int count)
     while(count > 0)
     {
         assert(optional_args[i] != NULL);
-        if(strcmp(optional_args[i], "-non-local") == 0)
+        const char *arg = optional_args[i];
+        if(strcmp(arg, "-non-local") == 0)
         {
             fprintf(stderr, "Non-local codegen support enabled\n");
             fprintf(stderr, "WARNING: Non-local is still in development and is very buggy!\n\n");
             set_nonlocal_flag();
         }
-        else if(strcmp(optional_args[i], "-O1") == 0)
+        else if(strcmp(arg, "-O1") == 0)
         {
             fprintf(stderr, "O1 optimizations enabled!\n\n");
             set_o1_flag();
         }
-        else if(strcmp(optional_args[i], "-O2") == 0)
+        else if(strcmp(arg, "-O2") == 0)
         {
             fprintf(stderr, "O2 optimizations enabled!\n\n");
             set_o2_flag();
         }
+        else if(strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
+        {
+            fprintf(stderr, "Target ABI: Windows x64\n\n");
+            set_target_windows_flag();
+        }
+        else if(strcmp(arg, "--target-sysv") == 0 || strcmp(arg, "-target-sysv") == 0 || strcmp(arg, "--sysv-abi") == 0)
+        {
+            fprintf(stderr, "Target ABI: System V AMD64\n\n");
+            set_target_sysv_flag();
+        }
+        else if((strcmp(arg, "--target") == 0 || strcmp(arg, "-target") == 0) && count > 1)
+        {
+            const char *value = optional_args[i + 1];
+            if(strcasecmp(value, "windows") == 0 || strcasecmp(value, "win64") == 0)
+            {
+                fprintf(stderr, "Target ABI: Windows x64\n\n");
+                set_target_windows_flag();
+            }
+            else if(strcasecmp(value, "sysv") == 0 || strcasecmp(value, "systemv") == 0 || strcasecmp(value, "linux") == 0)
+            {
+                fprintf(stderr, "Target ABI: System V AMD64\n\n");
+                set_target_sysv_flag();
+            }
+            else
+            {
+                fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
+                exit(1);
+            }
+            --count;
+            ++i;
+        }
+        else if(strncmp(arg, "--target=", 9) == 0)
+        {
+            const char *value = arg + 9;
+            if(strcasecmp(value, "windows") == 0 || strcasecmp(value, "win64") == 0)
+            {
+                fprintf(stderr, "Target ABI: Windows x64\n\n");
+                set_target_windows_flag();
+            }
+            else if(strcasecmp(value, "sysv") == 0 || strcasecmp(value, "systemv") == 0 || strcasecmp(value, "linux") == 0)
+            {
+                fprintf(stderr, "Target ABI: System V AMD64\n\n");
+                set_target_sysv_flag();
+            }
+            else
+            {
+                fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
+                exit(1);
+            }
+        }
         else
         {
-            fprintf(stderr, "ERROR: Unrecognized flag: %s\n", optional_args[i]);
+            fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
             exit(1);
         }
 

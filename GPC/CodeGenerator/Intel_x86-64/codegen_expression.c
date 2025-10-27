@@ -45,6 +45,17 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_ARRAY_ACCESS:
+            CODEGEN_DEBUG("DEBUG: Processing array access expression\n");
+            expr_tree = build_expr_tree(expr);
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+            free_reg(get_reg_stack(), target_reg);
+            free_expr_tree(expr_tree);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         case EXPR_MULOP:
             CODEGEN_DEBUG("DEBUG: Processing mulop expression\n");
             expr_tree = build_expr_tree(expr);
@@ -113,6 +124,115 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
 }
 
 
+ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
+{
+    assert(expr != NULL);
+    assert(expr->type == EXPR_ARRAY_ACCESS);
+    assert(ctx != NULL);
+    assert(out_reg != NULL);
+
+    const char *array_id = expr->expr_data.array_access_data.id;
+    if (array_id == NULL)
+    {
+        fprintf(stderr, "ERROR: Missing array identifier in access expression.\n");
+        exit(1);
+    }
+
+    inst_list = codegen_expr(expr->expr_data.array_access_data.array_expr, inst_list, ctx);
+    Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (index_reg == NULL)
+    {
+        fprintf(stderr, "ERROR: Unable to allocate register for array index.\n");
+        exit(1);
+    }
+
+    StackNode_t *array_node = find_label((char *)array_id);
+    if (array_node == NULL || array_node->is_array == 0)
+    {
+        fprintf(stderr, "ERROR: Array %s not found on stack (non-local arrays unsupported).\n", array_id);
+        exit(1);
+    }
+
+    int element_size = array_node->element_size;
+    if (element_size <= 0)
+        element_size = DOUBLEWORD;
+
+    int lower_bound = array_node->array_lower_bound;
+    char buffer[100];
+
+    if (lower_bound > 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (lower_bound < 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    int scaled_sizes[] = {1, 2, 4, 8};
+    int can_scale = 0;
+    for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+    {
+        if (element_size == scaled_sizes[i])
+        {
+            can_scale = 1;
+            break;
+        }
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (can_scale)
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        if (element_size != 1)
+        {
+            snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        StackNode_t *offset_temp = find_in_temp("array_index_offset");
+        if (offset_temp == NULL)
+            offset_temp = add_l_t("array_index_offset");
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    *out_reg = index_reg;
+    return inst_list;
+}
+
+ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
+{
+    assert(expr != NULL);
+    assert(target_reg != NULL);
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_array_element_address(expr, inst_list, ctx, &addr_reg);
+
+    char buffer[100];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+}
+
+
 /* Code generation for simple relops */
 ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                                 CodeGenContext *ctx, int *relop_type)
@@ -167,7 +287,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     }
 
     *offset = var->offset;
-    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", NON_LOCAL_REG_64);
+    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", current_non_local_reg64());
     inst_list = add_inst(inst_list, buffer);
 
     CODEGEN_DEBUG("DEBUG: Non-local access generated\n");
@@ -186,7 +306,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     int arg_num;
     Register_t *top_reg;
     char buffer[50];
-    char *arg_reg_char;
+    const char *arg_reg_char;
     expr_node_t *expr_tree;
 
     assert(ctx != NULL);
@@ -259,7 +379,7 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
     assert(cur_scope != NULL);
     assert(base != NULL);
 
-    snprintf(buffer, 50, "\tmovq\t(%s), %s\n", base, NON_LOCAL_REG_64);
+    snprintf(buffer, 50, "\tmovq\t(%s), %s\n", base, current_non_local_reg64());
     inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN

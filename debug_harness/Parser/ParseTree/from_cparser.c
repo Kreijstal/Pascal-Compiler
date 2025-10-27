@@ -107,8 +107,6 @@ static int map_type_name(const char *name, char **type_id_out) {
 }
 
 static struct RecordType *convert_record_type(ast_t *record_node);
-static struct Expression *convert_expression(ast_t *expr_node);
-static ListNode_t *convert_expression_list(ast_t *arg_node);
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out, ArrayTypeInfo *array_info) {
     if (type_id_out != NULL)
@@ -525,6 +523,8 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     return decl;
 }
 
+static ListNode_t *convert_expression_list(ast_t *arg_node);
+static struct Expression *convert_expression(ast_t *expr_node);
 static struct Statement *convert_statement(ast_t *stmt_node);
 static struct Statement *convert_block(ast_t *block_node);
 static Tree_t *convert_procedure(ast_t *proc_node);

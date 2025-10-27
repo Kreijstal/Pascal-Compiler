@@ -111,6 +111,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           list_print(tree->tree_data.program_data.uses_units, f, num_indent+1);
 
           print_indent(f, num_indent);
+          fprintf(f, "[CONST_DECLS]:\n");
+          list_print(tree->tree_data.program_data.const_declaration, f, num_indent+1);
+
+          print_indent(f, num_indent);
           fprintf(f, "[TYPE_DECLS]:\n");
           list_print(tree->tree_data.program_data.type_declaration, f, num_indent+1);
 
@@ -192,6 +196,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           list_print(tree->tree_data.subprogram_data.args_var, f, num_indent+1);
 
           print_indent(f, num_indent);
+          fprintf(f, "[CONST_DECLS]:\n");
+          list_print(tree->tree_data.subprogram_data.const_declarations, f, num_indent+1);
+
+          print_indent(f, num_indent);
           fprintf(f, "[VAR_DECLS]:\n");
           list_print(tree->tree_data.subprogram_data.declarations, f, num_indent+1);
 
@@ -213,11 +221,18 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           break;
 
         case TREE_ARR_DECL:
-          fprintf(f, "[ARRDECL of type %d in range(%d, %d)]\n",
-            tree->tree_data.arr_decl_data.type, tree->tree_data.arr_decl_data.s_range,
-            tree->tree_data.arr_decl_data.e_range);
+          if (tree->tree_data.arr_decl_data.type_id != NULL)
+            fprintf(f, "[ARRDECL of type %s in range(%d, %d)]\n",
+                tree->tree_data.arr_decl_data.type_id,
+                tree->tree_data.arr_decl_data.s_range,
+                tree->tree_data.arr_decl_data.e_range);
+          else
+            fprintf(f, "[ARRDECL of type %d in range(%d, %d)]\n",
+                tree->tree_data.arr_decl_data.type,
+                tree->tree_data.arr_decl_data.s_range,
+                tree->tree_data.arr_decl_data.e_range);
 
-          list_print(tree->tree_data.var_decl_data.ids, f, num_indent+1);
+          list_print(tree->tree_data.arr_decl_data.ids, f, num_indent+1);
           break;
 
         case TREE_TYPE_DECL:
@@ -467,6 +482,7 @@ void destroy_list(ListNode_t *list)
 
 void destroy_tree(Tree_t *tree)
 {
+    assert(tree != NULL);
     switch(tree->type)
     {
         case TREE_PROGRAM_TYPE:
@@ -474,6 +490,7 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.program_data.args_char);
           destroy_list(tree->tree_data.program_data.uses_units);
 
+          destroy_list(tree->tree_data.program_data.const_declaration);
           destroy_list(tree->tree_data.program_data.type_declaration);
 
           destroy_list(tree->tree_data.program_data.var_declaration);
@@ -505,6 +522,7 @@ void destroy_tree(Tree_t *tree)
 
           destroy_list(tree->tree_data.subprogram_data.args_var);
 
+          destroy_list(tree->tree_data.subprogram_data.const_declarations);
           destroy_list(tree->tree_data.subprogram_data.declarations);
 
           destroy_list(tree->tree_data.subprogram_data.subprograms);
@@ -517,9 +535,16 @@ void destroy_tree(Tree_t *tree)
           break;
 
         case TREE_ARR_DECL:
-          destroy_list(tree->tree_data.var_decl_data.ids);
-          if (tree->tree_data.var_decl_data.type_id != NULL)
-            free(tree->tree_data.var_decl_data.type_id);
+          destroy_list(tree->tree_data.arr_decl_data.ids);
+          if (tree->tree_data.arr_decl_data.type_id != NULL)
+            free(tree->tree_data.arr_decl_data.type_id);
+          break;
+
+        case TREE_CONST_DECL:
+          free(tree->tree_data.const_decl_data.id);
+          if (tree->tree_data.const_decl_data.type_id != NULL)
+            free(tree->tree_data.const_decl_data.type_id);
+          destroy_expr(tree->tree_data.const_decl_data.value);
           break;
 
         case TREE_TYPE_DECL:
@@ -537,6 +562,7 @@ void destroy_tree(Tree_t *tree)
 
 void destroy_stmt(struct Statement *stmt)
 {
+    assert(stmt != NULL);
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -601,6 +627,7 @@ void destroy_stmt(struct Statement *stmt)
 
 void destroy_expr(struct Expression *expr)
 {
+    assert(expr != NULL);
     switch(expr->type)
     {
         case EXPR_RELOP:
@@ -668,14 +695,17 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
         return NULL;
 
     struct RecordType *clone = (struct RecordType *)malloc(sizeof(struct RecordType));
+    assert(clone != NULL);
     clone->fields = NULL;
 
     ListNode_t *cur = record_type->fields;
     while (cur != NULL)
     {
         struct RecordField *field = (struct RecordField *)cur->cur;
+        assert(field != NULL);
 
         struct RecordField *field_clone = (struct RecordField *)malloc(sizeof(struct RecordField));
+        assert(field_clone != NULL);
         field_clone->name = field->name != NULL ? strdup(field->name) : NULL;
         field_clone->type = field->type;
         field_clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
@@ -694,16 +724,19 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
 }
 
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
-    ListNode_t *var_decl, ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement)
+    ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
+    ListNode_t *subprograms, struct Statement *compound_statement)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_PROGRAM_TYPE;
     new_tree->tree_data.program_data.program_id = id;
     new_tree->tree_data.program_data.args_char = args;
     new_tree->tree_data.program_data.uses_units = uses;
+    new_tree->tree_data.program_data.const_declaration = const_decl;
     new_tree->tree_data.program_data.var_declaration = var_decl;
     new_tree->tree_data.program_data.type_declaration = type_decl;
     new_tree->tree_data.program_data.subprograms = subprograms;
@@ -719,6 +752,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     struct Statement *initialization)
 {
     Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_UNIT;
@@ -739,6 +773,7 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_TYPE_DECL;
@@ -755,6 +790,7 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_TYPE_DECL;
@@ -766,11 +802,13 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
 }
 
 
-Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag, int overload_flag)
+Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
+    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_SUBPROGRAM;
@@ -778,6 +816,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_d
     new_tree->tree_data.subprogram_data.id = id;
     new_tree->tree_data.subprogram_data.mangled_id = NULL;
     new_tree->tree_data.subprogram_data.args_var = args;
+    new_tree->tree_data.subprogram_data.const_declarations = const_decl;
     new_tree->tree_data.subprogram_data.return_type = -1;
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
@@ -789,11 +828,13 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_d
     return new_tree;
 }
 
-Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *subprograms, struct Statement *compound_statement, int return_type, char *return_type_id, int cname_flag, int overload_flag)
+Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
+    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    int return_type, char *return_type_id, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_SUBPROGRAM;
@@ -801,6 +842,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *var_de
     new_tree->tree_data.subprogram_data.id = id;
     new_tree->tree_data.subprogram_data.mangled_id = NULL;
     new_tree->tree_data.subprogram_data.args_var = args;
+    new_tree->tree_data.subprogram_data.const_declarations = const_decl;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
@@ -818,6 +860,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_VAR_DECL;
@@ -829,17 +872,33 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
     return new_tree;
 }
 
-Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, int start, int end)
+Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
 
     new_tree->line_num = line_num;
     new_tree->type = TREE_ARR_DECL;
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
+    new_tree->tree_data.arr_decl_data.type_id = type_id;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
+
+    return new_tree;
+}
+
+Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value)
+{
+    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_CONST_DECL;
+    new_tree->tree_data.const_decl_data.id = id;
+    new_tree->tree_data.const_decl_data.type_id = type_id;
+    new_tree->tree_data.const_decl_data.value = value;
 
     return new_tree;
 }
@@ -850,6 +909,7 @@ struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expr
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_VAR_ASSIGN;
@@ -863,6 +923,7 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_PROCEDURE_CALL;
@@ -878,6 +939,7 @@ struct Statement *mk_compoundstatement(int line_num, ListNode_t *compound_statem
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_COMPOUND_STATEMENT;
@@ -891,6 +953,7 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_IF_THEN;
@@ -906,6 +969,7 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_WHILE;
@@ -920,6 +984,7 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
 {
    struct Statement *new_stmt;
    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
    new_stmt->line_num = line_num;
    new_stmt->type = STMT_FOR;
@@ -938,6 +1003,7 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
 {
   struct Statement *new_stmt;
   new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
   new_stmt->line_num = line_num;
   new_stmt->type = STMT_FOR;
@@ -955,6 +1021,7 @@ struct Statement *mk_asmblock(int line_num, char *code)
 {
     struct Statement *new_stmt;
     new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_ASM_BLOCK;
@@ -969,6 +1036,7 @@ struct Expression *mk_relop(int line_num, int type, struct Expression *left,
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_RELOP;
@@ -983,6 +1051,7 @@ struct Expression *mk_signterm(int line_num, struct Expression *sign_term)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_SIGN_TERM;
@@ -996,6 +1065,7 @@ struct Expression *mk_addop(int line_num, int type, struct Expression *left,
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_ADDOP;
@@ -1011,6 +1081,7 @@ struct Expression *mk_mulop(int line_num, int type, struct Expression *left,
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_MULOP;
@@ -1025,6 +1096,7 @@ struct Expression *mk_varid(int line_num, char *id)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_VAR_ID;
@@ -1037,6 +1109,7 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_ARRAY_ACCESS;
@@ -1050,6 +1123,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_FUNCTION_CALL;
@@ -1065,6 +1139,7 @@ struct Expression *mk_inum(int line_num, int i_num)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_INUM;
@@ -1077,6 +1152,7 @@ struct Expression *mk_string(int line_num, char *string)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_STRING;
@@ -1089,6 +1165,7 @@ struct Expression *mk_rnum(int line_num, float r_num)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_RNUM;
