@@ -44,6 +44,9 @@ int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
 /* Pushes a new array onto the current scope (head) */
 int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
 
+/* Pushes a new constant onto the current scope (head) */
+int PushConstOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int value);
+
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
 int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args);

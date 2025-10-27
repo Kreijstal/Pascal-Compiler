@@ -95,6 +95,57 @@ static int map_type_name(const char *name, char **type_id_out) {
 
 static struct RecordType *convert_record_type(ast_t *record_node);
 
+static int extract_integer_literal(ast_t *node, int *out_value)
+{
+    if (node == NULL || out_value == NULL)
+        return -1;
+
+    if (node->typ == PASCAL_T_INTEGER && node->sym != NULL && node->sym->name != NULL)
+    {
+        *out_value = atoi(node->sym->name);
+        return 0;
+    }
+
+    return -1;
+}
+
+static Tree_t *convert_array_spec(ast_t *array_node, ListNode_t *ids, int line_num)
+{
+    if (array_node == NULL || ids == NULL)
+        return NULL;
+
+    ast_t *index_node = array_node->child;
+    if (index_node == NULL)
+        return NULL;
+
+    ast_t *elem_node = index_node;
+    while (elem_node->next != NULL)
+        elem_node = elem_node->next;
+
+    if (elem_node == index_node)
+        return NULL;
+
+    int start = 0;
+    int end = 0;
+    if (index_node->typ != PASCAL_T_RANGE_TYPE)
+        return NULL;
+
+    ast_t *range_start = index_node->child;
+    ast_t *range_end = range_start != NULL ? range_start->next : NULL;
+    if (extract_integer_literal(range_start, &start) != 0 ||
+        extract_integer_literal(range_end, &end) != 0)
+        return NULL;
+
+    char *elem_type_name = dup_symbol(elem_node);
+    int elem_type = map_type_name(elem_type_name, NULL);
+    free(elem_type_name);
+
+    if (elem_type == UNKNOWN_TYPE)
+        elem_type = INT_TYPE;
+
+    return mk_arraydecl(line_num, ids, elem_type, start, end);
+}
+
 static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out) {
     if (type_id_out != NULL)
         *type_id_out = NULL;
@@ -268,6 +319,16 @@ static ListNode_t *convert_param(ast_t *param_node) {
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
+        ast_t *spec_child = cur->child;
+        if (spec_child != NULL && spec_child->typ == PASCAL_T_ARRAY_TYPE) {
+            Tree_t *array_decl = convert_array_spec(spec_child, ids, param_node->line);
+            if (array_decl != NULL) {
+                ListNode_t *result = NULL;
+                append_node(&result, array_decl, LIST_TREE);
+                return result;
+            }
+        }
+
         var_type = convert_type_spec(cur, &type_id, NULL);
         cur = cur->next;
     } else {
@@ -406,6 +467,40 @@ static struct Statement *convert_statement(ast_t *stmt_node);
 static struct Statement *convert_block(ast_t *block_node);
 static Tree_t *convert_procedure(ast_t *proc_node);
 static Tree_t *convert_function(ast_t *func_node);
+
+static Tree_t *convert_const_decl(ast_t *decl_node)
+{
+    if (decl_node == NULL)
+        return NULL;
+
+    ast_t *name_node = decl_node->child;
+    if (name_node == NULL)
+        return NULL;
+
+    char *id = dup_symbol(name_node);
+    ast_t *value_node = name_node->next;
+    if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
+        value_node = value_node->next;
+
+    struct Expression *expr = convert_expression(value_node);
+    return mk_constdecl(decl_node->line, id, expr);
+}
+
+static ListNode_t *convert_const_section(ast_t *section_node)
+{
+    ListNode_t *decls = NULL;
+    ast_t *cur = section_node->child;
+
+    while (cur != NULL && cur->typ == PASCAL_T_CONST_DECL)
+    {
+        Tree_t *decl = convert_const_decl(cur);
+        if (decl != NULL)
+            append_node(&decls, decl, LIST_TREE);
+        cur = cur->next;
+    }
+
+    return decls;
+}
 
 static void convert_routine_body(ast_t *body_node, ListNode_t **var_decls,
                                  ListNode_t **nested_subs,
@@ -982,6 +1077,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
 
         ListNode_t *args = NULL;
         ListNode_t *uses = NULL;
+        ListNode_t *const_decls = NULL;
         ListNode_t *var_decls = NULL;
         ListNode_t *type_decls = NULL;
         ListNode_t *subprograms = NULL;
@@ -992,6 +1088,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             switch (section->typ) {
             case PASCAL_T_VAR_SECTION:
                 extend_list(&var_decls, convert_var_section(section));
+                break;
+            case PASCAL_T_CONST_SECTION:
+                extend_list(&const_decls, convert_const_section(section));
                 break;
             case PASCAL_T_TYPE_SECTION:
                 append_type_decls_from_section(section, &type_decls);
@@ -1018,7 +1117,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             section = section->next;
         }
 
-        Tree_t *tree = mk_program(cur->line, program_id, args, uses, var_decls, type_decls, subprograms, body);
+        Tree_t *tree = mk_program(cur->line, program_id, args, uses, const_decls, var_decls, type_decls, subprograms, body);
         return tree;
     }
 
@@ -1029,9 +1128,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t *interface_uses = NULL;
         ListNode_t *interface_type_decls = NULL;
         ListNode_t *interface_var_decls = NULL;
+        ListNode_t *interface_const_decls = NULL;
         ListNode_t *implementation_uses = NULL;
         ListNode_t *implementation_type_decls = NULL;
         ListNode_t *implementation_var_decls = NULL;
+        ListNode_t *implementation_const_decls = NULL;
         ListNode_t *subprograms = NULL;
         struct Statement *initialization = NULL;
 
@@ -1053,6 +1154,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         break;
                     case PASCAL_T_VAR_SECTION:
                         extend_list(&interface_var_decls, convert_var_section(node));
+                        break;
+                    case PASCAL_T_CONST_SECTION:
+                        extend_list(&interface_const_decls, convert_const_section(node));
                         break;
                     default:
                         break;
@@ -1076,6 +1180,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         break;
                     case PASCAL_T_VAR_SECTION:
                         extend_list(&implementation_var_decls, convert_var_section(node));
+                        break;
+                    case PASCAL_T_CONST_SECTION:
+                        extend_list(&implementation_const_decls, convert_const_section(node));
                         break;
                     case PASCAL_T_PROCEDURE_DECL: {
                         Tree_t *proc = convert_procedure(node);
@@ -1104,8 +1211,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         Tree_t *tree = mk_unit(cur->line, unit_id, interface_uses, interface_type_decls,
-                               interface_var_decls, implementation_uses,
-                               implementation_type_decls, implementation_var_decls,
+                               interface_var_decls, interface_const_decls,
+                               implementation_uses, implementation_type_decls,
+                               implementation_var_decls, implementation_const_decls,
                                subprograms, initialization);
         return tree;
     }

@@ -17,7 +17,7 @@
 struct RecordType;
 
 enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
-    HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
+    HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE, HASHTYPE_CONSTANT};
 enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD};
 
 /* Items we put in the hash table */
@@ -29,6 +29,9 @@ typedef struct HashNode
     enum VarType var_type;
     ListNode_t *args; /* NULL when no args (or not applicable to given type) */
     struct RecordType *record_type; /* Used for type declarations */
+
+    int has_const_value;
+    int const_value;
 
     /* Symbol table resources */
     int referenced;

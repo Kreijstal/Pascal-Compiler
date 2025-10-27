@@ -44,6 +44,7 @@ int semcheck_id_not_main(char *id)
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
+int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 
@@ -155,6 +156,8 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
 
     /* TODO: Push program name onto scope */
+
+    return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
 
     /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
@@ -461,3 +464,42 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
 
     return return_val;
 }
+int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
+{
+    assert(symtab != NULL);
+
+    int return_val = 0;
+    ListNode_t *cur = const_decls;
+
+    while (cur != NULL)
+    {
+        Tree_t *tree = (Tree_t *)cur->cur;
+        assert(tree != NULL);
+        assert(tree->type == TREE_CONST_DECL);
+
+        struct Expression *expr = tree->tree_data.const_decl_data.value;
+        if (expr == NULL || expr->type != EXPR_INUM)
+        {
+            fprintf(stderr, "Error on line %d, unsupported constant expression for %s.\n",
+                    tree->line_num, tree->tree_data.const_decl_data.id);
+            ++return_val;
+        }
+        else
+        {
+            int res = PushConstOntoScope(symtab, HASHVAR_INTEGER,
+                                         tree->tree_data.const_decl_data.id,
+                                         expr->expr_data.i_num);
+            if (res > 0)
+            {
+                fprintf(stderr, "Error on line %d, redeclaration of constant %s!\n",
+                        tree->line_num, tree->tree_data.const_decl_data.id);
+                ++return_val;
+            }
+        }
+
+        cur = cur->next;
+    }
+
+    return return_val;
+}
+

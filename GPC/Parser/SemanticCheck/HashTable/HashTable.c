@@ -49,6 +49,8 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->record_type = record_type;
+        hash_node->has_const_value = 0;
+        hash_node->const_value = 0;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
 
@@ -84,6 +86,8 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->record_type = record_type;
+        hash_node->has_const_value = 0;
+        hash_node->const_value = 0;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
 

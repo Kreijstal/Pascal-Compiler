@@ -220,6 +220,13 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           list_print(tree->tree_data.var_decl_data.ids, f, num_indent+1);
           break;
 
+        case TREE_CONST_DECL:
+          fprintf(f, "[CONSTDECL %s]\n", tree->tree_data.const_decl_data.id);
+          print_indent(f, num_indent + 1);
+          fprintf(f, "[VALUE]:\n");
+          expr_print(tree->tree_data.const_decl_data.value, f, num_indent + 2);
+          break;
+
         case TREE_TYPE_DECL:
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
             {
@@ -474,6 +481,7 @@ void destroy_tree(Tree_t *tree)
           free(tree->tree_data.program_data.program_id);
           destroy_list(tree->tree_data.program_data.args_char);
           destroy_list(tree->tree_data.program_data.uses_units);
+          destroy_list(tree->tree_data.program_data.const_declaration);
 
           destroy_list(tree->tree_data.program_data.type_declaration);
 
@@ -489,9 +497,11 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.unit_data.interface_uses);
           destroy_list(tree->tree_data.unit_data.interface_type_decls);
           destroy_list(tree->tree_data.unit_data.interface_var_decls);
+          destroy_list(tree->tree_data.unit_data.interface_const_decls);
           destroy_list(tree->tree_data.unit_data.implementation_uses);
           destroy_list(tree->tree_data.unit_data.implementation_type_decls);
           destroy_list(tree->tree_data.unit_data.implementation_var_decls);
+          destroy_list(tree->tree_data.unit_data.implementation_const_decls);
           destroy_list(tree->tree_data.unit_data.subprograms);
           if (tree->tree_data.unit_data.initialization != NULL)
               destroy_stmt(tree->tree_data.unit_data.initialization);
@@ -521,6 +531,12 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.var_decl_data.ids);
           if (tree->tree_data.var_decl_data.type_id != NULL)
             free(tree->tree_data.var_decl_data.type_id);
+          break;
+
+        case TREE_CONST_DECL:
+          free(tree->tree_data.const_decl_data.id);
+          if (tree->tree_data.const_decl_data.value != NULL)
+            destroy_expr(tree->tree_data.const_decl_data.value);
           break;
 
         case TREE_TYPE_DECL:
@@ -700,7 +716,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
 }
 
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
-    ListNode_t *var_decl, ListNode_t *type_decl, ListNode_t *subprograms,
+    ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl, ListNode_t *subprograms,
     struct Statement *compound_statement)
 {
     Tree_t *new_tree;
@@ -712,6 +728,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     new_tree->tree_data.program_data.program_id = id;
     new_tree->tree_data.program_data.args_char = args;
     new_tree->tree_data.program_data.uses_units = uses;
+    new_tree->tree_data.program_data.const_declaration = const_decl;
     new_tree->tree_data.program_data.var_declaration = var_decl;
     new_tree->tree_data.program_data.type_declaration = type_decl;
     new_tree->tree_data.program_data.subprograms = subprograms;
@@ -722,8 +739,10 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
 
 Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     ListNode_t *interface_type_decls, ListNode_t *interface_var_decls,
+    ListNode_t *interface_const_decls,
     ListNode_t *implementation_uses, ListNode_t *implementation_type_decls,
-    ListNode_t *implementation_var_decls, ListNode_t *subprograms,
+    ListNode_t *implementation_var_decls, ListNode_t *implementation_const_decls,
+    ListNode_t *subprograms,
     struct Statement *initialization)
 {
     Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -735,9 +754,11 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     new_tree->tree_data.unit_data.interface_uses = interface_uses;
     new_tree->tree_data.unit_data.interface_type_decls = interface_type_decls;
     new_tree->tree_data.unit_data.interface_var_decls = interface_var_decls;
+    new_tree->tree_data.unit_data.interface_const_decls = interface_const_decls;
     new_tree->tree_data.unit_data.implementation_uses = implementation_uses;
     new_tree->tree_data.unit_data.implementation_type_decls = implementation_type_decls;
     new_tree->tree_data.unit_data.implementation_var_decls = implementation_var_decls;
+    new_tree->tree_data.unit_data.implementation_const_decls = implementation_const_decls;
     new_tree->tree_data.unit_data.subprograms = subprograms;
     new_tree->tree_data.unit_data.initialization = initialization;
 
@@ -855,6 +876,19 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, int start, int end
     new_tree->tree_data.arr_decl_data.type = type;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
+
+    return new_tree;
+}
+
+Tree_t *mk_constdecl(int line_num, char *id, struct Expression *expr)
+{
+    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_CONST_DECL;
+    new_tree->tree_data.const_decl_data.id = id;
+    new_tree->tree_data.const_decl_data.value = expr;
 
     return new_tree;
 }

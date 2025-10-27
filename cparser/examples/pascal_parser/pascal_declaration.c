@@ -28,6 +28,20 @@ static ast_t* map_var_modifier(ast_t* ast) {
     return make_modifier_node(ast, "var");
 }
 
+static ast_t* wrap_type_spec(ast_t* ast) {
+    if (ast == NULL)
+        return NULL;
+
+    ast_t* wrapper = new_ast();
+    wrapper->typ = PASCAL_T_TYPE_SPEC;
+    wrapper->sym = NULL;
+    wrapper->child = ast;
+    wrapper->next = NULL;
+    wrapper->line = ast->line;
+    wrapper->col = ast->col;
+    return wrapper;
+}
+
 static combinator_t* create_param_name_list(void) {
     return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
 }
@@ -218,10 +232,18 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* param_list = create_pascal_param_parser();
 
     // Variable declaration for function/procedure local variables
+    combinator_t* simple_type_name = map(token(cident(PASCAL_T_IDENTIFIER)), wrap_type_spec);
+
+    combinator_t* var_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        type_definition,
+        simple_type_name,
+        NULL
+    );
+
     combinator_t* var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
         token(match(":")),                          // colon
-        token(cident(PASCAL_T_IDENTIFIER)),         // variable type
+        var_type_spec,
         optional(token(match(";"))),                // optional semicolon
         NULL
     );

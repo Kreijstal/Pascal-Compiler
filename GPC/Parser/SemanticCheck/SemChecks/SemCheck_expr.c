@@ -366,6 +366,30 @@ int semcheck_varid(int *type_return,
     }
     else
     {
+        if (hash_return->hash_type == HASHTYPE_CONSTANT)
+        {
+            if (mutating != 0)
+            {
+                fprintf(stderr, "Error on line %d, cannot modify constant %s!\n\n",
+                        expr->line_num, id);
+                ++return_val;
+            }
+            else if (hash_return->has_const_value)
+            {
+                free(expr->expr_data.id);
+                expr->expr_data.id = NULL;
+                expr->type = EXPR_INUM;
+                expr->expr_data.i_num = hash_return->const_value;
+                *type_return = INT_TYPE;
+            }
+            else
+            {
+                *type_return = UNKNOWN_TYPE;
+            }
+
+            return return_val;
+        }
+
         set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
