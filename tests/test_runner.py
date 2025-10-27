@@ -347,15 +347,23 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
 
-    def test_zahlen_program_parses(self):
-        """Ensures the zahlen classification demo parses successfully in parse-only mode."""
+    def test_zahlen_program_compiles(self):
+        """Ensures the zahlen classification demo compiles successfully."""
         input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen.s")
 
-        run_compiler(input_file, asm_file, flags=["-parse-only"])
-        self.assertTrue(os.path.exists(asm_file))
-        content = read_file_content(asm_file)
-        self.assertIn("parse-only mode", content)
+        # Compile without parse-only flag
+        try:
+            run_compiler(input_file, asm_file)
+            self.assertTrue(os.path.exists(asm_file))
+            # Check that it's not in parse-only mode
+            content = read_file_content(asm_file)
+            self.assertNotIn("parse-only mode", content)
+            # Check that it contains assembly code
+            self.assertIn(".text", content)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"zahlen.p compilation failed: {e}")
+
 
     def test_for_program(self):
         """Tests the for program."""

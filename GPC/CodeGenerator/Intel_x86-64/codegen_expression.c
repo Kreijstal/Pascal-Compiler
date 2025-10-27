@@ -417,37 +417,42 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                 StackNode_t *array_node = find_label(arg_expr->expr_data.array_access_data.id);
                 
                 // Evaluate the index expression
-                struct Expression *index_expr = arg_expr->expr_data.array_access_data.access_expr;
-                ExprTree_t *index_tree = build_expr_tree(index_expr);
+                struct Expression *index_expr = arg_expr->expr_data.array_access_data.array_expr;
+                expr_node_t *index_tree = build_expr_tree(index_expr);
                 Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
                 inst_list = gencode_expr_tree(index_tree, inst_list, ctx, index_reg);
                 free_expr_tree(index_tree);
                 
-                // Compute address: base + (index - array_start) * element_size
+                // Compute address: base + (index - array_lower_bound) * element_size
                 int element_size = array_node->element_size;
-                int array_start = array_node->array_start;
+                int array_lower_bound = array_node->array_lower_bound;
                 
-                if (array_start != 0)
+                // Get register names for 32-bit and 64-bit operations
+                const char *reg_name_32 = index_reg->bit_32;
+                const char *reg_name_64 = index_reg->bit_64;
+                
+                if (array_lower_bound != 0)
                 {
-                    snprintf(buffer, 256, "\tsubl\t$%d, %s\n", array_start, get_reg_name(index_reg, 4));
+                    snprintf(buffer, 256, "\tsubl\t$%d, %s\n", array_lower_bound, reg_name_32);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 
-                // Multiply by element size
+                // Multiply by element_size
                 if (element_size != 1)
                 {
-                    snprintf(buffer, 256, "\timull\t$%d, %s, %s\n", element_size, 
-                            get_reg_name(index_reg, 4), get_reg_name(index_reg, 4));
+                    snprintf(buffer, 256, "\timull\t$%d, %s, %s\n", element_size, reg_name_32, reg_name_32);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 
-                // Add base address
-                snprintf(buffer, 256, "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, arg_reg_char);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 256, "\taddq\t%s, %s\n", get_reg_name(index_reg, 8), arg_reg_char);
+                // Sign extend to 64-bit if needed
+                snprintf(buffer, 256, "\tmovslq\t%s, %s\n", reg_name_32, reg_name_64);
                 inst_list = add_inst(inst_list, buffer);
                 
-                free_reg(index_reg);
+                // Compute final address: leaq -offset(%rbp, index_reg, 1), arg_reg
+                snprintf(buffer, 256, "\tleaq\t-%d(%%rbp,%s,1), %s\n", array_node->offset, reg_name_64, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+                
+                free_reg(get_reg_stack(), index_reg);
             }
             else
             {
