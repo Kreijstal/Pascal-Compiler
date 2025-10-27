@@ -7,6 +7,7 @@
 #define TREE_TYPES_H
 
 #include "../List/List.h"
+#include "type_tags.h"
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
@@ -121,6 +122,7 @@ enum ExprType {
     EXPR_VAR_ID,
     EXPR_ARRAY_ACCESS,
     EXPR_FUNCTION_CALL,
+    EXPR_FORMATTED_ARG,
     EXPR_INUM,
     EXPR_RNUM,
     EXPR_STRING
@@ -131,6 +133,7 @@ struct Expression
 {
     int line_num;
     enum ExprType type;
+    int inferred_type;
     union expr_data
     {
         /* Relational expression */
@@ -182,6 +185,13 @@ struct Expression
             ListNode_t *args_expr;
         struct HashNode *resolved_func;
         } function_call_data;
+
+        struct FormattedArg
+        {
+            struct Expression *value;
+            struct Expression *width;
+            struct Expression *precision;
+        } formatted_arg_data;
 
         /* Integer number */
         int i_num;

@@ -10,6 +10,7 @@
 #include <string.h>
 #include "../../List/List.h"
 #include "../../ParseTree/tree.h"
+#include "../../../common/casefold.h"
 #include "HashTable.h"
 
 /* Gives a new hash tables with NULL'd out list pointers */
@@ -70,7 +71,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         while(cur != NULL)
         {
             hash_node = (HashNode_t *)cur->cur;
-            if(strcmp(hash_node->id, id) == 0)
+            if(gpc_identifier_equals(hash_node->id, id))
             {
                 int is_new_proc_func = (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
                 int is_existing_proc_func = (hash_node->hash_type == HASHTYPE_PROCEDURE || hash_node->hash_type == HASHTYPE_FUNCTION);
@@ -131,7 +132,7 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
         while(list != NULL)
         {
             hash_node = (HashNode_t *)list->cur;
-            if(strcmp(hash_node->id, id) == 0)
+            if(gpc_identifier_equals(hash_node->id, id))
             {
                 return hash_node;
             }
@@ -160,7 +161,7 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
     while(list != NULL)
     {
         hash_node = (HashNode_t *)list->cur;
-        if(strcmp(hash_node->id, id) == 0)
+        if(gpc_identifier_equals(hash_node->id, id))
         {
             if(matches == NULL)
                 matches = CreateListNode(hash_node, LIST_UNSPECIFIED);
@@ -267,9 +268,9 @@ int hashpjw( char *s )
 
     assert(s != NULL);
 
-	for ( p = s; *p != '\0'; p++ )
-	{
-		h = (h << 4) + (*p);
+        for ( p = s; *p != '\0'; p++ )
+        {
+                h = (h << 4) + gpc_casefold_char(*p);
 		if ( (g = h & 0xf0000000) )
 		{
 			h = h ^ ( g >> 24 );

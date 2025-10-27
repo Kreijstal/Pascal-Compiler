@@ -41,6 +41,8 @@ int semcheck_arrayaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_formatted_arg(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Sets hash meta based on given mutating flag */
 void set_hash_meta(HashNode_t *node, int mutating)
@@ -171,6 +173,10 @@ int semcheck_expr_main(int *type_return,
             return_val += semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
             break;
 
+        case EXPR_FORMATTED_ARG:
+            return_val += semcheck_formatted_arg(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+
         /*** BASE CASES ***/
         case EXPR_INUM:
             *type_return = INT_TYPE;
@@ -188,6 +194,8 @@ int semcheck_expr_main(int *type_return,
             assert(0 && "Bad type in semcheck_expr_main!");
             break;
     }
+
+    expr->inferred_type = (type_return != NULL) ? *type_return : UNKNOWN_TYPE;
 
     return return_val;
 }
@@ -652,5 +660,48 @@ int semcheck_funccall(int *type_return,
         }
     }
 
+    return return_val;
+}
+
+int semcheck_formatted_arg(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    int return_val = 0;
+    int value_type = UNKNOWN_TYPE;
+    assert(expr != NULL);
+
+    struct Expression *value_expr = expr->expr_data.formatted_arg_data.value;
+    struct Expression *width_expr = expr->expr_data.formatted_arg_data.width;
+    struct Expression *precision_expr = expr->expr_data.formatted_arg_data.precision;
+
+    if (value_expr != NULL)
+        return_val += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, mutating);
+    else
+        value_type = UNKNOWN_TYPE;
+
+    if (width_expr != NULL)
+    {
+        int width_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&width_type, symtab, width_expr, max_scope_lev, NO_MUTATE);
+        if (width_type != INT_TYPE && width_type != LONGINT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, field width must be an integer type.\n", expr->line_num);
+            ++return_val;
+        }
+    }
+
+    if (precision_expr != NULL)
+    {
+        int precision_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&precision_type, symtab, precision_expr, max_scope_lev, NO_MUTATE);
+        if (precision_type != INT_TYPE && precision_type != LONGINT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, field precision must be an integer type.\n", expr->line_num);
+            ++return_val;
+        }
+    }
+
+    *type_return = value_type;
+    expr->inferred_type = value_type;
     return return_val;
 }

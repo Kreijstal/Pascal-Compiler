@@ -225,6 +225,8 @@ struct Expression *mk_inum(int line_num, int i_num);
 struct Expression *mk_rnum(int line_num, float r_num);
 
 struct Expression *mk_string(int line_num, char *string);
+struct Expression *mk_formatted_arg(int line_num, struct Expression *value,
+    struct Expression *width, struct Expression *precision);
 
 
 #endif

@@ -336,10 +336,25 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
-            assert(arg_expr->type == EXPR_VAR_ID);
-            StackNode_t *var_node = find_label(arg_expr->expr_data.id);
-            snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
-            inst_list = add_inst(inst_list, buffer);
+            if (arg_expr->type == EXPR_VAR_ID)
+            {
+                StackNode_t *var_node = find_label(arg_expr->expr_data.id);
+                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if (arg_expr->type == EXPR_ARRAY_ACCESS)
+            {
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
+                snprintf(buffer, 256, "\tmovq\t%s, %s\n", addr_reg->bit_64, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+            }
+            else
+            {
+                fprintf(stderr, "Error: unsupported expression type for var parameter\n");
+                assert(0);
+            }
         }
         else
         {

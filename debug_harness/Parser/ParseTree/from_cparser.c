@@ -801,6 +801,25 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_unary_expr(expr_node);
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
+    case PASCAL_T_FIELD_WIDTH: {
+        ast_t *value_node = expr_node->child;
+        ast_t *width_node = value_node != NULL ? value_node->next : NULL;
+        ast_t *precision_node = width_node != NULL ? width_node->next : NULL;
+
+        struct Expression *value_expr = convert_expression(value_node);
+        struct Expression *width_expr = convert_expression(width_node);
+        struct Expression *precision_expr = convert_expression(precision_node);
+
+        if (value_expr == NULL) {
+            if (width_expr != NULL)
+                destroy_expr(width_expr);
+            if (precision_expr != NULL)
+                destroy_expr(precision_expr);
+            return NULL;
+        }
+
+        return mk_formatted_arg(expr_node->line, value_expr, width_expr, precision_expr);
+    }
     default:
         fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.\n",
                 expr_node->typ, expr_node->line);

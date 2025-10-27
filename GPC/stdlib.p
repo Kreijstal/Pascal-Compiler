@@ -1,116 +1,5 @@
 program stdlib;
 
-procedure write(s: string);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lwrite_s_sysv
-        movq %rcx, %rdx
-        leaq .format_str_s(%rip), %rcx
-        jmp .Lwrite_s_args_done
-.Lwrite_s_sysv:
-        movq %rdi, %rsi
-        leaq .format_str_s(%rip), %rdi
-.Lwrite_s_args_done:
-        xorl %eax, %eax
-        call gpc_printf
-    end
-end;
-
-procedure write(i: integer);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lwrite_i_sysv
-        movl %ecx, %edx
-        leaq .format_str_d(%rip), %rcx
-        jmp .Lwrite_i_args_done
-.Lwrite_i_sysv:
-        movl %edi, %esi
-        leaq .format_str_d(%rip), %rdi
-.Lwrite_i_args_done:
-        xorl %eax, %eax
-        call gpc_printf
-    end
-end;
-
-procedure writeln(s: string);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lwriteln_s_sysv
-        movq %rcx, %rdx
-        leaq .format_str_sn(%rip), %rcx
-        jmp .Lwriteln_s_args_done
-.Lwriteln_s_sysv:
-        movq %rdi, %rsi
-        leaq .format_str_sn(%rip), %rdi
-.Lwriteln_s_args_done:
-        xorl %eax, %eax
-        call gpc_printf
-    end
-end;
-
-procedure writeln(i: integer);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lwriteln_i_sysv
-        movl %ecx, %edx
-        leaq .format_str_dn(%rip), %rcx
-        jmp .Lwriteln_i_args_done
-.Lwriteln_i_sysv:
-        movl %edi, %esi
-        leaq .format_str_dn(%rip), %rdi
-.Lwriteln_i_args_done:
-        xorl %eax, %eax
-        call gpc_printf
-    end
-end;
-
-procedure writeln(i: longint);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lwriteln_li_sysv
-        movq %rcx, %rdx
-        leaq .format_str_dn(%rip), %rcx
-        jmp .Lwriteln_li_args_done
-.Lwriteln_li_sysv:
-        movq %rdi, %rsi
-        leaq .format_str_dn(%rip), %rdi
-.Lwriteln_li_args_done:
-        xorl %eax, %eax
-        call gpc_printf
-    end
-end;
-
-procedure writeln;
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lwriteln_void_sysv
-        leaq .format_str_n(%rip), %rcx
-        jmp .Lwriteln_void_done
-.Lwriteln_void_sysv:
-        leaq .format_str_n(%rip), %rdi
-.Lwriteln_void_done:
-        xorl %eax, %eax
-        call gpc_printf
-    end
-end;
 
 procedure read(var i: integer);
 begin
@@ -150,49 +39,38 @@ begin
     end
 end;
 
-procedure write(i: longint);
+function succ(i: integer): integer;
 begin
+    succ := i;
     assembler;
     asm
         movl $GPC_TARGET_WINDOWS, %eax
         testl %eax, %eax
-        je .Lwrite_longint_sysv
-        movq %rcx, %rdx
-        leaq .format_str_d(%rip), %rcx
-        jmp .Lwrite_longint_args_done
-.Lwrite_longint_sysv:
-        movq %rdi, %rsi
-        leaq .format_str_d(%rip), %rdi
-.Lwrite_longint_args_done:
-        xorl %eax, %eax
-        call gpc_printf
+        je .Lsucc_i_sysv
+        movl %ecx, %eax
+        jmp .Lsucc_i_done
+.Lsucc_i_sysv:
+        movl %edi, %eax
+.Lsucc_i_done:
+        incl %eax
     end
-end;
-
-function succ(i: integer): integer;
-begin
-    succ := i + 1;
 end;
 
 function succ(i: longint): longint;
 begin
-    succ := i + 1;
-end;
-
-function max(a, b: integer): integer;
-begin
-    if a >= b then
-        max := a
-    else
-        max := b;
-end;
-
-function max(a, b: longint): longint;
-begin
-    if a >= b then
-        max := a
-    else
-        max := b;
+    succ := i;
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lsucc_li_sysv
+        movq %rcx, %rax
+        jmp .Lsucc_li_done
+.Lsucc_li_sysv:
+        movq %rdi, %rax
+.Lsucc_li_done:
+        incq %rax
+    end
 end;
 
 procedure halt;

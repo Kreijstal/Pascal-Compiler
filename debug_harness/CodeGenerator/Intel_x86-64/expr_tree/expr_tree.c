@@ -320,7 +320,25 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
+        Register_t *saved_target = target_reg;
+        Register_t *reacquired = NULL;
+        if (saved_target != NULL)
+        {
+            free_reg(get_reg_stack(), saved_target);
+        }
+
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx, expr->expr_data.function_call_data.resolved_func);
+
+        if (saved_target != NULL)
+        {
+            if (get_register_64bit(get_reg_stack(), saved_target->bit_64, &reacquired) != 0 || reacquired == NULL)
+            {
+                fprintf(stderr, "ERROR: Unable to reacquire register %s for function call.\n", saved_target->bit_64);
+                exit(1);
+            }
+            target_reg = reacquired;
+        }
+
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
@@ -563,23 +581,6 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
-            else if(type == MOD)
-            {
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
-
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
-
-                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
-            }
             /* NOTE: Division and modulus is a more special case */
             else if(type == SLASH || type == DIV)
             {
@@ -598,11 +599,31 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 snprintf(buffer, 50, "\tcdq\n");
                 inst_list = add_inst(inst_list, buffer);
 
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
+                Register_t *div_reg = get_free_reg(get_reg_stack(), &inst_list);
+                char divisor_operand[32];
+                StackNode_t *divisor_slot = NULL;
+                if (div_reg != NULL && strcmp(div_reg->bit_32, "%eax") != 0)
+                {
+                    snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, div_reg->bit_32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(divisor_operand, sizeof(divisor_operand), "%s", div_reg->bit_32);
+                }
+                else
+                {
+                    if (div_reg != NULL)
+                    {
+                        free_reg(get_reg_stack(), div_reg);
+                        div_reg = NULL;
+                    }
+                    divisor_slot = find_in_temp("TEMP_DIVISOR");
+                    if (divisor_slot == NULL)
+                        divisor_slot = add_l_t("TEMP_DIVISOR");
+                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", right, divisor_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(divisor_operand, sizeof(divisor_operand), "-%d(%%rbp)", divisor_slot->offset);
+                }
+
+                snprintf(buffer, 50, "\tidivl\t%s\n", divisor_operand);
                 inst_list = add_inst(inst_list, buffer);
 
                 snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", left);
@@ -612,10 +633,13 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tpopq\t%%rax\n");
                 inst_list = add_inst(inst_list, buffer);
+
+                if (div_reg != NULL)
+                    free_reg(get_reg_stack(), div_reg);
             }
             else if(type == MOD)
             {
-                inst_list = gencode_modulus(left, right, inst_list);
+                inst_list = gencode_modulus(right, left, inst_list);
             }
             else
             {

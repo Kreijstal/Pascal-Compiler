@@ -11,6 +11,7 @@
 #include "../register_types.h"
 #include "../codegen.h"
 #include "../../../Parser/List/List.h"
+#include "../../../common/casefold.h"
 
 /* Sets num_args_alloced to 0 */
 void free_arg_regs(void)
@@ -372,16 +373,33 @@ RegStack_t *init_reg_stack()
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
 
-    /* R10 */
-    Register_t *r10;
-    r10 = (Register_t *)malloc(sizeof(Register_t));
+    /* Caller-saved temporaries */
+    Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
     assert(r10 != NULL);
     r10->bit_64 = strdup("%r10");
     r10->bit_32 = strdup("%r10d");
 
+    Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r11 != NULL);
+    r11->bit_64 = strdup("%r11");
+    r11->bit_32 = strdup("%r11d");
+
+    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r8 != NULL);
+    r8->bit_64 = strdup("%r8");
+    r8->bit_32 = strdup("%r8d");
+
+    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r9 != NULL);
+    r9->bit_64 = strdup("%r9");
+    r9->bit_32 = strdup("%r9d");
+
 
     registers = CreateListNode(rax, LIST_UNSPECIFIED);
     registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
 
     /*
     registers = CreateListNode(rdi, LIST_UNSPECIFIED);
@@ -391,7 +409,7 @@ RegStack_t *init_reg_stack()
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
-    reg_stack->num_registers = 2;
+    reg_stack->num_registers = 5;
 
     return reg_stack;
 }
@@ -545,6 +563,7 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
     }
     else
     {
+        fprintf(stderr, "ERROR: register allocator exhausted while evaluating expression.\n");
         return NULL;
     }
 }
@@ -637,7 +656,7 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
     while(cur_li != NULL)
     {
         cur_node = (StackNode_t *)cur_li->cur;
-        if(strcmp(cur_node->label, label) == 0)
+        if(gpc_identifier_equals(cur_node->label, label))
         {
             return cur_node;
         }
@@ -660,7 +679,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
     while(cur_li != NULL)
     {
         cur_node = (StackNode_t *)cur_li->cur;
-        if(strcmp(cur_node->label, label) == 0)
+        if(gpc_identifier_equals(cur_node->label, label))
         {
             return cur_node;
         }
@@ -683,7 +702,7 @@ StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
     while(cur_li != NULL)
     {
         cur_node = (StackNode_t *)cur_li->cur;
-        if(strcmp(cur_node->label, label) == 0)
+        if(gpc_identifier_equals(cur_node->label, label))
         {
             return cur_node;
         }

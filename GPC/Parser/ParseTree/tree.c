@@ -464,6 +464,23 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           fprintf(f, "[R_NUM:%f]\n", expr->expr_data.r_num);
           break;
 
+        case EXPR_FORMATTED_ARG:
+          fprintf(f, "[FORMATTED_ARG]\n");
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[VALUE]:\n");
+          if (expr->expr_data.formatted_arg_data.value != NULL)
+              expr_print(expr->expr_data.formatted_arg_data.value, f, num_indent+1);
+          print_indent(f, num_indent);
+          fprintf(f, "[WIDTH]:\n");
+          if (expr->expr_data.formatted_arg_data.width != NULL)
+              expr_print(expr->expr_data.formatted_arg_data.width, f, num_indent+1);
+          print_indent(f, num_indent);
+          fprintf(f, "[PRECISION]:\n");
+          if (expr->expr_data.formatted_arg_data.precision != NULL)
+              expr_print(expr->expr_data.formatted_arg_data.precision, f, num_indent+1);
+          break;
+
         case EXPR_STRING:
           fprintf(f, "[STRING:%s]\n", expr->expr_data.string);
           break;
@@ -710,6 +727,15 @@ void destroy_expr(struct Expression *expr)
         case EXPR_FUNCTION_CALL:
           free(expr->expr_data.function_call_data.id);
           destroy_list(expr->expr_data.function_call_data.args_expr);
+          break;
+
+        case EXPR_FORMATTED_ARG:
+          if (expr->expr_data.formatted_arg_data.value != NULL)
+              destroy_expr(expr->expr_data.formatted_arg_data.value);
+          if (expr->expr_data.formatted_arg_data.width != NULL)
+              destroy_expr(expr->expr_data.formatted_arg_data.width);
+          if (expr->expr_data.formatted_arg_data.precision != NULL)
+              destroy_expr(expr->expr_data.formatted_arg_data.precision);
           break;
 
         case EXPR_INUM:
@@ -1147,6 +1173,7 @@ struct Expression *mk_relop(int line_num, int type, struct Expression *left,
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_RELOP;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.relop_data.type = type;
     new_expr->expr_data.relop_data.left = left;
     new_expr->expr_data.relop_data.right = right;
@@ -1162,6 +1189,7 @@ struct Expression *mk_signterm(int line_num, struct Expression *sign_term)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_SIGN_TERM;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.sign_term = sign_term;
 
     return new_expr;
@@ -1176,6 +1204,7 @@ struct Expression *mk_addop(int line_num, int type, struct Expression *left,
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_ADDOP;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.addop_data.addop_type = type;
     new_expr->expr_data.addop_data.left_expr = left;
     new_expr->expr_data.addop_data.right_term = right;
@@ -1192,6 +1221,7 @@ struct Expression *mk_mulop(int line_num, int type, struct Expression *left,
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_MULOP;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.mulop_data.mulop_type = type;
     new_expr->expr_data.mulop_data.left_term = left;
     new_expr->expr_data.mulop_data.right_factor = right;
@@ -1207,6 +1237,7 @@ struct Expression *mk_varid(int line_num, char *id)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_VAR_ID;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.id = id;
 
     return new_expr;
@@ -1220,6 +1251,7 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_ARRAY_ACCESS;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.array_access_data.id = id;
     new_expr->expr_data.array_access_data.array_expr = index_expr;
 
@@ -1234,6 +1266,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_FUNCTION_CALL;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.function_call_data.id = id;
     new_expr->expr_data.function_call_data.mangled_id = NULL;
     new_expr->expr_data.function_call_data.args_expr = args;
@@ -1250,6 +1283,7 @@ struct Expression *mk_inum(int line_num, int i_num)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_INUM;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.i_num = i_num;
 
     return new_expr;
@@ -1263,6 +1297,7 @@ struct Expression *mk_string(int line_num, char *string)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_STRING;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.string = string;
 
     return new_expr;
@@ -1276,7 +1311,23 @@ struct Expression *mk_rnum(int line_num, float r_num)
 
     new_expr->line_num = line_num;
     new_expr->type = EXPR_RNUM;
+    new_expr->inferred_type = UNKNOWN_TYPE;
     new_expr->expr_data.r_num = r_num;
 
+    return new_expr;
+}
+
+struct Expression *mk_formatted_arg(int line_num, struct Expression *value,
+    struct Expression *width, struct Expression *precision)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    new_expr->line_num = line_num;
+    new_expr->type = EXPR_FORMATTED_ARG;
+    new_expr->inferred_type = UNKNOWN_TYPE;
+    new_expr->expr_data.formatted_arg_data.value = value;
+    new_expr->expr_data.formatted_arg_data.width = width;
+    new_expr->expr_data.formatted_arg_data.precision = precision;
     return new_expr;
 }

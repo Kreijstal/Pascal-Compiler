@@ -131,3 +131,45 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
     descriptor->data = new_data;
     descriptor->length = new_length;
 }
+
+static void gpc_print_string_with_format(const char *value, int width, int precision)
+{
+    if (value == NULL)
+        value = "";
+
+    if (precision >= 0 && width >= 0)
+        printf("%*.*s", width, precision, value);
+    else if (precision >= 0)
+        printf("%.*s", precision, value);
+    else if (width >= 0)
+        printf("%*s", width, value);
+    else
+        printf("%s", value);
+}
+
+static void gpc_print_int_with_format(long long value, int width, int precision)
+{
+    if (precision >= 0 && width >= 0)
+        printf("%*.*lld", width, precision, value);
+    else if (precision >= 0)
+        printf("%.*lld", precision, value);
+    else if (width >= 0)
+        printf("%*lld", width, value);
+    else
+        printf("%lld", value);
+}
+
+void gpc_write_string(const char *value, int width, int precision)
+{
+    gpc_print_string_with_format(value, width, precision);
+}
+
+void gpc_write_int64(int64_t value, int width, int precision)
+{
+    gpc_print_int_with_format((long long)value, width, precision);
+}
+
+void gpc_write_newline(void)
+{
+    putchar('\n');
+}

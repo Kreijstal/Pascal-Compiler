@@ -15,6 +15,7 @@
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../common/casefold.h"
 
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
@@ -58,6 +59,227 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    assert(stmt != NULL);
+    assert(ctx != NULL);
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL)
+    {
+        fprintf(stderr, "ERROR: SetLength expects two arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *array_expr = (struct Expression *)args_expr->cur;
+    struct Expression *len_expr = (struct Expression *)args_expr->next->cur;
+
+    if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+    {
+        fprintf(stderr, "ERROR: SetLength first argument must be a variable identifier.\n");
+        return inst_list;
+    }
+
+    StackNode_t *array_node = find_label(array_expr->expr_data.id);
+    if (array_node == NULL || !array_node->is_dynamic)
+    {
+        fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_expr->expr_data.id);
+        return inst_list;
+    }
+
+    inst_list = codegen_expr(len_expr, inst_list, ctx);
+    Register_t *length_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (length_reg == NULL)
+    {
+        fprintf(stderr, "ERROR: Unable to allocate register for SetLength length.\n");
+        exit(1);
+    }
+
+    Register_t *descriptor_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (descriptor_reg == NULL)
+    {
+        fprintf(stderr, "ERROR: Unable to allocate register for SetLength descriptor.\n");
+        exit(1);
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, descriptor_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", length_reg->bit_32, length_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", descriptor_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", length_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", array_node->element_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", descriptor_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", length_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", array_node->element_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_dynarray_setlength\n");
+
+    free_reg(get_reg_stack(), descriptor_reg);
+    free_reg(get_reg_stack(), length_reg);
+
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_emit_write_call(ListNode_t *inst_list, CodeGenContext *ctx,
+    struct Expression *value_expr, struct Expression *width_expr,
+    struct Expression *precision_expr, const char *function_name, int value_type)
+{
+    char buffer[256];
+    if (value_expr == NULL)
+    {
+        fprintf(stderr, "ERROR: write argument missing value.\n");
+        return inst_list;
+    }
+
+    expr_node_t *value_tree = build_expr_tree(value_expr);
+    if (value_tree == NULL)
+        return inst_list;
+
+    Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (value_reg == NULL)
+    {
+        fprintf(stderr, "ERROR: Unable to allocate register for write argument.\n");
+        exit(1);
+    }
+    inst_list = gencode_expr_tree(value_tree, inst_list, ctx, value_reg);
+    free_expr_tree(value_tree);
+
+    const char *arg0_64 = get_arg_reg64_num(0);
+    if (value_type == INT_TYPE)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", value_reg->bit_32, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg0_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg0_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    free_reg(get_reg_stack(), value_reg);
+
+    const char *width_reg32 = get_arg_reg32_num(1);
+    if (width_reg32 == NULL)
+    {
+        fprintf(stderr, "ERROR: No width argument register available.\n");
+        exit(1);
+    }
+    if (width_expr != NULL)
+    {
+        expr_node_t *width_tree = build_expr_tree(width_expr);
+        Register_t *width_tmp = get_free_reg(get_reg_stack(), &inst_list);
+        if (width_tmp == NULL)
+        {
+            fprintf(stderr, "ERROR: Unable to allocate register for write width.\n");
+            exit(1);
+        }
+        inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_tmp);
+        free_expr_tree(width_tree);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", width_tmp->bit_32, width_reg32);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), width_tmp);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", width_reg32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    const char *prec_reg32 = get_arg_reg32_num(2);
+    if (prec_reg32 == NULL)
+    {
+        fprintf(stderr, "ERROR: No precision argument register available.\n");
+        exit(1);
+    }
+    if (precision_expr != NULL)
+    {
+        expr_node_t *prec_tree = build_expr_tree(precision_expr);
+        Register_t *prec_tmp = get_free_reg(get_reg_stack(), &inst_list);
+        if (prec_tmp == NULL)
+        {
+            fprintf(stderr, "ERROR: Unable to allocate register for write precision.\n");
+            exit(1);
+        }
+        inst_list = gencode_expr_tree(prec_tree, inst_list, ctx, prec_tmp);
+        free_expr_tree(prec_tree);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", prec_tmp->bit_32, prec_reg32);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), prec_tmp);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", prec_reg32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", function_name);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, int emit_newline)
+{
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        struct Expression *value_expr = expr;
+        struct Expression *width_expr = NULL;
+        struct Expression *precision_expr = NULL;
+        if (expr != NULL && expr->type == EXPR_FORMATTED_ARG)
+        {
+            value_expr = expr->expr_data.formatted_arg_data.value;
+            width_expr = expr->expr_data.formatted_arg_data.width;
+            precision_expr = expr->expr_data.formatted_arg_data.precision;
+        }
+
+        int value_type = (value_expr != NULL) ? value_expr->inferred_type : UNKNOWN_TYPE;
+        if (value_type == UNKNOWN_TYPE && value_expr != NULL)
+            value_type = value_expr->type == EXPR_STRING ? STRING_TYPE : INT_TYPE;
+
+        if (value_type == STRING_TYPE)
+        {
+            inst_list = codegen_emit_write_call(inst_list, ctx, value_expr, width_expr, precision_expr, "gpc_write_string", value_type);
+        }
+        else
+        {
+            inst_list = codegen_emit_write_call(inst_list, ctx, value_expr, width_expr, precision_expr, "gpc_write_int64", value_type);
+        }
+
+        args = args->next;
+    }
+
+    if (emit_newline)
+    {
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
+        free_arg_regs();
+    }
+
+    return inst_list;
+}
+
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -67,16 +289,47 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     assert(stmt->type == STMT_PROCEDURE_CALL);
     assert(ctx != NULL);
 
-    char *proc_name;
-    ListNode_t *args_expr;
+    const char *proc_id = stmt->stmt_data.procedure_call_data.id;
+    char *proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     char buffer[50];
 
-    proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
-    args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (proc_id != NULL)
+    {
+        if (gpc_identifier_equals(proc_id, "SetLength"))
+        {
+            inst_list = codegen_builtin_setlength(stmt, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        }
+
+        if (gpc_identifier_equals(proc_id, "write"))
+        {
+            inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 0);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        }
+
+        if (gpc_identifier_equals(proc_id, "writeln"))
+        {
+            inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 1);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        }
+    }
 
     inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
     inst_list = codegen_vect_reg(inst_list, 0);
-    snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
+    const char *call_target = (proc_name != NULL) ? proc_name : proc_id;
+    if (call_target == NULL)
+        call_target = "";
+    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
     #ifdef DEBUG_CODEGEN
