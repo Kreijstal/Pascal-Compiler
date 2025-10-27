@@ -206,6 +206,169 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
 }
 
+/* Helper to check if an argument list contains field width expressions */
+static int has_field_width_args(ListNode_t *args_expr)
+{
+    while (args_expr != NULL) {
+        if (args_expr->type == LIST_EXPR) {
+            struct Expression *expr = (struct Expression *)args_expr->cur;
+            if (expr != NULL && expr->type == EXPR_FIELD_WIDTH) {
+                return 1;
+            }
+        }
+        args_expr = args_expr->next;
+    }
+    return 0;
+}
+
+/* Helper to check if procedure is write or writeln */
+static int is_write_procedure(const char *name)
+{
+    if (name == NULL)
+        return 0;
+    return (strcasecmp(name, "write") == 0 || strcasecmp(name, "writeln") == 0);
+}
+
+/* Generate code for formatted write/writeln calls with field width */
+static ListNode_t *codegen_formatted_write(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, int is_writeln)
+{
+    char buffer[512];
+    char format_str[256];
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    
+    // Build the format string
+    format_str[0] = '\0';
+    
+    ListNode_t *cur_arg = args_expr;
+    while (cur_arg != NULL && cur_arg->type == LIST_EXPR) {
+        struct Expression *expr = (struct Expression *)cur_arg->cur;
+        
+        if (expr->type == EXPR_FIELD_WIDTH) {
+            // Extract value and width
+            struct Expression *value_expr = expr->expr_data.field_width_data.value;
+            struct Expression *width_expr = expr->expr_data.field_width_data.width;
+            
+            // Determine the format specifier based on value type
+            const char *fmt_spec;
+            if (value_expr->type == EXPR_STRING) {
+                fmt_spec = "s";
+            } else {
+                fmt_spec = "ld";  // Use %ld for long integers (Pascal integers are typically 32-bit, but safer to use long)
+            }
+            
+            // Check if width is a constant
+            if (width_expr->type == EXPR_INUM) {
+                int width = width_expr->expr_data.i_num;
+                char fmt_part[32];
+                snprintf(fmt_part, sizeof(fmt_part), "%%%d%s", width, fmt_spec);
+                strcat(format_str, fmt_part);
+            } else {
+                // Dynamic width - not yet supported, use simple format
+                strcat(format_str, "%");
+                strcat(format_str, fmt_spec);
+            }
+        } else {
+            // Regular argument without field width
+            const char *fmt_spec;
+            if (expr->type == EXPR_STRING) {
+                fmt_spec = "%s";
+            } else {
+                fmt_spec = "%ld";
+            }
+            strcat(format_str, fmt_spec);
+        }
+        
+        cur_arg = cur_arg->next;
+    }
+    
+    if (is_writeln) {
+        strcat(format_str, "\\n");
+    }
+    
+    // Generate a unique label for the format string
+    static int format_label_counter = 0;
+    char format_label[64];
+    snprintf(format_label, sizeof(format_label), ".Lfmt_str_w_%d", format_label_counter++);
+    
+    // Save format string to .rodata section
+    // We'll add this at the end of the file - for now add it inline
+    inst_list = add_inst(inst_list, "\t.section\t.rodata\n");
+    snprintf(buffer, sizeof(buffer), "%s:\n", format_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\t.string\t\"%s\"\n", format_str);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = add_inst(inst_list, "\t.text\n");
+    
+    // Now generate code to call gpc_printf with the format string and arguments
+    // System V AMD64 ABI: first 6 integer/pointer args in rdi, rsi, rdx, rcx, r8, r9
+    
+    // Load format string address into rdi (first argument)
+    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rdi\n", format_label);
+    inst_list = add_inst(inst_list, buffer);
+    
+    // Now load the arguments into the appropriate registers
+    // For each argument, extract the value part (not the width)
+    cur_arg = args_expr;
+    int arg_idx = 0;
+    const char *arg_regs_64[] = {"%rsi", "%rdx", "%rcx", "%r8", "%r9"};  // First is %rdi for format string
+    const char *arg_regs_32[] = {"%esi", "%edx", "%ecx", "%r8d", "%r9d"};
+    
+    while (cur_arg != NULL && cur_arg->type == LIST_EXPR && arg_idx < 5) {
+        struct Expression *expr = (struct Expression *)cur_arg->cur;
+        struct Expression *value_expr = expr;
+        
+        // If it's a field width expression, extract the value part
+        if (expr->type == EXPR_FIELD_WIDTH) {
+            value_expr = expr->expr_data.field_width_data.value;
+        }
+        
+        // Generate code to load the value into the appropriate register
+        if (value_expr->type == EXPR_INUM) {
+            // For integer constants, use sign extension to 64-bit
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", value_expr->expr_data.i_num, arg_regs_32[arg_idx]);
+            inst_list = add_inst(inst_list, buffer);
+            // Sign-extend to 64-bit (movslq source, dest)
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", arg_regs_32[arg_idx], arg_regs_64[arg_idx]);
+            inst_list = add_inst(inst_list, buffer);
+        } else if (value_expr->type == EXPR_STRING) {
+            // Need to create a string literal and load its address
+            static int str_literal_counter = 0;
+            char str_label[64];
+            snprintf(str_label, sizeof(str_label), ".Lstr_lit_%d", str_literal_counter++);
+            
+            inst_list = add_inst(inst_list, "\t.section\t.rodata\n");
+            snprintf(buffer, sizeof(buffer), "%s:\n", str_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\t.string\t\"%s\"\n", value_expr->expr_data.string);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\t.text\n");
+            
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", str_label, arg_regs_64[arg_idx]);
+            inst_list = add_inst(inst_list, buffer);
+        } else {
+            // For other expression types, evaluate them normally
+            // This is more complex - we need to evaluate the expression and move the result
+            // For simplicity, use codegen_expr and then move result
+            inst_list = codegen_expr(value_expr, inst_list, ctx);
+            // The result is in %eax, move to the target register and sign-extend
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", arg_regs_32[arg_idx]);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", arg_regs_32[arg_idx], arg_regs_64[arg_idx]);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        arg_idx++;
+        cur_arg = cur_arg->next;
+    }
+    
+    // Clear %eax (vector register count for variadic functions)
+    inst_list = codegen_vect_reg(inst_list, 0);
+    
+    // Call gpc_printf
+    inst_list = add_inst(inst_list, "\tcall\tgpc_printf\n");
+    
+    return inst_list;
+}
 /* Code generation for a procedure call */
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -236,6 +399,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);
+    }
+    else if (is_write_procedure(unmangled_name) && has_field_width_args(args_expr))
+    {
+        // Handle write/writeln with field width formatting
+        int is_writeln = (strcasecmp(unmangled_name, "writeln") == 0);
+        return codegen_formatted_write(stmt, inst_list, ctx, is_writeln);
     }
     else
     {

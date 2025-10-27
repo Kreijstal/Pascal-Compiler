@@ -468,6 +468,25 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           fprintf(f, "[STRING:%s]\n", expr->expr_data.string);
           break;
 
+        case EXPR_FIELD_WIDTH:
+          fprintf(f, "[FIELD_WIDTH]\n");
+          ++num_indent;
+          
+          print_indent(f, num_indent);
+          fprintf(f, "[VALUE]:\n");
+          expr_print(expr->expr_data.field_width_data.value, f, num_indent+1);
+          
+          print_indent(f, num_indent);
+          fprintf(f, "[WIDTH]:\n");
+          expr_print(expr->expr_data.field_width_data.width, f, num_indent+1);
+          
+          if (expr->expr_data.field_width_data.precision != NULL) {
+              print_indent(f, num_indent);
+              fprintf(f, "[PRECISION]:\n");
+              expr_print(expr->expr_data.field_width_data.precision, f, num_indent+1);
+          }
+          break;
+
         default:
           fprintf(stderr, "BAD TYPE IN expr_print!\n");
           exit(1);
@@ -720,6 +739,14 @@ void destroy_expr(struct Expression *expr)
 
         case EXPR_STRING:
           free(expr->expr_data.string);
+          break;
+
+        case EXPR_FIELD_WIDTH:
+          destroy_expr(expr->expr_data.field_width_data.value);
+          destroy_expr(expr->expr_data.field_width_data.width);
+          if (expr->expr_data.field_width_data.precision != NULL) {
+              destroy_expr(expr->expr_data.field_width_data.precision);
+          }
           break;
 
         default:
