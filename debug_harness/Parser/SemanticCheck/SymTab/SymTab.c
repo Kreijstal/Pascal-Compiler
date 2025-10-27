@@ -20,6 +20,7 @@ SymTab_t *InitSymTab()
     SymTab_t *new_symtab;
 
     new_symtab = (SymTab_t *)malloc(sizeof(SymTab_t));
+    assert(new_symtab != NULL);
     new_symtab->stack_head = NULL;
     new_symtab->builtins = InitHashTable();
 
@@ -66,6 +67,7 @@ int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -82,10 +84,11 @@ int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
 }
 
 /* Pushes a new array onto the current scope (head) */
-int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
+int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int start, int end, int element_size)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -93,7 +96,48 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
     if(FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL);
+        int result = AddIdentToTable(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL);
+        if (result == 0)
+        {
+            HashNode_t *node = FindIdentInTable(cur_hash, id);
+            if (node != NULL)
+            {
+                node->is_array = 1;
+                node->array_start = start;
+                node->array_end = end;
+                node->element_size = element_size;
+            }
+        }
+        return result;
+    }
+    else
+    {
+        return 1;
+    }
+}
+
+int PushConstOntoScope(SymTab_t *symtab, char *id, int value)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+
+    HashTable_t *cur_hash;
+
+    if (FindIdentInTable(symtab->builtins, id) == NULL)
+    {
+        cur_hash = (HashTable_t *)symtab->stack_head->cur;
+        int result = AddIdentToTable(cur_hash, id, NULL, HASHVAR_INTEGER, HASHTYPE_CONST, NULL, NULL);
+        if (result == 0)
+        {
+            HashNode_t *node = FindIdentInTable(cur_hash, id);
+            if (node != NULL)
+            {
+                node->is_constant = 1;
+                node->const_int_value = value;
+            }
+        }
+        return result;
     }
     else
     {
@@ -107,6 +151,7 @@ int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNod
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -128,6 +173,7 @@ int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum Var
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -149,6 +195,7 @@ int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, List
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -213,6 +260,9 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, char *id)
     ListNode_t *cur_scope;
     ListNode_t *found_nodes = NULL;
 
+    assert(symtab != NULL);
+    assert(id != NULL);
+
     cur_scope = symtab->stack_head;
 
     /* Check builtins first */
@@ -238,6 +288,7 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, struct 
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+    assert(id != NULL);
 
     HashTable_t *cur_hash;
 
@@ -292,6 +343,7 @@ void DestroySymTab(SymTab_t *symtab)
 void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent)
 {
     assert(symtab != NULL);
+    assert(f != NULL);
 
     int i, scope;
     ListNode_t *cur;

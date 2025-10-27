@@ -9,6 +9,7 @@ build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
 GPC_PATH = os.path.join(build_dir, "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
+RUNTIME_SOURCE = "GPC/runtime.c"
 
 # The compiler is built by Meson now, so this function is not needed.
 
@@ -48,6 +49,48 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
+        cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
+        cls._compile_runtime()
+
+    @classmethod
+    def _compile_runtime(cls):
+        """Compile the runtime support file once to speed up repeated links."""
+        try:
+            subprocess.run(
+                [
+                    "gcc",
+                    "-c",
+                    "-O0",
+                    "-pipe",
+                    "-o",
+                    cls.runtime_object,
+                    RUNTIME_SOURCE,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"runtime compilation failed: {e.stderr}")
+
+    def compile_executable(self, asm_file, executable_file):
+        try:
+            subprocess.run(
+                [
+                    "gcc",
+                    "-no-pie",
+                    "-o",
+                    executable_file,
+                    asm_file,
+                    self.runtime_object,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")
@@ -82,8 +125,13 @@ class TestCompiler(unittest.TestCase):
         unoptimized_asm = read_file_content(unoptimized_output_file)
 
         # In the unoptimized version, we expect space for two integers (x and y).
-        # The stack is 16-byte aligned, so this will be 16 bytes.
-        self.assertIn("subq\t$16", unoptimized_asm)
+        # The stack allocation depends on the active ABI: System V uses 16 bytes,
+        # while the Windows x64 ABI reserves a 32-byte home space in addition to
+        # the locals (48 bytes total in this case).
+        if ".set\tGPC_TARGET_WINDOWS, 1" in unoptimized_asm:
+            self.assertIn("subq\t$48", unoptimized_asm)
+        else:
+            self.assertIn("subq\t$16", unoptimized_asm)
 
         # --- Run with -O2 optimization ---
         optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "dead_code_optimized_o2.s")
@@ -108,10 +156,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Test with different inputs
         test_cases = {
@@ -147,10 +192,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Run the executable and check the output
         try:
@@ -165,6 +207,28 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_array_consts(self):
+        """Tests that const declarations and array indexing work together."""
+        input_file = os.path.join(TEST_CASES_DIR, "array_const.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "array_const.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "array_const")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("array_const execution timed out")
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "5\n6\n7\n8\n")
+
     def test_record_type_declaration(self):
         """Tests that a program declaring a record type compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
@@ -176,10 +240,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Run the executable and verify the output so we know the program ran.
         try:
@@ -200,10 +261,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Run the executable and check the output
         try:
@@ -230,10 +288,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Run the executable and check the output
         try:
@@ -247,6 +302,32 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+    def test_sysutils_unit(self):
+        """Tests that the SysUtils unit links and provides basic helpers."""
+        input_file = os.path.join(TEST_CASES_DIR, "sysutils_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "sysutils_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "sysutils_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+            return
+
+        lines = process.stdout.strip().splitlines()
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertEqual(lines[0].strip(), "32")
+        self.assertEqual(lines[1].strip(), "1")
+        self.assertEqual(process.returncode, 0)
 
     def test_for_program(self):
         """Tests the for program."""

@@ -90,6 +90,21 @@
         } for_assign_bison_union;
     } for_assign_bison;
 
+    struct UnitInterface
+    {
+        ListNode_t *uses;
+        ListNode_t *type_decls;
+        ListNode_t *var_decls;
+    } unit_interface;
+
+    struct UnitImplementation
+    {
+        ListNode_t *uses;
+        ListNode_t *type_decls;
+        ListNode_t *var_decls;
+        ListNode_t *subprograms;
+    } unit_implementation;
+
     /* Tree pointers */
     Tree_t *tree;
     struct Statement *stmt;
@@ -101,6 +116,12 @@
 
 /* Token keywords */
 %token PROGRAM
+%token UNIT
+%token INTERFACE
+%token IMPLEMENTATION
+%token USES
+%token INITIALIZATION
+%token FINALIZATION
 %token VARIABLE
 %token PROCEDURE
 %token FUNCTION
@@ -171,7 +192,7 @@
 %nonassoc THEN
 %nonassoc ELSE
 
-%start program /* Explicitly set the start symbol */
+%start translation_unit /* Explicitly set the start symbol */
 /* TYPES FOR THE GRAMMAR */
 %type<ident_list> identifier_list
 %type<list> optional_program_parameters
@@ -223,7 +244,19 @@
 %type<op_val> addop
 %type<op_val> mulop
 
+%type<list> uses_clause
+%type<list> uses_clause_opt
+%type<list> uses_list
+%type<unit_interface> interface_section
+%type<unit_implementation> implementation_section
+%type<stmt> unit_initialization
+
 %%
+
+translation_unit
+    : program
+    | unit
+    ;
 
 optional_program_parameters
     : '(' identifier_list ')'
@@ -234,6 +267,7 @@ optional_program_parameters
 
 program
     : PROGRAM ident optional_program_parameters ';'
+     uses_clause_opt
      type_declarations_opt
      declarations
      subprogram_declarations
@@ -241,9 +275,88 @@ program
      '.'
      END_OF_FILE
      {
-         parse_tree = mk_program($2.line_num, $2.id, $3, $6, $5, $7, $8);
+         parse_tree = mk_program($2.line_num, $2.id, $3, $5, $7, $6, $8, $9);
          return -1;
      }
+    ;
+
+uses_clause
+    : USES uses_list ';'
+        { $$ = $2; }
+    ;
+
+uses_clause_opt
+    : uses_clause
+        { $$ = $1; }
+    | /* empty */
+        { $$ = NULL; }
+    ;
+
+uses_list
+    : ident
+        {
+            $$ = CreateListNode($1.id, LIST_STRING);
+        }
+    | uses_list ',' ident
+        {
+            $$ = PushListNodeBack($1, CreateListNode($3.id, LIST_STRING));
+        }
+    ;
+
+unit
+    : UNIT ident ';'
+      interface_section
+      implementation_section
+      unit_initialization
+      END
+      '.'
+      END_OF_FILE
+      {
+          parse_tree = mk_unit($2.line_num, $2.id,
+              $4.uses, $4.type_decls, $4.var_decls,
+              $5.uses, $5.type_decls, $5.var_decls, $5.subprograms,
+              $6);
+          return -1;
+      }
+    ;
+
+interface_section
+    : INTERFACE uses_clause_opt type_declarations_opt declarations
+        {
+            $$.uses = $2;
+            $$.type_decls = $3;
+            $$.var_decls = $4;
+        }
+    | /* empty */
+        {
+            $$.uses = NULL;
+            $$.type_decls = NULL;
+            $$.var_decls = NULL;
+        }
+    ;
+
+implementation_section
+    : IMPLEMENTATION uses_clause_opt type_declarations_opt declarations subprogram_declarations
+        {
+            $$.uses = $2;
+            $$.type_decls = $3;
+            $$.var_decls = $4;
+            $$.subprograms = $5;
+        }
+    | IMPLEMENTATION uses_clause_opt type_declarations_opt declarations
+        {
+            $$.uses = $2;
+            $$.type_decls = $3;
+            $$.var_decls = $4;
+            $$.subprograms = NULL;
+        }
+    ;
+
+unit_initialization
+    : INITIALIZATION compound_statement
+        { $$ = $2; }
+    | /* empty */
+        { $$ = NULL; }
     ;
 
 ident
