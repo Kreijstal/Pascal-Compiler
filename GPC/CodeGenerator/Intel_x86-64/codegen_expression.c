@@ -95,6 +95,17 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_FUNCTION_CALL:
+            CODEGEN_DEBUG("DEBUG: Processing function call expression\n");
+            expr_tree = build_expr_tree(expr);
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+            free_reg(get_reg_stack(), target_reg);
+            free_expr_tree(expr_tree);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         default:
             assert(0 && "Unsupported expression type");
             break;

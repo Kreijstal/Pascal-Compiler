@@ -157,6 +157,48 @@ pascal_string \'([^\']|\'\')*\'
     return PROGRAM;
 }
 
+"unit"   {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[UNIT] ");
+    #endif
+    return UNIT;
+}
+
+"interface" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[INTERFACE] ");
+    #endif
+    return INTERFACE;
+}
+
+"implementation" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[IMPLEMENTATION] ");
+    #endif
+    return IMPLEMENTATION;
+}
+
+"uses" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[USES] ");
+    #endif
+    return USES;
+}
+
+"initialization" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[INITIALIZATION] ");
+    #endif
+    return INITIALIZATION;
+}
+
+"finalization" {
+    #ifdef DEBUG_FLEX
+        fprintf(stderr, "[FINALIZATION] ");
+    #endif
+    return FINALIZATION;
+}
+
 "procedure"   {
     #ifdef DEBUG_FLEX
         fprintf(stderr, "[PROCEDURE] ");

@@ -18,7 +18,8 @@ typedef struct Tree Tree_t;
 
 /* Enum for readability */
 enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
-    TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC, TREE_TYPE_DECL};
+    TREE_STATEMENT_TYPE, TREE_SUBPROGRAM_PROC, TREE_SUBPROGRAM_FUNC, TREE_TYPE_DECL,
+    TREE_UNIT};
 
 typedef struct Tree
 {
@@ -32,11 +33,25 @@ typedef struct Tree
             char *program_id;
 
             ListNode_t *args_char;
+            ListNode_t *uses_units;
             ListNode_t *var_declaration;
             ListNode_t *type_declaration;
             ListNode_t *subprograms;
             struct Statement *body_statement;
         } program_data;
+
+        struct Unit
+        {
+            char *unit_id;
+            ListNode_t *interface_uses;
+            ListNode_t *interface_type_decls;
+            ListNode_t *interface_var_decls;
+            ListNode_t *implementation_uses;
+            ListNode_t *implementation_type_decls;
+            ListNode_t *implementation_var_decls;
+            ListNode_t *subprograms;
+            struct Statement *initialization;
+        } unit_data;
 
         /* A type declaration */
         struct TypeDecl
@@ -123,8 +138,14 @@ void destroy_record_type(struct RecordType *record_type);
 struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */
-Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
-    ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement);
+Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
+    ListNode_t *var_decl, ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement);
+
+Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
+    ListNode_t *interface_type_decls, ListNode_t *interface_var_decls,
+    ListNode_t *implementation_uses, ListNode_t *implementation_type_decls,
+    ListNode_t *implementation_var_decls, ListNode_t *subprograms,
+    struct Statement *initialization);
 
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
