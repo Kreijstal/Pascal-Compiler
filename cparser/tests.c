@@ -239,6 +239,8 @@ static ParseError* add_context_to_error(ParseError* err) {
     new_err->line = err->line;
     new_err->col = err->col;
     new_err->message = strdup("In custom context");
+    new_err->parser_name = NULL;
+    new_err->unexpected = NULL;
     new_err->cause = err;
     new_err->partial_ast = NULL;
     return new_err;

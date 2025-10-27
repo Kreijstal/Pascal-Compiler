@@ -17,7 +17,6 @@ void init_pascal_statement_parser(combinator_t** p) {
     // First create the expression parser to use within statements
     combinator_t** expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *expr_parser = new_combinator();
-    (*expr_parser)->extra_to_free = expr_parser;
     init_pascal_expression_parser(expr_parser);
 
     // Create the main statement parser pointer for recursive references
@@ -287,4 +286,6 @@ void init_pascal_statement_parser(combinator_t** p) {
         expr_stmt,                            // expression statements (must be last)
         NULL
     );
+
+    (*p)->extra_to_free = expr_parser;
 }

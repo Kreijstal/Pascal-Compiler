@@ -8,6 +8,17 @@
 #include <string.h>
 #include <ctype.h>
 
+static inline void discard_failure(ParseResult result) {
+    if (!result.is_success) {
+        free_error(result.value.error);
+    }
+}
+
+static ParseResult fail_with_message(const char* message, input_t* in, InputState* state, char* parser_name) {
+    restore_input_state(in, state);
+    return make_failure_v2(in, parser_name, strdup(message), NULL);
+}
+
 // Range type parser: reuse expression parser and re-tag range AST nodes
 static ParseResult range_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -21,15 +32,14 @@ static ParseResult range_type_fn(input_t* in, void* args, char* parser_name) {
     free_combinator(expr_parser);
 
     if (!expr_result.is_success) {
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected range expression"), NULL);
+        discard_failure(expr_result);
+        return fail_with_message("Expected range expression", in, &state, parser_name);
     }
 
     ast_t* expr_ast = expr_result.value.ast;
     if (expr_ast == NULL || expr_ast->typ != PASCAL_T_RANGE || expr_ast->child == NULL || expr_ast->child->next == NULL) {
         free_ast(expr_ast);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Invalid range expression"), NULL);
+        return fail_with_message("Invalid range expression", in, &state, parser_name);
     }
 
     expr_ast->typ = pargs->tag;
@@ -56,9 +66,9 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* array_keyword = token(keyword_ci("array"));
     ParseResult array_res = parse(in, array_keyword);
     if (!array_res.is_success) {
+        discard_failure(array_res);
         free_combinator(array_keyword);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'array'"), NULL);
+        return fail_with_message("Expected 'array'", in, &state, parser_name);
     }
     free_ast(array_res.value.ast);
     free_combinator(array_keyword);
@@ -67,9 +77,9 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* open_bracket = token(match("["));
     ParseResult open_res = parse(in, open_bracket);
     if (!open_res.is_success) {
+        discard_failure(open_res);
         free_combinator(open_bracket);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '[' after 'array'"), NULL);
+        return fail_with_message("Expected '[' after 'array'", in, &state, parser_name);
     }
     free_ast(open_res.value.ast);
     free_combinator(open_bracket);
@@ -86,9 +96,9 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     if (indices_res.is_success) {
         indices_ast = indices_res.value.ast;
     } else {
+        discard_failure(indices_res);
         free_combinator(index_list);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected array indices"), NULL);
+        return fail_with_message("Expected array indices", in, &state, parser_name);
     }
     free_combinator(index_list);
 
@@ -96,10 +106,10 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* close_bracket = token(match("]"));
     ParseResult close_res = parse(in, close_bracket);
     if (!close_res.is_success) {
+        discard_failure(close_res);
         free_ast(indices_ast);
         free_combinator(close_bracket);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected ']'"), NULL);
+        return fail_with_message("Expected ']'", in, &state, parser_name);
     }
     free_ast(close_res.value.ast);
     free_combinator(close_bracket);
@@ -108,10 +118,10 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* of_keyword = token(keyword_ci("of"));
     ParseResult of_res = parse(in, of_keyword);
     if (!of_res.is_success) {
+        discard_failure(of_res);
         free_ast(indices_ast);
         free_combinator(of_keyword);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'OF' after array indices"), NULL);
+        return fail_with_message("Expected 'OF' after array indices", in, &state, parser_name);
     }
     free_ast(of_res.value.ast);
     free_combinator(of_keyword);
@@ -123,10 +133,10 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     if (elem_res.is_success) {
         element_ast = elem_res.value.ast;
     } else {
+        discard_failure(elem_res);
         free_ast(indices_ast);
         free_combinator(element_type);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected element type after 'OF'"), NULL);
+        return fail_with_message("Expected element type after 'OF'", in, &state, parser_name);
     }
     free_combinator(element_type);
 
@@ -339,9 +349,9 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* record_keyword = token(keyword_ci("record"));
     ParseResult record_res = parse(in, record_keyword);
     if (!record_res.is_success) {
+        discard_failure(record_res);
         free_combinator(record_keyword);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'record'"), NULL);
+        return fail_with_message("Expected 'record'", in, &state, parser_name);
     }
     free_ast(record_res.value.ast);
     free_combinator(record_keyword);
@@ -362,6 +372,8 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     ast_t* fields_ast = NULL;
     if (fields_res.is_success) {
         fields_ast = fields_res.value.ast;
+    } else {
+        discard_failure(fields_res);
     }
     // Note: Empty record is allowed in Pascal, so we don't require fields
     free_combinator(field_list);
@@ -370,10 +382,10 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* end_keyword = token(keyword_ci("end"));
     ParseResult end_res = parse(in, end_keyword);
     if (!end_res.is_success) {
+        discard_failure(end_res);
         if (fields_ast) free_ast(fields_ast);
         free_combinator(end_keyword);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'end' after record fields"), NULL);
+        return fail_with_message("Expected 'end' after record fields", in, &state, parser_name);
     }
     free_ast(end_res.value.ast);
     free_combinator(end_keyword);
@@ -417,9 +429,9 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
     combinator_t* open_paren = token(match("("));
     ParseResult open_res = parse(in, open_paren);
     if (!open_res.is_success) {
+        discard_failure(open_res);
         free_combinator(open_paren);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '(' for enumerated type"), NULL);
+        return fail_with_message("Expected '(' for enumerated type", in, &state, parser_name);
     }
     free_ast(open_res.value.ast);
     free_combinator(open_paren);
@@ -432,9 +444,9 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
     if (values_res.is_success) {
         values_ast = values_res.value.ast;
     } else {
+        discard_failure(values_res);
         free_combinator(value_list);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected enumerated values"), NULL);
+        return fail_with_message("Expected enumerated values", in, &state, parser_name);
     }
     free_combinator(value_list);
 
@@ -442,10 +454,10 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
     combinator_t* close_paren = token(match(")"));
     ParseResult close_res = parse(in, close_paren);
     if (!close_res.is_success) {
+        discard_failure(close_res);
         free_ast(values_ast);
         free_combinator(close_paren);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected ')' after enumerated values"), NULL);
+        return fail_with_message("Expected ')' after enumerated values", in, &state, parser_name);
     }
     free_ast(close_res.value.ast);
     free_combinator(close_paren);
@@ -480,9 +492,9 @@ static ParseResult set_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* set_keyword = token(keyword_ci("set"));
     ParseResult set_result = parse(in, set_keyword);
     if (!set_result.is_success) {
+        discard_failure(set_result);
         free_combinator(set_keyword);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'set'"), NULL);
+        return fail_with_message("Expected 'set'", in, &state, parser_name);
     }
     free_combinator(set_keyword);
     free_ast(set_result.value.ast);
@@ -491,9 +503,9 @@ static ParseResult set_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* of_keyword = token(keyword_ci("of"));
     ParseResult of_result = parse(in, of_keyword);
     if (!of_result.is_success) {
+        discard_failure(of_result);
         free_combinator(of_keyword);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'of' after 'set'"), NULL);
+        return fail_with_message("Expected 'of' after 'set'", in, &state, parser_name);
     }
     free_combinator(of_keyword);
     free_ast(of_result.value.ast);
@@ -502,9 +514,9 @@ static ParseResult set_type_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* element_type = token(cident(PASCAL_T_IDENTIFIER));
     ParseResult element_result = parse(in, element_type);
     if (!element_result.is_success) {
+        discard_failure(element_result);
         free_combinator(element_type);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected element type after 'of'"), NULL);
+        return fail_with_message("Expected element type after 'of'", in, &state, parser_name);
     }
     free_combinator(element_type);
 
