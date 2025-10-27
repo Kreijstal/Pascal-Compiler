@@ -12,7 +12,7 @@
 
 /* Careful with using LIST_UNSPECIFIED. Can cause errors on switch statements */
 enum ListType{LIST_TREE, LIST_STMT, LIST_EXPR, LIST_STRING,
-              LIST_UNSPECIFIED};
+              LIST_RECORD_FIELD, LIST_UNSPECIFIED};
 
 /* Our linked list of tree type nodes */
 typedef struct List ListNode_t;

@@ -92,6 +92,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         case HASHVAR_UNTYPED:
             *type = UNKNOWN_TYPE;
             break;
+        case HASHVAR_RECORD:
+            *type = UNKNOWN_TYPE;
+            break;
         default:
             assert(0 && "Bad type in set_type_from_hashtype!");
             break;

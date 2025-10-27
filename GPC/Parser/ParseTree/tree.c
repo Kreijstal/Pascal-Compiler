@@ -11,6 +11,9 @@
 #include <string.h>
 #include <assert.h>
 
+static void print_record_field(struct RecordField *field, FILE *f, int num_indent);
+static void destroy_record_field(struct RecordField *field);
+
 /* NOTE: tree_print and destroy_tree implicitely call stmt and expr functions */
 /* Tree printing */
 void print_indent(FILE *f, int num_indent)
@@ -43,12 +46,49 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
                 print_indent(f, num_indent);
                 fprintf(f, "%s\n", (char *)cur->cur);
                 break;
+            case LIST_RECORD_FIELD:
+                print_record_field((struct RecordField *)cur->cur, f, num_indent);
+                break;
             default:
                 fprintf(stderr, "BAD TYPE IN list_print!\n");
                 exit(1);
         }
         cur = cur->next;
     }
+}
+
+static void print_record_field(struct RecordField *field, FILE *f, int num_indent)
+{
+    if (field == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[FIELD:%s", field->name != NULL ? field->name : "<unnamed>");
+    if (field->type_id != NULL)
+        fprintf(f, " type=%s", field->type_id);
+    else
+        fprintf(f, " type=%d", field->type);
+    fprintf(f, "]\n");
+
+    if (field->nested_record != NULL)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[NESTED_RECORD]:\n");
+        list_print(field->nested_record->fields, f, num_indent + 2);
+    }
+}
+
+static void destroy_record_field(struct RecordField *field)
+{
+    if (field == NULL)
+        return;
+
+    if (field->name != NULL)
+        free(field->name);
+    if (field->type_id != NULL)
+        free(field->type_id);
+    destroy_record_type(field->nested_record);
+    free(field);
 }
 
 void tree_print(Tree_t *tree, FILE *f, int num_indent)
@@ -135,8 +175,21 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           break;
 
         case TREE_TYPE_DECL:
-            fprintf(f, "[TYPEDECL:%s = %d..%d]\n", tree->tree_data.type_decl_data.id,
-                tree->tree_data.type_decl_data.start, tree->tree_data.type_decl_data.end);
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            {
+                fprintf(f, "[TYPEDECL:%s RECORD]\n", tree->tree_data.type_decl_data.id);
+                if (tree->tree_data.type_decl_data.info.record != NULL)
+                {
+                    print_indent(f, num_indent + 1);
+                    fprintf(f, "[FIELDS]:\n");
+                    list_print(tree->tree_data.type_decl_data.info.record->fields, f, num_indent + 2);
+                }
+            }
+            else
+            {
+                fprintf(f, "[TYPEDECL:%s = %d..%d]\n", tree->tree_data.type_decl_data.id,
+                    tree->tree_data.type_decl_data.info.range.start, tree->tree_data.type_decl_data.info.range.end);
+            }
             break;
 
         default:
@@ -349,12 +402,15 @@ void destroy_list(ListNode_t *list)
                 case LIST_EXPR:
                     destroy_expr((struct Expression *)cur->cur);
                     break;
-                case LIST_STRING:
-                    free((char *)cur->cur);
-                    break;
-                default:
-                    fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
-                    exit(1);
+            case LIST_STRING:
+                free((char *)cur->cur);
+                break;
+            case LIST_RECORD_FIELD:
+                destroy_record_field((struct RecordField *)cur->cur);
+                break;
+            default:
+                fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
+                exit(1);
             }
             prev = cur;
             cur = cur->next;
@@ -407,6 +463,8 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                destroy_record_type(tree->tree_data.type_decl_data.info.record);
             break;
 
         default:
@@ -536,6 +594,49 @@ void destroy_expr(struct Expression *expr)
     free(expr);
 }
 
+void destroy_record_type(struct RecordType *record_type)
+{
+    if (record_type == NULL)
+        return;
+
+    destroy_list(record_type->fields);
+    free(record_type);
+}
+
+struct RecordType *clone_record_type(const struct RecordType *record_type)
+{
+    if (record_type == NULL)
+        return NULL;
+
+    struct RecordType *clone = (struct RecordType *)malloc(sizeof(struct RecordType));
+    assert(clone != NULL);
+    clone->fields = NULL;
+
+    ListNode_t *cur = record_type->fields;
+    while (cur != NULL)
+    {
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        assert(field != NULL);
+
+        struct RecordField *field_clone = (struct RecordField *)malloc(sizeof(struct RecordField));
+        assert(field_clone != NULL);
+        field_clone->name = field->name != NULL ? strdup(field->name) : NULL;
+        field_clone->type = field->type;
+        field_clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
+        field_clone->nested_record = clone_record_type(field->nested_record);
+
+        ListNode_t *node = CreateListNode(field_clone, LIST_RECORD_FIELD);
+        if (clone->fields == NULL)
+            clone->fields = node;
+        else
+            PushListNodeBack(clone->fields, node);
+
+        cur = cur->next;
+    }
+
+    return clone;
+}
+
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
     ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement)
 {
@@ -564,8 +665,25 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
     new_tree->line_num = line_num;
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
-    new_tree->tree_data.type_decl_data.start = start;
-    new_tree->tree_data.type_decl_data.end = end;
+    new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RANGE;
+    new_tree->tree_data.type_decl_data.info.range.start = start;
+    new_tree->tree_data.type_decl_data.info.range.end = end;
+
+    return new_tree;
+}
+
+
+Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
+{
+    Tree_t *new_tree;
+    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_TYPE_DECL;
+    new_tree->tree_data.type_decl_data.id = id;
+    new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RECORD;
+    new_tree->tree_data.type_decl_data.info.record = record_type;
 
     return new_tree;
 }

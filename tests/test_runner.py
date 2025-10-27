@@ -166,6 +166,30 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_record_type_declaration(self):
+        """Tests that a program declaring a record type compiles and runs."""
+        input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "record_decl_only.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_decl_only")
+
+        # Compile the pascal program to assembly. This exercises the record type
+        # conversion logic added to the cparser import path.
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        try:
+            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"gcc compilation failed: {e.stderr}")
+
+        # Run the executable and verify the output so we know the program ran.
+        try:
+            process = subprocess.run([executable_file], capture_output=True, text=True, timeout=5)
+            self.assertEqual(process.stdout, "42\n")
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+
     def test_fizzbuzz(self):
         """Tests the fizzbuzz program."""
         input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
