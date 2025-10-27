@@ -21,6 +21,7 @@
 #include "../../ParseTree/tree_types.h"
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
+#include "../../../identifier_utils.h"
 
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
@@ -79,6 +80,58 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     {
         fprintf(stderr, "Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
         ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_index = 1;
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        int expr_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, or string.\n",
+                    stmt->line_num, arg_index);
+            ++return_val;
+        }
+
+        if (expr != NULL && expr->field_width != NULL)
+        {
+            int width_type = UNKNOWN_TYPE;
+            return_val += semcheck_expr_main(&width_type, symtab, expr->field_width, INT_MAX, NO_MUTATE);
+            if (width_type != INT_TYPE && width_type != LONGINT_TYPE)
+            {
+                fprintf(stderr, "Error on line %d, field width for argument %d must be an integer.\n",
+                        stmt->line_num, arg_index);
+                ++return_val;
+            }
+        }
+
+        if (expr != NULL && expr->field_precision != NULL)
+        {
+            int precision_type = UNKNOWN_TYPE;
+            return_val += semcheck_expr_main(&precision_type, symtab, expr->field_precision, INT_MAX, NO_MUTATE);
+            if (precision_type != INT_TYPE && precision_type != LONGINT_TYPE)
+            {
+                fprintf(stderr, "Error on line %d, field precision for argument %d must be an integer.\n",
+                        stmt->line_num, arg_index);
+                ++return_val;
+            }
+        }
+
+        args = args->next;
+        ++arg_index;
     }
 
     return return_val;
@@ -205,7 +258,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
     // Handle SetLength specially - it's a builtin with variable arguments
-    if (proc_id != NULL && strcmp(proc_id, "SetLength") == 0)
+    if (proc_id != NULL && pascal_identifier_equals(proc_id, "SetLength"))
     {
         HashNode_t *setlength_node = NULL;
         if (FindIdent(&setlength_node, symtab, proc_id) != -1 && setlength_node != NULL &&
@@ -215,6 +268,21 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
             setlength_node->referenced += 1;
             return_val += semcheck_builtin_setlength(symtab, stmt, max_scope_lev);
+            return return_val;
+        }
+    }
+
+    if (proc_id != NULL &&
+        (pascal_identifier_equals(proc_id, "write") || pascal_identifier_equals(proc_id, "writeln")))
+    {
+        HashNode_t *write_node = NULL;
+        if (FindIdent(&write_node, symtab, proc_id) != -1 && write_node != NULL &&
+            write_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+        {
+            stmt->stmt_data.procedure_call_data.resolved_proc = write_node;
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+            write_node->referenced += 1;
+            return_val += semcheck_builtin_write_like(symtab, stmt, max_scope_lev);
             return return_val;
         }
     }

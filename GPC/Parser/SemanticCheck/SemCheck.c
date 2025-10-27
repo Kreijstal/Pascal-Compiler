@@ -17,6 +17,7 @@
 #include <limits.h>
 #include "SemCheck.h"
 #include "../../flags.h"
+#include "../../identifier_utils.h"
 #include "../../Optimizer/optimizer.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
@@ -33,7 +34,7 @@ void semcheck_add_builtins(SymTab_t *symtab);
 /* Main is a special keyword at the moment for code generation */
 int semcheck_id_not_main(char *id)
 {
-    if(strcmp(id, "main") == 0)
+    if(pascal_identifier_equals(id, "main"))
     {
         fprintf(stderr, "ERROR: main is special keyword, it cannot be a program, or subprogram\n");
         return 1;
@@ -316,6 +317,18 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (setlength_name != NULL) {
         AddBuiltinProc(symtab, setlength_name, NULL);
         free(setlength_name);
+    }
+
+    char *write_name = strdup("write");
+    if (write_name != NULL) {
+        AddBuiltinProc(symtab, write_name, NULL);
+        free(write_name);
+    }
+
+    char *writeln_name = strdup("writeln");
+    if (writeln_name != NULL) {
+        AddBuiltinProc(symtab, writeln_name, NULL);
+        free(writeln_name);
     }
 
     /* Builtins are now in stdlib.p */

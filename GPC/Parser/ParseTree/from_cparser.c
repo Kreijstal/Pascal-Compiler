@@ -118,6 +118,7 @@ static int map_type_name(const char *name, char **type_id_out) {
 
 static struct RecordType *convert_record_type(ast_t *record_node);
 static struct Expression *convert_expression(ast_t *expr_node);
+static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 
@@ -895,6 +896,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_unary_expr(expr_node);
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
+    case PASCAL_T_FIELD_WIDTH:
+        return convert_field_width_expr(expr_node);
     default:
         fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.\n",
                 expr_node->typ, expr_node->line);
@@ -910,14 +913,10 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
 
     while (cur != NULL && cur != ast_nil) {
         ast_t *unwrapped = unwrap_pascal_node(cur);
-        // Handle field width specifiers - extract the base expression and ignore the width
         if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH) {
-            // The actual expression is the first child
-            if (unwrapped->child != NULL) {
-                struct Expression *expr = convert_expression(unwrapped->child);
-                if (expr != NULL)
-                    append_node(&args, expr, LIST_EXPR);
-            }
+            struct Expression *expr = convert_field_width_expr(unwrapped);
+            if (expr != NULL)
+                append_node(&args, expr, LIST_EXPR);
         } else if (unwrapped != NULL) {
             struct Expression *expr = convert_expression(unwrapped);
             if (expr != NULL)
@@ -927,6 +926,35 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     }
 
     return args;
+}
+
+static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
+    if (field_width_node == NULL)
+        return NULL;
+
+    ast_t *base_node = field_width_node->child;
+    if (base_node == NULL)
+        return NULL;
+
+    struct Expression *base_expr = convert_expression(base_node);
+    if (base_expr == NULL)
+        return NULL;
+
+    ast_t *width_node = base_node->next;
+    if (width_node != NULL && width_node != ast_nil) {
+        struct Expression *width_expr = convert_expression(width_node);
+        base_expr->field_width = width_expr;
+    }
+
+    ast_t *precision_node = NULL;
+    if (width_node != NULL)
+        precision_node = width_node->next;
+    if (precision_node != NULL && precision_node != ast_nil) {
+        struct Expression *precision_expr = convert_expression(precision_node);
+        base_expr->field_precision = precision_expr;
+    }
+
+    return base_expr;
 }
 
 static struct Statement *convert_assignment(ast_t *assign_node) {
