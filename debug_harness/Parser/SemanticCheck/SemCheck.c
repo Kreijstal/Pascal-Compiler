@@ -19,11 +19,11 @@
 #include "../../Optimizer/optimizer.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
+#include "../ParseTree/type_tags.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
-#include "Grammar.tab.h"
 #include "NameMangling.h"
 
 /* Adds built-in functions */
@@ -46,9 +46,100 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
+int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
+
+static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, int *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return 1;
+
+    switch (expr->type)
+    {
+        case EXPR_INUM:
+            *out_value = expr->expr_data.i_num;
+            return 0;
+        case EXPR_VAR_ID:
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL && node->hash_type == HASHTYPE_CONST)
+            {
+                *out_value = node->const_int_value;
+                return 0;
+            }
+            fprintf(stderr, "Error: constant %s is undefined or not a const.\n", expr->expr_data.id);
+            return 1;
+        }
+        case EXPR_SIGN_TERM:
+        {
+            int value;
+            if (evaluate_const_expr(symtab, expr->expr_data.sign_term, &value) != 0)
+                return 1;
+            *out_value = -value;
+            return 0;
+        }
+        case EXPR_ADDOP:
+        {
+            int left, right;
+            if (evaluate_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
+                return 1;
+            if (evaluate_const_expr(symtab, expr->expr_data.addop_data.right_term, &right) != 0)
+                return 1;
+            switch (expr->expr_data.addop_data.addop_type)
+            {
+                case PLUS:
+                    *out_value = left + right;
+                    return 0;
+                case MINUS:
+                    *out_value = left - right;
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        }
+        case EXPR_MULOP:
+        {
+            int left, right;
+            if (evaluate_const_expr(symtab, expr->expr_data.mulop_data.left_term, &left) != 0)
+                return 1;
+            if (evaluate_const_expr(symtab, expr->expr_data.mulop_data.right_factor, &right) != 0)
+                return 1;
+            switch (expr->expr_data.mulop_data.mulop_type)
+            {
+                case STAR:
+                    *out_value = left * right;
+                    return 0;
+                case DIV:
+                    if (right == 0)
+                    {
+                        fprintf(stderr, "Error: division by zero in const expression.\n");
+                        return 1;
+                    }
+                    *out_value = left / right;
+                    return 0;
+                case MOD:
+                    if (right == 0)
+                    {
+                        fprintf(stderr, "Error: modulo by zero in const expression.\n");
+                        return 1;
+                    }
+                    *out_value = left % right;
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    fprintf(stderr, "Error: unsupported const expression.\n");
+    return 1;
+}
 
 /* The main function for checking a tree */
 /* Return values:
@@ -60,6 +151,9 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 {
     SymTab_t *symtab;
     int return_val;
+
+    assert(parse_tree != NULL);
+    assert(sem_result != NULL);
 
     symtab = InitSymTab();
     semcheck_add_builtins(symtab);
@@ -90,13 +184,21 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     cur = type_decls;
     while(cur != NULL)
     {
+        assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
-        // For now, all custom types are integer based
-        var_type = HASHVAR_INTEGER;
-        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type);
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            var_type = HASHVAR_RECORD;
+        else
+            var_type = HASHVAR_INTEGER;
+
+        struct RecordType *record_info = NULL;
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            record_info = tree->tree_data.type_decl_data.info.record;
+
+        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type, record_info);
 
         if(func_return > 0)
         {
@@ -111,15 +213,50 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     return return_val;
 }
 
+int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
+{
+    ListNode_t *cur = const_decls;
+    int return_val = 0;
+
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_TREE);
+        Tree_t *tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_CONST_DECL);
+
+        int value = 0;
+        if (evaluate_const_expr(symtab, tree->tree_data.const_decl_data.value, &value) != 0)
+        {
+            fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
+            ++return_val;
+        }
+        else if (PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value) > 0)
+        {
+            fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                    tree->line_num, tree->tree_data.const_decl_data.id);
+            ++return_val;
+        }
+
+        cur = cur->next;
+    }
+
+    return return_val;
+}
+
 /* Adds built-in functions */
 /*TODO: these should be defined in pascal not in semantic analyzer */
 void semcheck_add_builtins(SymTab_t *symtab)
 {
-    char *id;
-    ListNode_t *args, *arg_ids;
-
-    AddBuiltinType(symtab, strdup("PChar"), HASHVAR_PCHAR);
-    AddBuiltinType(symtab, strdup("string"), HASHVAR_PCHAR);
+    char *pchar_name = strdup("PChar");
+    if (pchar_name != NULL) {
+        AddBuiltinType(symtab, pchar_name, HASHVAR_PCHAR);
+        free(pchar_name);
+    }
+    char *string_name = strdup("string");
+    if (string_name != NULL) {
+        AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
+        free(string_name);
+    }
 
     /* Builtins are now in stdlib.p */
 }
@@ -128,7 +265,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
-    enum VarType var_type;
     assert(tree != NULL);
     assert(symtab != NULL);
     assert(tree->type == TREE_PROGRAM_TYPE);
@@ -145,6 +281,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
 
+    return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
 
@@ -157,7 +294,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         optimize(symtab, tree);
     }
 
-    PopScope(symtab);
+    /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
     return return_val;
 }
 
@@ -218,13 +355,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
     while(cur != NULL)
     {
         /* Any declaration is always a tree */
+        assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
 
-        ids = tree->tree_data.var_decl_data.ids;
+        if (tree->type == TREE_VAR_DECL)
+            ids = tree->tree_data.var_decl_data.ids;
+        else
+            ids = tree->tree_data.arr_decl_data.ids;
 
         while(ids != NULL)
         {
+            assert(ids->cur != NULL);
             assert(ids->type == LIST_STRING);
 
             /* Variable declarations */
@@ -255,12 +398,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Array declarations */
             else
             {
+                assert(tree->type == TREE_ARR_DECL);
                 if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else
                     var_type = HASHVAR_REAL;
 
-                func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur);
+                int element_size = (var_type == HASHVAR_REAL) ? 8 : 8;
+                func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
+                    tree->tree_data.arr_decl_data.s_range, tree->tree_data.arr_decl_data.e_range, element_size);
             }
 
             /* Greater than 0 signifies an error */
@@ -285,7 +431,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 /* A return value greater than 0 indicates how many errors occurred */
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 {
-    int return_val, func_return, return_mutated;
+    int return_val, func_return;
     int new_max_scope;
     enum VarType var_type;
     enum TreeType sub_type;
@@ -383,6 +529,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* These arguments are themselves like declarations */
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
 
+    return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
 
     return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
@@ -434,6 +581,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     cur = subprograms;
     while(cur != NULL)
     {
+        assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         return_val += semcheck_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev);
         cur = cur->next;

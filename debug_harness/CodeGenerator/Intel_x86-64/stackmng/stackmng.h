@@ -13,8 +13,14 @@
 #include <stdio.h>
 #include "../../../Parser/List/List.h"
 
-#define CONST_STACK_OFFSET_BYTES 0 /* gcc will handle what's there */
 #define DOUBLEWORD 4
+
+extern int g_stack_home_space_bytes;
+
+static inline int current_stack_home_space(void)
+{
+    return g_stack_home_space_bytes;
+}
 
 typedef struct StackScope StackScope_t;
 typedef struct StackNode StackNode_t;
@@ -23,9 +29,9 @@ typedef struct Register Register_t;
 
 /* Helper for getting special registers */
 extern int num_args_alloced;
-void free_arg_regs();
-char *get_arg_reg64_num(int num);
-char *get_arg_reg32_num(int num);
+void free_arg_regs(void);
+const char *get_arg_reg64_num(int num);
+const char *get_arg_reg32_num(int num);
 
 /****** stackmng *******/
 typedef struct stackmng
@@ -44,6 +50,7 @@ void pop_stackscope();
 StackNode_t *add_l_t(char *);
 StackNode_t *add_l_x(char *);
 StackNode_t *add_l_z(char *);
+StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
 StackNode_t *find_in_temp(char *);
 StackNode_t *find_label(char *);
 RegStack_t *get_reg_stack();
@@ -108,6 +115,9 @@ typedef struct StackNode
     int offset;
     char *label;
     int size;
+    int is_array;
+    int array_lower_bound;
+    int element_size;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */

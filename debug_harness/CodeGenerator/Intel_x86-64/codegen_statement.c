@@ -12,14 +12,19 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -44,16 +49,23 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
         default:
-            fprintf(stderr, "Critical error: Unrecognized statement type in codegen\n");
-            exit(1);
+            assert(0 && "Unrecognized statement type in codegen");
+            break;
     }
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
+    assert(ctx != NULL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -67,14 +79,22 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Returns a list of instructions */
 ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_COMPOUND_STATEMENT);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     ListNode_t *stmt_list;
     struct Statement *cur_stmt;
@@ -86,14 +106,21 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = codegen_stmt(cur_stmt, inst_list, ctx, symtab);
         stmt_list = stmt_list->next;
     }
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Code generation for a variable assignment */
 ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_VAR_ASSIGN);
+    assert(ctx != NULL);
 
     StackNode_t *var;
     Register_t *reg;
@@ -104,34 +131,83 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
-    assert(var_expr->type == EXPR_VAR_ID);
-    var = find_label(var_expr->expr_data.id);
-    inst_list = codegen_expr(assign_expr, inst_list, ctx);
-    reg = front_reg_stack(get_reg_stack());
+    if (var_expr->type == EXPR_VAR_ID)
+    {
+        var = find_label(var_expr->expr_data.id);
+        inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        reg = front_reg_stack(get_reg_stack());
 
-    if(var != NULL)
-    {
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+        if(var != NULL)
+        {
+            snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+        }
+        else if(nonlocal_flag() == 1)
+        {
+            inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
+            snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
+        }
+        else
+        {
+            fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+            fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+            exit(1);
+        }
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return add_inst(inst_list, buffer);
     }
-    else if(nonlocal_flag() == 1)
+    else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
-        inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
-        snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, NON_LOCAL_REG_64);
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_array_element_address(var_expr, inst_list, ctx, &addr_reg);
+
+        StackNode_t *addr_temp = add_l_t("array_addr");
+        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_temp->offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+
+        inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
+        {
+            fprintf(stderr, "ERROR: Unable to allocate register for array value.\n");
+            exit(1);
+        }
+
+        Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reload == NULL)
+        {
+            fprintf(stderr, "ERROR: Unable to allocate register for array store.\n");
+            exit(1);
+        }
+
+        snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reload);
+        return inst_list;
     }
     else
     {
-        fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
-        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-        exit(1);
+        assert(0 && "Unsupported assignment target");
     }
-    return add_inst(inst_list, buffer);
 }
 
 /* Code generation for a procedure call */
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -160,6 +236,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
         free_arg_regs();
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
         return inst_list;
     }
 }
@@ -167,8 +246,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 /* Code generation for if-then-else statements */
 ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_IF_THEN);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     int relop_type, inverse;
     struct Expression *expr;
@@ -202,14 +286,22 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeG
         snprintf(buffer, 50, "%s:\n", label2);
         inst_list = add_inst(inst_list, buffer);
     }
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Code generation for while statements */
 ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_WHILE);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     int relop_type, inverse;
     struct Expression *expr;
@@ -235,14 +327,22 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
 
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
 /* Code generation for for statements */
 ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
     assert(stmt != NULL);
     assert(stmt->type == STMT_FOR);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
 
     int relop_type, inverse;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
@@ -266,7 +366,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     }
 
     assert(for_var->type == EXPR_VAR_ID);
-    comparison_expr = mk_relop(-1, LT, for_var, expr);
+    comparison_expr = mk_relop(-1, LE, for_var, expr);
     one_expr = mk_inum(-1, 1);
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
@@ -291,5 +391,8 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     free(one_expr);
     free(update_expr);
     free(update_stmt);
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }

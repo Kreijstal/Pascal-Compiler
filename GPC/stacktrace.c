@@ -1,12 +1,41 @@
 #define _GNU_SOURCE
-#include <libunwind.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #include "stacktrace.h"
 
-static void stack_trace_handler(int sig) {
+#ifdef _WIN32
+
+static void stack_trace_handler(int sig)
+{
+    fprintf(stderr, "Caught signal %d\n", sig);
+    fprintf(stderr, "Stack trace not available on Windows\n");
+    exit(sig);
+}
+
+void install_stack_trace_handler(void)
+{
+    signal(SIGSEGV, stack_trace_handler);
+    signal(SIGFPE, stack_trace_handler);
+    signal(SIGABRT, stack_trace_handler);
+}
+
+#else
+
+#if defined(__has_include)
+#  if __has_include(<libunwind.h>)
+#    ifndef HAVE_LIBUNWIND
+#      define HAVE_LIBUNWIND 1
+#    endif
+#  endif
+#endif
+
+#ifdef HAVE_LIBUNWIND
+#include <libunwind.h>
+
+static void stack_trace_handler(int sig)
+{
     unw_context_t context;
     unw_cursor_t cursor;
     unw_word_t ip, off;
@@ -35,7 +64,8 @@ static void stack_trace_handler(int sig) {
     exit(sig);
 }
 
-void install_stack_trace_handler(void) {
+void install_stack_trace_handler(void)
+{
     struct sigaction sa;
     sa.sa_handler = stack_trace_handler;
     sigemptyset(&sa.sa_mask);
@@ -45,3 +75,23 @@ void install_stack_trace_handler(void) {
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
 }
+
+#else
+
+static void stack_trace_handler(int sig)
+{
+    fprintf(stderr, "Caught signal %d\n", sig);
+    fprintf(stderr, "Stack trace not available (libunwind not found)\n");
+    exit(sig);
+}
+
+void install_stack_trace_handler(void)
+{
+    signal(SIGSEGV, stack_trace_handler);
+    signal(SIGFPE, stack_trace_handler);
+    signal(SIGABRT, stack_trace_handler);
+}
+
+#endif /* HAVE_LIBUNWIND */
+
+#endif /* _WIN32 */

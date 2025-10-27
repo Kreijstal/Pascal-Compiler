@@ -14,9 +14,11 @@
 #include <stdio.h>
 #include "../../List/List.h"
 
-enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
+struct RecordType;
+
+enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_CONST, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
     HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
-enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR};
+enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD, HASHVAR_ARRAY};
 
 /* Items we put in the hash table */
 typedef struct HashNode
@@ -26,10 +28,19 @@ typedef struct HashNode
     enum HashType hash_type;
     enum VarType var_type;
     ListNode_t *args; /* NULL when no args (or not applicable to given type) */
+    struct RecordType *record_type; /* Used for type declarations */
 
     /* Symbol table resources */
     int referenced;
     int mutated;
+
+    int is_constant;
+    int const_int_value;
+
+    int is_array;
+    int array_start;
+    int array_end;
+    int element_size;
 
 } HashNode_t;
 
@@ -46,7 +57,7 @@ HashTable_t *InitHashTable();
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args);
+    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */

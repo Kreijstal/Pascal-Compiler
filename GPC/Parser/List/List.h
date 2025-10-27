@@ -12,7 +12,7 @@
 
 /* Careful with using LIST_UNSPECIFIED. Can cause errors on switch statements */
 enum ListType{LIST_TREE, LIST_STMT, LIST_EXPR, LIST_STRING,
-              LIST_UNSPECIFIED};
+              LIST_RECORD_FIELD, LIST_UNSPECIFIED};
 
 /* Our linked list of tree type nodes */
 typedef struct List ListNode_t;
@@ -35,6 +35,9 @@ ListNode_t *PushListNodeFront(ListNode_t *head_node, ListNode_t *new_head);
 /* TODO: Make more efficient */
 /* Returns the head node */
 ListNode_t *PushListNodeBack(ListNode_t *head_node, ListNode_t *new_node);
+
+/* Concatenates two lists by appending back_list to the end of front_list. */
+ListNode_t *ConcatList(ListNode_t *front_list, ListNode_t *back_list);
 
 /* Inserting a node given the previous node */
 void InsertListNode(ListNode_t *prev, ListNode_t *new_node);

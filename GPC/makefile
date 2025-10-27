@@ -1,7 +1,7 @@
 CC = gcc
 FLAGS = -g
 OPTIMIZE =
-LIBS =
+LIBS = -lunwind -lunwind-x86_64
 
 PARSER_DIR = Parser
 GRAMMAR_DIR = Parser/LexAndYacc
@@ -17,7 +17,7 @@ EXTRA_CCFLAGS ?=
 CCFLAGS = $(CCFLAGS_BASE) $(EXTRA_CCFLAGS)
 
 # Object files to build
-GPC_OBJS = main.o flags.o
+GPC_OBJS = main.o flags.o stacktrace.o
 PARSER_OBJS = $(PARSER_DIR)/ParsePascal.o
 TREE_OBJS = $(PARSER_DIR)/List.o $(PARSER_DIR)/tree.o
 SEM_OBJS = $(PARSER_DIR)/SemCheck.o $(PARSER_DIR)/HashTable.o $(PARSER_DIR)/SymTab.o $(PARSER_DIR)/NameMangling.o
@@ -51,6 +51,9 @@ main.o: $(PARSER_OBJS) main.c
 
 flags.o:
 	$(CC) $(CCFLAGS) -c flags.c
+
+stacktrace.o:
+	$(CC) $(CCFLAGS) -c stacktrace.c
 
 optimizer.o:
 	$(CC) $(CCFLAGS) -c $(OPTIMIZER_DIR)/optimizer.c
