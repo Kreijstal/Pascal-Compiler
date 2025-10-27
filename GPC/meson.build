@@ -1,5 +1,7 @@
 
 compiler = meson.get_compiler('c')
+libunwind_dep = dependency('libunwind', required: false)
+libunwind_platform = compiler.find_library('unwind-x86_64', required: false)
 
 inc_dirs = include_directories(
   '.',
@@ -13,6 +15,24 @@ inc_dirs = include_directories(
   'CodeGenerator/Intel_x86-64',
   'Optimizer'
 )
+
+gpc_deps = [
+  cparser_dep,
+  pascal_parser_dep,
+  compiler.find_library('m', required: false),
+]
+
+gpc_c_args = []
+
+if libunwind_dep.found()
+  gpc_deps += libunwind_dep
+  if libunwind_platform.found()
+    gpc_deps += libunwind_platform
+  endif
+  gpc_c_args += ['-DHAVE_LIBUNWIND=1']
+else
+  gpc_c_args += ['-DHAVE_LIBUNWIND=0']
+endif
 
 gpc_cparser_sources = [
   'main_cparser.c',
@@ -38,10 +58,8 @@ gpc_cparser_sources = [
 
 gpc_cparser_exe = executable('gpc', gpc_cparser_sources,
   include_directories: inc_dirs,
-  dependencies: [
-    cparser_dep,
-    compiler.find_library('m', required: false),
-  ]
+  dependencies: gpc_deps,
+  c_args: gpc_c_args,
 )
 
 python = find_program('python3')

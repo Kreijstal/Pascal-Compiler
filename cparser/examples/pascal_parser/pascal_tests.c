@@ -1159,11 +1159,46 @@ void test_pascal_for_statement(void) {
         stmt = stmt->child;
     }
     TEST_ASSERT(stmt->typ == PASCAL_T_FOR_STMT);
-    
-    // Check loop variable
-    ast_t* loop_var = stmt->child;
+
+    // Check loop initializer
+    ast_t* initializer = stmt->child;
+    TEST_ASSERT(initializer->typ == PASCAL_T_ASSIGNMENT);
+
+    ast_t* loop_var = initializer->child;
     TEST_ASSERT(loop_var->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(loop_var->sym->name, "i") == 0);
+
+    ast_t* start_value = loop_var->next;
+    TEST_ASSERT(start_value->typ == PASCAL_T_INTEGER);
+    TEST_ASSERT(strcmp(start_value->sym->name, "1") == 0);
+
+    free_ast(res.value.ast);
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_for_statement_without_assignment(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("for j to 3 do writeln(j);");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    ast_t* stmt = res.value.ast;
+    if (stmt->typ == PASCAL_T_NONE) {
+        stmt = stmt->child;
+    }
+
+    TEST_ASSERT(stmt->typ == PASCAL_T_FOR_STMT);
+
+    ast_t* initializer = stmt->child;
+    TEST_ASSERT(initializer->typ == PASCAL_T_IDENTIFIER);
+    TEST_ASSERT(strcmp(initializer->sym->name, "j") == 0);
 
     free_ast(res.value.ast);
     free_combinator(p);
@@ -2463,6 +2498,7 @@ TEST_LIST = {
     { "test_pascal_if_else_statement", test_pascal_if_else_statement },
     { "test_pascal_begin_end_block", test_pascal_begin_end_block },
     { "test_pascal_for_statement", test_pascal_for_statement },
+    { "test_pascal_for_statement_without_assignment", test_pascal_for_statement_without_assignment },
     { "test_pascal_while_statement", test_pascal_while_statement },
     { "test_pascal_simple_asm_block", test_pascal_simple_asm_block },
     { "test_pascal_multiline_asm_block", test_pascal_multiline_asm_block },
