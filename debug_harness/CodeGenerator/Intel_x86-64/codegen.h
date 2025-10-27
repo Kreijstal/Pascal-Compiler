@@ -82,12 +82,11 @@
     OUTPUT:
         Output is written as a gcc assembly file (.s). Assembly is then assembled using gcc.
 
-        The write bultin currently only takes integer types and has the
-            label LC0 with %d\n. The function call is "call printf"
+        The write builtin currently only takes integer types and has the
+            label LC0 with %d\n. The function call is "call gpc_printf"
 
-        The read bultin currently only reads integer types and has the
-            label LC1 with "%d". The function call is "call __isoc99_scanf"
-            - NOTE: Using c99 gcc standard here for simplicity
+        The read builtin currently only reads integer types and has the
+            label LC1 with "%d". The function call is "call gpc_scanf"
 
     TEMPORARIES:
         Temporaries are allocated as needed and reused once freed for efficiency
@@ -123,11 +122,11 @@
 #define WRITE_SYSCALL_NUM 1
 #define STDOUT_FD 1
 #define EXIT_SYSCALL_NUM 60
-#define SCANF_CALL "__isoc99_scanf"
+#define SCANF_CALL "gpc_scanf"
 #define SCANF_REGISTER ".LC1(%rip)"
 #elif defined(_WIN32) || defined(_WIN64)
 #define PLATFORM_WINDOWS 1
-#define SCANF_CALL "__isoc99_scanf@PLT"
+#define SCANF_CALL "gpc_scanf@PLT"
 #define SCANF_REGISTER ".LC1"
 #else
 #error "Unsupported platform"
