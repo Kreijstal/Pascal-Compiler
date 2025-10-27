@@ -10,6 +10,12 @@
 #include <unistd.h>
 #endif
 
+#ifdef _WIN32
+int gpc_target_windows = 1;
+#else
+int gpc_target_windows = 0;
+#endif
+
 #if defined(_WIN32) && defined(__GNUC__)
 #define GPC_SYSV_ABI __attribute__((sysv_abi))
 #else
