@@ -36,6 +36,9 @@ ListNode_t *PushListNodeFront(ListNode_t *head_node, ListNode_t *new_head);
 /* Returns the head node */
 ListNode_t *PushListNodeBack(ListNode_t *head_node, ListNode_t *new_node);
 
+/* Concatenates two lists by appending back_list to the end of front_list. */
+ListNode_t *ConcatList(ListNode_t *front_list, ListNode_t *back_list);
+
 /* Inserting a node given the previous node */
 void InsertListNode(ListNode_t *prev, ListNode_t *new_node);
 

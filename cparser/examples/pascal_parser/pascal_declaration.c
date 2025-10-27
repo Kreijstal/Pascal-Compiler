@@ -327,6 +327,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         uses_section,
         const_section,
         type_section,
+        var_section,
         procedure_header,
         function_header,
         NULL
@@ -338,8 +339,9 @@ void init_pascal_unit_parser(combinator_t** p) {
     // as well as uses, const, type, and var sections
     combinator_t* implementation_definition = multi(new_combinator(), PASCAL_T_NONE,
         uses_section,                                // uses clauses in implementation
-        const_section,                               // const declarations in implementation  
+        const_section,                               // const declarations in implementation
         type_section,                                // type declarations in implementation
+        var_section,                                 // var declarations in implementation
         constructor_impl,                            // constructor Class.Method implementations
         destructor_impl,                             // destructor Class.Method implementations
         method_procedure_impl,                       // procedure Class.Method implementations
@@ -674,7 +676,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     (*nested_proc_or_func)->extra_to_free = nested_proc_or_func;
 
     // Forward declaration for nested functions - these will refer to working_function and working_procedure below
-    combinator_t* nested_function_decl = lazy(nested_proc_or_func);
+    combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
 
     combinator_t* nested_function_body = seq(new_combinator(), PASCAL_T_NONE,
         optional(local_var_section),                 // optional local var section

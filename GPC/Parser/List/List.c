@@ -50,6 +50,24 @@ ListNode_t *PushListNodeBack(ListNode_t *head_node, ListNode_t *new_node)
     return head_node;
 }
 
+ListNode_t *ConcatList(ListNode_t *front_list, ListNode_t *back_list)
+{
+    ListNode_t *cur;
+
+    if(front_list == NULL)
+        return back_list;
+
+    if(back_list == NULL)
+        return front_list;
+
+    cur = front_list;
+    while(cur->next != NULL)
+        cur = cur->next;
+
+    cur->next = back_list;
+    return front_list;
+}
+
 void InsertListNode(ListNode_t *prev, ListNode_t *new_node)
 {
     assert(prev != NULL);

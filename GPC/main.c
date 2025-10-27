@@ -4,8 +4,228 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <stdbool.h>
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
+
+typedef struct
+{
+    char **names;
+    size_t count;
+    size_t capacity;
+} UnitSet;
+
+static void unit_set_init(UnitSet *set)
+{
+    set->names = NULL;
+    set->count = 0;
+    set->capacity = 0;
+}
+
+static void unit_set_destroy(UnitSet *set)
+{
+    if (set->names != NULL)
+    {
+        for (size_t i = 0; i < set->count; ++i)
+        {
+            free(set->names[i]);
+        }
+        free(set->names);
+    }
+    set->names = NULL;
+    set->count = 0;
+    set->capacity = 0;
+}
+
+static bool unit_set_contains(const UnitSet *set, const char *name)
+{
+    if (name == NULL)
+        return true;
+
+    for (size_t i = 0; i < set->count; ++i)
+    {
+        if (strcmp(set->names[i], name) == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool unit_set_add(UnitSet *set, char *name)
+{
+    if (name == NULL)
+        return false;
+
+    if (unit_set_contains(set, name))
+    {
+        free(name);
+        return false;
+    }
+
+    if (set->count == set->capacity)
+    {
+        size_t new_capacity = set->capacity == 0 ? 4 : set->capacity * 2;
+        char **new_names = (char **)realloc(set->names, new_capacity * sizeof(char *));
+        if (new_names == NULL)
+        {
+            free(name);
+            return false;
+        }
+        set->names = new_names;
+        set->capacity = new_capacity;
+    }
+
+    set->names[set->count++] = name;
+    return true;
+}
+
+static char *lowercase_copy(const char *name)
+{
+    if (name == NULL)
+        return NULL;
+
+    size_t len = strlen(name);
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL)
+        return NULL;
+
+    for (size_t i = 0; i < len; ++i)
+        copy[i] = (char)tolower((unsigned char)name[i]);
+    copy[len] = '\0';
+    return copy;
+}
+
+static char *build_unit_path(const char *unit_name)
+{
+    const char *prefix = "GPC/Units/";
+    const char *suffix = ".p";
+    size_t len = strlen(prefix) + strlen(unit_name) + strlen(suffix) + 1;
+    char *path = (char *)malloc(len);
+    if (path == NULL)
+        return NULL;
+
+    snprintf(path, len, "%s%s%s", prefix, unit_name, suffix);
+    return path;
+}
+
+static void append_initialization_statement(Tree_t *program, struct Statement *init_stmt)
+{
+    if (program == NULL || init_stmt == NULL)
+        return;
+
+    struct Statement *body = program->tree_data.program_data.body_statement;
+    if (body == NULL || body->type != STMT_COMPOUND_STATEMENT)
+    {
+        destroy_stmt(init_stmt);
+        return;
+    }
+
+    if (init_stmt->type != STMT_COMPOUND_STATEMENT)
+    {
+        destroy_stmt(init_stmt);
+        return;
+    }
+
+    ListNode_t *init_list = init_stmt->stmt_data.compound_statement;
+    if (init_list == NULL)
+    {
+        destroy_stmt(init_stmt);
+        return;
+    }
+
+    if (body->stmt_data.compound_statement == NULL)
+        body->stmt_data.compound_statement = init_list;
+    else
+        ConcatList(body->stmt_data.compound_statement, init_list);
+
+    init_stmt->stmt_data.compound_statement = NULL;
+    destroy_stmt(init_stmt);
+}
+
+static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
+{
+    if (program == NULL || unit_tree == NULL)
+        return;
+
+    program->tree_data.program_data.type_declaration =
+        ConcatList(program->tree_data.program_data.type_declaration,
+                   unit_tree->tree_data.unit_data.interface_type_decls);
+    unit_tree->tree_data.unit_data.interface_type_decls = NULL;
+
+    program->tree_data.program_data.var_declaration =
+        ConcatList(program->tree_data.program_data.var_declaration,
+                   unit_tree->tree_data.unit_data.interface_var_decls);
+    unit_tree->tree_data.unit_data.interface_var_decls = NULL;
+
+    program->tree_data.program_data.type_declaration =
+        ConcatList(program->tree_data.program_data.type_declaration,
+                   unit_tree->tree_data.unit_data.implementation_type_decls);
+    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+    program->tree_data.program_data.var_declaration =
+        ConcatList(program->tree_data.program_data.var_declaration,
+                   unit_tree->tree_data.unit_data.implementation_var_decls);
+    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
+
+    program->tree_data.program_data.subprograms =
+        ConcatList(program->tree_data.program_data.subprograms,
+                   unit_tree->tree_data.unit_data.subprograms);
+    unit_tree->tree_data.unit_data.subprograms = NULL;
+
+    append_initialization_statement(program, unit_tree->tree_data.unit_data.initialization);
+    unit_tree->tree_data.unit_data.initialization = NULL;
+}
+
+static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
+
+static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
+{
+    if (unit_name == NULL || visited == NULL)
+        return;
+
+    char *normalized = lowercase_copy(unit_name);
+    if (normalized == NULL)
+        return;
+
+    if (!unit_set_add(visited, normalized))
+        return;
+
+    char *path = build_unit_path(normalized);
+    if (path == NULL)
+        return;
+
+    Tree_t *unit_tree = ParsePascalOnly(path);
+    free(path);
+    if (unit_tree == NULL)
+    {
+        fprintf(stderr, "ERROR: Failed to load unit '%s'.\n", unit_name);
+        exit(1);
+    }
+
+    if (unit_tree->type != TREE_UNIT)
+    {
+        fprintf(stderr, "ERROR: %s is not a Pascal unit.\n", unit_name);
+        destroy_tree(unit_tree);
+        exit(1);
+    }
+
+    load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
+    load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
+
+    merge_unit_into_program(program, unit_tree);
+    destroy_tree(unit_tree);
+}
+
+static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited)
+{
+    ListNode_t *cur = uses;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+            load_unit(program, (const char *)cur->cur, visited);
+        cur = cur->next;
+    }
+}
 
 /* Global variable definitions */
 Tree_t *parse_tree = NULL;
@@ -13,7 +233,6 @@ int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
-#include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 
@@ -52,6 +271,9 @@ int main(int argc, char **argv)
 
     if(prelude_tree != NULL && user_tree != NULL)
     {
+        UnitSet visited_units;
+        unit_set_init(&visited_units);
+
         ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
         ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
 
@@ -72,6 +294,11 @@ int main(int argc, char **argv)
         // Since we moved the user_subs list, we need to avoid a double free
         if(prelude_tree != NULL)
             prelude_tree->tree_data.program_data.subprograms = NULL;
+
+        load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
+        load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+
+        unit_set_destroy(&visited_units);
 
         int sem_result;
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);

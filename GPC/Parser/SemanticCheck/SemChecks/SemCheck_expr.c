@@ -470,7 +470,6 @@ int semcheck_funccall(int *type_return,
     ListNode_t *overload_candidates = FindAllIdents(symtab, id);
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
 
-    HashNode_t *resolved_func = NULL;
     int match_count = 0;
 
     if (overload_candidates != NULL)
@@ -480,10 +479,7 @@ int semcheck_funccall(int *type_return,
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
-            {
-                resolved_func = candidate;
                 match_count++;
-            }
             cur = cur->next;
         }
     }

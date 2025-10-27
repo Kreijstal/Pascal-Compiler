@@ -191,7 +191,7 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
             assert(expr->type == EXPR_VAR_ID);
             id = expr->expr_data.id;
 
-            expr = expr = stmt->stmt_data.var_assign_data.expr;
+            expr = stmt->stmt_data.var_assign_data.expr;
             decrement_reference_id_expr(symtab, id, expr);
 
             break;

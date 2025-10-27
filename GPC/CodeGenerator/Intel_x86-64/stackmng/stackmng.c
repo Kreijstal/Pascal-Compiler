@@ -330,23 +330,16 @@ RegStack_t *init_reg_stack()
     rbx->bit_64 = strdup("%rbx");
     rbx->bit_32 = strdup("%ebx");
 
-    /* RDI */
-    Register_t *rdi;
-    rdi = (Register_t *)malloc(sizeof(Register_t));
-    assert(rdi != NULL);
-    rdi->bit_64 = strdup("%rdi");
-    rdi->bit_32 = strdup("%edi");
-
-    /* RSI */
-    /*Register_t *rsi;
-    rsi = (Register_t *)malloc(sizeof(Register_t));
-    rsi->bit_64 = strdup("%rsi");
-    rsi->bit_32 = strdup("%esi");*/
+    /* R10 */
+    Register_t *r10;
+    r10 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r10 != NULL);
+    r10->bit_64 = strdup("%r10");
+    r10->bit_32 = strdup("%r10d");
 
 
     registers = CreateListNode(rbx, LIST_UNSPECIFIED);
-    registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
-    /*registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));*/
+    registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
 
     /*
     registers = CreateListNode(rdi, LIST_UNSPECIFIED);

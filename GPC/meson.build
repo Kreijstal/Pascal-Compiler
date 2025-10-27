@@ -70,5 +70,6 @@ test('Compiler tests', python,
   env: [
     'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
     'MESON_BUILD_ROOT=' + meson.build_root()
-    ]
+    ],
+  timeout: 120,
 )

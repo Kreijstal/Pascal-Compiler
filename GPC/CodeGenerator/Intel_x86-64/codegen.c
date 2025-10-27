@@ -575,7 +575,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     Tree_t *arg_decl;
-    int type, arg_num;
+    int type;
+    int arg_num = 0;
     ListNode_t *arg_ids;
     char *arg_reg;
     char buffer[50];
@@ -593,7 +594,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 type = arg_decl->tree_data.var_decl_data.type;
                 if(type == REAL_TYPE)
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
-                arg_num = 0;
                 while(arg_ids != NULL)
                 {
                     arg_reg = get_arg_reg32_num(arg_num);
