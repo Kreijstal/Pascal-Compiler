@@ -3,6 +3,18 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <stdarg.h>
+
+int __isoc99_scanf(const char *format, ...) {
+    int result;
+    va_list args;
+    va_start(args, format);
+    result = vscanf(format, args);
+    va_end(args);
+    return result;
+}
+#endif
 
 void print_integer(int n) {
     printf("%d\n", n);

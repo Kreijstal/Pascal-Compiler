@@ -17,11 +17,6 @@ static bool is_whitespace_char(char c) {
     return isspace((unsigned char)c);
 }
 
-// Helper function to check if a character can be part of an identifier
-static bool is_identifier_char(char c) {
-    return isalnum((unsigned char)c) || c == '_';
-}
-
 // Pascal-style comment parser using proper combinators: { comment content }
 combinator_t* pascal_comment() {
     return seq(new_combinator(), PASCAL_T_NONE,
