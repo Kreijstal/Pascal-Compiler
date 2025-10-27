@@ -1250,6 +1250,21 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     return new_expr;
 }
 
+struct Expression *mk_fieldwidth(int line_num, struct Expression *value, struct Expression *width, struct Expression *precision)
+{
+    struct Expression *new_expr;
+    new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    new_expr->line_num = line_num;
+    new_expr->type = EXPR_FIELD_WIDTH;
+    new_expr->expr_data.field_width_data.value = value;
+    new_expr->expr_data.field_width_data.width = width;
+    new_expr->expr_data.field_width_data.precision = precision;
+
+    return new_expr;
+}
+
 struct Expression *mk_inum(int line_num, int i_num)
 {
     struct Expression *new_expr;

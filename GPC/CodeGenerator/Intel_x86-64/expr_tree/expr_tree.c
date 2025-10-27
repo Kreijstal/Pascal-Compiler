@@ -72,6 +72,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_INUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
+        case EXPR_FIELD_WIDTH:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;

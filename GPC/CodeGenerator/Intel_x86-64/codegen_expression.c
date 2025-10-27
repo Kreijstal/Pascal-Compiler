@@ -117,6 +117,11 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_FIELD_WIDTH:
+            // For field width expressions outside of write/writeln context,
+            // just evaluate the value part (the width is discarded)
+            CODEGEN_DEBUG("DEBUG: Processing field width expression\n");
+            return codegen_expr(expr->expr_data.field_width_data.value, inst_list, ctx);
         default:
             assert(0 && "Unsupported expression type");
             break;

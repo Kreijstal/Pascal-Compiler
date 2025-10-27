@@ -189,6 +189,30 @@ int semcheck_expr_main(int *type_return,
             return_val += semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
             break;
 
+        case EXPR_FIELD_WIDTH:
+            // For field width expressions, the type is the type of the value
+            return_val += semcheck_expr_main(type_return, symtab, 
+                expr->expr_data.field_width_data.value, max_scope_lev, mutating);
+            // Also check the width expression (should be integer)
+            int width_type;
+            return_val += semcheck_expr_main(&width_type, symtab,
+                expr->expr_data.field_width_data.width, max_scope_lev, NO_MUTATE);
+            if (width_type != INT_TYPE && width_type != LONGINT_TYPE) {
+                fprintf(stderr, "Error on line %d, field width must be an integer!\n", expr->line_num);
+                ++return_val;
+            }
+            // Check precision if provided
+            if (expr->expr_data.field_width_data.precision != NULL) {
+                int prec_type;
+                return_val += semcheck_expr_main(&prec_type, symtab,
+                    expr->expr_data.field_width_data.precision, max_scope_lev, NO_MUTATE);
+                if (prec_type != INT_TYPE && prec_type != LONGINT_TYPE) {
+                    fprintf(stderr, "Error on line %d, field precision must be an integer!\n", expr->line_num);
+                    ++return_val;
+                }
+            }
+            break;
+
         /*** BASE CASES ***/
         case EXPR_INUM:
             *type_return = INT_TYPE;

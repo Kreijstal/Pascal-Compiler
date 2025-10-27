@@ -228,6 +228,8 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
 
 struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
 
+struct Expression *mk_fieldwidth(int line_num, struct Expression *value, struct Expression *width, struct Expression *precision);
+
 struct Expression *mk_inum(int line_num, int i_num);
 struct Expression *mk_rnum(int line_num, float r_num);
 

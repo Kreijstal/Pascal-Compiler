@@ -123,7 +123,8 @@ enum ExprType {
     EXPR_FUNCTION_CALL,
     EXPR_INUM,
     EXPR_RNUM,
-    EXPR_STRING
+    EXPR_STRING,
+    EXPR_FIELD_WIDTH
 };
 
 /* An expression subtree */
@@ -182,6 +183,14 @@ struct Expression
             ListNode_t *args_expr;
         struct HashNode *resolved_func;
         } function_call_data;
+
+        /* Field width (for formatted output) */
+        struct FieldWidth
+        {
+            struct Expression *value;
+            struct Expression *width;
+            struct Expression *precision;  /* NULL if not specified */
+        } field_width_data;
 
         /* Integer number */
         int i_num;
