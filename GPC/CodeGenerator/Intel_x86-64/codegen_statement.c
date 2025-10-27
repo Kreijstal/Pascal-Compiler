@@ -400,9 +400,10 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
-    else if (is_write_procedure(unmangled_name) && has_field_width_args(args_expr))
+    else if (is_write_procedure(unmangled_name) && 
+             (has_field_width_args(args_expr) || ListLength(args_expr) > 1))
     {
-        // Handle write/writeln with field width formatting
+        // Handle write/writeln with field width formatting or multiple arguments
         int is_writeln = (strcasecmp(unmangled_name, "writeln") == 0);
         return codegen_formatted_write(stmt, inst_list, ctx, is_writeln);
     }

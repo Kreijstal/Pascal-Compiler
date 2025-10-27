@@ -223,6 +223,46 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         return return_val;
     }
 
+    // Special handling for write/writeln with field width formatting or multiple arguments
+    if (strcasecmp(proc_id, "write") == 0 || strcasecmp(proc_id, "writeln") == 0)
+    {
+        // Check if any argument is a field width expression or if there are multiple arguments
+        int has_field_width = 0;
+        int arg_count = ListLength(args_given);
+        
+        ListNode_t *cur_arg = args_given;
+        while (cur_arg != NULL) {
+            if (cur_arg->type == LIST_EXPR) {
+                struct Expression *expr = (struct Expression *)cur_arg->cur;
+                if (expr != NULL && expr->type == EXPR_FIELD_WIDTH) {
+                    has_field_width = 1;
+                    break;
+                }
+            }
+            cur_arg = cur_arg->next;
+        }
+        
+        // If it has field width formatting or multiple arguments, handle specially
+        if (has_field_width || arg_count > 1) {
+            // Validate each argument expression
+            cur_arg = args_given;
+            while (cur_arg != NULL && cur_arg->type == LIST_EXPR) {
+                struct Expression *expr = (struct Expression *)cur_arg->cur;
+                if (expr != NULL) {
+                    int arg_type_check;
+                    return_val += semcheck_expr_main(&arg_type_check, symtab, expr, max_scope_lev, NO_MUTATE);
+                }
+                cur_arg = cur_arg->next;
+            }
+            
+            // Mark as resolved (special formatting case)
+            // We'll generate special code in codegen
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
+            stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+            return return_val;
+        }
+    }
+
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
     assert(mangled_name != NULL);
 
