@@ -12,24 +12,42 @@
     #define RETURN_REG_64 "%rax"
     #define RETURN_REG_32 "%eax"
 
-    /* Non-local register */
-    #define NON_LOCAL_REG_64 "%rcx"
-    #define NON_LOCAL_REG_32 "%ecx"
-
     /* Argument registers */
     /* TODO: Add remaining registers */
     #define NUM_ARG_REG 4
 
-    #define ARG_REG_1_64 "%rdi"
-    #define ARG_REG_1_32 "%edi"
+#include "../../flags.h"
 
-    #define ARG_REG_2_64 "%rsi"
-    #define ARG_REG_2_32 "%esi"
+extern gpc_target_abi_t g_current_codegen_abi;
 
-    #define ARG_REG_3_64 "%rdx"
-    #define ARG_REG_3_32 "%edx"
+static inline const char *current_arg_reg64(int num)
+{
+    static const char *const windows_regs[] = { "%rcx", "%rdx", "%r8", "%r9" };
+    static const char *const sysv_regs[] = { "%rdi", "%rsi", "%rdx", "%rcx" };
+    const char *const *regs = (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    if (num < 0 || num >= NUM_ARG_REG)
+        return NULL;
+    return regs[num];
+}
 
-    #define ARG_REG_4_64 "%rcx"
-    #define ARG_REG_4_32 "%ecx"
+static inline const char *current_arg_reg32(int num)
+{
+    static const char *const windows_regs[] = { "%ecx", "%edx", "%r8d", "%r9d" };
+    static const char *const sysv_regs[] = { "%edi", "%esi", "%edx", "%ecx" };
+    const char *const *regs = (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    if (num < 0 || num >= NUM_ARG_REG)
+        return NULL;
+    return regs[num];
+}
+
+static inline const char *current_non_local_reg64(void)
+{
+    return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS ? "%r11" : "%rcx";
+}
+
+static inline const char *current_non_local_reg32(void)
+{
+    return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS ? "%r11d" : "%ecx";
+}
 
 #endif

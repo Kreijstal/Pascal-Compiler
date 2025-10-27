@@ -12,6 +12,23 @@
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR, STMT_ASM_BLOCK};
 
+enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD };
+
+struct RecordType;
+
+struct RecordField
+{
+    char *name;
+    int type;
+    char *type_id;
+    struct RecordType *nested_record;
+};
+
+struct RecordType
+{
+    ListNode_t *fields;
+};
+
 /* A statement subtree */
 struct Statement
 {

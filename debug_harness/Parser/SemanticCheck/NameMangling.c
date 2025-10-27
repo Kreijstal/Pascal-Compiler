@@ -4,7 +4,7 @@
 #include "NameMangling.h"
 #include "../ParseTree/tree.h"
 #include "../List/List.h"
-#include "Grammar.tab.h"
+#include "../ParseTree/type_tags.h"
 #include "SemChecks/SemCheck_expr.h"
 #include "SymTab/SymTab.h"
 
@@ -114,6 +114,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
             case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
+            case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
             case -1:              type_suffix = "_a"; break; // Array
             default:              type_suffix = "_u"; break; // Unknown/unsupported
         }

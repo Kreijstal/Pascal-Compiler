@@ -38,8 +38,8 @@
         - Function return "variable" pushed to x stack portion (SemCheck makes sure there's no issues)
 
     GENERAL PURPOSE REGISTERS:
-        - RBX
-        - RDI
+        - RAX
+        - R10
 
     SPECIAL REGISTERS:
         - RSP (Stack pointer)
@@ -82,12 +82,11 @@
     OUTPUT:
         Output is written as a gcc assembly file (.s). Assembly is then assembled using gcc.
 
-        The write bultin currently only takes integer types and has the
-            label LC0 with %d\n. The function call is "call printf"
+        The write builtin currently only takes integer types and has the
+            label LC0 with %d\n. The function call is "call gpc_printf"
 
-        The read bultin currently only reads integer types and has the
-            label LC1 with "%d". The function call is "call __isoc99_scanf"
-            - NOTE: Using c99 gcc standard here for simplicity
+        The read builtin currently only reads integer types and has the
+            label LC1 with "%d". The function call is "call gpc_scanf"
 
     TEMPORARIES:
         Temporaries are allocated as needed and reused once freed for efficiency
@@ -96,35 +95,26 @@
 #ifndef CODE_GEN_H
 #define CODE_GEN_H
 
-/* Platform detection */
-#ifdef __linux__
-#define PLATFORM_LINUX 1
-#define PLATFORM_WINDOWS 0
-#elif defined(_WIN32) || defined(_WIN64)
-#define PLATFORM_LINUX 0
-#define PLATFORM_WINDOWS 1
-#else
-#error "Unsupported platform"
-#endif
+#include "../../flags.h"
 
+extern gpc_target_abi_t g_current_codegen_abi;
+extern int g_stack_home_space_bytes;
+
+#ifdef GPC_DEBUG_CODEGEN
 #define DEBUG_CODEGEN
+#endif
+#ifdef DEBUG_CODEGEN
+#define CODEGEN_DEBUG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define CODEGEN_DEBUG(...) ((void)0)
+#endif
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
-/* Linux-specific defines */
-#if PLATFORM_LINUX
-#define WRITE_SYSCALL_NUM 1
-#define STDOUT_FD 1
-#define EXIT_SYSCALL_NUM 60
-#define SCANF_CALL "__isoc99_scanf"
-#define SCANF_REGISTER ".LC1(%rip)"
-#elif defined(_WIN32) || defined(_WIN64)
-#define PLATFORM_WINDOWS 1
-#define SCANF_CALL "__isoc99_scanf@PLT"
-#define SCANF_REGISTER ".LC1"
-#else
-#error "Unsupported platform"
-#endif
+static inline int codegen_target_is_windows(void)
+{
+    return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS;
+}
 
 #define NORMAL_JMP -1
 
@@ -145,6 +135,8 @@ typedef struct {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
+    SymTab_t *symtab;
+    gpc_target_abi_t target_abi;
 } CodeGenContext;
 
 /* Generates a label */
@@ -154,12 +146,12 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
 ListNode_t *add_inst(ListNode_t *, char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
-void codegen_program_header(char *, CodeGenContext *ctx);
+void codegen_program_header(const char *, CodeGenContext *ctx);
 void codegen_rodata(CodeGenContext *ctx);
 void codegen_program_footer(CodeGenContext *ctx);
 void codegen_main(char *prgm_name, CodeGenContext *ctx);

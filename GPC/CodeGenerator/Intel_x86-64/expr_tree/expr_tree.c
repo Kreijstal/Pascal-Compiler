@@ -19,7 +19,7 @@
 #include "../../../Parser/List/List.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../../Parser/ParseTree/type_tags.h"
 
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
@@ -27,7 +27,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
-ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, char *, int );
+ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
 ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     ListNode_t *inst_list);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
@@ -68,6 +68,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
             break;
 
         case EXPR_VAR_ID:
+        case EXPR_ARRAY_ACCESS:
         case EXPR_INUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
@@ -326,6 +327,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
     }
+    else if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        return codegen_array_access(expr, inst_list, ctx, target_reg);
+    }
     else if (expr->type == EXPR_STRING)
     {
         char label[20];
@@ -338,10 +343,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         return add_inst(inst_list, buffer);
     }
 
-    inst_list = gencode_leaf_var(expr, inst_list, buf_leaf, 30);
+    inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
 
 #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
+    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
 #endif
 
     snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
@@ -370,7 +375,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     expr = node->expr;
     right_expr = node->right_expr->expr;
     assert(right_expr != NULL);
-    inst_list = gencode_leaf_var(right_expr, inst_list, name_buf, 30);
+    inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
     inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
 
@@ -460,7 +465,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 /* Returns the corresponding string and instructions for a leaf */
 /* TODO: Only supports var_id and i_num */
 ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
-    char *buffer, int buf_len)
+    CodeGenContext *ctx, char *buffer, int buf_len)
 {
     assert(expr != NULL);
     assert(buffer != NULL);
@@ -472,11 +477,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
     {
         case EXPR_VAR_ID:
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
+            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
             #endif
             stack_node = find_label(expr->expr_data.id);
             #ifdef DEBUG_CODEGEN
-            fprintf(stderr, "DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
+            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
             #endif
 
             if(stack_node != NULL)
@@ -486,13 +491,23 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             else if(nonlocal_flag() == 1)
             {
                 inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
-                snprintf(buffer, buf_len, "-%d(%s)", offset, NON_LOCAL_REG_64);
+                snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
             }
             else
             {
-                fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
-                fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                exit(1);
+                HashNode_t *node = NULL;
+                if (ctx != NULL && ctx->symtab != NULL &&
+                    FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    node != NULL && node->hash_type == HASHTYPE_CONST)
+                {
+                    snprintf(buffer, buf_len, "$%d", node->const_int_value);
+                }
+                else
+                {
+                    fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+                    fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+                    exit(1);
+                }
             }
 
             break;
@@ -569,7 +584,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             else if(type == SLASH || type == DIV)
             {
                 #ifdef DEBUG_CODEGEN
-                fprintf(stderr, "DEBUG: gencode_op: left = %s, right = %s\n", left, right);
+                CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
                 #endif
                 // left is the dividend, right is the divisor
                 snprintf(buffer, 50, "\tpushq\t%%rax\n");

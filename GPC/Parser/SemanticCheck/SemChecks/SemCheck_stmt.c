@@ -20,7 +20,7 @@
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../List/List.h"
-#include "Grammar.tab.h"
+#include "../../ParseTree/type_tags.h"
 
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
@@ -176,15 +176,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     else if (match_count == 0)
     {
         fprintf(stderr, "Error on line %d, call to procedure %s does not match any available overload\n", stmt->line_num, proc_id);
+        DestroyList(overload_candidates);
         free(mangled_name);
         return ++return_val;
     }
     else
     {
         fprintf(stderr, "Error on line %d, call to procedure %s is ambiguous\n", stmt->line_num, proc_id);
+        DestroyList(overload_candidates);
         free(mangled_name);
         return ++return_val;
     }
+    DestroyList(overload_candidates);
     free(mangled_name);
 
     if(scope_return == -1) // Should not happen if match_count > 0

@@ -23,7 +23,7 @@
 #include "../Parser/ParseTree/tree_types.h"
 #include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "Grammar.tab.h"
+#include "../Parser/ParseTree/type_tags.h"
 
 void optimize_prog(SymTab_t *symtab, Tree_t *prog);
 void optimize_subprog(SymTab_t *symtab, Tree_t *sub);
@@ -191,7 +191,7 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
             assert(expr->type == EXPR_VAR_ID);
             id = expr->expr_data.id;
 
-            expr = expr = stmt->stmt_data.var_assign_data.expr;
+            expr = stmt->stmt_data.var_assign_data.expr;
             decrement_reference_id_expr(symtab, id, expr);
 
             break;

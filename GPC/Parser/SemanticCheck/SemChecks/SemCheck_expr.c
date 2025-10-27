@@ -20,7 +20,7 @@
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../ParseTree/type_tags.h"
 
 int is_type_ir(int *type);
 int is_and_or(int *type);
@@ -90,6 +90,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
              *type = STRING_TYPE;
              break;
         case HASHVAR_UNTYPED:
+            *type = UNKNOWN_TYPE;
+            break;
+        case HASHVAR_RECORD:
             *type = UNKNOWN_TYPE;
             break;
         default:
@@ -374,9 +377,16 @@ int semcheck_varid(int *type_return,
         if(hash_return->hash_type != HASHTYPE_VAR &&
             hash_return->hash_type != HASHTYPE_FUNCTION_RETURN)
         {
-            fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
-                expr->line_num, id);
-            ++return_val;
+            if(hash_return->hash_type == HASHTYPE_CONST && mutating == 0)
+            {
+                /* Constants are readable values. */
+            }
+            else
+            {
+                fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
+                    expr->line_num, id);
+                ++return_val;
+            }
         }
         set_type_from_hashtype(type_return, hash_return);
     }
@@ -467,7 +477,6 @@ int semcheck_funccall(int *type_return,
     ListNode_t *overload_candidates = FindAllIdents(symtab, id);
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
 
-    HashNode_t *resolved_func = NULL;
     int match_count = 0;
 
     if (overload_candidates != NULL)
@@ -477,10 +486,7 @@ int semcheck_funccall(int *type_return,
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
-            {
-                resolved_func = candidate;
                 match_count++;
-            }
             cur = cur->next;
         }
     }

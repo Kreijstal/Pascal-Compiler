@@ -20,26 +20,22 @@
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
-#include "Grammar.tab.h"
+#include "../../Parser/ParseTree/type_tags.h"
 
-/* Platform detection */
-#if defined(__linux__) || defined(__unix__)
-#define PLATFORM_LINUX 1
-#else
-#define PLATFORM_LINUX 0
-#endif
+gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
+int g_stack_home_space_bytes = 0;
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(buf != NULL);
     assert(ctx != NULL);
     snprintf(buf, buf_len, ".L%d", ++ctx->label_counter);
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -48,7 +44,7 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 ListNode_t *add_inst(ListNode_t *inst_list, char *inst)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     ListNode_t *new_node;
 
@@ -65,7 +61,7 @@ ListNode_t *add_inst(ListNode_t *inst_list, char *inst)
     }
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
 }
@@ -74,7 +70,7 @@ ListNode_t *add_inst(ListNode_t *inst_list, char *inst)
 void free_inst_list(ListNode_t *inst_list)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     ListNode_t *cur;
 
@@ -90,7 +86,7 @@ void free_inst_list(ListNode_t *inst_list)
 
     DestroyList(inst_list);
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -99,7 +95,7 @@ void free_inst_list(ListNode_t *inst_list)
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char buffer[30], jmp_buf[6];
 
@@ -156,7 +152,7 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
     snprintf(buffer, 30, "\t%s\t%s\n", jmp_buf, label);
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return add_inst(inst_list, buffer);
 }
@@ -165,7 +161,7 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 void codegen_function_header(char *func_name, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(func_name != NULL);
     assert(ctx != NULL);
@@ -173,7 +169,7 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
     fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
 }
@@ -182,24 +178,24 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
 void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(func_name != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
 }
 
 
 /* This is the entry function */
-void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
+void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char *prgm_name;
 
@@ -208,7 +204,15 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t 
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    fprintf(stderr, "DEBUG: ENTERING codegen\n");
+    if (ctx->target_abi != GPC_TARGET_ABI_SYSTEM_V && ctx->target_abi != GPC_TARGET_ABI_WINDOWS)
+        ctx->target_abi = current_target_abi();
+
+    g_current_codegen_abi = ctx->target_abi;
+    g_stack_home_space_bytes = (ctx->target_abi == GPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+
+    ctx->symtab = symtab;
+
+    CODEGEN_DEBUG("DEBUG: ENTERING codegen\n");
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
@@ -221,9 +225,9 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t 
 
     free_stackmng();
 
-    fprintf(stderr, "DEBUG: LEAVING codegen\n");
+    CODEGEN_DEBUG("DEBUG: LEAVING codegen\n");
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
 }
@@ -231,10 +235,13 @@ void codegen(Tree_t *tree, char *input_file_name, CodeGenContext *ctx, SymTab_t 
 void codegen_rodata(CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(ctx != NULL);
-    fprintf(ctx->output_file, ".section .rodata\n");
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
+    else
+        fprintf(ctx->output_file, "\t.section\t.rodata\n");
     fprintf(ctx->output_file, ".format_str_s:\n");
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
@@ -247,29 +254,28 @@ void codegen_rodata(CodeGenContext *ctx)
     fprintf(ctx->output_file, ".string \"\\n\"\n");
     fprintf(ctx->output_file, ".text\n");
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
 /* Generates platform-compatible headers */
-void codegen_program_header(char *fname, CodeGenContext *ctx)
+void codegen_program_header(const char *fname, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(fname != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
-    
-#if PLATFORM_LINUX
-    fprintf(ctx->output_file, "\t.section\t.rodata\n");
-#else
-    fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
-#endif
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
+    else
+        fprintf(ctx->output_file, "\t.section\t.rodata\n");
 
     fprintf(ctx->output_file, "\t.text\n");
+    fprintf(ctx->output_file, "\t.set\tGPC_TARGET_WINDOWS, %d\n", codegen_target_is_windows());
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
 }
@@ -278,15 +284,15 @@ void codegen_program_header(char *fname, CodeGenContext *ctx)
 void codegen_program_footer(CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(ctx != NULL);
-#if PLATFORM_LINUX
-#else
-    fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
-#endif
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
+    else
+        fprintf(ctx->output_file, "\t.section\t.note.GNU-stack,\"\",@progbits\n");
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -294,24 +300,26 @@ void codegen_program_footer(CodeGenContext *ctx)
 void codegen_main(char *prgm_name, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(prgm_name != NULL);
     assert(ctx != NULL);
+    int call_space;
     fprintf(ctx->output_file, "\t.section\t.text\n");
     fprintf(ctx->output_file, "\t.globl\tmain\n");
     codegen_function_header("main", ctx);
-    fprintf(ctx->output_file, "\tsubq\t$32, %%rsp\n");
+    call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
+    if (call_space > 0)
+        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
     fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
-#if PLATFORM_LINUX
-    fprintf(ctx->output_file, "\txor\t%%edi, %%edi\n");
-#else
-    fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
-#endif
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
+    else
+        fprintf(ctx->output_file, "\txor\t%%edi, %%edi\n");
     fprintf(ctx->output_file, "\tcall\texit\n");
     codegen_function_footer("main", ctx);
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -319,7 +327,7 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
 void codegen_stack_space(CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     int needed_space;
 
@@ -333,7 +341,7 @@ void codegen_stack_space(CodeGenContext *ctx)
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", needed_space);
     }
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -341,7 +349,7 @@ void codegen_stack_space(CodeGenContext *ctx)
 void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char *inst;
 
@@ -357,7 +365,7 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
         inst_list = inst_list->next;
     }
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -365,7 +373,7 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(prgm->type == TREE_PROGRAM_TYPE);
     assert(ctx != NULL);
@@ -395,7 +403,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     pop_stackscope();
 
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return prgm_name;
 }
@@ -404,7 +412,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
      ListNode_t *cur, *id_list;
      Tree_t *tree;
@@ -417,24 +425,41 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
      {
          tree = (Tree_t *)cur->cur;
          assert(tree != NULL);
-         assert(tree->type == TREE_VAR_DECL);
 
-         id_list = tree->tree_data.var_decl_data.ids;
-         if(tree->tree_data.var_decl_data.type == REAL_TYPE)
+         if (tree->type == TREE_VAR_DECL)
          {
-             fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
+             id_list = tree->tree_data.var_decl_data.ids;
+             if(tree->tree_data.var_decl_data.type == REAL_TYPE)
+             {
+                 fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
+             }
+
+             while(id_list != NULL)
+             {
+                 add_l_x((char *)id_list->cur);
+                 id_list = id_list->next;
+             };
          }
-
-         while(id_list != NULL)
+         else if (tree->type == TREE_ARR_DECL)
          {
-             add_l_x((char *)id_list->cur);
-             id_list = id_list->next;
-         };
+             id_list = tree->tree_data.arr_decl_data.ids;
+             int length = tree->tree_data.arr_decl_data.e_range - tree->tree_data.arr_decl_data.s_range + 1;
+             if (length < 0)
+                 length = 0;
+             int total_size = length * DOUBLEWORD;
+             if (total_size <= 0)
+                 total_size = DOUBLEWORD;
+             while (id_list != NULL)
+             {
+                 add_array((char *)id_list->cur, total_size, DOUBLEWORD, tree->tree_data.arr_decl_data.s_range);
+                 id_list = id_list->next;
+             }
+         }
 
          cur = cur->next;
      }
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -442,13 +467,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
 ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char buffer[50];
     assert(inst_list != NULL);
     snprintf(buffer, 50, "\tmovl\t$%d, %%eax\n", num_vec);
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return add_inst(inst_list, buffer);
 }
@@ -457,7 +482,7 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
 void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     Tree_t *sub;
 
@@ -484,7 +509,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         sub_list = sub_list->next;
     }
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -492,7 +517,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
 void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(proc_tree != NULL);
     assert(proc_tree->type == TREE_SUBPROGRAM);
@@ -521,7 +546,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     free_inst_list(inst_list);
     pop_stackscope();
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -529,7 +554,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(func_tree != NULL);
     assert(func_tree->type == TREE_SUBPROGRAM);
@@ -563,7 +588,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     free_inst_list(inst_list);
     pop_stackscope();
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
 }
 
@@ -571,12 +596,13 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: ENTERING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     Tree_t *arg_decl;
-    int type, arg_num;
+    int type;
+    int arg_num = 0;
     ListNode_t *arg_ids;
-    char *arg_reg;
+    const char *arg_reg;
     char buffer[50];
     StackNode_t *arg_stack;
 
@@ -592,7 +618,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 type = arg_decl->tree_data.var_decl_data.type;
                 if(type == REAL_TYPE)
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
-                arg_num = 0;
                 while(arg_ids != NULL)
                 {
                     arg_reg = get_arg_reg32_num(arg_num);
@@ -619,7 +644,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
         args = args->next;
     }
     #ifdef DEBUG_CODEGEN
-    fprintf(stderr, "DEBUG: LEAVING %s\n", __func__);
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
 }

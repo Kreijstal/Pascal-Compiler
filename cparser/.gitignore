@@ -1,0 +1,30 @@
+# Build artifacts
+CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+*.a
+*.o
+*.d
+/calculator
+/tests
+/json_parser_cli
+/json_tests
+/calc_tests
+/pascal_tests
+/pascal_parser_cli
+./test_strings
+build/
+
+# Compiled binaries
+*.exe
+*.so
+*.dll
+
+# Example build artifacts
+examples/*/test_pascal
+examples/*/test_pascal_tests
+examples/*/pascal_tests
+examples/*/test_strings
