@@ -22,12 +22,8 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 
-/* Platform detection */
-#if defined(__linux__) || defined(__unix__)
-#define PLATFORM_LINUX 1
-#else
-#define PLATFORM_LINUX 0
-#endif
+gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
+int g_stack_home_space_bytes = 0;
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
@@ -208,6 +204,12 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     assert(ctx != NULL);
     assert(symtab != NULL);
 
+    if (ctx->target_abi != GPC_TARGET_ABI_SYSTEM_V && ctx->target_abi != GPC_TARGET_ABI_WINDOWS)
+        ctx->target_abi = current_target_abi();
+
+    g_current_codegen_abi = ctx->target_abi;
+    g_stack_home_space_bytes = (ctx->target_abi == GPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+
     ctx->symtab = symtab;
 
     CODEGEN_DEBUG("DEBUG: ENTERING codegen\n");
@@ -236,7 +238,10 @@ void codegen_rodata(CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(ctx != NULL);
-    fprintf(ctx->output_file, ".section .rodata\n");
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
+    else
+        fprintf(ctx->output_file, "\t.section\t.rodata\n");
     fprintf(ctx->output_file, ".format_str_s:\n");
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
@@ -262,14 +267,13 @@ void codegen_program_header(const char *fname, CodeGenContext *ctx)
     assert(fname != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
-    
-#if PLATFORM_LINUX
-    fprintf(ctx->output_file, "\t.section\t.rodata\n");
-#else
-    fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
-#endif
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
+    else
+        fprintf(ctx->output_file, "\t.section\t.rodata\n");
 
     fprintf(ctx->output_file, "\t.text\n");
+    fprintf(ctx->output_file, "\t.set\tGPC_TARGET_WINDOWS, %d\n", codegen_target_is_windows());
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -283,11 +287,10 @@ void codegen_program_footer(CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(ctx != NULL);
-#if PLATFORM_LINUX
-    fprintf(ctx->output_file, "\t.section\t.note.GNU-stack,\"\",@progbits\n");
-#else
-    fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
-#endif
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
+    else
+        fprintf(ctx->output_file, "\t.section\t.note.GNU-stack,\"\",@progbits\n");
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -301,16 +304,18 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     #endif
     assert(prgm_name != NULL);
     assert(ctx != NULL);
+    int call_space;
     fprintf(ctx->output_file, "\t.section\t.text\n");
     fprintf(ctx->output_file, "\t.globl\tmain\n");
     codegen_function_header("main", ctx);
-    fprintf(ctx->output_file, "\tsubq\t$32, %%rsp\n");
+    call_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 32;
+    if (call_space > 0)
+        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", call_space);
     fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
-#if PLATFORM_LINUX
-    fprintf(ctx->output_file, "\txor\t%%edi, %%edi\n");
-#else
-    fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
-#endif
+    if (codegen_target_is_windows())
+        fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
+    else
+        fprintf(ctx->output_file, "\txor\t%%edi, %%edi\n");
     fprintf(ctx->output_file, "\tcall\texit\n");
     codegen_function_footer("main", ctx);
     #ifdef DEBUG_CODEGEN
@@ -597,7 +602,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     int type;
     int arg_num = 0;
     ListNode_t *arg_ids;
-    char *arg_reg;
+    const char *arg_reg;
     char buffer[50];
     StackNode_t *arg_stack;
 

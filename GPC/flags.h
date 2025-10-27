@@ -6,11 +6,20 @@
 #ifndef FLAGS_H
 #define FLAGS_H
 
-void set_nonlocal_flag();
-void set_o1_flag();
-void set_o2_flag();
+typedef enum {
+    GPC_TARGET_ABI_SYSTEM_V = 0,
+    GPC_TARGET_ABI_WINDOWS = 1,
+} gpc_target_abi_t;
 
-int nonlocal_flag();
-int optimize_flag();
+void set_nonlocal_flag(void);
+void set_o1_flag(void);
+void set_o2_flag(void);
+void set_target_windows_flag(void);
+void set_target_sysv_flag(void);
+
+int nonlocal_flag(void);
+int optimize_flag(void);
+int target_windows_flag(void);
+gpc_target_abi_t current_target_abi(void);
 
 #endif

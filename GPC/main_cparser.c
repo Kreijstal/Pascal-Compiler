@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /*
  * GPC - Gwinn Pascal Compiler (cparser integration)
  */
@@ -8,8 +9,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <strings.h>
+#else
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <ctype.h>
 #include <stdbool.h>
 
@@ -29,6 +37,15 @@
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#ifndef R_OK
+#define R_OK 4
+#endif
+#define access _access
+#endif
+
 extern ast_t *ast_nil;
 
 /* Legacy globals referenced in other components */
@@ -42,6 +59,11 @@ static void print_usage(const char *prog_name)
 {
     fprintf(stderr, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
     fprintf(stderr, "  Compiles Pascal source to x86-64 assembly\n");
+    fprintf(stderr, "  Flags:\n");
+    fprintf(stderr, "    -O1, -O2              Enable optimizations\n");
+    fprintf(stderr, "    -non-local            Enable non-local variable chasing (experimental)\n");
+    fprintf(stderr, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
+    fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
 }
 
 static int file_is_readable(const char *path)
@@ -61,6 +83,16 @@ static char *duplicate_path(const char *path)
     return dup;
 }
 
+#ifdef _WIN32
+static char* realpath(const char* path, char* resolved_path)
+{
+    DWORD len = GetFullPathNameA(path, PATH_MAX, resolved_path, NULL);
+    if (len == 0 || len >= PATH_MAX)
+        return NULL;
+    return resolved_path;
+}
+#endif
+
 static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
 {
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
@@ -70,6 +102,10 @@ static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
         buffer[len] = '\0';
         return len;
     }
+#elif defined(_WIN32)
+    DWORD len = GetModuleFileNameA(NULL, buffer, (DWORD)size);
+    if (len > 0 && len < size)
+        return (ssize_t)len;
 #endif
 
     if (argv0 != NULL)
@@ -139,25 +175,76 @@ static void set_flags(char **optional_args, int count)
     int i = 0;
     while (count > 0)
     {
-        if (strcmp(optional_args[i], "-non-local") == 0)
+        const char *arg = optional_args[i];
+        if (strcmp(arg, "-non-local") == 0)
         {
             fprintf(stderr, "Non-local codegen support enabled\n");
             fprintf(stderr, "WARNING: Non-local is still in development and is very buggy!\n\n");
             set_nonlocal_flag();
         }
-        else if (strcmp(optional_args[i], "-O1") == 0)
+        else if (strcmp(arg, "-O1") == 0)
         {
             fprintf(stderr, "O1 optimizations enabled!\n\n");
             set_o1_flag();
         }
-        else if (strcmp(optional_args[i], "-O2") == 0)
+        else if (strcmp(arg, "-O2") == 0)
         {
             fprintf(stderr, "O2 optimizations enabled!\n\n");
             set_o2_flag();
         }
+        else if (strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
+        {
+            fprintf(stderr, "Target ABI: Windows x64\n\n");
+            set_target_windows_flag();
+        }
+        else if (strcmp(arg, "--target-sysv") == 0 || strcmp(arg, "-target-sysv") == 0 || strcmp(arg, "--sysv-abi") == 0)
+        {
+            fprintf(stderr, "Target ABI: System V AMD64\n\n");
+            set_target_sysv_flag();
+        }
+        else if ((strcmp(arg, "--target") == 0 || strcmp(arg, "-target") == 0) && count > 1)
+        {
+            const char *value = optional_args[i + 1];
+            if (strcasecmp(value, "windows") == 0 || strcasecmp(value, "win64") == 0)
+            {
+                fprintf(stderr, "Target ABI: Windows x64\n\n");
+                set_target_windows_flag();
+            }
+            else if (strcasecmp(value, "sysv") == 0 || strcasecmp(value, "systemv") == 0 || strcasecmp(value, "linux") == 0)
+            {
+                fprintf(stderr, "Target ABI: System V AMD64\n\n");
+                set_target_sysv_flag();
+            }
+            else
+            {
+                fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
+                exit(1);
+            }
+            --count;
+            ++i;
+        }
+        else if (strncmp(arg, "--target=", 9) == 0)
+        {
+            const char *value = arg + 9;
+            if (strcasecmp(value, "windows") == 0 || strcasecmp(value, "win64") == 0)
+            {
+                fprintf(stderr, "Target ABI: Windows x64\n\n");
+                set_target_windows_flag();
+            }
+            else if (strcasecmp(value, "sysv") == 0 || strcasecmp(value, "systemv") == 0 || strcasecmp(value, "linux") == 0)
+            {
+                fprintf(stderr, "Target ABI: System V AMD64\n\n");
+                set_target_sysv_flag();
+            }
+            else
+            {
+                fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
+                exit(1);
+            }
+        }
         else
         {
-            fprintf(stderr, "ERROR: Unrecognized flag: %s\n", optional_args[i]);
+            fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
             exit(1);
         }
 
@@ -693,6 +780,8 @@ int main(int argc, char **argv)
         }
         ctx.label_counter = 1;
         ctx.write_label_counter = 1;
+        ctx.symtab = symtab;
+        ctx.target_abi = current_target_abi();
 
         codegen(user_tree, input_file, &ctx, symtab);
         fclose(ctx.output_file);

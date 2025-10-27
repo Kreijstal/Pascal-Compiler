@@ -13,8 +13,14 @@
 #include <stdio.h>
 #include "../../../Parser/List/List.h"
 
-#define CONST_STACK_OFFSET_BYTES 0 /* gcc will handle what's there */
 #define DOUBLEWORD 4
+
+extern int g_stack_home_space_bytes;
+
+static inline int current_stack_home_space(void)
+{
+    return g_stack_home_space_bytes;
+}
 
 typedef struct StackScope StackScope_t;
 typedef struct StackNode StackNode_t;
@@ -23,9 +29,9 @@ typedef struct Register Register_t;
 
 /* Helper for getting special registers */
 extern int num_args_alloced;
-void free_arg_regs();
-char *get_arg_reg64_num(int num);
-char *get_arg_reg32_num(int num);
+void free_arg_regs(void);
+const char *get_arg_reg64_num(int num);
+const char *get_arg_reg32_num(int num);
 
 /****** stackmng *******/
 typedef struct stackmng

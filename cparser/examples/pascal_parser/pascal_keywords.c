@@ -1,7 +1,13 @@
+#define _GNU_SOURCE
 #include "pascal_keywords.h"
 #include "pascal_parser.h"
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
+#ifdef _WIN32
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
 
 const char* pascal_reserved_keywords[] = {
     "begin", "end", "if", "then", "else", "while", "do", "for", "to", "downto",
