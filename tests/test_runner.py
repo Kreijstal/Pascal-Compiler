@@ -125,8 +125,12 @@ class TestCompiler(unittest.TestCase):
         unoptimized_asm = read_file_content(unoptimized_output_file)
 
         # In the unoptimized version, we expect space for two integers (x and y).
-        # The stack is 16-byte aligned, so this will be 16 bytes.
-        self.assertIn("subq\t$16", unoptimized_asm)
+        # System V builds reserve 16 bytes, while Windows builds include an
+        # additional 32-byte home space for the ABI, resulting in 48 bytes.
+        if "\t.set\tGPC_TARGET_WINDOWS, 1" in unoptimized_asm:
+            self.assertIn("subq\t$48", unoptimized_asm)
+        else:
+            self.assertIn("subq\t$16", unoptimized_asm)
 
         # --- Run with -O2 optimization ---
         optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "dead_code_optimized_o2.s")

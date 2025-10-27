@@ -287,7 +287,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     }
 
     *offset = var->offset;
-    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", NON_LOCAL_REG_64);
+    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", current_non_local_reg64());
     inst_list = add_inst(inst_list, buffer);
 
     CODEGEN_DEBUG("DEBUG: Non-local access generated\n");
@@ -306,7 +306,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     int arg_num;
     Register_t *top_reg;
     char buffer[50];
-    char *arg_reg_char;
+    const char *arg_reg_char;
     expr_node_t *expr_tree;
 
     assert(ctx != NULL);
@@ -379,7 +379,7 @@ ListNode_t * codegen_goto_prev_scope(ListNode_t *inst_list, StackScope_t *cur_sc
     assert(cur_scope != NULL);
     assert(base != NULL);
 
-    snprintf(buffer, 50, "\tmovq\t(%s), %s\n", base, NON_LOCAL_REG_64);
+    snprintf(buffer, 50, "\tmovq\t(%s), %s\n", base, current_non_local_reg64());
     inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN

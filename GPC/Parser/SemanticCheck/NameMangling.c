@@ -116,13 +116,13 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
     while (cur != NULL) {
         int type = *(int*)cur->cur;
         const char* type_suffix;
-        switch ((enum VarType)type) { // <-- Cast to enum VarType
+        switch (type) {
             case HASHVAR_INTEGER: type_suffix = "_i"; break;
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
             case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
             case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
-            case -1:              type_suffix = "_a"; break; // Array
+            case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
             default:              type_suffix = "_u"; break; // Unknown/unsupported
         }
         strcat(mangled_name, type_suffix);
