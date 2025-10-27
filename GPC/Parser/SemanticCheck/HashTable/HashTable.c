@@ -28,7 +28,7 @@ HashTable_t *InitHashTable()
 /* Adds an identifier to the table */
 /* Returns 1 if successfully added, 0 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args)
+    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type)
 {
     ListNode_t *list, *cur;
     HashNode_t *hash_node;
@@ -48,6 +48,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->id = strdup(id);
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
+        hash_node->record_type = record_type;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
 
@@ -82,6 +83,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->id = strdup(id);
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
+        hash_node->record_type = record_type;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
 

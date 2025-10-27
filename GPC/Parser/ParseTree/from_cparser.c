@@ -93,34 +93,45 @@ static int map_type_name(const char *name, char **type_id_out) {
     return UNKNOWN_TYPE;
 }
 
-static int convert_type_spec(ast_t *type_spec, char **type_id_out) {
-    if (type_id_out != NULL) {
+static struct RecordType *convert_record_type(ast_t *record_node);
+
+static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out) {
+    if (type_id_out != NULL)
         *type_id_out = NULL;
+    if (record_out != NULL)
+        *record_out = NULL;
+
+    if (type_spec == NULL)
+        return UNKNOWN_TYPE;
+
+    ast_t *spec_node = type_spec;
+    if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+        spec_node = spec_node->child;
+
+    if (spec_node == NULL)
+        return UNKNOWN_TYPE;
+
+    if (spec_node->typ == PASCAL_T_IDENTIFIER) {
+        char *dup = dup_symbol(spec_node);
+        int result = map_type_name(dup, type_id_out);
+        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+            *type_id_out = dup;
+        } else {
+            free(dup);
+        }
+        return result;
     }
-    if (type_spec == NULL) {
+
+    if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
+        struct RecordType *record = convert_record_type(spec_node);
+        if (record_out != NULL) {
+            *record_out = record;
+        } else {
+            destroy_record_type(record);
+        }
         return UNKNOWN_TYPE;
     }
-    if (type_spec->typ == PASCAL_T_IDENTIFIER) {
-        char *dup = dup_symbol(type_spec);
-        int result = map_type_name(dup, type_id_out);
-        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
-            *type_id_out = dup;
-        } else {
-            free(dup);
-        }
-        return result;
-    }
-    ast_t *child = type_spec->child;
-    if (child != NULL && child->typ == PASCAL_T_IDENTIFIER) {
-        char *dup = dup_symbol(child);
-        int result = map_type_name(dup, type_id_out);
-        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
-            *type_id_out = dup;
-        } else {
-            free(dup);
-        }
-        return result;
-    }
+
     return UNKNOWN_TYPE;
 }
 
@@ -134,6 +145,84 @@ static ListNode_t *convert_identifier_list(ast_t **cursor) {
     }
     *cursor = cur;
     return ids;
+}
+
+static struct RecordType *convert_record_type(ast_t *record_node) {
+    if (record_node == NULL)
+        return NULL;
+
+    ListNode_t *fields = NULL;
+
+    for (ast_t *field_decl = record_node->child; field_decl != NULL; field_decl = field_decl->next) {
+        if (field_decl->typ != PASCAL_T_FIELD_DECL)
+            continue;
+
+        ast_t *cursor = field_decl->child;
+        ListNode_t *names = convert_identifier_list(&cursor);
+        if (names == NULL)
+            continue;
+
+        while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
+               cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER) {
+            cursor = cursor->next;
+        }
+
+        char *field_type_id = NULL;
+        struct RecordType *nested_record = NULL;
+        int field_type = UNKNOWN_TYPE;
+        if (cursor != NULL)
+            field_type = convert_type_spec(cursor, &field_type_id, &nested_record);
+
+        ListNode_t *name_node = names;
+        while (name_node != NULL) {
+            char *field_name = (char *)name_node->cur;
+            char *type_id_copy = NULL;
+            if (field_type_id != NULL)
+                type_id_copy = strdup(field_type_id);
+
+            struct RecordType *nested_copy = NULL;
+            if (nested_record != NULL) {
+                if (name_node->next == NULL) {
+                    nested_copy = nested_record;
+                    nested_record = NULL;
+                } else {
+                    nested_copy = clone_record_type(nested_record);
+                }
+            }
+
+            struct RecordField *field_desc = (struct RecordField *)malloc(sizeof(struct RecordField));
+            if (field_desc != NULL) {
+                field_desc->name = field_name;
+                field_desc->type = field_type;
+                field_desc->type_id = type_id_copy;
+                field_desc->nested_record = nested_copy;
+                append_node(&fields, field_desc, LIST_RECORD_FIELD);
+            } else {
+                if (field_name != NULL)
+                    free(field_name);
+                if (type_id_copy != NULL)
+                    free(type_id_copy);
+                destroy_record_type(nested_copy);
+            }
+
+            ListNode_t *next_name = name_node->next;
+            free(name_node);
+            name_node = next_name;
+        }
+
+        if (field_type_id != NULL)
+            free(field_type_id);
+        if (nested_record != NULL)
+            destroy_record_type(nested_record);
+    }
+
+    struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
+    if (record == NULL) {
+        destroy_list(fields);
+        return NULL;
+    }
+    record->fields = fields;
+    return record;
 }
 
 static char *pop_last_identifier(ListNode_t **ids) {
@@ -179,7 +268,7 @@ static Tree_t *convert_param(ast_t *param_node) {
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(cur, &type_id);
+        var_type = convert_type_spec(cur, &type_id, NULL);
         cur = cur->next;
     } else {
         char *type_name = pop_last_identifier(&ids);
@@ -226,7 +315,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     int var_type = UNKNOWN_TYPE;
 
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(cur, &type_id);
+        var_type = convert_type_spec(cur, &type_id, NULL);
         cur = cur->next;
     } else {
         char *type_name = pop_last_identifier(&ids);
@@ -256,6 +345,47 @@ static ListNode_t *convert_var_section(ast_t *section_node) {
     }
 
     return decls;
+}
+
+static Tree_t *convert_type_decl(ast_t *type_decl_node) {
+    if (type_decl_node == NULL)
+        return NULL;
+
+    ast_t *id_node = type_decl_node->child;
+    if (id_node == NULL)
+        return NULL;
+
+    char *id = dup_symbol(id_node);
+    if (id == NULL)
+        return NULL;
+
+    ast_t *spec_node = id_node->next;
+    while (spec_node != NULL && spec_node->typ != PASCAL_T_TYPE_SPEC &&
+           spec_node->typ != PASCAL_T_RECORD_TYPE) {
+        spec_node = spec_node->next;
+    }
+
+    char *type_id = NULL;
+    struct RecordType *record_type = NULL;
+    if (spec_node != NULL)
+        convert_type_spec(spec_node, &type_id, &record_type);
+
+    Tree_t *decl = NULL;
+    if (record_type != NULL) {
+        decl = mk_record_type(type_decl_node->line, id, record_type);
+    } else {
+        decl = mk_typedecl(type_decl_node->line, id, 0, 0);
+    }
+
+    if (type_id != NULL)
+        free(type_id);
+
+    if (decl == NULL) {
+        free(id);
+        destroy_record_type(record_type);
+    }
+
+    return decl;
 }
 
 static ListNode_t *convert_expression_list(ast_t *arg_node);
@@ -690,7 +820,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int return_type = UNKNOWN_TYPE;
 
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
-        return_type = convert_type_spec(cur->child != NULL ? cur->child : cur, &return_type_id);
+        return_type = convert_type_spec(cur->child, &return_type_id, NULL);
         cur = cur->next;
     }
 
@@ -767,10 +897,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             ast_t *type_decl = section->child;
             while (type_decl != NULL) {
                 if (type_decl->typ == PASCAL_T_TYPE_DECL) {
-                    ast_t *id_node = type_decl->child;
-                    char *id = dup_symbol(id_node);
-                    Tree_t *decl = mk_typedecl(type_decl->line, id, 0, 0);
-                    append_node(&type_decls, decl, LIST_TREE);
+                    Tree_t *decl = convert_type_decl(type_decl);
+                    if (decl != NULL)
+                        append_node(&type_decls, decl, LIST_TREE);
                 }
                 type_decl = type_decl->next;
             }

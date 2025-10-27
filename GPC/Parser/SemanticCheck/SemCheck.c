@@ -98,9 +98,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
-        // For now, all custom types are integer based
-        var_type = HASHVAR_INTEGER;
-        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type);
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            var_type = HASHVAR_RECORD;
+        else
+            var_type = HASHVAR_INTEGER;
+
+        struct RecordType *record_info = NULL;
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+            record_info = tree->tree_data.type_decl_data.info.record;
+
+        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type, record_info);
 
         if(func_return > 0)
         {

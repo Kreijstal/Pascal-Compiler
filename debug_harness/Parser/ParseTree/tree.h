@@ -42,8 +42,16 @@ typedef struct Tree
         struct TypeDecl
         {
             char *id;
-            int start;
-            int end;
+            enum TypeDeclKind kind;
+            union
+            {
+                struct
+                {
+                    int start;
+                    int end;
+                } range;
+                struct RecordType *record;
+            } info;
         } type_decl_data;
 
         /* A subprogram */
@@ -111,12 +119,15 @@ void destroy_list(ListNode_t *list);
 void destroy_tree(Tree_t *tree);
 void destroy_stmt(struct Statement *stmt);
 void destroy_expr(struct Expression *expr);
+void destroy_record_type(struct RecordType *record_type);
+struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
     ListNode_t *type_decl, ListNode_t *subprograms, struct Statement *compound_statement);
 
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
+Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *var_decl,
     ListNode_t *subprograms, struct Statement *compound_statement, int cname_flag, int overload_flag);
