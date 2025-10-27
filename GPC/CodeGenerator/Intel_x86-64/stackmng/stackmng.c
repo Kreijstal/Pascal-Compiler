@@ -106,12 +106,14 @@ StackNode_t *add_l_t(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    cur_scope->t_offset += DOUBLEWORD;
+    int temp_size = DOUBLEWORD * 2;
+
+    cur_scope->t_offset += temp_size;
 
     offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
-    new_node = init_stack_node(offset, label, DOUBLEWORD);
+    new_node = init_stack_node(offset, label, temp_size);
 
     if(cur_scope->t == NULL)
     {
@@ -133,6 +135,11 @@ StackNode_t *add_l_t(char *label)
 /* Adds doubleword to x */
 StackNode_t *add_l_x(char *label)
 {
+    return add_scalar(label, DOUBLEWORD);
+}
+
+StackNode_t *add_scalar(char *label, int size)
+{
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
     assert(label != NULL);
@@ -143,12 +150,12 @@ StackNode_t *add_l_x(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    cur_scope->x_offset += DOUBLEWORD;
+    cur_scope->x_offset += size;
 
     offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset;
 
-    new_node = init_stack_node(offset, label, DOUBLEWORD);
+    new_node = init_stack_node(offset, label, size);
 
     if(cur_scope->x == NULL)
     {
@@ -184,6 +191,8 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
     new_node->is_array = 1;
     new_node->array_lower_bound = lower_bound;
     new_node->element_size = element_size;
+    new_node->is_dynamic_array = 0;
+    new_node->scalar_size = 0;
 
     if(cur_scope->x == NULL)
     {
@@ -197,6 +206,44 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added array %s to x_offset %d\n", new_node->label, new_node->offset);
+    #endif
+
+    return new_node;
+}
+
+StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+
+    int pointer_size = DOUBLEWORD * 2;
+    cur_scope->x_offset += pointer_size;
+
+    int offset = current_stack_home_space() +
+        cur_scope->z_offset + cur_scope->x_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, pointer_size);
+    new_node->is_array = 1;
+    new_node->is_dynamic_array = 1;
+    new_node->array_lower_bound = lower_bound;
+    new_node->element_size = element_size;
+    new_node->scalar_size = pointer_size;
+
+    if(cur_scope->x == NULL)
+    {
+        cur_scope->x = CreateListNode(new_node, LIST_UNSPECIFIED);
+    }
+    else
+    {
+        cur_scope->x = PushListNodeBack(cur_scope->x,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+    }
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added dynamic array %s to x_offset %d\n", new_node->label, new_node->offset);
     #endif
 
     return new_node;
@@ -234,6 +281,38 @@ StackNode_t *add_l_z(char *label)
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d\n", label, offset);
+    #endif
+
+    return new_node;
+}
+
+StackNode_t *add_pointer_z(char *label)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+
+    int pointer_size = DOUBLEWORD * 2;
+    cur_scope->z_offset += pointer_size;
+
+    int offset = current_stack_home_space() + cur_scope->z_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, pointer_size);
+
+    if(cur_scope->z == NULL)
+    {
+        cur_scope->z = CreateListNode(new_node, LIST_UNSPECIFIED);
+    }
+    else
+    {
+        cur_scope->z = PushListNodeBack(cur_scope->z,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+    }
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added pointer %s to z_offset %d\n", label, offset);
     #endif
 
     return new_node;
@@ -721,6 +800,8 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->is_array = 0;
     new_node->array_lower_bound = 0;
     new_node->element_size = size;
+    new_node->is_dynamic_array = 0;
+    new_node->scalar_size = size;
 
     return new_node;
 }

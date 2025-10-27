@@ -239,6 +239,20 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, char *id)
         hash_node = FindIdentInTable((HashTable_t *)cur->cur, id);
         if(hash_node != NULL)
         {
+            if (hash_node->hash_type == HASHTYPE_FUNCTION)
+            {
+                ListNode_t *matches = FindAllIdentsInTable((HashTable_t *)cur->cur, id);
+                while (matches != NULL)
+                {
+                    HashNode_t *candidate = (HashNode_t *)matches->cur;
+                    if (candidate != NULL && candidate->hash_type == HASHTYPE_FUNCTION_RETURN)
+                    {
+                        hash_node = candidate;
+                        break;
+                    }
+                    matches = matches->next;
+                }
+            }
             *hash_return = hash_node;
             return return_val;
         }

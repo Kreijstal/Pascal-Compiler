@@ -1,5 +1,6 @@
-import subprocess
 import os
+import re
+import subprocess
 import unittest
 
 # Path to the compiler executable
@@ -40,6 +41,27 @@ def read_file_content(filepath):
     """Reads and returns the content of a file."""
     with open(filepath, "r") as f:
         return f.read()
+
+def extract_function_body(asm_text, function_name):
+    """Extracts the assembly for a single function based on its .globl label."""
+    if asm_text is None:
+        return ""
+
+    lower_text = asm_text.lower()
+    pattern = re.compile(r"\.globl\s+%s\b" % re.escape(function_name.lower()))
+    match = pattern.search(lower_text)
+    if not match:
+        return ""
+
+    start = asm_text.find("\n", match.start())
+    if start == -1:
+        return ""
+
+    next_match = re.search(r"\n\.globl\s", asm_text[start:])
+    end = start + next_match.start() if next_match else len(asm_text)
+
+    return asm_text[start:end]
+
 
 class TestCompiler(unittest.TestCase):
     @classmethod
@@ -95,25 +117,31 @@ class TestCompiler(unittest.TestCase):
         """Tests the -O1 constant folding optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")
 
+        with open(input_file, "r", encoding="utf-8") as source_file:
+            source_text = source_file.read()
+        program_match = re.search(r"program\s+([A-Za-z0-9_]+)", source_text, re.IGNORECASE)
+        program_label = program_match.group(1) if program_match else "simple_expr"
+
         # --- Run without optimization ---
         unoptimized_output_file = os.path.join(TEST_OUTPUT_DIR, "simple_expr_unoptimized.s")
         run_compiler(input_file, unoptimized_output_file)
         unoptimized_asm = read_file_content(unoptimized_output_file)
 
-        # In the unoptimized version, we expect to see the `add` instruction.
-        # The compiler might use `addl` for 32-bit integers.
-        # I'll check for "addl" since the compiler seems to be generating 32-bit code.
-        self.assertIn("addl", unoptimized_asm)
+        # In the unoptimized version, we expect to see the `add` instruction in the
+        # generated function body.
+        unoptimized_body = extract_function_body(unoptimized_asm, program_label)
+        self.assertIn("addl", unoptimized_body)
 
         # --- Run with -O1 optimization ---
         optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "simple_expr_optimized_o1.s")
         run_compiler(input_file, optimized_output_file, flags=["-O1"])
         optimized_asm = read_file_content(optimized_output_file)
 
+        optimized_body = extract_function_body(optimized_asm, program_label)
         # In the optimized version, we expect the constant `5` to be moved directly.
         self.assertIn("movl\t$5", optimized_asm)
-        # And we should not see the `add` instruction.
-        self.assertNotIn("addl", optimized_asm)
+        # And we should not see the `add` instruction in the optimized function body.
+        self.assertNotIn("addl", optimized_body)
 
     def test_dead_code_elimination_o2(self):
         """Tests the -O2 dead code elimination optimization."""
@@ -206,6 +234,24 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+    def test_repeat_type_inference(self):
+        """Tests repeat-until loops and variable type inference."""
+        input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(process.stdout, "5\n")
+        self.assertEqual(process.returncode, 0)
 
     def test_array_consts(self):
         """Tests that const declarations and array indexing work together."""
@@ -327,6 +373,51 @@ class TestCompiler(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 2)
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
+        self.assertEqual(process.returncode, 0)
+
+    def test_zahlen_program_runs(self):
+        """Ensures the zahlen classification demo compiles and executes with dynamic arrays."""
+        input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "zahlen")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        zahlen_input = "5\n12\n-7\n0\n3\n4\n"
+        process = subprocess.run(
+            [executable_file],
+            input=zahlen_input,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        expected_output = (
+            "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n"
+            "gerade ungerade Positive Negative\n"
+            "\n"
+            "Gerade Zahlen:\n"
+            "4\n"
+            "0\n"
+            "12\n"
+            "\n"
+            "Ungerade Zahlen:\n"
+            "3\n"
+            "-7\n"
+            "\n"
+            "Positive Zahlen:\n"
+            "4\n"
+            "3\n"
+            "0\n"
+            "12\n"
+            "\n"
+            "Negative Zahlen:\n"
+            "-7\n"
+            "\n"
+        )
+
+        self.assertEqual(process.stdout, expected_output)
         self.assertEqual(process.returncode, 0)
 
     def test_for_program(self):

@@ -18,7 +18,8 @@ struct RecordType;
 
 enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_CONST, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
     HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
-enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD};
+enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD,
+HASHVAR_ARRAY};
 
 /* Items we put in the hash table */
 typedef struct HashNode
@@ -41,6 +42,14 @@ typedef struct HashNode
     int array_start;
     int array_end;
     int element_size;
+    int is_type_alias;
+    int alias_is_array;
+    int alias_array_start;
+    int alias_array_end;
+    int alias_element_type;
+    char *alias_element_type_id;
+    int alias_is_dynamic;
+    int alias_element_size;
 
 } HashNode_t;
 

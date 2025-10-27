@@ -42,6 +42,15 @@ typedef struct HashNode
     int array_end;
     int element_size;
 
+    int is_type_alias;
+    int alias_is_array;
+    int alias_array_start;
+    int alias_array_end;
+    int alias_element_type;
+    char *alias_element_type_id;
+    int alias_is_dynamic;
+    int alias_element_size;
+
 } HashNode_t;
 
 /* Our actual hash table */

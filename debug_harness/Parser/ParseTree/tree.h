@@ -88,6 +88,7 @@ typedef struct Tree
             ListNode_t *declarations;
             ListNode_t *subprograms;
             struct Statement *statement_list;
+            int has_pascal_body;
         } subprogram_data;
 
         /* A variable declaration */

@@ -57,6 +57,14 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->array_start = 0;
         hash_node->array_end = 0;
         hash_node->element_size = 0;
+        hash_node->is_type_alias = 0;
+        hash_node->alias_is_array = 0;
+        hash_node->alias_array_start = 0;
+        hash_node->alias_array_end = -1;
+        hash_node->alias_element_type = HASHVAR_UNTYPED;
+        hash_node->alias_element_type_id = NULL;
+        hash_node->alias_is_dynamic = 0;
+        hash_node->alias_element_size = 0;
 
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -98,6 +106,14 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->array_start = 0;
         hash_node->array_end = 0;
         hash_node->element_size = 0;
+        hash_node->is_type_alias = 0;
+        hash_node->alias_is_array = 0;
+        hash_node->alias_array_start = 0;
+        hash_node->alias_array_end = -1;
+        hash_node->alias_element_type = HASHVAR_UNTYPED;
+        hash_node->alias_element_type_id = NULL;
+        hash_node->alias_is_dynamic = 0;
+        hash_node->alias_element_size = 0;
 
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;
@@ -193,6 +209,8 @@ void DestroyHashTable(HashTable_t *table)
             hash_node = (HashNode_t *)cur->cur;
             if (hash_node->id != NULL)
                 free(hash_node->id);
+            if (hash_node->alias_element_type_id != NULL)
+                free(hash_node->alias_element_type_id);
             if(hash_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
                 DestroyBuiltin(hash_node);
 

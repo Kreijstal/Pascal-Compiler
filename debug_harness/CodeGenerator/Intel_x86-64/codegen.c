@@ -426,20 +426,45 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
          tree = (Tree_t *)cur->cur;
          assert(tree != NULL);
 
-         if (tree->type == TREE_VAR_DECL)
-         {
-             id_list = tree->tree_data.var_decl_data.ids;
-             if(tree->tree_data.var_decl_data.type == REAL_TYPE)
-             {
-                 fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
-             }
+        if (tree->type == TREE_VAR_DECL)
+        {
+            id_list = tree->tree_data.var_decl_data.ids;
+            if(tree->tree_data.var_decl_data.type == REAL_TYPE)
+            {
+                fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
+            }
 
-             while(id_list != NULL)
-             {
-                 add_l_x((char *)id_list->cur);
-                 id_list = id_list->next;
-             };
-         }
+            while(id_list != NULL)
+            {
+                if (tree->tree_data.var_decl_data.is_alias_array)
+                {
+                    if (tree->tree_data.var_decl_data.alias_array_is_dynamic)
+                    {
+                        add_dynamic_array((char *)id_list->cur,
+                            tree->tree_data.var_decl_data.alias_element_size,
+                            tree->tree_data.var_decl_data.alias_array_start);
+                    }
+                    else
+                    {
+                        int length = tree->tree_data.var_decl_data.alias_array_end -
+                            tree->tree_data.var_decl_data.alias_array_start + 1;
+                        if (length < 0)
+                            length = 0;
+                        int total_size = length * tree->tree_data.var_decl_data.alias_element_size;
+                        if (total_size <= 0)
+                            total_size = tree->tree_data.var_decl_data.alias_element_size;
+                        add_array((char *)id_list->cur, total_size,
+                            tree->tree_data.var_decl_data.alias_element_size,
+                            tree->tree_data.var_decl_data.alias_array_start);
+                    }
+                }
+                else
+                {
+                    add_l_x((char *)id_list->cur);
+                }
+                id_list = id_list->next;
+            };
+        }
          else if (tree->type == TREE_ARR_DECL)
          {
              id_list = tree->tree_data.arr_decl_data.ids;
@@ -566,7 +591,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ListNode_t *inst_list;
     char buffer[50];
     char *sub_id;
-    StackNode_t *return_var;
+    StackNode_t *return_var = NULL;
+    int has_pascal_body;
 
     func = &func_tree->tree_data.subprogram_data;
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
@@ -574,13 +600,18 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
-    return_var = add_l_x(func->id);
+    has_pascal_body = func->has_pascal_body;
+    if (has_pascal_body)
+        return_var = add_l_x(func->id);
     codegen_function_locals(func->declarations, ctx);
 
     codegen_subprograms(func->subprograms, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
-    snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
-    inst_list = add_inst(inst_list, buffer);
+    if (has_pascal_body && return_var != NULL)
+    {
+        snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -620,14 +651,29 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
                 while(arg_ids != NULL)
                 {
-                    arg_reg = get_arg_reg32_num(arg_num);
+                    int is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    if(is_var_param)
+                        arg_reg = get_arg_reg64_num(arg_num);
+                    else
+                        arg_reg = get_arg_reg32_num(arg_num);
+
                     if(arg_reg == NULL)
                     {
                         fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
                         exit(1);
                     }
-                    arg_stack = add_l_z((char *)arg_ids->cur);
-                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+
+                    if(is_var_param)
+                    {
+                        arg_stack = add_pointer_z((char *)arg_ids->cur);
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    }
+                    else
+                    {
+                        arg_stack = add_l_z((char *)arg_ids->cur);
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    }
+
                     inst_list = add_inst(inst_list, buffer);
                     arg_ids = arg_ids->next;
                     ++arg_num;

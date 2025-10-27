@@ -68,6 +68,7 @@ typedef struct Tree
                     int end;
                 } range;
                 struct RecordType *record;
+                struct TypeAlias alias;
             } info;
         } type_decl_data;
 
@@ -88,6 +89,7 @@ typedef struct Tree
             ListNode_t *declarations;
             ListNode_t *subprograms;
             struct Statement *statement_list;
+            int has_pascal_body;
         } subprogram_data;
 
         /* A variable declaration */
@@ -98,6 +100,14 @@ typedef struct Tree
             int type; /* Int, or real */
             char *type_id;
             int is_var_param;
+            int inferred_type;
+            struct Statement *initializer;
+            int is_alias_array;
+            int alias_array_is_dynamic;
+            int alias_array_start;
+            int alias_array_end;
+            int alias_element_type;
+            int alias_element_size;
         } var_decl_data;
 
         /* An array declaration */
@@ -161,6 +171,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     struct Statement *initialization);
 
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
+Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end);
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
@@ -171,7 +182,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, int cname_flag, int overload_flag);
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param);
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end);
 
@@ -189,6 +200,9 @@ struct Statement *mk_ifthen(int line_num, struct Expression *eval_relop, struct 
 
 struct Statement *mk_while(int line_num, struct Expression *eval_relop,
                             struct Statement *while_stmt);
+
+struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
+                            struct Expression *until_expr);
 
 struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struct Expression *to,
                                struct Statement *do_for);

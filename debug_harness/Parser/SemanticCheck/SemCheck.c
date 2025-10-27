@@ -388,8 +388,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = type_node->var_type;
                     }
                 }
-                else if(tree->tree_data.var_decl_data.type == INT_TYPE || tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if(tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 
@@ -399,12 +401,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                if(tree->tree_data.arr_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 
-                int element_size = (var_type == HASHVAR_REAL) ? 8 : 8;
+                int element_size = (var_type == HASHVAR_REAL || var_type == HASHVAR_LONGINT) ? 8 : 4;
                 func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
                     tree->tree_data.arr_decl_data.s_range, tree->tree_data.arr_decl_data.e_range, element_size);
             }
@@ -496,8 +500,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 var_type = type_node->var_type;
             }
         }
-        else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE || subprogram->tree_data.subprogram_data.return_type == LONGINT_TYPE)
+        else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)
             var_type = HASHVAR_INTEGER;
+        else if(subprogram->tree_data.subprogram_data.return_type == LONGINT_TYPE)
+            var_type = HASHVAR_LONGINT;
         else
             var_type = HASHVAR_REAL;
 
@@ -550,7 +556,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         ResetHashNodeStatus(hash_return);
         return_val += semcheck_func_stmt(symtab,
                 subprogram->tree_data.subprogram_data.statement_list);
-        if(hash_return->mutated == NO_MUTATE)
+        int has_pascal_body = statement_contains_pascal_code(
+            subprogram->tree_data.subprogram_data.statement_list);
+        subprogram->tree_data.subprogram_data.has_pascal_body = has_pascal_body;
+        if(hash_return->mutated == NO_MUTATE && has_pascal_body)
         {
             fprintf(stderr,
                 "Error in function %s: no return statement declared in function body!\n\n",
@@ -588,4 +597,31 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     }
 
     return return_val;
+}
+static int statement_contains_pascal_code(struct Statement *stmt)
+{
+    if (stmt == NULL)
+        return 0;
+
+    switch (stmt->type)
+    {
+        case STMT_ASM_BLOCK:
+            return 0;
+        case STMT_COMPOUND_STATEMENT:
+        {
+            ListNode_t *cur = stmt->stmt_data.compound_statement;
+            while (cur != NULL)
+            {
+                if (cur->type == LIST_STMT &&
+                    statement_contains_pascal_code((struct Statement *)cur->cur))
+                {
+                    return 1;
+                }
+                cur = cur->next;
+            }
+            return 0;
+        }
+        default:
+            return 1;
+    }
 }

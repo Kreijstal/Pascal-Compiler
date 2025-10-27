@@ -124,7 +124,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
 }
 
 
-ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
+ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg, StackNode_t **out_node)
 {
     assert(expr != NULL);
     assert(expr->type == EXPR_ARRAY_ACCESS);
@@ -153,6 +153,9 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         exit(1);
     }
 
+    if (out_node != NULL)
+        *out_node = array_node;
+
     int element_size = array_node->element_size;
     if (element_size <= 0)
         element_size = DOUBLEWORD;
@@ -171,26 +174,10 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int scaled_sizes[] = {1, 2, 4, 8};
-    int can_scale = 0;
-    for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
-    {
-        if (element_size == scaled_sizes[i])
-        {
-            can_scale = 1;
-            break;
-        }
-    }
-
     snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
-    if (can_scale)
-    {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
+    if (array_node->is_dynamic_array)
     {
         if (element_size != 1)
         {
@@ -198,22 +185,79 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             inst_list = add_inst(inst_list, buffer);
         }
 
-        StackNode_t *offset_temp = find_in_temp("array_index_offset");
-        if (offset_temp == NULL)
-            offset_temp = add_l_t("array_index_offset");
+        Register_t *base_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (base_reg == NULL)
+        {
+            StackNode_t *dynamic_index_temp = find_in_temp("dynamic_index_temp");
+            if (dynamic_index_temp == NULL)
+                dynamic_index_temp = add_l_t("dynamic_index_temp");
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, dynamic_index_temp->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", dynamic_index_temp->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            *out_reg = index_reg;
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, base_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", index_reg->bit_64, base_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), index_reg);
+        *out_reg = base_reg;
+        return inst_list;
     }
+    else
+    {
+        int scaled_sizes[] = {1, 2, 4, 8};
+        int can_scale = 0;
+        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+        {
+            if (element_size == scaled_sizes[i])
+            {
+                can_scale = 1;
+                break;
+            }
+        }
 
-    *out_reg = index_reg;
-    return inst_list;
+        if (can_scale)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (element_size != 1)
+            {
+                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            StackNode_t *offset_temp = find_in_temp("array_index_offset");
+            if (offset_temp == NULL)
+                offset_temp = add_l_t("array_index_offset");
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        *out_reg = index_reg;
+        return inst_list;
+    }
 }
 
 ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
@@ -222,10 +266,14 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     assert(target_reg != NULL);
 
     Register_t *addr_reg = NULL;
-    inst_list = codegen_array_element_address(expr, inst_list, ctx, &addr_reg);
+    StackNode_t *array_node = NULL;
+    inst_list = codegen_array_element_address(expr, inst_list, ctx, &addr_reg, &array_node);
 
     char buffer[100];
-    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    if (array_node != NULL && array_node->element_size >= 8)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), addr_reg);
@@ -335,11 +383,25 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 
         if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
-            // Pass by reference
-            assert(arg_expr->type == EXPR_VAR_ID);
-            StackNode_t *var_node = find_label(arg_expr->expr_data.id);
-            snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
-            inst_list = add_inst(inst_list, buffer);
+            if (arg_expr->type == EXPR_VAR_ID)
+            {
+                StackNode_t *var_node = find_label(arg_expr->expr_data.id);
+                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if (arg_expr->type == EXPR_ARRAY_ACCESS)
+            {
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg, NULL);
+                snprintf(buffer, 50, "\tmovq\t%s, %s\n", addr_reg->bit_64, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+            }
+            else
+            {
+                fprintf(stderr, "ERROR: Unsupported argument type for var parameter.\n");
+                exit(1);
+            }
         }
         else
         {

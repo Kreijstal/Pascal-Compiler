@@ -32,6 +32,25 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
+static int types_are_assignment_compatible(int first, int second)
+{
+    if (first == second)
+        return 1;
+
+    if ((first == INT_TYPE && second == LONGINT_TYPE) ||
+        (first == LONGINT_TYPE && second == INT_TYPE))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int is_integral_type(int type)
+{
+    return (type == INT_TYPE || type == LONGINT_TYPE);
+}
+
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
@@ -115,7 +134,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    if(type_first != type_second)
+    if(!types_are_assignment_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
                 stmt->line_num);
@@ -383,7 +402,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(for_type != INT_TYPE)
+        if(!is_integral_type(for_type))
         {
             fprintf(stderr, "Error on line %d, expected int in \"for\" assignment!\n\n",
                     stmt->line_num);
@@ -402,7 +421,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     do_for = stmt->stmt_data.for_data.do_for;
 
     return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
-    if(to_type != INT_TYPE)
+    if(!is_integral_type(to_type))
     {
         fprintf(stderr, "Error on line %d, expected int in \"to\" assignment!\n\n",
                 stmt->line_num);
@@ -434,13 +453,13 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, BOTH_MUTATE_REFERENCE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    if(type_first != type_second)
+    if(!types_are_assignment_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
                 for_assign->line_num);
         ++return_val;
     }
-    if(type_first != INT_TYPE)
+    if(!is_integral_type(type_first))
     {
         fprintf(stderr, "Error on line %d, expected int in \"for\" assignment statement!\n\n",
                 for_assign->line_num);

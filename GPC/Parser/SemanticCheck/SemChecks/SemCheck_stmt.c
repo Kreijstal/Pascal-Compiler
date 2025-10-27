@@ -13,6 +13,9 @@
 #include <assert.h>
 #include <limits.h>
 #include <string.h>
+#ifdef _WIN32
+#define strcasecmp _stricmp
+#endif
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
 #include "../NameMangling.h"
@@ -29,8 +32,28 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
+
+static int types_are_assignment_compatible(int first, int second)
+{
+    if (first == second)
+        return 1;
+
+    if ((first == INT_TYPE && second == LONGINT_TYPE) ||
+        (first == LONGINT_TYPE && second == INT_TYPE))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int is_integral_type(int type)
+{
+    return (type == INT_TYPE || type == LONGINT_TYPE);
+}
 
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -75,6 +98,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return_val += semcheck_while(symtab, stmt, max_scope_lev);
             break;
 
+        case STMT_REPEAT:
+            return_val += semcheck_repeat(symtab, stmt, max_scope_lev);
+            break;
+
         case STMT_FOR:
             return_val += semcheck_for(symtab, stmt, max_scope_lev);
             break;
@@ -115,7 +142,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    if(type_first != type_second)
+    if(!types_are_assignment_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
                 stmt->line_num);
@@ -143,6 +170,58 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
+
+
+    HashNode_t *builtin_proc = NULL;
+    if (FindIdent(&builtin_proc, symtab, proc_id) != -1 && builtin_proc != NULL &&
+        builtin_proc->hash_type == HASHTYPE_BUILTIN_PROCEDURE &&
+        strcasecmp(proc_id, "SetLength") == 0)
+    {
+        if (ListLength(args_given) != 2)
+        {
+            fprintf(stderr, "Error on line %d, SetLength expects exactly two arguments.\n", stmt->line_num);
+            return ++return_val;
+        }
+
+        struct Expression *array_expr = (struct Expression *)args_given->cur;
+        if (array_expr->type != EXPR_VAR_ID)
+        {
+            fprintf(stderr, "Error on line %d, SetLength first argument must be a dynamic array variable.\n", stmt->line_num);
+            return ++return_val;
+        }
+
+        HashNode_t *array_node = NULL;
+        if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1 || array_node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, unknown array %s in SetLength.\n", stmt->line_num, array_expr->expr_data.id);
+            return ++return_val;
+        }
+
+        if (array_node->hash_type != HASHTYPE_ARRAY || array_node->array_end >= array_node->array_start)
+        {
+            fprintf(stderr, "Error on line %d, SetLength requires a dynamic array variable.\n", stmt->line_num);
+            return ++return_val;
+        }
+
+        struct Expression *len_expr = (struct Expression *)args_given->next->cur;
+        int len_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&len_type, symtab, len_expr, INT_MAX, NO_MUTATE);
+        if (len_type != INT_TYPE && len_type != LONGINT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
+            return ++return_val;
+        }
+
+        const char *runtime_name = NULL;
+        if (array_node->var_type == HASHVAR_INTEGER)
+            runtime_name = "gpc_dynarray_set_length_integer";
+        else
+            runtime_name = "gpc_dynarray_set_length_longint";
+
+        stmt->stmt_data.procedure_call_data.mangled_id = strdup(runtime_name);
+        stmt->stmt_data.procedure_call_data.resolved_proc = builtin_proc;
+        return return_val;
+    }
 
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
     assert(mangled_name != NULL);
@@ -175,10 +254,22 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     }
     else if (match_count == 0)
     {
-        fprintf(stderr, "Error on line %d, call to procedure %s does not match any available overload\n", stmt->line_num, proc_id);
-        DestroyList(overload_candidates);
-        free(mangled_name);
-        return ++return_val;
+        HashNode_t *builtin_proc = NULL;
+        if (FindIdent(&builtin_proc, symtab, proc_id) != -1 && builtin_proc != NULL &&
+            builtin_proc->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+        {
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+            stmt->stmt_data.procedure_call_data.resolved_proc = builtin_proc;
+            sym_return = builtin_proc;
+            scope_return = 0;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, call to procedure %s does not match any available overload\n", stmt->line_num, proc_id);
+            DestroyList(overload_candidates);
+            free(mangled_name);
+            return ++return_val;
+        }
     }
     else
     {
@@ -362,6 +453,37 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     return return_val;
 }
 
+/** REPEAT **/
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    int until_type = UNKNOWN_TYPE;
+    ListNode_t *body_list;
+
+    assert(symtab != NULL);
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_REPEAT);
+
+    body_list = stmt->stmt_data.repeat_data.body_list;
+    while (body_list != NULL)
+    {
+        struct Statement *body_stmt = (struct Statement *)body_list->cur;
+        if (body_stmt != NULL)
+            return_val += semcheck_stmt_main(symtab, body_stmt, max_scope_lev);
+        body_list = body_list->next;
+    }
+
+    return_val += semcheck_expr_main(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
+    if (until_type != BOOL)
+    {
+        fprintf(stderr, "Error on line %d, expected relational inside repeat statement!\n\n",
+            stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
 /** FOR **/
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
@@ -387,7 +509,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(for_type != INT_TYPE)
+        if(!is_integral_type(for_type))
         {
             fprintf(stderr, "Error on line %d, expected int in \"for\" assignment!\n\n",
                     stmt->line_num);
@@ -406,7 +528,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     do_for = stmt->stmt_data.for_data.do_for;
 
     return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
-    if(to_type != INT_TYPE)
+    if(!is_integral_type(to_type))
     {
         fprintf(stderr, "Error on line %d, expected int in \"to\" assignment!\n\n",
                 stmt->line_num);
@@ -438,13 +560,13 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, BOTH_MUTATE_REFERENCE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    if(type_first != type_second)
+    if(!types_are_assignment_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
                 for_assign->line_num);
         ++return_val;
     }
-    if(type_first != INT_TYPE)
+    if(!is_integral_type(type_first))
     {
         fprintf(stderr, "Error on line %d, expected int in \"for\" assignment statement!\n\n",
                 for_assign->line_num);

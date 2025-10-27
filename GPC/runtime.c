@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -79,4 +81,56 @@ void gpc_sleep_ms(int milliseconds) {
         /* Retry until sleep completes */
     }
 #endif
+}
+
+static void gpc_dynarray_set_length_impl(void **array_ptr, long long length, size_t element_size) {
+    if (array_ptr == NULL)
+        return;
+
+    if (length < 0)
+        length = 0;
+
+    size_t header_size = sizeof(size_t);
+    size_t requested_count = (length > 0) ? (size_t)length + 1 : 0;
+
+    unsigned char *data_ptr = (unsigned char *)(*array_ptr);
+    unsigned char *base_ptr = data_ptr != NULL ? data_ptr - header_size : NULL;
+    size_t old_count = base_ptr != NULL ? *((size_t *)base_ptr) : 0;
+
+    if (requested_count == 0) {
+        if (base_ptr != NULL)
+            free(base_ptr);
+        *array_ptr = NULL;
+        return;
+    }
+
+    size_t total_size = header_size + requested_count * element_size;
+    unsigned char *new_base = (unsigned char *)realloc(base_ptr, total_size);
+    if (new_base == NULL)
+        return;
+
+    *((size_t *)new_base) = requested_count;
+    unsigned char *new_data = new_base + header_size;
+
+    if (requested_count > old_count) {
+        size_t grow_bytes = (requested_count - old_count) * element_size;
+        memset(new_data + old_count * element_size, 0, grow_bytes);
+    }
+
+    /* Always keep the sentinel slot zeroed. */
+    memset(new_data + (requested_count - 1) * element_size, 0, element_size);
+
+    *array_ptr = new_data;
+}
+
+void gpc_dynarray_set_length_integer(int32_t **array_ptr, long long length) {
+    gpc_dynarray_set_length_impl((void **)array_ptr, length, sizeof(int32_t));
+}
+
+void gpc_dynarray_set_length_longint(int64_t **array_ptr, long long length) {
+    gpc_dynarray_set_length_impl((void **)array_ptr, length, sizeof(int64_t));
+}
+
+void gpc_runtime_halt(void) {
+    exit(0);
 }

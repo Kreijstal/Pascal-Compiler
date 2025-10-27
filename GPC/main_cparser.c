@@ -192,6 +192,11 @@ static void set_flags(char **optional_args, int count)
             fprintf(stderr, "O2 optimizations enabled!\n\n");
             set_o2_flag();
         }
+        else if (strcmp(arg, "-parse-only") == 0 || strcmp(arg, "--parse-only") == 0)
+        {
+            fprintf(stderr, "Parse-only mode enabled.\n\n");
+            set_parse_only_flag();
+        }
         else if (strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
         {
             fprintf(stderr, "Target ABI: Windows x64\n\n");
@@ -427,12 +432,12 @@ static bool buffer_starts_with_unit(const char *buffer, size_t length)
     return true;
 }
 
-static Tree_t *parse_pascal_file(const char *path)
+static bool parse_pascal_file(const char *path, Tree_t **out_tree, bool convert_to_tree)
 {
     size_t length = 0;
     char *buffer = read_file(path, &length);
     if (buffer == NULL)
-        return NULL;
+        return false;
 
     combinator_t *parser = new_combinator();
     bool is_unit = buffer_starts_with_unit(buffer, length);
@@ -455,6 +460,7 @@ static Tree_t *parse_pascal_file(const char *path)
 
     ParseResult result = parse(input, parser);
     Tree_t *tree = NULL;
+    bool success = false;
     if (!result.is_success)
     {
         report_parse_error(path, result.value.error);
@@ -470,11 +476,23 @@ static Tree_t *parse_pascal_file(const char *path)
                     path, input->start, input->length);
         }
 
-        tree = tree_from_pascal_ast(result.value.ast);
-        if (tree == NULL)
+        if (convert_to_tree)
         {
-            fprintf(stderr, "Error: Failed to convert AST for '%s' to legacy parse tree.\n", path);
+            tree = tree_from_pascal_ast(result.value.ast);
+            if (tree == NULL)
+            {
+                fprintf(stderr, "Error: Failed to convert AST for '%s' to legacy parse tree.\n", path);
+            }
+            else
+            {
+                success = true;
+            }
         }
+        else
+        {
+            success = true;
+        }
+
         free_ast(result.value.ast);
     }
 
@@ -482,7 +500,25 @@ static Tree_t *parse_pascal_file(const char *path)
     free(input);
     file_to_parse = NULL;
     free_combinator(parser);
-    return tree;
+    if (!success && tree != NULL)
+        destroy_tree(tree);
+
+    if (out_tree != NULL)
+    {
+        if (convert_to_tree)
+        {
+            if (success)
+                *out_tree = tree;
+            else
+                *out_tree = NULL;
+        }
+        else
+        {
+            *out_tree = NULL;
+        }
+    }
+
+    return success;
 }
 
 typedef struct
@@ -667,11 +703,18 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
 
-    Tree_t *unit_tree = parse_pascal_file(path);
+    Tree_t *unit_tree = NULL;
+    bool ok = parse_pascal_file(path, &unit_tree, true);
     free(path);
-    if (unit_tree == NULL)
+    if (!ok)
     {
         fprintf(stderr, "ERROR: Failed to load unit '%s'.\n", unit_name);
+        exit(1);
+    }
+
+    if (unit_tree == NULL)
+    {
+        fprintf(stderr, "ERROR: Failed to convert unit '%s' into legacy parse tree.\n", unit_name);
         exit(1);
     }
 
@@ -724,17 +767,63 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    Tree_t *prelude_tree = parse_pascal_file(stdlib_path);
-    if (prelude_tree == NULL)
+    bool parse_only = parse_only_flag();
+
+    Tree_t *prelude_tree = NULL;
+    if (!parse_pascal_file(stdlib_path, &prelude_tree, !parse_only))
     {
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
         free(stdlib_path);
         return 1;
     }
 
-    Tree_t *user_tree = parse_pascal_file(input_file);
-    if (user_tree == NULL)
+    Tree_t *user_tree = NULL;
+    if (!parse_pascal_file(input_file, &user_tree, !parse_only))
     {
-        destroy_tree(prelude_tree);
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
+        free(stdlib_path);
+        return 1;
+    }
+
+    if (parse_only)
+    {
+        FILE *out = fopen(output_file, "w");
+        if (out == NULL)
+        {
+            fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
+            if (user_tree != NULL)
+                destroy_tree(user_tree);
+            free(stdlib_path);
+            return 1;
+        }
+        fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
+        fprintf(out, "; parse-only mode: no code generated\n");
+        fclose(out);
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
+        free(stdlib_path);
+        if (ast_nil != NULL)
+        {
+            free(ast_nil);
+            ast_nil = NULL;
+        }
+        return 0;
+    }
+
+    if (prelude_tree == NULL || user_tree == NULL)
+    {
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
         free(stdlib_path);
         return 1;
     }

@@ -42,6 +42,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_WHILE:
             inst_list = codegen_while(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_REPEAT:
+            inst_list = codegen_repeat(stmt, inst_list, ctx, symtab);
+            break;
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
             break;
@@ -74,7 +77,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+    HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
     inst_list = codegen_vect_reg(inst_list, 0);
     snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
     inst_list = add_inst(inst_list, buffer);
@@ -160,7 +164,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
         Register_t *addr_reg = NULL;
-        inst_list = codegen_array_element_address(var_expr, inst_list, ctx, &addr_reg);
+        StackNode_t *array_node = NULL;
+        inst_list = codegen_array_element_address(var_expr, inst_list, ctx, &addr_reg, &array_node);
 
         StackNode_t *addr_temp = add_l_t("array_addr");
         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_temp->offset);
@@ -185,7 +190,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        if (array_node != NULL && array_node->element_size >= 8)
+            snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+        else
+            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), value_reg);
@@ -326,6 +334,41 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
 
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+    return inst_list;
+}
+
+ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_REPEAT);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    char body_label[18], buffer[50];
+    int relop_type, inverse;
+    ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
+
+    gen_label(body_label, 18, ctx);
+    snprintf(buffer, 50, "%s:\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    while (body_list != NULL)
+    {
+        struct Statement *body_stmt = (struct Statement *)body_list->cur;
+        inst_list = codegen_stmt(body_stmt, inst_list, ctx, symtab);
+        body_list = body_list->next;
+    }
+
+    inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
+    inverse = 1;
+    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
