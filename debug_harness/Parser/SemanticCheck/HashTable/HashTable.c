@@ -16,6 +16,7 @@
 HashTable_t *InitHashTable()
 {
     HashTable_t *new_table = (HashTable_t *)malloc(sizeof(HashTable_t));
+    assert(new_table != NULL);
 
     int i;
     for(i = 0; i < TABLE_SIZE; ++i)
@@ -33,11 +34,15 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
     HashNode_t *hash_node;
     int hash;
 
+    assert(table != NULL);
+    assert(id != NULL);
+
     hash = hashpjw(id);
     list = table->table[hash];
     if(list == NULL)
     {
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+        assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = strdup(id);
@@ -46,6 +51,12 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->record_type = record_type;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
+        hash_node->is_constant = 0;
+        hash_node->const_int_value = 0;
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
 
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -72,6 +83,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
 
         /* Success if here */
         hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+        assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = strdup(id);
@@ -80,6 +92,12 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->record_type = record_type;
         hash_node->referenced = 0;
         hash_node->mutated = 0;
+        hash_node->is_constant = 0;
+        hash_node->const_int_value = 0;
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
 
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;
@@ -93,6 +111,9 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
     ListNode_t *list;
     HashNode_t *hash_node;
     int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
 
     hash = hashpjw(id);
     list = table->table[hash];
@@ -125,6 +146,9 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
     HashNode_t *hash_node;
     int hash;
 
+    assert(table != NULL);
+    assert(id != NULL);
+
     hash = hashpjw(id);
     list = table->table[hash];
 
@@ -147,6 +171,7 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
 /* Resets hash node mutation and reference status */
 void ResetHashNodeStatus(HashNode_t *hash_node)
 {
+    assert(hash_node != NULL);
     hash_node->mutated = 0;
     hash_node->referenced = 0;
 }
@@ -157,6 +182,8 @@ void DestroyHashTable(HashTable_t *table)
     ListNode_t *cur, *temp;
     HashNode_t *hash_node;
 
+    assert(table != NULL);
+
     int i;
     for(i = 0; i < TABLE_SIZE; ++i)
     {
@@ -164,6 +191,8 @@ void DestroyHashTable(HashTable_t *table)
         while(cur != NULL)
         {
             hash_node = (HashNode_t *)cur->cur;
+            if (hash_node->id != NULL)
+                free(hash_node->id);
             if(hash_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
                 DestroyBuiltin(hash_node);
 
@@ -183,7 +212,6 @@ void DestroyBuiltin(HashNode_t *node)
     assert(node != NULL);
     assert(node->hash_type == HASHTYPE_BUILTIN_PROCEDURE);
 
-    free(node->id);
     destroy_list(node->args);
 }
 
@@ -193,6 +221,9 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
     int i, j;
     ListNode_t *list;
     HashNode_t *hash_node;
+
+    assert(table != NULL);
+    assert(f != NULL);
 
     for(i = 0; i < TABLE_SIZE; ++i)
     {
@@ -219,7 +250,7 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
 }
 
 /* The well-known symbol hash function
-/* -----------------------------------------------------------------------------
+ * -----------------------------------------------------------------------------
  * hashpjw
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).
@@ -229,10 +260,12 @@ int hashpjw( char *s )
 	char *p;
 	unsigned h = 0, g;
 
+    assert(s != NULL);
+
 	for ( p = s; *p != '\0'; p++ )
 	{
 		h = (h << 4) + (*p);
-		if ( g = h & 0xf0000000 )
+		if ( (g = h & 0xf0000000) )
 		{
 			h = h ^ ( g >> 24 );
 			h = h ^ g;

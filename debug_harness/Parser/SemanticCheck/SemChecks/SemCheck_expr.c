@@ -44,6 +44,7 @@ int semcheck_funccall(int *type_return,
 /* Sets hash meta based on given mutating flag */
 void set_hash_meta(HashNode_t *node, int mutating)
 {
+    assert(node != NULL);
     if(mutating == BOTH_MUTATE_REFERENCE)
     {
         node->referenced += 1;
@@ -95,23 +96,26 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
             *type = UNKNOWN_TYPE;
             break;
         default:
-            fprintf(stderr, "ERROR in set_type_from_hashtype, bad types!\n");
-            exit(1);
+            assert(0 && "Bad type in set_type_from_hashtype!");
+            break;
     }
+    return 0;
 }
 
 /* Semantic check on a normal expression */
 int semcheck_expr(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
-    semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
+    assert(type_return != NULL);
+    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
 /* Semantic check on a function expression (no side effects allowed) */
 int semcheck_expr_func(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int mutating)
 {
-    semcheck_expr_main(type_return, symtab, expr, 0, mutating);
+    assert(type_return != NULL);
+    return semcheck_expr_main(type_return, symtab, expr, 0, mutating);
 }
 
 /* Main semantic checking */
@@ -121,6 +125,7 @@ int semcheck_expr_main(int *type_return,
     int return_val;
     assert(symtab != NULL);
     assert(expr != NULL);
+    assert(type_return != NULL);
 
     return_val = 0;
     switch(expr->type)
@@ -161,14 +166,14 @@ int semcheck_expr_main(int *type_return,
         case EXPR_RNUM:
             *type_return = REAL_TYPE;
             break;
-
+        
         case EXPR_STRING:
             *type_return = STRING_TYPE;
             break;
 
         default:
-            fprintf(stderr, "ERROR: Bad type in semcheck_expr_main!\n");
-            exit(1);
+            assert(0 && "Bad type in semcheck_expr_main!");
+            break;
     }
 
     return return_val;
@@ -372,9 +377,16 @@ int semcheck_varid(int *type_return,
         if(hash_return->hash_type != HASHTYPE_VAR &&
             hash_return->hash_type != HASHTYPE_FUNCTION_RETURN)
         {
-            fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
-                expr->line_num, id);
-            ++return_val;
+            if(hash_return->hash_type == HASHTYPE_CONST && mutating == 0)
+            {
+                /* Constants are readable values. */
+            }
+            else
+            {
+                fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
+                    expr->line_num, id);
+                ++return_val;
+            }
         }
         set_type_from_hashtype(type_return, hash_return);
     }
@@ -465,7 +477,6 @@ int semcheck_funccall(int *type_return,
     ListNode_t *overload_candidates = FindAllIdents(symtab, id);
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
 
-    HashNode_t *resolved_func = NULL;
     int match_count = 0;
 
     if (overload_candidates != NULL)
@@ -475,10 +486,7 @@ int semcheck_funccall(int *type_return,
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
-            {
-                resolved_func = candidate;
                 match_count++;
-            }
             cur = cur->next;
         }
     }

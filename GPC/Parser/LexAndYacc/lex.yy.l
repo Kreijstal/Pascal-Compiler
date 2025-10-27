@@ -10,6 +10,7 @@
     #include "ErrVars.h"
     #include "tree.h"
     #include "List.h"
+    #include "Grammar.tab.h"
     #include "../ParseTree/type_tags.h"
 
     char asm_buffer[1024];

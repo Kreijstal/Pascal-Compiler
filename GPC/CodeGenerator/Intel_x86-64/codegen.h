@@ -152,6 +152,7 @@ typedef struct {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
+    SymTab_t *symtab;
 } CodeGenContext;
 
 /* Generates a label */

@@ -201,6 +201,41 @@ StackNode_t *add_l_x(char *label)
     return new_node;
 }
 
+StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+
+    cur_scope->x_offset += total_size;
+
+    int offset = CONST_STACK_OFFSET_BYTES +
+        cur_scope->z_offset + cur_scope->x_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, total_size);
+    new_node->is_array = 1;
+    new_node->array_lower_bound = lower_bound;
+    new_node->element_size = element_size;
+
+    if(cur_scope->x == NULL)
+    {
+        cur_scope->x = CreateListNode(new_node, LIST_UNSPECIFIED);
+    }
+    else
+    {
+        cur_scope->x = PushListNodeBack(cur_scope->x,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+    }
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added array %s to x_offset %d\n", new_node->label, new_node->offset);
+    #endif
+
+    return new_node;
+}
+
 /* Adds doubleword to z */
 StackNode_t *add_l_z(char *label)
 {
@@ -454,7 +489,7 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
         cur = cur->next;
     }
 
-    assert(0 && "Could not find register to push onto stack!");
+    return;
 }
 
 void swap_reg_stack(RegStack_t *reg_stack)
@@ -717,6 +752,9 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->offset = offset;
     new_node->label = strdup(label);
     new_node->size = size;
+    new_node->is_array = 0;
+    new_node->array_lower_bound = 0;
+    new_node->element_size = size;
 
     return new_node;
 }

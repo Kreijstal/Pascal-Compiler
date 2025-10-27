@@ -16,7 +16,7 @@
 
 struct RecordType;
 
-enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
+enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_CONST, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
     HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
 enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD};
 
@@ -33,6 +33,14 @@ typedef struct HashNode
     /* Symbol table resources */
     int referenced;
     int mutated;
+
+    int is_constant;
+    int const_int_value;
+
+    int is_array;
+    int array_start;
+    int array_end;
+    int element_size;
 
 } HashNode_t;
 
@@ -71,7 +79,7 @@ void DestroyBuiltin(HashNode_t *);
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 
 /* The well-known symbol hash function
-/* -----------------------------------------------------------------------------
+ * -----------------------------------------------------------------------------
  * hashpjw
  * Peter J. Weinberger's hash function
  * Source: Aho, Sethi, and Ullman, "Compilers", Addison-Wesley, 1986 (page 436).
