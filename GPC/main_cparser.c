@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /*
  * GPC - Gwinn Pascal Compiler (cparser integration)
  */
@@ -8,8 +9,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <strings.h>
+#else
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <ctype.h>
 #include <stdbool.h>
 
@@ -28,6 +36,15 @@
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#ifndef R_OK
+#define R_OK 4
+#endif
+#define access _access
+#endif
 
 extern ast_t *ast_nil;
 
@@ -61,6 +78,16 @@ static char *duplicate_path(const char *path)
     return dup;
 }
 
+#ifdef _WIN32
+static char* realpath(const char* path, char* resolved_path)
+{
+    DWORD len = GetFullPathNameA(path, PATH_MAX, resolved_path, NULL);
+    if (len == 0 || len >= PATH_MAX)
+        return NULL;
+    return resolved_path;
+}
+#endif
+
 static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
 {
 #if defined(__linux__) || defined(__unix__) || defined(__APPLE__)
@@ -70,6 +97,10 @@ static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
         buffer[len] = '\0';
         return len;
     }
+#elif defined(_WIN32)
+    DWORD len = GetModuleFileNameA(NULL, buffer, (DWORD)size);
+    if (len > 0 && len < size)
+        return (ssize_t)len;
 #endif
 
     if (argv0 != NULL)

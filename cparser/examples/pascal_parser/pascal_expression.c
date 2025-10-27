@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifdef _WIN32
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
 
 // Pascal identifier parser that excludes reserved keywords
 static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_name) {

@@ -1,8 +1,10 @@
+#define _GNU_SOURCE
 #include "parser.h"
 #include "combinators.h"
 #include "combinator_internals.h"
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdio.h>
 
 // Initialize ast_nil if not already initialized
 static ast_t* ensure_ast_nil_initialized() {
