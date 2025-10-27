@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 #include "SemCheck.h"
 #include "../../flags.h"
 #include "../../Optimizer/optimizer.h"
@@ -360,10 +361,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
 
+        ListNode_t *ids_head;
         if (tree->type == TREE_VAR_DECL)
-            ids = tree->tree_data.var_decl_data.ids;
+            ids_head = tree->tree_data.var_decl_data.ids;
         else
-            ids = tree->tree_data.arr_decl_data.ids;
+            ids_head = tree->tree_data.arr_decl_data.ids;
+
+        ids = ids_head;
 
         while(ids != NULL)
         {
@@ -388,6 +392,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = type_node->var_type;
                     }
                 }
+                else if (tree->tree_data.var_decl_data.inferred_type)
+                    var_type = HASHVAR_UNTYPED;
                 else if(tree->tree_data.var_decl_data.type == INT_TYPE || tree->tree_data.var_decl_data.type == LONGINT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else
@@ -421,6 +427,89 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         }
 
         cur = cur->next;
+
+        if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.initializer != NULL)
+        {
+            if (ids_head == NULL || ids_head->next != NULL)
+            {
+                fprintf(stderr, "Error on line %d, type inference initializers must declare a single identifier.\n",
+                    tree->line_num);
+                ++return_val;
+            }
+            else
+            {
+                char *var_name = (char *)ids_head->cur;
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, symtab, var_name) == -1 || var_node == NULL)
+                {
+                    fprintf(stderr, "Error on line %d, failed to resolve variable %s for initializer.\n",
+                        tree->line_num, var_name);
+                    ++return_val;
+                }
+                else
+                {
+                    struct Statement *init_stmt = tree->tree_data.var_decl_data.initializer;
+                    struct Expression *init_expr = init_stmt->stmt_data.var_assign_data.expr;
+                    int expr_type = UNKNOWN_TYPE;
+                    return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
+
+                    if (expr_type == UNKNOWN_TYPE)
+                    {
+                        fprintf(stderr, "Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
+                        ++return_val;
+                    }
+                    else
+                    {
+                        enum VarType inferred_var_type = HASHVAR_UNTYPED;
+                        int normalized_type = expr_type;
+
+                        switch(expr_type)
+                        {
+                            case INT_TYPE:
+                            case LONGINT_TYPE:
+                            case BOOL:
+                                inferred_var_type = HASHVAR_INTEGER;
+                                normalized_type = INT_TYPE;
+                                break;
+                            case REAL_TYPE:
+                                inferred_var_type = HASHVAR_REAL;
+                                normalized_type = REAL_TYPE;
+                                break;
+                            case STRING_TYPE:
+                                inferred_var_type = HASHVAR_PCHAR;
+                                normalized_type = STRING_TYPE;
+                                if (tree->tree_data.var_decl_data.type_id == NULL)
+                                    tree->tree_data.var_decl_data.type_id = strdup("string");
+                                break;
+                            default:
+                                fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",
+                                    tree->line_num, var_name);
+                                ++return_val;
+                                inferred_var_type = HASHVAR_UNTYPED;
+                                break;
+                        }
+
+                        if (tree->tree_data.var_decl_data.inferred_type)
+                        {
+                            if (inferred_var_type != HASHVAR_UNTYPED)
+                            {
+                                tree->tree_data.var_decl_data.type = normalized_type;
+                                var_node->var_type = inferred_var_type;
+                            }
+                        }
+                        else
+                        {
+                            if (inferred_var_type != var_node->var_type)
+                            {
+                                fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
+                                    tree->line_num, var_name);
+                                ++return_val;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
     }
 

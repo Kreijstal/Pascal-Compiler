@@ -145,6 +145,11 @@ static void set_flags(char **optional_args, int count)
             fprintf(stderr, "WARNING: Non-local is still in development and is very buggy!\n\n");
             set_nonlocal_flag();
         }
+        else if (strcmp(optional_args[i], "-parse-only") == 0 || strcmp(optional_args[i], "--parse-only") == 0)
+        {
+            fprintf(stderr, "Parse-only mode enabled.\n\n");
+            set_parse_only_flag();
+        }
         else if (strcmp(optional_args[i], "-O1") == 0)
         {
             fprintf(stderr, "O1 optimizations enabled!\n\n");
@@ -650,6 +655,31 @@ int main(int argc, char **argv)
         destroy_tree(prelude_tree);
         free(stdlib_path);
         return 1;
+    }
+
+    if (parse_only_flag())
+    {
+        FILE *out = fopen(output_file, "w");
+        if (out == NULL)
+        {
+            fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            free(stdlib_path);
+            return 1;
+        }
+        fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
+        fprintf(out, "; parse-only mode: no code generated\n");
+        fclose(out);
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
+        free(stdlib_path);
+        if (ast_nil != NULL)
+        {
+            free(ast_nil);
+            ast_nil = NULL;
+        }
+        return 0;
     }
 
     ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;

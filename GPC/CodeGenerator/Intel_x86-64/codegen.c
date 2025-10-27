@@ -22,6 +22,8 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 
+ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+
 /* Platform detection */
 #if defined(__linux__) || defined(__unix__)
 #define PLATFORM_LINUX 1
@@ -387,6 +389,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_subprograms(data->subprograms, ctx, symtab);
 
     inst_list = NULL;
+    inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
     codegen_function_header(prgm_name, ctx);
@@ -533,6 +536,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_locals(proc->declarations, ctx);
 
     codegen_subprograms(proc->subprograms, ctx, symtab);
+    inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
@@ -573,6 +577,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_locals(func->declarations, ctx);
 
     codegen_subprograms(func->subprograms, ctx, symtab);
+    inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
     inst_list = add_inst(inst_list, buffer);
@@ -641,5 +646,23 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    return inst_list;
+}
+
+ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+    while (decls != NULL)
+    {
+        Tree_t *decl = (Tree_t *)decls->cur;
+        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        {
+            struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+            if (init_stmt != NULL)
+                inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+        }
+        decls = decls->next;
+    }
     return inst_list;
 }

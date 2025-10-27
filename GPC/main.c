@@ -272,6 +272,23 @@ int main(int argc, char **argv)
 
     if(prelude_tree != NULL && user_tree != NULL)
     {
+        if (parse_only_flag())
+        {
+            FILE *out = fopen(argv[2], "w");
+            if (out == NULL)
+            {
+                fprintf(stderr, "ERROR: Failed to open output file: %s\n", argv[2]);
+                exit(1);
+            }
+            fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
+            fprintf(out, "; parse-only mode: no code generated\n");
+            fclose(out);
+
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            return 0;
+        }
+
         UnitSet visited_units;
         unit_set_init(&visited_units);
 
@@ -358,6 +375,11 @@ void set_flags(char **optional_args, int count)
             fprintf(stderr, "Non-local codegen support enabled\n");
             fprintf(stderr, "WARNING: Non-local is still in development and is very buggy!\n\n");
             set_nonlocal_flag();
+        }
+        else if(strcmp(optional_args[i], "-parse-only") == 0 || strcmp(optional_args[i], "--parse-only") == 0)
+        {
+            fprintf(stderr, "Parse-only mode enabled.\n\n");
+            set_parse_only_flag();
         }
         else if(strcmp(optional_args[i], "-O1") == 0)
         {

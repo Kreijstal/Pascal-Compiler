@@ -218,11 +218,29 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* param_list = create_pascal_param_parser();
 
     // Variable declaration for function/procedure local variables
-    combinator_t* var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
+    combinator_t** var_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *var_expr_parser = new_combinator();
+    init_pascal_expression_parser(var_expr_parser);
+
+    combinator_t* typed_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
         token(match(":")),                          // colon
         token(cident(PASCAL_T_IDENTIFIER)),         // variable type
         optional(token(match(";"))),                // optional semicolon
+        NULL
+    );
+
+    combinator_t* inferred_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),          // variable name (single)
+        token(match(":=")),                         // type inference assignment
+        lazy(var_expr_parser),                      // initializer expression
+        optional(token(match(";"))),               // optional semicolon
+        NULL
+    );
+
+    combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
+        inferred_var_decl,
+        typed_var_decl,
         NULL
     );
 
@@ -231,6 +249,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         many(var_decl),                            // multiple variable declarations
         NULL
     );
+
+    var_section->extra_to_free = var_expr_parser;
 
     // Function/procedure body that can contain local declarations
     combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
@@ -536,26 +556,44 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         sep_by(program_param, token(match(",")))
     ));
 
-    // Enhanced Variable declaration: var1, var2, var3 : type;
+    // Enhanced Variable declaration: includes type inference
     combinator_t* var_identifier_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
-        record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
-        enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
-        array_type(PASCAL_T_ARRAY_TYPE),                // array types like ARRAY[0..9] OF integer
-        set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
-        pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
-        range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
-        type_name(PASCAL_T_IDENTIFIER),                 // built-in types
-        token(cident(PASCAL_T_IDENTIFIER)),             // custom types
+        class_type(PASCAL_T_CLASS_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+        array_type(PASCAL_T_ARRAY_TYPE),
+        set_type(PASCAL_T_SET),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        range_type(PASCAL_T_RANGE_TYPE),
+        type_name(PASCAL_T_IDENTIFIER),
+        token(cident(PASCAL_T_IDENTIFIER)),
         NULL
     );
 
-    combinator_t* var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
-        var_identifier_list,                            // multiple variable names
-        token(match(":")),                              // colon
-        type_spec,                                      // type specification
-        token(match(";")),                              // semicolon
+    combinator_t** program_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *program_expr_parser = new_combinator();
+    init_pascal_expression_parser(program_expr_parser);
+
+    combinator_t* typed_program_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
+        var_identifier_list,
+        token(match(":")),
+        type_spec,
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* inferred_program_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match(":=")),
+        lazy(program_expr_parser),
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
+        inferred_program_var_decl,
+        typed_program_var_decl,
         NULL
     );
 
@@ -565,6 +603,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         many(var_decl),                              // multiple variable declarations
         NULL
     );
+    var_section->extra_to_free = program_expr_parser;
 
     // Type declaration: TypeName = TypeSpec;
     combinator_t* type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,

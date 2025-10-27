@@ -416,7 +416,7 @@ declaration_list
             if($4.type == ARRAY)
                 tree = mk_arraydecl($2.line_num, $2.list, $4.actual_type, $4.start, $4.end);
             else
-                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id, 0);
+                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id, 0, 0, NULL);
 
             if($1 == NULL)
                 $$ = CreateListNode(tree, LIST_TREE);
@@ -429,7 +429,7 @@ declaration_list
             if($3.type == ARRAY)
                 tree = mk_arraydecl($1.line_num, $1.list, $3.actual_type, $3.start, $3.end);
             else
-                tree = mk_vardecl($1.line_num, $1.list, $3.actual_type, $3.id, 0);
+                tree = mk_vardecl($1.line_num, $1.list, $3.actual_type, $3.id, 0, 0, NULL);
 
             $$ = CreateListNode(tree, LIST_TREE);
         }
@@ -455,6 +455,13 @@ type_declaration
         }
         $$ = mk_typedecl($1.line_num, $1.id, $3, $5);
     }
+    | ident relop type ';'
+    {
+        if ($2 != EQ) {
+            yyerror("Expected '=' in type declaration");
+        }
+        $$ = mk_typealiasdecl($1.line_num, $1.id, ($3.type == ARRAY), $3.actual_type, $3.id, $3.start, $3.end);
+    }
     ;
 
 signed_int
@@ -475,6 +482,8 @@ type
             $$.type = SINGLE;
             $$.actual_type = $1;
             $$.id = NULL;
+            $$.start = 0;
+            $$.end = 0;
         }
     | ARRAY '[' int_num DOTDOT int_num ']' OF standard_type
         {
@@ -484,11 +493,29 @@ type
             $$.start = $3;
             $$.end = $5;
         }
+    | ARRAY OF standard_type
+        {
+            $$.type = ARRAY;
+            $$.actual_type = $3;
+            $$.id = NULL;
+            $$.start = 0;
+            $$.end = -1;
+        }
+    | ARRAY OF ident
+        {
+            $$.type = ARRAY;
+            $$.actual_type = -1;
+            $$.id = $3.id;
+            $$.start = 0;
+            $$.end = -1;
+        }
     | ident
         {
             $$.type = ID;
             $$.id = $1.id;
             $$.actual_type = -1;
+            $$.start = 0;
+            $$.end = 0;
         }
     ;
 
@@ -663,7 +690,7 @@ parameter_item
             if($4.type == ARRAY)
                 tree = mk_arraydecl($2.line_num, $2.list, $4.actual_type, $4.start, $4.end);
             else
-                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id, 0);
+                tree = mk_vardecl($2.line_num, $2.list, $4.actual_type, $4.id, 0, 0, NULL);
             $$ = tree;
         }
     | VARIABLE optional_const identifier_list ':' type
@@ -672,7 +699,7 @@ parameter_item
             if($5.type == ARRAY)
                 tree = mk_arraydecl($3.line_num, $3.list, $5.actual_type, $5.start, $5.end);
             else
-                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id, 1);
+                tree = mk_vardecl($3.line_num, $3.list, $5.actual_type, $5.id, 1, 0, NULL);
             $$ = tree;
         }
     ;

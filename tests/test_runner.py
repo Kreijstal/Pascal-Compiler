@@ -202,6 +202,24 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_repeat_type_inference(self):
+        """Tests repeat-until loops and variable type inference."""
+        input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(process.stdout, "5\n")
+        self.assertEqual(process.returncode, 0)
+
     def test_array_consts(self):
         """Tests that const declarations and array indexing work together."""
         input_file = os.path.join(TEST_CASES_DIR, "array_const.p")
@@ -323,6 +341,16 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
+
+    def test_zahlen_program_parses(self):
+        """Ensures the zahlen classification demo parses successfully in parse-only mode."""
+        input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen.s")
+
+        run_compiler(input_file, asm_file, flags=["-parse-only"])
+        self.assertTrue(os.path.exists(asm_file))
+        content = read_file_content(asm_file)
+        self.assertIn("parse-only mode", content)
 
     def test_for_program(self):
         """Tests the for program."""

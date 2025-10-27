@@ -13,6 +13,7 @@ int FLAG_NON_LOCAL_CHASING = 0;
 /* Flag for turning on optimizations */
 /* Set with -O1 and -O2 */
 int FLAG_OPTIMIZE = 0;
+int FLAG_PARSE_ONLY = 0;
 
 void set_nonlocal_flag()
 {
@@ -30,6 +31,11 @@ void set_o2_flag()
         FLAG_OPTIMIZE = 2;
 }
 
+void set_parse_only_flag()
+{
+    FLAG_PARSE_ONLY = 1;
+}
+
 int nonlocal_flag()
 {
     return FLAG_NON_LOCAL_CHASING;
@@ -37,4 +43,9 @@ int nonlocal_flag()
 int optimize_flag()
 {
     return FLAG_OPTIMIZE;
+}
+
+int parse_only_flag()
+{
+    return FLAG_PARSE_ONLY;
 }

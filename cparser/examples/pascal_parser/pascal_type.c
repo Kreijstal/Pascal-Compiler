@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 static inline void discard_failure(ParseResult result) {
     if (!result.is_success) {
@@ -73,46 +74,50 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(array_res.value.ast);
     free_combinator(array_keyword);
 
-    // Parse [
+    bool has_indices = false;
+    ast_t* indices_ast = NULL;
+
+    // Parse optional [ ... ] section for static array bounds.
     combinator_t* open_bracket = token(match("["));
     ParseResult open_res = parse(in, open_bracket);
-    if (!open_res.is_success) {
+    if (open_res.is_success) {
+        has_indices = true;
+        free_ast(open_res.value.ast);
+    } else {
         discard_failure(open_res);
-        free_combinator(open_bracket);
-        return fail_with_message("Expected '[' after 'array'", in, &state, parser_name);
     }
-    free_ast(open_res.value.ast);
     free_combinator(open_bracket);
 
-    // Parse ranges/indices (simplified - just accept any identifiers/ranges for now)
-    combinator_t* array_index = multi(new_combinator(), PASCAL_T_NONE,
-        range_type(PASCAL_T_RANGE_TYPE),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-    combinator_t* index_list = sep_by(array_index, token(match(",")));
-    ParseResult indices_res = parse(in, index_list);
-    ast_t* indices_ast = NULL;
-    if (indices_res.is_success) {
-        indices_ast = indices_res.value.ast;
-    } else {
-        discard_failure(indices_res);
+    if (has_indices) {
+        // Parse ranges/indices (simplified - just accept any identifiers/ranges for now)
+        combinator_t* array_index = multi(new_combinator(), PASCAL_T_NONE,
+            range_type(PASCAL_T_RANGE_TYPE),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        );
+        combinator_t* index_list = sep_by(array_index, token(match(",")));
+        ParseResult indices_res = parse(in, index_list);
+        if (indices_res.is_success) {
+            indices_ast = indices_res.value.ast;
+        } else {
+            discard_failure(indices_res);
+            free_combinator(index_list);
+            return fail_with_message("Expected array indices", in, &state, parser_name);
+        }
         free_combinator(index_list);
-        return fail_with_message("Expected array indices", in, &state, parser_name);
-    }
-    free_combinator(index_list);
 
-    // Parse ]
-    combinator_t* close_bracket = token(match("]"));
-    ParseResult close_res = parse(in, close_bracket);
-    if (!close_res.is_success) {
-        discard_failure(close_res);
-        free_ast(indices_ast);
+        // Parse ]
+        combinator_t* close_bracket = token(match("]"));
+        ParseResult close_res = parse(in, close_bracket);
+        if (!close_res.is_success) {
+            discard_failure(close_res);
+            free_ast(indices_ast);
+            free_combinator(close_bracket);
+            return fail_with_message("Expected ']'", in, &state, parser_name);
+        }
+        free_ast(close_res.value.ast);
         free_combinator(close_bracket);
-        return fail_with_message("Expected ']'", in, &state, parser_name);
     }
-    free_ast(close_res.value.ast);
-    free_combinator(close_bracket);
 
     // Parse OF
     combinator_t* of_keyword = token(keyword_ci("of"));

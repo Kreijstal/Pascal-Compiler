@@ -104,6 +104,7 @@ static int map_type_name(const char *name, char **type_id_out) {
 static struct RecordType *convert_record_type(ast_t *record_node);
 static struct Expression *convert_expression(ast_t *expr_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
+static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out, ArrayTypeInfo *array_info) {
     if (type_id_out != NULL)
@@ -340,7 +341,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         ListNode_t *next_id = id_node->next;
         id_node->next = NULL;
         char *type_id_copy = type_id != NULL ? strdup(type_id) : NULL;
-        Tree_t *param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param);
+        Tree_t *param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL);
         append_node(&result, param_decl, LIST_TREE);
         id_node = next_id;
     }
@@ -377,11 +378,13 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
     ArrayTypeInfo array_info = {0};
+    int inferred = 0;
+    struct Statement *initializer_stmt = NULL;
 
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
         var_type = convert_type_spec(cur, &type_id, NULL, &array_info);
         cur = cur->next;
-    } else {
+    } else if (cur == NULL) {
         char *type_name = pop_last_identifier(&ids);
         if (type_name != NULL) {
             var_type = map_type_name(type_name, &type_id);
@@ -401,7 +404,21 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         return decl;
     }
 
-    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0);
+    if (cur != NULL) {
+        struct Expression *init_expr = convert_expression(cur);
+        if (init_expr != NULL) {
+            if (ids->next != NULL) {
+                fprintf(stderr, "ERROR: type inference with initializers requires a single identifier.\n");
+                destroy_expr(init_expr);
+            } else {
+                inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
+                struct Expression *lhs = mk_varid(decl_node->line, strdup((char *)ids->cur));
+                initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
+            }
+        }
+    }
+
+    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt);
     return decl;
 }
 
@@ -895,6 +912,19 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         struct Expression *condition = convert_expression(cond);
         struct Statement *body_stmt = convert_statement(body);
         return mk_while(stmt_node->line, condition, body_stmt);
+    }
+    case PASCAL_T_REPEAT_STMT: {
+        ast_t *body_wrapper = stmt_node->child;
+        ast_t *cond_node = body_wrapper != NULL ? body_wrapper->next : NULL;
+
+        ListNode_t *body_list = NULL;
+        if (body_wrapper != NULL) {
+            ast_t *body_nodes = body_wrapper->child != NULL ? body_wrapper->child : body_wrapper;
+            body_list = convert_statement_list(body_nodes);
+        }
+
+        struct Expression *condition = convert_expression(cond_node);
+        return mk_repeat(stmt_node->line, body_list, condition);
     }
     case PASCAL_T_FOR_STMT: {
         ast_t *init_node = unwrap_pascal_node(stmt_node->child);

@@ -29,6 +29,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
@@ -73,6 +74,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_WHILE:
             return_val += semcheck_while(symtab, stmt, max_scope_lev);
+            break;
+
+        case STMT_REPEAT:
+            return_val += semcheck_repeat(symtab, stmt, max_scope_lev);
             break;
 
         case STMT_FOR:
@@ -358,6 +363,37 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     }
 
     return_val += semcheck_stmt_main(symtab, while_stmt, max_scope_lev);
+
+    return return_val;
+}
+
+/** REPEAT **/
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    int until_type = UNKNOWN_TYPE;
+    ListNode_t *body_list;
+
+    assert(symtab != NULL);
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_REPEAT);
+
+    body_list = stmt->stmt_data.repeat_data.body_list;
+    while (body_list != NULL)
+    {
+        struct Statement *body_stmt = (struct Statement *)body_list->cur;
+        if (body_stmt != NULL)
+            return_val += semcheck_stmt_main(symtab, body_stmt, max_scope_lev);
+        body_list = body_list->next;
+    }
+
+    return_val += semcheck_expr_main(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
+    if (until_type != BOOL)
+    {
+        fprintf(stderr, "Error on line %d, expected relational inside repeat statement!\n\n",
+            stmt->line_num);
+        ++return_val;
+    }
 
     return return_val;
 }

@@ -246,6 +246,30 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
                     list_print(tree->tree_data.type_decl_data.info.record->fields, f, num_indent + 2);
                 }
             }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+            {
+                const struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                fprintf(f, "[TYPEDECL:%s ALIAS]\n", tree->tree_data.type_decl_data.id);
+                print_indent(f, num_indent + 1);
+                if (alias->is_array)
+                {
+                    fprintf(f, "[ARRAY ALIAS start=%d end=%d open=%d]\n",
+                        alias->array_start, alias->array_end, alias->is_open_array);
+                    print_indent(f, num_indent + 1);
+                    if (alias->array_element_type_id != NULL)
+                        fprintf(f, "[ELEMENT_TYPE:%s]\n", alias->array_element_type_id);
+                    else
+                        fprintf(f, "[ELEMENT_TYPE:%d]\n", alias->array_element_type);
+                }
+                else if (alias->target_type_id != NULL)
+                {
+                    fprintf(f, "[ALIASES:%s]\n", alias->target_type_id);
+                }
+                else
+                {
+                    fprintf(f, "[ALIASES_TYPE:%d]\n", alias->base_type);
+                }
+            }
             else
             {
                 fprintf(f, "[TYPEDECL:%s = %d..%d]\n", tree->tree_data.type_decl_data.id,
@@ -551,6 +575,13 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.type_decl_data.id);
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 destroy_record_type(tree->tree_data.type_decl_data.info.record);
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+            {
+                if (tree->tree_data.type_decl_data.info.alias.target_type_id != NULL)
+                    free(tree->tree_data.type_decl_data.info.alias.target_type_id);
+                if (tree->tree_data.type_decl_data.info.alias.array_element_type_id != NULL)
+                    free(tree->tree_data.type_decl_data.info.alias.array_element_type_id);
+            }
             break;
 
         default:
@@ -781,6 +812,43 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RANGE;
     new_tree->tree_data.type_decl_data.info.range.start = start;
     new_tree->tree_data.type_decl_data.info.range.end = end;
+
+    return new_tree;
+}
+
+
+Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end)
+{
+    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_TYPE_DECL;
+    new_tree->tree_data.type_decl_data.id = id;
+    new_tree->tree_data.type_decl_data.kind = TYPE_DECL_ALIAS;
+
+    struct TypeAlias *alias = &new_tree->tree_data.type_decl_data.info.alias;
+    alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
+    alias->target_type_id = NULL;
+    alias->is_array = is_array;
+    alias->array_start = start;
+    alias->array_end = end;
+    alias->array_element_type = UNKNOWN_TYPE;
+    alias->array_element_type_id = NULL;
+    alias->is_open_array = (alias->is_array && end < start);
+
+    if (alias->is_array)
+    {
+        alias->array_element_type = actual_type;
+        if (actual_type == UNKNOWN_TYPE && type_id != NULL)
+            alias->array_element_type_id = type_id;
+    }
+    else
+    {
+        alias->base_type = actual_type;
+        if (type_id != NULL)
+            alias->target_type_id = type_id;
+    }
 
     return new_tree;
 }

@@ -12,7 +12,19 @@
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR, STMT_ASM_BLOCK};
 
-enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD };
+enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
+
+struct TypeAlias
+{
+    int base_type;
+    char *target_type_id;
+    int is_array;
+    int array_start;
+    int array_end;
+    int array_element_type;
+    char *array_element_type_id;
+    int is_open_array;
+};
 
 struct RecordType;
 

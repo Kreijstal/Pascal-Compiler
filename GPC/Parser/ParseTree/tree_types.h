@@ -10,9 +10,21 @@
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
-    STMT_IF_THEN, STMT_WHILE, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR, STMT_ASM_BLOCK};
+    STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR, STMT_ASM_BLOCK};
 
-enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD };
+enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
+
+struct TypeAlias
+{
+    int base_type;
+    char *target_type_id;
+    int is_array;
+    int array_start;
+    int array_end;
+    int array_element_type;
+    char *array_element_type_id;
+    int is_open_array;
+};
 
 struct RecordType;
 
@@ -75,6 +87,13 @@ struct Statement
             struct Expression *relop_expr;
             struct Statement *while_stmt;
         } while_data;
+
+        /* REPEAT */
+        struct Repeat
+        {
+            ListNode_t *body_list;
+            struct Expression *until_expr;
+        } repeat_data;
 
         /* FOR */
         struct For

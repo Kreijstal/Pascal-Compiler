@@ -42,6 +42,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_WHILE:
             inst_list = codegen_while(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_REPEAT:
+            inst_list = codegen_repeat(stmt, inst_list, ctx, symtab);
+            break;
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
             break;
@@ -326,6 +329,41 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
 
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+    return inst_list;
+}
+
+ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_REPEAT);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    char body_label[18], buffer[50];
+    int relop_type, inverse;
+    ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
+
+    gen_label(body_label, 18, ctx);
+    snprintf(buffer, 50, "%s:\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    while (body_list != NULL)
+    {
+        struct Statement *body_stmt = (struct Statement *)body_list->cur;
+        inst_list = codegen_stmt(body_stmt, inst_list, ctx, symtab);
+        body_list = body_list->next;
+    }
+
+    inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
+    inverse = 1;
+    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
