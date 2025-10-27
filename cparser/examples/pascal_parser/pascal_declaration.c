@@ -4,25 +4,71 @@
 #include "pascal_expression.h"
 #include "pascal_type.h"
 #include "pascal_keywords.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
-// Helper function to create parameter parser (reduces code duplication)
-combinator_t* create_pascal_param_parser(void) {
-    combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
-        optional(multi(new_combinator(), PASCAL_T_NONE,     // only one modifier allowed
-            token(create_keyword_parser("const", PASCAL_T_IDENTIFIER)),  // const modifier
-            token(create_keyword_parser("var", PASCAL_T_IDENTIFIER)),    // var modifier
-            NULL
-        )),
-        param_name_list,                             // parameter name(s) - can be multiple comma-separated
-        token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // parameter type
+// Helper to create simple keyword AST nodes for modifiers
+static ast_t* make_modifier_node(ast_t* original, const char* keyword) {
+    if (original == NULL)
+        return NULL;
+
+    original->typ = PASCAL_T_IDENTIFIER;
+    original->sym = sym_lookup(keyword);
+    original->child = NULL;
+    original->next = NULL;
+    return original;
+}
+
+static ast_t* map_const_modifier(ast_t* ast) {
+    return make_modifier_node(ast, "const");
+}
+
+static ast_t* map_var_modifier(ast_t* ast) {
+    return make_modifier_node(ast, "var");
+}
+
+static combinator_t* create_param_name_list(void) {
+    return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+}
+
+static combinator_t* create_param_type_spec(void) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)),
         NULL
     );
+}
+
+// Helper function to create parameter parser (reduces code duplication)
+combinator_t* create_pascal_param_parser(void) {
+    combinator_t* var_param = seq(new_combinator(), PASCAL_T_PARAM,
+        map(token(match("var")), map_var_modifier),
+        create_param_name_list(),
+        create_param_type_spec(),
+        NULL
+    );
+
+    combinator_t* const_param = seq(new_combinator(), PASCAL_T_PARAM,
+        map(token(match("const")), map_const_modifier),
+        create_param_name_list(),
+        create_param_type_spec(),
+        NULL
+    );
+
+    combinator_t* value_param = seq(new_combinator(), PASCAL_T_PARAM,
+        create_param_name_list(),
+        create_param_type_spec(),
+        NULL
+    );
+
+    combinator_t* param = multi(new_combinator(), PASCAL_T_NONE,
+        var_param,
+        const_param,
+        value_param,
+        NULL
+    );
+
     return optional(between(
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
 }
@@ -78,7 +124,6 @@ void init_pascal_program_parser(combinator_t** p) {
     // Create the base statement parser
     combinator_t** base_stmt = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *base_stmt = new_combinator();
-    (*base_stmt)->extra_to_free = base_stmt;
     init_pascal_statement_parser(base_stmt);
 
     // Terminated statement: statement followed by semicolon
@@ -87,13 +132,14 @@ void init_pascal_program_parser(combinator_t** p) {
         token(match(";")),                     // followed by semicolon
         NULL
     );
+
+    (*p)->extra_to_free = base_stmt;
 }
 
 // Pascal Unit Parser
 void init_pascal_unit_parser(combinator_t** p) {
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Uses section: uses unit1, unit2, unit3;
@@ -194,7 +240,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             type_section,                              // local types
             NULL
         )),
-        lazy(stmt_parser),                          // main statement block
+        lazy(stmt_parser),                         // main statement block
         NULL
     );
 
@@ -325,20 +371,15 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(match(".")),
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Procedure/Function Declaration Parser
 void init_pascal_procedure_parser(combinator_t** p) {
-    // Create expression parser for default values and type references
-    combinator_t** expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *expr_parser = new_combinator();
-    (*expr_parser)->extra_to_free = expr_parser;
-    init_pascal_expression_parser(expr_parser);
-
     // Create statement parser for procedure/function bodies
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Parameter: [const|var] identifier1,identifier2,... : type
@@ -393,6 +434,8 @@ void init_pascal_procedure_parser(combinator_t** p) {
         procedure_decl,                          // procedure declarations second
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Method Implementation Parser - for constructor/destructor/procedure implementations
@@ -400,7 +443,6 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     // Create statement parser for method bodies
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Parameter: [const|var] identifier1,identifier2,... : type
@@ -469,6 +511,8 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
         procedure_impl,
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }
 
 // Pascal Complete Program Parser - for full Pascal programs
@@ -587,7 +631,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Need to create a modified procedure parser that supports var parameters
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *stmt_parser = new_combinator();
-    (*stmt_parser)->extra_to_free = stmt_parser;
     init_pascal_statement_parser(stmt_parser);
 
     // Enhanced parameter: [const|var] identifier1,identifier2,... : type
@@ -760,4 +803,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(".")),                           // final period
         NULL
     );
+
+    (*p)->extra_to_free = stmt_parser;
 }

@@ -206,6 +206,7 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name) {
         ParseResult op_res = parse(in, cargs->op);
         if (!op_res.is_success) {
             restore_input_state(in, &state);
+            free_error(op_res.value.error);
             break;
         }
         tag_t op_tag = op_res.value.ast->typ;
@@ -273,6 +274,16 @@ static ParseResult map_fn(input_t * in, void * args, char* parser_name) {
     return make_success(new_ast);
 }
 
+static ast_t* find_tail_node(ast_t* node) {
+    if (node == NULL || node == ast_nil)
+        return node;
+
+    ast_t* cur = node;
+    while (cur->next != NULL && cur->next != ast_nil)
+        cur = cur->next;
+    return cur;
+}
+
 static ParseResult gseq_fn(input_t * in, void * args, char* parser_name) {
     seq_args * sa = (seq_args *) args;
     seq_list * seq = sa->list;
@@ -281,8 +292,13 @@ static ParseResult gseq_fn(input_t * in, void * args, char* parser_name) {
         ParseResult res = parse(in, seq->comb);
         if (!res.is_success) return res;
         if (res.value.ast != ast_nil) {
-            if (head == NULL) head = tail = res.value.ast;
-            else { tail->next = res.value.ast; while(tail->next) tail = tail->next; }
+            if (head == NULL) {
+                head = res.value.ast;
+                tail = find_tail_node(head);
+            } else {
+                tail->next = res.value.ast;
+                tail = find_tail_node(tail->next);
+            }
         }
         seq = seq->next;
     }
@@ -309,8 +325,13 @@ static ParseResult seq_fn(input_t * in, void * args, char* parser_name) {
             return wrap_failure_with_ast(in, res.value.error->message, res, head);
         }
         if (res.value.ast != ast_nil) {
-            if (head == NULL) head = tail = res.value.ast;
-            else { tail->next = res.value.ast; while(tail->next) tail = tail->next; }
+            if (head == NULL) {
+                head = res.value.ast;
+                tail = find_tail_node(head);
+            } else {
+                tail->next = res.value.ast;
+                tail = find_tail_node(tail->next);
+            }
         }
         seq = seq->next;
     }

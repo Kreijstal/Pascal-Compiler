@@ -132,6 +132,7 @@ combinator_t * eoi();
 
 // --- Combinator Constructors ---
 combinator_t * lazy(combinator_t** parser_ptr);
+combinator_t * lazy_owned(combinator_t** parser_ptr);
 
 // --- Expression Parser Constructors ---
 typedef enum { EXPR_BASE, EXPR_INFIX, EXPR_PREFIX, EXPR_POSTFIX } expr_fix;

@@ -17,7 +17,6 @@ void init_pascal_statement_parser(combinator_t** p) {
     // First create the expression parser to use within statements
     combinator_t** expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *expr_parser = new_combinator();
-    (*expr_parser)->extra_to_free = expr_parser;
     init_pascal_expression_parser(expr_parser);
 
     // Create the main statement parser pointer for recursive references
@@ -106,21 +105,24 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // For statement: for identifier := expression (to|downto) expression do statement
+    // For statement: for [identifier := expression | identifier] (to|downto) expression do statement
     combinator_t* for_direction = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("to")),                 // to keyword (case-insensitive)
         token(keyword_ci("downto")),             // downto keyword (case-insensitive)
         NULL
     );
+    combinator_t* for_initializer = multi(new_combinator(), PASCAL_T_NONE,
+        assignment,                             // try explicit initializer first (y := 1)
+        simple_identifier,                      // fall back to existing variable (for y to ...)
+        NULL
+    );
     combinator_t* for_stmt = seq(new_combinator(), PASCAL_T_FOR_STMT,
         token(keyword_ci("for")),                // for keyword (case-insensitive)
-        token(cident(PASCAL_T_IDENTIFIER)),    // loop variable
-        token(match(":=")),                    // assignment
-        lazy(expr_parser),                     // start expression
-        for_direction,                         // to or downto
-        lazy(expr_parser),                     // end expression
+        for_initializer,                        // loop initializer (assignment or bare identifier)
+        for_direction,                          // to or downto
+        lazy(expr_parser),                      // end expression
         token(keyword_ci("do")),                 // do keyword (case-insensitive)
-        lazy(stmt_parser),                     // loop body statement
+        lazy(stmt_parser),                      // loop body statement
         NULL
     );
 
@@ -287,4 +289,6 @@ void init_pascal_statement_parser(combinator_t** p) {
         expr_stmt,                            // expression statements (must be last)
         NULL
     );
+
+    (*p)->extra_to_free = expr_parser;
 }
