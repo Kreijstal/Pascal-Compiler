@@ -51,6 +51,7 @@ StackNode_t *add_l_t(char *);
 StackNode_t *add_l_x(char *);
 StackNode_t *add_l_z(char *);
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
+StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound);
 StackNode_t *find_in_temp(char *);
 StackNode_t *find_label(char *);
 RegStack_t *get_reg_stack();
@@ -118,6 +119,7 @@ typedef struct StackNode
     int is_array;
     int array_lower_bound;
     int element_size;
+    int is_dynamic;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */

@@ -29,8 +29,60 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
+
+static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, SetLength expects exactly two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *array_expr = (struct Expression *)args->cur;
+    struct Expression *length_expr = (struct Expression *)args->next->cur;
+
+    if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+    {
+        fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
+        ++return_val;
+    }
+    else
+    {
+        HashNode_t *array_node = NULL;
+        if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1 || array_node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, undeclared identifier \"%s\" in SetLength.\n", stmt->line_num, array_expr->expr_data.id);
+            ++return_val;
+        }
+        else
+        {
+            set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
+            if (array_node->hash_type != HASHTYPE_ARRAY || !array_node->is_dynamic_array)
+            {
+                fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
+                ++return_val;
+            }
+        }
+    }
+
+    int length_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
+    if (length_type != INT_TYPE && length_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
 
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -75,6 +127,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return_val += semcheck_while(symtab, stmt, max_scope_lev);
             break;
 
+        case STMT_REPEAT:
+            return_val += semcheck_repeat(symtab, stmt, max_scope_lev);
+            break;
+
         case STMT_FOR:
             return_val += semcheck_for(symtab, stmt, max_scope_lev);
             break;
@@ -117,9 +173,13 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     if(type_first != type_second)
     {
-        fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
-                stmt->line_num);
-        ++return_val;
+        if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+              (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
+        {
+            fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
+                    stmt->line_num);
+            ++return_val;
+        }
     }
 
     return return_val;
@@ -168,7 +228,10 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     if (match_count == 1)
     {
-        stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
+        if (resolved_proc->mangled_id != NULL)
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
+        else
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
         sym_return = resolved_proc;
         scope_return = 0; // FIXME: This needs to be properly calculated
@@ -199,6 +262,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     else
     {
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
+        if (sym_return->hash_type == HASHTYPE_BUILTIN_PROCEDURE && proc_id != NULL &&
+            strcmp(proc_id, "SetLength") == 0)
+        {
+            return_val += semcheck_builtin_setlength(symtab, stmt, max_scope_lev);
+            return return_val;
+        }
+
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n\n",
@@ -358,6 +428,37 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     }
 
     return_val += semcheck_stmt_main(symtab, while_stmt, max_scope_lev);
+
+    return return_val;
+}
+
+/** REPEAT **/
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    int until_type = UNKNOWN_TYPE;
+    ListNode_t *body_list;
+
+    assert(symtab != NULL);
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_REPEAT);
+
+    body_list = stmt->stmt_data.repeat_data.body_list;
+    while (body_list != NULL)
+    {
+        struct Statement *body_stmt = (struct Statement *)body_list->cur;
+        if (body_stmt != NULL)
+            return_val += semcheck_stmt_main(symtab, body_stmt, max_scope_lev);
+        body_list = body_list->next;
+    }
+
+    return_val += semcheck_expr_main(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
+    if (until_type != BOOL)
+    {
+        fprintf(stderr, "Error on line %d, expected relational inside repeat statement!\n\n",
+            stmt->line_num);
+        ++return_val;
+    }
 
     return return_val;
 }

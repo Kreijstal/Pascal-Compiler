@@ -86,18 +86,28 @@ static int map_type_name(const char *name, char **type_id_out) {
         return UNKNOWN_TYPE;
     }
     if (strcasecmp(name, "integer") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("integer");
         return INT_TYPE;
     }
     if (strcasecmp(name, "longint") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");
         return LONGINT_TYPE;
     }
     if (strcasecmp(name, "real") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("real");
         return REAL_TYPE;
     }
     if (strcasecmp(name, "string") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("string");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "single") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("single");
         return REAL_TYPE;
     }
     if (type_id_out != NULL) {

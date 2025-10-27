@@ -13,6 +13,7 @@ int FLAG_NON_LOCAL_CHASING = 0;
 /* Flag for turning on optimizations */
 /* Set with -O1 and -O2 */
 int FLAG_OPTIMIZE = 0;
+int FLAG_PARSE_ONLY = 0;
 
 static gpc_target_abi_t FLAG_TARGET_ABI =
 #ifdef _WIN32
@@ -37,6 +38,11 @@ void set_o2_flag(void)
         FLAG_OPTIMIZE = 2;
 }
 
+void set_parse_only_flag(void)
+{
+    FLAG_PARSE_ONLY = 1;
+}
+
 void set_target_windows_flag(void)
 {
     FLAG_TARGET_ABI = GPC_TARGET_ABI_WINDOWS;
@@ -54,6 +60,11 @@ int nonlocal_flag(void)
 int optimize_flag(void)
 {
     return FLAG_OPTIMIZE;
+}
+
+int parse_only_flag(void)
+{
+    return FLAG_PARSE_ONLY;
 }
 
 int target_windows_flag(void)

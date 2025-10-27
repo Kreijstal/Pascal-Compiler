@@ -252,10 +252,36 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType(symtab, pchar_name, HASHVAR_PCHAR);
         free(pchar_name);
     }
+    char *integer_name = strdup("integer");
+    if (integer_name != NULL) {
+        AddBuiltinType(symtab, integer_name, HASHVAR_INTEGER);
+        free(integer_name);
+    }
+    char *longint_name = strdup("longint");
+    if (longint_name != NULL) {
+        AddBuiltinType(symtab, longint_name, HASHVAR_LONGINT);
+        free(longint_name);
+    }
+    char *real_name = strdup("real");
+    if (real_name != NULL) {
+        AddBuiltinType(symtab, real_name, HASHVAR_REAL);
+        free(real_name);
+    }
+    char *single_name = strdup("single");
+    if (single_name != NULL) {
+        AddBuiltinType(symtab, single_name, HASHVAR_REAL);
+        free(single_name);
+    }
     char *string_name = strdup("string");
     if (string_name != NULL) {
         AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
         free(string_name);
+    }
+
+    char *setlength_name = strdup("SetLength");
+    if (setlength_name != NULL) {
+        AddBuiltinProc(symtab, setlength_name, NULL);
+        free(setlength_name);
     }
 
     /* Builtins are now in stdlib.p */
@@ -388,8 +414,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = type_node->var_type;
                     }
                 }
-                else if(tree->tree_data.var_decl_data.type == INT_TYPE || tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if(tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 
@@ -399,12 +427,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                if(tree->tree_data.arr_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 
-                int element_size = (var_type == HASHVAR_REAL) ? 8 : 8;
+                int element_size;
+                if (var_type == HASHVAR_REAL)
+                    element_size = 8;
+                else if (var_type == HASHVAR_LONGINT)
+                    element_size = 8;
+                else
+                    element_size = 4;
                 func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
                     tree->tree_data.arr_decl_data.s_range, tree->tree_data.arr_decl_data.e_range, element_size);
             }

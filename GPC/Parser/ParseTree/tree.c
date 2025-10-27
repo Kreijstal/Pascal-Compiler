@@ -246,6 +246,30 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
                     list_print(tree->tree_data.type_decl_data.info.record->fields, f, num_indent + 2);
                 }
             }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+            {
+                const struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                fprintf(f, "[TYPEDECL:%s ALIAS]\n", tree->tree_data.type_decl_data.id);
+                print_indent(f, num_indent + 1);
+                if (alias->is_array)
+                {
+                    fprintf(f, "[ARRAY ALIAS start=%d end=%d open=%d]\n",
+                        alias->array_start, alias->array_end, alias->is_open_array);
+                    print_indent(f, num_indent + 1);
+                    if (alias->array_element_type_id != NULL)
+                        fprintf(f, "[ELEMENT_TYPE:%s]\n", alias->array_element_type_id);
+                    else
+                        fprintf(f, "[ELEMENT_TYPE:%d]\n", alias->array_element_type);
+                }
+                else if (alias->target_type_id != NULL)
+                {
+                    fprintf(f, "[ALIASES:%s]\n", alias->target_type_id);
+                }
+                else
+                {
+                    fprintf(f, "[ALIASES_TYPE:%d]\n", alias->base_type);
+                }
+            }
             else
             {
                 fprintf(f, "[TYPEDECL:%s = %d..%d]\n", tree->tree_data.type_decl_data.id,
@@ -314,6 +338,15 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[DO]:\n");
           stmt_print(stmt->stmt_data.while_data.while_stmt, f, num_indent+1);
+          break;
+
+        case STMT_REPEAT:
+          fprintf(f, "[REPEAT]:\n");
+          list_print(stmt->stmt_data.repeat_data.body_list, f, num_indent+1);
+
+          print_indent(f, num_indent);
+          fprintf(f, "[UNTIL]:\n");
+          expr_print(stmt->stmt_data.repeat_data.until_expr, f, num_indent+1);
           break;
 
         case STMT_FOR:
@@ -532,6 +565,10 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_VAR_DECL:
           destroy_list(tree->tree_data.var_decl_data.ids);
+          if (tree->tree_data.var_decl_data.type_id != NULL)
+              free(tree->tree_data.var_decl_data.type_id);
+          if (tree->tree_data.var_decl_data.initializer != NULL)
+              destroy_stmt(tree->tree_data.var_decl_data.initializer);
           break;
 
         case TREE_ARR_DECL:
@@ -551,6 +588,13 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.type_decl_data.id);
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 destroy_record_type(tree->tree_data.type_decl_data.info.record);
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+            {
+                if (tree->tree_data.type_decl_data.info.alias.target_type_id != NULL)
+                    free(tree->tree_data.type_decl_data.info.alias.target_type_id);
+                if (tree->tree_data.type_decl_data.info.alias.array_element_type_id != NULL)
+                    free(tree->tree_data.type_decl_data.info.alias.array_element_type_id);
+            }
             break;
 
         default:
@@ -594,6 +638,11 @@ void destroy_stmt(struct Statement *stmt)
         case STMT_WHILE:
           destroy_expr(stmt->stmt_data.while_data.relop_expr);
           destroy_stmt(stmt->stmt_data.while_data.while_stmt);
+          break;
+
+        case STMT_REPEAT:
+          destroy_list(stmt->stmt_data.repeat_data.body_list);
+          destroy_expr(stmt->stmt_data.repeat_data.until_expr);
           break;
 
         case STMT_FOR:
@@ -856,7 +905,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
 
 /*enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_STATEMENT_TYPE};*/
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param)
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -868,6 +917,50 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
     new_tree->tree_data.var_decl_data.type = type;
     new_tree->tree_data.var_decl_data.type_id = type_id;
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
+    new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
+    new_tree->tree_data.var_decl_data.initializer = initializer;
+
+    return new_tree;
+}
+
+Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end)
+{
+    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_TYPE_DECL;
+    new_tree->tree_data.type_decl_data.id = id;
+    new_tree->tree_data.type_decl_data.kind = TYPE_DECL_ALIAS;
+
+    struct TypeAlias *alias = &new_tree->tree_data.type_decl_data.info.alias;
+    alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
+    alias->target_type_id = NULL;
+    alias->is_array = is_array;
+    alias->array_start = start;
+    alias->array_end = end;
+    alias->array_element_type = UNKNOWN_TYPE;
+    alias->array_element_type_id = NULL;
+    alias->is_open_array = (alias->is_array && end < start);
+
+    if (alias->is_array)
+    {
+        alias->array_element_type = actual_type;
+        if (actual_type == UNKNOWN_TYPE && type_id != NULL)
+            alias->array_element_type_id = type_id;
+        else if (type_id != NULL)
+            free(type_id);
+        else
+            alias->array_element_type_id = NULL;
+    }
+    else
+    {
+        alias->base_type = actual_type;
+        if (type_id != NULL)
+            alias->target_type_id = type_id;
+        else
+            alias->target_type_id = NULL;
+    }
 
     return new_tree;
 }
@@ -975,6 +1068,20 @@ struct Statement *mk_while(int line_num, struct Expression *eval_relop,
     new_stmt->type = STMT_WHILE;
     new_stmt->stmt_data.while_data.relop_expr = eval_relop;
     new_stmt->stmt_data.while_data.while_stmt = while_stmt;
+
+    return new_stmt;
+}
+
+struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
+                            struct Expression *until_expr)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_REPEAT;
+    new_stmt->stmt_data.repeat_data.body_list = body_list;
+    new_stmt->stmt_data.repeat_data.until_expr = until_expr;
 
     return new_stmt;
 }

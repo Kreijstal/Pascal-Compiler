@@ -28,7 +28,8 @@ HashTable_t *InitHashTable()
 /* Adds an identifier to the table */
 /* Returns 1 if successfully added, 0 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type)
+    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
+    struct TypeAlias *type_alias)
 {
     ListNode_t *list, *cur;
     HashNode_t *hash_node;
@@ -57,6 +58,8 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->array_start = 0;
         hash_node->array_end = 0;
         hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        hash_node->type_alias = type_alias;
 
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -98,6 +101,8 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->array_start = 0;
         hash_node->array_end = 0;
         hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        hash_node->type_alias = type_alias;
 
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;

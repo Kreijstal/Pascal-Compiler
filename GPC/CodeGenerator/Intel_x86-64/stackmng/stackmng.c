@@ -184,6 +184,7 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
     new_node->is_array = 1;
     new_node->array_lower_bound = lower_bound;
     new_node->element_size = element_size;
+    new_node->is_dynamic = 0;
 
     if(cur_scope->x == NULL)
     {
@@ -197,6 +198,46 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added array %s to x_offset %d\n", new_node->label, new_node->offset);
+    #endif
+
+    return new_node;
+}
+
+StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+
+    int descriptor_size = 4 * DOUBLEWORD;
+    if (descriptor_size < 2 * element_size)
+        descriptor_size = 2 * element_size;
+
+    cur_scope->x_offset += descriptor_size;
+
+    int offset = current_stack_home_space() +
+        cur_scope->z_offset + cur_scope->x_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, descriptor_size);
+    new_node->is_array = 1;
+    new_node->array_lower_bound = lower_bound;
+    new_node->element_size = element_size;
+    new_node->is_dynamic = 1;
+
+    if(cur_scope->x == NULL)
+    {
+        cur_scope->x = CreateListNode(new_node, LIST_UNSPECIFIED);
+    }
+    else
+    {
+        cur_scope->x = PushListNodeBack(cur_scope->x,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+    }
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added dynamic array %s descriptor to x_offset %d\n", new_node->label, new_node->offset);
     #endif
 
     return new_node;
@@ -721,6 +762,7 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->is_array = 0;
     new_node->array_lower_bound = 0;
     new_node->element_size = size;
+    new_node->is_dynamic = 0;
 
     return new_node;
 }

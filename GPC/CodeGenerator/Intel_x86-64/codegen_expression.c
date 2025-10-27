@@ -158,58 +158,127 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         element_size = DOUBLEWORD;
 
     int lower_bound = array_node->array_lower_bound;
-    char buffer[100];
+    char buffer[128];
 
-    if (lower_bound > 0)
+    if (array_node->is_dynamic)
     {
-        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else if (lower_bound < 0)
-    {
-        snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    int scaled_sizes[] = {1, 2, 4, 8};
-    int can_scale = 0;
-    for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
-    {
-        if (element_size == scaled_sizes[i])
+        Register_t *base_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (base_reg == NULL)
         {
-            can_scale = 1;
-            break;
+            fprintf(stderr, "ERROR: Unable to allocate register for dynamic array base.\n");
+            exit(1);
         }
-    }
 
-    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
-
-    if (can_scale)
-    {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, base_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        if (element_size != 1)
+
+        if (lower_bound > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+            snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (lower_bound < 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
         }
 
-        StackNode_t *offset_temp = find_in_temp("array_index_offset");
-        if (offset_temp == NULL)
-            offset_temp = add_l_t("array_index_offset");
-
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+        int scaled_sizes[] = {1, 2, 4, 8};
+        int can_scale = 0;
+        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+        {
+            if (element_size == scaled_sizes[i])
+            {
+                can_scale = 1;
+                break;
+            }
+        }
+
+        if (can_scale)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n", base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (element_size != 1)
+            {
+                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            StackNode_t *offset_temp = find_in_temp("array_index_offset");
+            if (offset_temp == NULL)
+                offset_temp = add_l_t("array_index_offset");
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        free_reg(get_reg_stack(), base_reg);
+    }
+    else
+    {
+        if (lower_bound > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (lower_bound < 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        int scaled_sizes[] = {1, 2, 4, 8};
+        int can_scale = 0;
+        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+        {
+            if (element_size == scaled_sizes[i])
+            {
+                can_scale = 1;
+                break;
+            }
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (can_scale)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (element_size != 1)
+            {
+                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            StackNode_t *offset_temp = find_in_temp("array_index_offset");
+            if (offset_temp == NULL)
+                offset_temp = add_l_t("array_index_offset");
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     *out_reg = index_reg;
