@@ -4,10 +4,18 @@ procedure write(s: string);
 begin
     assembler;
     asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwrite_s_sysv
+        movq %rcx, %rdx
+        leaq .format_str_s(%rip), %rcx
+        jmp .Lwrite_s_args_done
+.Lwrite_s_sysv:
         movq %rdi, %rsi
         leaq .format_str_s(%rip), %rdi
-        movl $0, %eax
-        call printf
+.Lwrite_s_args_done:
+        xorl %eax, %eax
+        call gpc_printf
     end
 end;
 
@@ -15,10 +23,18 @@ procedure write(i: integer);
 begin
     assembler;
     asm
-        movq %rdi, %rsi
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwrite_i_sysv
+        movl %ecx, %edx
+        leaq .format_str_d(%rip), %rcx
+        jmp .Lwrite_i_args_done
+.Lwrite_i_sysv:
+        movl %edi, %esi
         leaq .format_str_d(%rip), %rdi
-        movl $0, %eax
-        call printf
+.Lwrite_i_args_done:
+        xorl %eax, %eax
+        call gpc_printf
     end
 end;
 
@@ -26,10 +42,18 @@ procedure writeln(s: string);
 begin
     assembler;
     asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwriteln_s_sysv
+        movq %rcx, %rdx
+        leaq .format_str_sn(%rip), %rcx
+        jmp .Lwriteln_s_args_done
+.Lwriteln_s_sysv:
         movq %rdi, %rsi
         leaq .format_str_sn(%rip), %rdi
-        movl $0, %eax
-        call printf
+.Lwriteln_s_args_done:
+        xorl %eax, %eax
+        call gpc_printf
     end
 end;
 
@@ -37,10 +61,18 @@ procedure writeln(i: integer);
 begin
     assembler;
     asm
-        movq %rdi, %rsi
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwriteln_i_sysv
+        movl %ecx, %edx
+        leaq .format_str_dn(%rip), %rcx
+        jmp .Lwriteln_i_args_done
+.Lwriteln_i_sysv:
+        movl %edi, %esi
         leaq .format_str_dn(%rip), %rdi
-        movl $0, %eax
-        call printf
+.Lwriteln_i_args_done:
+        xorl %eax, %eax
+        call gpc_printf
     end
 end;
 
@@ -48,10 +80,18 @@ procedure writeln(i: longint);
 begin
     assembler;
     asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwriteln_li_sysv
+        movq %rcx, %rdx
+        leaq .format_str_dn(%rip), %rcx
+        jmp .Lwriteln_li_args_done
+.Lwriteln_li_sysv:
         movq %rdi, %rsi
         leaq .format_str_dn(%rip), %rdi
-        movl $0, %eax
-        call printf
+.Lwriteln_li_args_done:
+        xorl %eax, %eax
+        call gpc_printf
     end
 end;
 
@@ -59,9 +99,16 @@ procedure writeln;
 begin
     assembler;
     asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwriteln_void_sysv
+        leaq .format_str_n(%rip), %rcx
+        jmp .Lwriteln_void_done
+.Lwriteln_void_sysv:
         leaq .format_str_n(%rip), %rdi
-        movl $0, %eax
-        call printf
+.Lwriteln_void_done:
+        xorl %eax, %eax
+        call gpc_printf
     end
 end;
 
@@ -69,10 +116,18 @@ procedure read(var i: integer);
 begin
     assembler;
     asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lread_i_sysv
+        movq %rcx, %rdx
+        leaq .format_str_d(%rip), %rcx
+        jmp .Lread_i_args_done
+.Lread_i_sysv:
         movq %rdi, %rsi
         leaq .format_str_d(%rip), %rdi
-        movl $0, %eax
-        call __isoc99_scanf
+.Lread_i_args_done:
+        xorl %eax, %eax
+        call gpc_scanf
     end
 end;
 
@@ -80,10 +135,18 @@ procedure read(var i: longint);
 begin
     assembler;
     asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lread_li_sysv
+        movq %rcx, %rdx
+        leaq .format_str_d(%rip), %rcx
+        jmp .Lread_li_args_done
+.Lread_li_sysv:
         movq %rdi, %rsi
         leaq .format_str_d(%rip), %rdi
-        movl $0, %eax
-        call __isoc99_scanf
+.Lread_li_args_done:
+        xorl %eax, %eax
+        call gpc_scanf
     end
 end;
 

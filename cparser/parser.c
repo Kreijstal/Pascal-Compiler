@@ -6,8 +6,24 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdint.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "parser.h"
 #include "combinator_internals.h"
+
+#ifdef _WIN32
+static char* strndup(const char* s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char* buf = (char*)malloc(len + 1);
+    if (buf == NULL)
+        return NULL;
+    memcpy(buf, s, len);
+    buf[len] = '\0';
+    return buf;
+}
+#endif
 
 //=============================================================================
 // Internal Structs & Forward Declarations

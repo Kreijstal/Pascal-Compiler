@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "debug_deserializer.h"
+#include "flags.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "CodeGenerator/Intel_x86-64/codegen_expression.h"
 #include "CodeGenerator/Intel_x86-64/expr_tree/expr_tree.h"
@@ -46,6 +47,7 @@ int main() {
 
     // Create dummy context and symtab
     CodeGenContext *ctx = (CodeGenContext *)calloc(1, sizeof(CodeGenContext));
+    ctx->target_abi = current_target_abi();
     init_stackmng();
     push_stackscope();
     add_l_x("i");

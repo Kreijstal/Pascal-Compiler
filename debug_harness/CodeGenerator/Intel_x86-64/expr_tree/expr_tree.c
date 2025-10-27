@@ -491,7 +491,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             else if(nonlocal_flag() == 1)
             {
                 inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
-                snprintf(buffer, buf_len, "-%d(%s)", offset, NON_LOCAL_REG_64);
+                snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
             }
             else
             {
