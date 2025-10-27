@@ -28,23 +28,23 @@ begin
 if a[c]>=0 then begin Positive[p]:=a[c];p:=succ(p); end else begin Negative[n]:=a[c];n:=succ(n) end;
 if a[c] mod 2=0 then begin gerade[g]:=a[c];g:=succ(g) end else begin ungerade[u]:=a[c];u:=succ(u) end;
 end;
-writeln('gerade':15,'ungerade':15,'Positive':15,'Negative':15);
+writeln('              gerade         ungerade         Positive         Negative');
 for c:=0 to max(p,max(u,max(n,g)))-1 do 
 begin 
 if (c<g-1) then write(gerade[c]:15) else write('':15);
 if (c<u) then write(ungerade[c]:15) else write('':15);
-if (c<p-1) then write(positive[c]:15) else write('':15);
-if (c<n) then write(negative[c]:15) else write('':15);
+if (c<p-1) then write(Positive[c]:15) else write('':15);
+if (c<n) then write(Negative[c]:15) else write('':15);
 writeln;
 end;
 writeln('Gerade Zahlen');
-for c:=0 to g-2 do write(gerade[c],' '); writeln;
+for c:=0 to g-2 do begin write(gerade[c]); write(' '); end; writeln;
 writeln('Ungerade Zahlen');
-for c:=0 to u-1 do write(ungerade[c],' '); writeln;
+for c:=0 to u-1 do begin write(ungerade[c]); write(' '); end; writeln;
 writeln('Positive Zahlen');
-for c:=0 to p-2 do write(positive[c],' '); writeln;
+for c:=0 to p-2 do begin write(Positive[c]); write(' '); end; writeln;
 writeln('Negative Zahlen');
-for c:=0 to n-1 do write(negative[c],' '); writeln;
+for c:=0 to n-1 do begin write(Negative[c]); write(' '); end; writeln;
 
 
 

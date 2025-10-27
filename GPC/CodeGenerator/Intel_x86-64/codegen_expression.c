@@ -405,10 +405,55 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
-            assert(arg_expr->type == EXPR_VAR_ID);
-            StackNode_t *var_node = find_label(arg_expr->expr_data.id);
-            snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
-            inst_list = add_inst(inst_list, buffer);
+            if (arg_expr->type == EXPR_VAR_ID)
+            {
+                StackNode_t *var_node = find_label(arg_expr->expr_data.id);
+                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if (arg_expr->type == EXPR_ARRAY_ACCESS)
+            {
+                // For array access, compute the address of the array element
+                StackNode_t *array_node = find_label(arg_expr->expr_data.array_access_data.id);
+                
+                // Evaluate the index expression
+                struct Expression *index_expr = arg_expr->expr_data.array_access_data.access_expr;
+                ExprTree_t *index_tree = build_expr_tree(index_expr);
+                Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
+                inst_list = gencode_expr_tree(index_tree, inst_list, ctx, index_reg);
+                free_expr_tree(index_tree);
+                
+                // Compute address: base + (index - array_start) * element_size
+                int element_size = array_node->element_size;
+                int array_start = array_node->array_start;
+                
+                if (array_start != 0)
+                {
+                    snprintf(buffer, 256, "\tsubl\t$%d, %s\n", array_start, get_reg_name(index_reg, 4));
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                
+                // Multiply by element size
+                if (element_size != 1)
+                {
+                    snprintf(buffer, 256, "\timull\t$%d, %s, %s\n", element_size, 
+                            get_reg_name(index_reg, 4), get_reg_name(index_reg, 4));
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                
+                // Add base address
+                snprintf(buffer, 256, "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 256, "\taddq\t%s, %s\n", get_reg_name(index_reg, 8), arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+                
+                free_reg(index_reg);
+            }
+            else
+            {
+                fprintf(stderr, "Error: unsupported expression type for var parameter\n");
+                assert(0);
+            }
         }
         else
         {

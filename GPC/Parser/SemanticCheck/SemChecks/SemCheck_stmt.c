@@ -204,6 +204,21 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
+    // Handle SetLength specially - it's a builtin with variable arguments
+    if (proc_id != NULL && strcmp(proc_id, "SetLength") == 0)
+    {
+        HashNode_t *setlength_node = NULL;
+        if (FindIdent(&setlength_node, symtab, proc_id) != -1 && setlength_node != NULL &&
+            setlength_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+        {
+            stmt->stmt_data.procedure_call_data.resolved_proc = setlength_node;
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+            setlength_node->referenced += 1;
+            return_val += semcheck_builtin_setlength(symtab, stmt, max_scope_lev);
+            return return_val;
+        }
+    }
+
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
     assert(mangled_name != NULL);
 
@@ -262,12 +277,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     else
     {
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
-        if (sym_return->hash_type == HASHTYPE_BUILTIN_PROCEDURE && proc_id != NULL &&
-            strcmp(proc_id, "SetLength") == 0)
-        {
-            return_val += semcheck_builtin_setlength(symtab, stmt, max_scope_lev);
-            return return_val;
-        }
 
         if(scope_return > max_scope_lev)
         {
@@ -488,7 +497,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(for_type != INT_TYPE)
+        if(for_type != INT_TYPE && for_type != LONGINT_TYPE)
         {
             fprintf(stderr, "Error on line %d, expected int in \"for\" assignment!\n\n",
                     stmt->line_num);
@@ -507,7 +516,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     do_for = stmt->stmt_data.for_data.do_for;
 
     return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
-    if(to_type != INT_TYPE)
+    if(to_type != INT_TYPE && to_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in \"to\" assignment!\n\n",
                 stmt->line_num);
@@ -541,11 +550,16 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
 
     if(type_first != type_second)
     {
-        fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
-                for_assign->line_num);
-        ++return_val;
+        // Allow integer/longint compatibility
+        if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+              (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
+        {
+            fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
+                    for_assign->line_num);
+            ++return_val;
+        }
     }
-    if(type_first != INT_TYPE)
+    if(type_first != INT_TYPE && type_first != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in \"for\" assignment statement!\n\n",
                 for_assign->line_num);

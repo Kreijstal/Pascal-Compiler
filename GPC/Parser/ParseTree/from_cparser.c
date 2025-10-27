@@ -794,6 +794,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_INTEGER:
         return mk_inum(expr_node->line, atoi(expr_node->sym->name));
     case PASCAL_T_STRING:
+    case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
@@ -869,6 +870,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
     case PASCAL_T_STRING:
+    case PASCAL_T_CHAR:
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
@@ -907,9 +909,20 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ast_t *cur = arg_node;
 
     while (cur != NULL && cur != ast_nil) {
-        struct Expression *expr = convert_expression(unwrap_pascal_node(cur));
-        if (expr != NULL)
-            append_node(&args, expr, LIST_EXPR);
+        ast_t *unwrapped = unwrap_pascal_node(cur);
+        // Handle field width specifiers - extract the base expression and ignore the width
+        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH) {
+            // The actual expression is the first child
+            if (unwrapped->child != NULL) {
+                struct Expression *expr = convert_expression(unwrapped->child);
+                if (expr != NULL)
+                    append_node(&args, expr, LIST_EXPR);
+            }
+        } else if (unwrapped != NULL) {
+            struct Expression *expr = convert_expression(unwrapped);
+            if (expr != NULL)
+                append_node(&args, expr, LIST_EXPR);
+        }
         cur = cur->next;
     }
 

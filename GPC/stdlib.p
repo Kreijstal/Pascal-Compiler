@@ -150,6 +150,60 @@ begin
     end
 end;
 
+procedure write(i: longint);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lwrite_longint_sysv
+        movq %rcx, %rdx
+        leaq .format_str_d(%rip), %rcx
+        jmp .Lwrite_longint_args_done
+.Lwrite_longint_sysv:
+        movq %rdi, %rsi
+        leaq .format_str_d(%rip), %rdi
+.Lwrite_longint_args_done:
+        xorl %eax, %eax
+        call gpc_printf
+    end
+end;
+
+function succ(i: integer): integer;
+begin
+    succ := i + 1;
+end;
+
+function succ(i: longint): longint;
+begin
+    succ := i + 1;
+end;
+
+function max(a, b: integer): integer;
+begin
+    if a >= b then
+        max := a
+    else
+        max := b;
+end;
+
+function max(a, b: longint): longint;
+begin
+    if a >= b then
+        max := a
+    else
+        max := b;
+end;
+
+procedure halt;
+begin
+    assembler;
+    asm
+        movl $0, %edi
+        call exit
+    end
+end;
+
 
 begin
     assembler;

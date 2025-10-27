@@ -456,7 +456,7 @@ int semcheck_arrayaccess(int *type_return,
 
     /***** THEN VERIFY EXPRESSION INSIDE *****/
     return_val += semcheck_expr_main(&expr_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
-    if(expr_type != INT_TYPE)
+    if(expr_type != INT_TYPE && expr_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in array index expression!\n\n",
             expr->line_num);
