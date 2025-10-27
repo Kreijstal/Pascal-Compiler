@@ -206,6 +206,7 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name) {
         ParseResult op_res = parse(in, cargs->op);
         if (!op_res.is_success) {
             restore_input_state(in, &state);
+            free_error(op_res.value.error);
             break;
         }
         tag_t op_tag = op_res.value.ast->typ;

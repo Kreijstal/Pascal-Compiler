@@ -84,6 +84,7 @@ typedef struct {
 
 typedef struct {
     combinator_t** parser_ptr;
+    bool owns_parser;
 } lazy_args;
 
 #endif // COMBINATOR_INTERNALS_H
