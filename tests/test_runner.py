@@ -696,13 +696,13 @@ class TestCompiler(unittest.TestCase):
 
     def test_unsupported_expression_reports_tag_name(self):
         """Unsupported constructs should report the Pascal tag name for clarity."""
-        input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitshift_expr.s")
+        input_file = os.path.join(TEST_CASES_DIR, "typecast_expr.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "typecast_expr.s")
 
         stderr = run_compiler(input_file, asm_file)
 
         self.assertIn("unsupported expression tag", stderr)
-        self.assertIn("SHL", stderr)
+        self.assertIn("TYPECAST", stderr)
 
     def test_ctypes_unit(self):
         """Ensures the ctypes unit exposes C compatible aliases."""

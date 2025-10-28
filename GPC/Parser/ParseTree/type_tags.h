@@ -38,4 +38,9 @@
 #define DIV                 21
 #define MOD                 22
 
+/* Bitwise operators */
+#define XOR                 23
+#define SHL                 24
+#define SHR                 25
+
 #endif /* TYPE_TAGS_H */
