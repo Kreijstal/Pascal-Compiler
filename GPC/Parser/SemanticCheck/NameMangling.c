@@ -33,6 +33,8 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_REAL;
         case STRING_TYPE:
             return HASHVAR_PCHAR;
+        case BOOL:
+            return HASHVAR_BOOLEAN;
         default:
             return HASHVAR_UNTYPED;
     }
@@ -121,6 +123,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
             case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
+            case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
             case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
             case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
             default:              type_suffix = "_u"; break; // Unknown/unsupported

@@ -17,6 +17,79 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
+    Register_t **out_reg, const char *message)
+{
+    if (out_reg != NULL)
+        *out_reg = NULL;
+    if (message != NULL)
+        codegen_report_error(ctx, "%s", message);
+    return inst_list;
+}
+
+static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        return inst_list;
+
+    expr_node_t *expr_tree = build_expr_tree(expr);
+    Register_t *reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (reg == NULL)
+        return codegen_fail_register(ctx, inst_list, out_reg,
+            "ERROR: Unable to allocate register for expression evaluation.");
+    inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, reg);
+    free_expr_tree(expr_tree);
+    *out_reg = reg;
+    return inst_list;
+}
+
+static ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        return inst_list;
+
+    if (expr->type == EXPR_VAR_ID)
+    {
+        StackNode_t *var_node = find_label(expr->expr_data.id);
+        if (var_node == NULL)
+        {
+            if (nonlocal_flag() == 1)
+            {
+                int offset = 0;
+                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                    return codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Unable to allocate register for address expression.");
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
+                    current_non_local_reg64(), addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                return inst_list;
+            }
+            return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+        }
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+            return codegen_fail_register(ctx, inst_list, out_reg,
+                "ERROR: Unable to allocate register for address expression.");
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = addr_reg;
+        return inst_list;
+    }
+    else if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        return codegen_array_element_address(expr, inst_list, ctx, out_reg);
+    }
+
+    return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+}
+
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -91,19 +164,17 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     }
 
     inst_list = codegen_expr(len_expr, inst_list, ctx);
+    if (codegen_had_error(ctx))
+        return inst_list;
     Register_t *length_reg = get_free_reg(get_reg_stack(), &inst_list);
     if (length_reg == NULL)
-    {
-        fprintf(stderr, "ERROR: Unable to allocate register for SetLength length.\n");
-        exit(1);
-    }
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate register for SetLength length.");
 
     Register_t *descriptor_reg = get_free_reg(get_reg_stack(), &inst_list);
     if (descriptor_reg == NULL)
-    {
-        fprintf(stderr, "ERROR: Unable to allocate register for SetLength descriptor.\n");
-        exit(1);
-    }
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate register for SetLength descriptor.");
 
     char buffer[128];
     snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, descriptor_reg->bit_64);
@@ -136,6 +207,67 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     free_reg(get_reg_stack(), descriptor_reg);
     free_reg(get_reg_stack(), length_reg);
 
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
+    {
+        fprintf(stderr, "ERROR: Move expects three arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *src_expr = (struct Expression *)args_expr->cur;
+    struct Expression *dst_expr = (struct Expression *)args_expr->next->cur;
+    struct Expression *count_expr = (struct Expression *)args_expr->next->next->cur;
+
+    Register_t *dst_reg = NULL;
+    Register_t *src_reg = NULL;
+    Register_t *count_reg = NULL;
+
+    inst_list = codegen_address_for_expr(dst_expr, inst_list, ctx, &dst_reg);
+    if (codegen_had_error(ctx) || dst_reg == NULL)
+        return inst_list;
+    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+    if (codegen_had_error(ctx) || src_reg == NULL)
+        return inst_list;
+    inst_list = codegen_evaluate_expr(count_expr, inst_list, ctx, &count_reg);
+    if (codegen_had_error(ctx) || count_reg == NULL)
+        return inst_list;
+    inst_list = codegen_sign_extend32_to64(inst_list, count_reg->bit_32, count_reg->bit_64);
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+
+    free_reg(get_reg_stack(), dst_reg);
+    free_reg(get_reg_stack(), src_reg);
+    free_reg(get_reg_stack(), count_reg);
     free_arg_regs();
     return inst_list;
 }
@@ -205,6 +337,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         const char *call_target = "gpc_write_integer";
         if (expr_type == STRING_TYPE)
             call_target = "gpc_write_string";
+        else if (expr_type == BOOL)
+            call_target = "gpc_write_boolean";
 
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
@@ -262,6 +396,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "writeln"))
     {
         inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 1);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
+    {
+        inst_list = codegen_builtin_move(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
@@ -332,11 +475,17 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     {
         var = find_label(var_expr->expr_data.id);
         inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
         reg = front_reg_stack(get_reg_stack());
 
         if(var != NULL)
         {
-            snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+            int use_qword = (var->size >= 8);
+            if (use_qword)
+                snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+            else
+                snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
         }
         else if(nonlocal_flag() == 1)
         {
@@ -345,9 +494,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
-            fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-            exit(1);
+            codegen_report_error(ctx,
+                "ERROR: Non-local codegen support disabled (buggy)! Enable with flag '-non-local' after required flags");
+            return inst_list;
         }
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -358,6 +507,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     {
         Register_t *addr_reg = NULL;
         inst_list = codegen_array_element_address(var_expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
 
         StackNode_t *addr_temp = add_l_t("array_addr");
         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_temp->offset);
@@ -365,18 +516,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         free_reg(get_reg_stack(), addr_reg);
 
         inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
         Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (value_reg == NULL)
-        {
-            fprintf(stderr, "ERROR: Unable to allocate register for array value.\n");
-            exit(1);
-        }
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for array value.");
 
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
         {
-            fprintf(stderr, "ERROR: Unable to allocate register for array store.\n");
-            exit(1);
+            free_reg(get_reg_stack(), value_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for array store.");
         }
 
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);

@@ -47,6 +47,8 @@ static int var_type_to_expr_type(enum VarType var_type)
             return REAL_TYPE;
         case HASHVAR_PCHAR:
             return STRING_TYPE;
+        case HASHVAR_BOOLEAN:
+            return BOOL;
         default:
             return UNKNOWN_TYPE;
     }
@@ -137,6 +139,40 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     return return_val;
 }
 
+static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Move expects exactly three arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *src_expr = (struct Expression *)args->cur;
+    struct Expression *dst_expr = (struct Expression *)args->next->cur;
+    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+
+    int expr_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&expr_type, symtab, src_expr, INT_MAX, NO_MUTATE);
+
+    expr_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&expr_type, symtab, dst_expr, max_scope_lev, MUTATE);
+
+    int count_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&count_type, symtab, count_expr, INT_MAX, NO_MUTATE);
+    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Move count argument must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -151,9 +187,9 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
-        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE)
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL)
         {
-            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, or string.\n",
+            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, boolean, or string.\n",
                     stmt->line_num, arg_index);
             ++return_val;
         }
@@ -256,6 +292,29 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 /****** STMT SEMCHECKS *******/
 
 /** VAR_ASSIGN **/
+static const char *type_tag_to_name(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE:
+            return "integer";
+        case LONGINT_TYPE:
+            return "longint";
+        case REAL_TYPE:
+            return "real";
+        case STRING_TYPE:
+            return "string";
+        case BOOL:
+            return "boolean";
+        case PROCEDURE:
+            return "procedure";
+        case UNKNOWN_TYPE:
+            return "unknown";
+        default:
+            return "unsupported";
+    }
+}
+
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val;
@@ -281,8 +340,15 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
               (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
         {
-            fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
-                    stmt->line_num);
+            const char *lhs_name = "<expression>";
+            if (var != NULL && var->type == EXPR_VAR_ID)
+                lhs_name = var->expr_data.id;
+            fprintf(stderr,
+                "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
+                stmt->line_num,
+                lhs_name,
+                type_tag_to_name(type_first),
+                type_tag_to_name(type_second));
             ++return_val;
         }
     }
@@ -324,6 +390,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "writeln",
         semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Move",
+        semcheck_builtin_move, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

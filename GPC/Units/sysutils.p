@@ -2,9 +2,17 @@ unit SysUtils;
 
 interface
 
+type
+    TDateTime = longint;
+    AnsiString = string;
+    NativeUInt = longint;
+
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
 function MillisecondsBetween(startTick, endTick: longint): longint;
+function Now: TDateTime;
+function IntToStr(value: longint): AnsiString;
+function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 
 implementation
 
@@ -33,6 +41,68 @@ begin
         MillisecondsBetween := endTick - startTick
     else
         MillisecondsBetween := startTick - endTick;
+end;
+
+function Now: TDateTime;
+var
+    tick: longint;
+begin
+    tick := GetTickCount64();
+    Now := tick div 1000;
+end;
+
+function DigitToString(Value: longint): AnsiString;
+var
+    DigitValue: longint;
+begin
+    if Value < 0 then
+        DigitValue := 0
+    else if Value > 9 then
+        DigitValue := 9
+    else
+        DigitValue := Value;
+
+    DigitToString := Chr(Ord('0') + DigitValue);
+end;
+
+function IntToStr(value: longint): AnsiString;
+var
+    remainder: longint;
+    working: longint;
+    prefix: AnsiString;
+    digits: AnsiString;
+begin
+    if value = 0 then
+    begin
+        IntToStr := '0';
+        exit;
+    end;
+
+    if value < 0 then
+    begin
+        working := -value;
+        prefix := '-';
+    end
+    else
+    begin
+        working := value;
+        prefix := '';
+    end;
+
+    digits := '';
+    while working > 0 do
+    begin
+        remainder := working mod 10;
+        digits := DigitToString(remainder) + digits;
+        working := working div 10;
+    end;
+
+    IntToStr := prefix + digits;
+end;
+
+function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
+begin
+    FormatDateTime := '00:00.000';
 end;
 
 end.
