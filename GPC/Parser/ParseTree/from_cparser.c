@@ -24,6 +24,9 @@ typedef struct {
     int end;
     int element_type;
     char *element_type_id;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
 } ArrayTypeInfo;
 
 static char *dup_symbol(ast_t *node) {
@@ -133,6 +136,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct Record
         array_info->end = 0;
         array_info->element_type = UNKNOWN_TYPE;
         array_info->element_type_id = NULL;
+        array_info->is_pointer = 0;
+        array_info->pointer_type = UNKNOWN_TYPE;
+        array_info->pointer_type_id = NULL;
     }
 
     if (type_spec == NULL)
@@ -200,6 +206,30 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct Record
                     }
                     if (mapped == UNKNOWN_TYPE && array_info->element_type_id == NULL)
                         array_info->element_type_id = dup;
+                    else if (mapped != UNKNOWN_TYPE)
+                        free(dup);
+                }
+            }
+        }
+        return UNKNOWN_TYPE;
+    }
+
+    if (spec_node->typ == PASCAL_T_POINTER_TYPE) {
+        if (array_info != NULL) {
+            array_info->is_pointer = 1;
+            array_info->pointer_type = UNKNOWN_TYPE;
+            ast_t *target_node = spec_node->child;
+            if (target_node != NULL) {
+                char *dup = dup_symbol(target_node);
+                if (dup != NULL) {
+                    int mapped = map_type_name(dup, &array_info->pointer_type_id);
+                    array_info->pointer_type = mapped;
+                    if (mapped != UNKNOWN_TYPE && array_info->pointer_type_id != NULL) {
+                        free(array_info->pointer_type_id);
+                        array_info->pointer_type_id = NULL;
+                    }
+                    if (mapped == UNKNOWN_TYPE && array_info->pointer_type_id == NULL)
+                        array_info->pointer_type_id = dup;
                     else if (mapped != UNKNOWN_TYPE)
                         free(dup);
                 }
@@ -605,11 +635,15 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     if (record_type != NULL) {
         decl = mk_record_type(type_decl_node->line, id, record_type);
     } else if (array_info.is_array) {
-        decl = mk_typealiasdecl(type_decl_node->line, id, 1, array_info.element_type,
+        decl = mk_typealiasdecl(type_decl_node->line, id, 1, 0, array_info.element_type,
                                  array_info.element_type_id, array_info.start, array_info.end);
         array_info.element_type_id = NULL;
+    } else if (array_info.is_pointer) {
+        decl = mk_typealiasdecl(type_decl_node->line, id, 0, 1, array_info.pointer_type,
+                                 array_info.pointer_type_id, 0, 0);
+        array_info.pointer_type_id = NULL;
     } else if (mapped_type != UNKNOWN_TYPE || type_id != NULL) {
-        decl = mk_typealiasdecl(type_decl_node->line, id, 0, mapped_type, type_id, 0, 0);
+        decl = mk_typealiasdecl(type_decl_node->line, id, 0, 0, mapped_type, type_id, 0, 0);
         type_id = NULL;
     } else {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
@@ -619,6 +653,8 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
         free(type_id);
     if (array_info.element_type_id != NULL)
         free(array_info.element_type_id);
+    if (array_info.pointer_type_id != NULL)
+        free(array_info.pointer_type_id);
 
     if (decl == NULL) {
         free(id);

@@ -25,6 +25,9 @@ struct TypeAlias
     int array_element_type;
     char *array_element_type_id;
     int is_open_array;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
 };
 
 struct RecordType;

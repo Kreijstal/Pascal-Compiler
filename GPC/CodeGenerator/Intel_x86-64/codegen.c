@@ -525,6 +525,12 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
 
+        if (sub->tree_data.subprogram_data.statement_list == NULL)
+        {
+            sub_list = sub_list->next;
+            continue;
+        }
+
         switch(sub->tree_data.subprogram_data.sub_type)
         {
             case TREE_SUBPROGRAM_PROC:

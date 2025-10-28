@@ -594,6 +594,8 @@ void destroy_tree(Tree_t *tree)
                     free(tree->tree_data.type_decl_data.info.alias.target_type_id);
                 if (tree->tree_data.type_decl_data.info.alias.array_element_type_id != NULL)
                     free(tree->tree_data.type_decl_data.info.alias.array_element_type_id);
+                if (tree->tree_data.type_decl_data.info.alias.pointer_type_id != NULL)
+                    free(tree->tree_data.type_decl_data.info.alias.pointer_type_id);
             }
             break;
 
@@ -606,7 +608,9 @@ void destroy_tree(Tree_t *tree)
 
 void destroy_stmt(struct Statement *stmt)
 {
-    assert(stmt != NULL);
+    if (stmt == NULL)
+        return;
+
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -933,7 +937,8 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
     return new_tree;
 }
 
-Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end)
+Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int is_pointer,
+    int actual_type, char *type_id, int start, int end)
 {
     Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
     assert(new_tree != NULL);
@@ -947,11 +952,14 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
     alias->target_type_id = NULL;
     alias->is_array = is_array;
+    alias->is_pointer = is_pointer;
     alias->array_start = start;
     alias->array_end = end;
     alias->array_element_type = UNKNOWN_TYPE;
     alias->array_element_type_id = NULL;
     alias->is_open_array = (alias->is_array && end < start);
+    alias->pointer_type = UNKNOWN_TYPE;
+    alias->pointer_type_id = NULL;
 
     if (alias->is_array)
     {
@@ -962,6 +970,17 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
             free(type_id);
         else
             alias->array_element_type_id = NULL;
+    }
+    else if (alias->is_pointer)
+    {
+        alias->base_type = UNKNOWN_TYPE;
+        alias->pointer_type = actual_type;
+        if (actual_type == UNKNOWN_TYPE && type_id != NULL)
+            alias->pointer_type_id = type_id;
+        else if (type_id != NULL)
+            free(type_id);
+        else
+            alias->pointer_type_id = NULL;
     }
     else
     {

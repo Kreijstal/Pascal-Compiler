@@ -164,7 +164,8 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     struct Statement *initialization);
 
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
-Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end);
+Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int is_pointer,
+    int actual_type, char *type_id, int start, int end);
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,

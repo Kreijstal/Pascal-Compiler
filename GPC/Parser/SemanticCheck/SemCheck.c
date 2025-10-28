@@ -210,8 +210,27 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_REAL;
                     else if (element_type == LONGINT_TYPE)
                         var_type = HASHVAR_LONGINT;
+                    else if (element_type == STRING_TYPE)
+                        var_type = HASHVAR_PCHAR;
                     else
                         var_type = HASHVAR_INTEGER;
+                }
+                else if (alias_info->is_pointer)
+                {
+                    var_type = HASHVAR_LONGINT;
+                    if (alias_info->pointer_type == STRING_TYPE)
+                    {
+                        var_type = HASHVAR_PCHAR;
+                    }
+                    else if (alias_info->pointer_type_id != NULL)
+                    {
+                        HashNode_t *target_node = NULL;
+                        if (FindIdent(&target_node, symtab, alias_info->pointer_type_id) != -1 && target_node != NULL)
+                        {
+                            if (target_node->var_type == HASHVAR_PCHAR)
+                                var_type = HASHVAR_PCHAR;
+                        }
+                    }
                 }
                 else
                 {
@@ -220,10 +239,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_REAL;
                     else if (base_type == LONGINT_TYPE)
                         var_type = HASHVAR_LONGINT;
+                    else if (base_type == STRING_TYPE)
+                        var_type = HASHVAR_PCHAR;
                     else if (base_type == INT_TYPE)
                         var_type = HASHVAR_INTEGER;
                     else
                         var_type = HASHVAR_UNTYPED;
+
+                    if (var_type == HASHVAR_UNTYPED && alias_info->target_type_id != NULL)
+                    {
+                        HashNode_t *target_node = NULL;
+                        if (FindIdent(&target_node, symtab, alias_info->target_type_id) != -1 && target_node != NULL)
+                            var_type = target_node->var_type;
+                    }
                 }
                 break;
             }
@@ -647,6 +675,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     int new_max_scope;
     enum VarType var_type;
     enum TreeType sub_type;
+    struct Statement *body;
     HashNode_t *hash_return;
 
     assert(symtab != NULL);
@@ -660,6 +689,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     return_val = 0;
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
+
+    if (subprogram->tree_data.subprogram_data.statement_list == NULL)
+    {
+        subprogram->tree_data.subprogram_data.cname_flag = 1;
+    }
 
     // --- Name Mangling Logic ---
     if (subprogram->tree_data.subprogram_data.cname_flag) {
@@ -747,11 +781,18 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
                     new_max_scope);
 
+    body = subprogram->tree_data.subprogram_data.statement_list;
+    if (body == NULL)
+    {
+        PopScope(symtab);
+        return return_val;
+    }
+
     /* Functions cannot have side effects, so need to call a special function in that case */
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         return_val += semcheck_stmt(symtab,
-                subprogram->tree_data.subprogram_data.statement_list,
+                body,
                 new_max_scope);
     }
     else
@@ -761,7 +802,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         ResetHashNodeStatus(hash_return);
         return_val += semcheck_func_stmt(symtab,
-                subprogram->tree_data.subprogram_data.statement_list);
+                body);
         if(hash_return->mutated == NO_MUTATE)
         {
             fprintf(stderr,

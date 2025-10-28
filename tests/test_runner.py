@@ -53,6 +53,7 @@ class TestCompiler(unittest.TestCase):
 
         cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
         cls._compile_runtime()
+        cls._build_ctypes_helper_library()
 
     @classmethod
     def _compile_runtime(cls):
@@ -75,7 +76,11 @@ class TestCompiler(unittest.TestCase):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"runtime compilation failed: {e.stderr}")
 
-    def compile_executable(self, asm_file, executable_file):
+    def compile_executable(self, asm_file, executable_file, extra_objects=None, extra_link_args=None):
+        if extra_objects is None:
+            extra_objects = []
+        if extra_link_args is None:
+            extra_link_args = []
         try:
             subprocess.run(
                 [
@@ -85,13 +90,49 @@ class TestCompiler(unittest.TestCase):
                     executable_file,
                     asm_file,
                     self.runtime_object,
-                ],
+                ]
+                + list(extra_objects)
+                + list(extra_link_args),
                 check=True,
                 capture_output=True,
                 text=True,
             )
         except subprocess.CalledProcessError as e:
             self.fail(f"gcc compilation failed: {e.stderr}")
+
+    @classmethod
+    def _build_ctypes_helper_library(cls):
+        if os.name == "nt":
+            shared_name = "libctypes_helper.dll"
+            shared_flags = []
+        else:
+            shared_name = "libctypes_helper.so"
+            shared_flags = ["-fPIC"]
+
+        cls.ctypes_helper_library = os.path.join(TEST_OUTPUT_DIR, shared_name)
+        source = os.path.join(TEST_CASES_DIR, "ctypes_helper.c")
+        try:
+            command = [
+                "gcc",
+                "-shared",
+                "-O0",
+            ]
+            command.extend(shared_flags)
+            command.extend(
+                [
+                    "-o",
+                    cls.ctypes_helper_library,
+                    source,
+                ]
+            )
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"ctypes helper library compilation failed: {e.stderr}")
 
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
@@ -197,6 +238,64 @@ class TestCompiler(unittest.TestCase):
             )
 
         self.assertTrue(os.path.exists(ast_file))
+
+    def test_ctypes_can_call_dynamic_library(self):
+        """Builds a shared C helper and ensures Pascal code can call into it via ctypes aliases."""
+        input_file = os.path.join(TEST_CASES_DIR, "ctypes_dll_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_dll_demo.s")
+
+        run_compiler(input_file, asm_file)
+
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_dll_demo")
+        self.compile_executable(
+            asm_file,
+            executable_file,
+            extra_objects=[self.ctypes_helper_library],
+        )
+
+        env = os.environ.copy()
+        if os.name == "nt":
+            path_var = "PATH"
+        else:
+            path_var = "LD_LIBRARY_PATH"
+        existing = env.get(path_var, "")
+        env[path_var] = (
+            TEST_OUTPUT_DIR + (os.pathsep + existing if existing else "")
+        )
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+        self.assertEqual(result.stdout.strip(), "42")
+
+    def test_ctypes_pointer_aliases(self):
+        """Ensures pointer helpers from ctypes compile and behave like scalar aliases."""
+        input_file = os.path.join(TEST_CASES_DIR, "ctypes_pointer_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_pointer_demo.s")
+
+        run_compiler(input_file, asm_file)
+
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_pointer_demo")
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.stdout.strip(), "0")
+
+    def test_bell_numbers_prefix(self):
+        self.skipTest(
+            "Bell numbers demo requires runtime support that is not yet available"
+        )
 
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
@@ -397,6 +496,30 @@ class TestCompiler(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 2)
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
+        self.assertEqual(process.returncode, 0)
+
+    def test_ctypes_unit(self):
+        """Ensures the ctypes unit exposes C compatible aliases."""
+        input_file = os.path.join(TEST_CASES_DIR, "ctypes_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+            return
+
+        lines = process.stdout.strip().splitlines()
+        self.assertEqual(lines, ["-42", "7", "1024", "ctypes"])
         self.assertEqual(process.returncode, 0)
 
     def test_zahlen_program_compiles(self):
