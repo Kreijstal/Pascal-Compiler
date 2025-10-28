@@ -44,6 +44,8 @@ static const char *describe_expression_kind(const struct Expression *expr)
             return "relational expression";
         case EXPR_INUM:
             return "integer literal";
+        case EXPR_RNUM:
+            return "real literal";
         default:
             return "expression";
     }
@@ -121,8 +123,22 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_RNUM:
+            CODEGEN_DEBUG("DEBUG: Processing real constant expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         case EXPR_BOOL:
             CODEGEN_DEBUG("DEBUG: Processing boolean constant expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_STRING:
+            CODEGEN_DEBUG("DEBUG: Processing string literal expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -360,7 +376,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     CODEGEN_DEBUG("DEBUG: Generating simple relop\n");
 
-    *relop_type = expr->expr_data.relop_data.type;
+    if (relop_type != NULL)
+        *relop_type = expr->expr_data.relop_data.type;
     inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
 
     Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
