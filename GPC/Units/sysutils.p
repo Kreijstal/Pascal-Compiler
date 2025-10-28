@@ -45,10 +45,13 @@ end;
 
 function Now: TDateTime;
 var
-    tick: longint;
+    ticks: TDateTime;
 begin
-    tick := GetTickCount64();
-    Now := tick div 1000;
+    asm
+        call gpc_now
+        movq %rax, -8(%rbp)
+    end;
+    Now := ticks;
 end;
 
 function DigitToString(Value: longint): AnsiString;
@@ -101,8 +104,14 @@ begin
 end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
+var
+    resultPtr: AnsiString;
 begin
-    FormatDateTime := '00:00.000';
+    asm
+        call gpc_format_datetime
+        movq %rax, -8(%rbp)
+    end;
+    FormatDateTime := resultPtr;
 end;
 
 end.

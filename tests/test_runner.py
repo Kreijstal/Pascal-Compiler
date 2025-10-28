@@ -442,6 +442,25 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "42\n7\n1\n")
 
+    def test_runtime_features(self):
+        """Verifies string helpers, Inc, and dynamic arrays on NativeUInt values."""
+        input_file = os.path.join(TEST_CASES_DIR, "runtime_features.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "runtime_features.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "runtime_features")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "10\nCompiler\n8\n3\n")
+
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
         input_file = "GPC/TestPrograms/sign_test.p"
