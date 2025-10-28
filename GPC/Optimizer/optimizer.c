@@ -31,7 +31,7 @@
 
 typedef struct IdSetEntry
 {
-    const char *id;
+    char *id;
     struct IdSetEntry *next;
 } IdSetEntry;
 
@@ -79,6 +79,7 @@ static void id_set_destroy(IdSet *set)
         while (cur != NULL)
         {
             IdSetEntry *next = cur->next;
+            free(cur->id);
             free(cur);
             cur = next;
         }
@@ -106,7 +107,15 @@ static void id_set_add(IdSet *set, const char *id)
     if (entry == NULL)
         return;
 
-    entry->id = id;
+    size_t len = strlen(id);
+    entry->id = (char *)malloc(len + 1);
+    if (entry->id == NULL)
+    {
+        free(entry);
+        return;
+    }
+
+    memcpy(entry->id, id, len + 1);
     entry->next = set->buckets[index];
     set->buckets[index] = entry;
 }
@@ -129,11 +138,6 @@ static int id_set_contains(const IdSet *set, const char *id)
 
 static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog);
 static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub);
-
-void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls);
-int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt);
-int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var_assign);
-int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *);
 
 static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *stmt);
 static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids, struct Statement *var_assign);
@@ -468,65 +472,6 @@ static int remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet 
         }
     }
 
-    return removed;
-}
-
-void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls)
-{
-    if (symtab == NULL || id == NULL || var_decls == NULL)
-        return;
-
-    IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
-    if (ids == NULL)
-        return;
-
-    id_set_add(ids, id);
-    (void)remove_var_decls_set(symtab, ids, var_decls);
-    id_set_destroy(ids);
-}
-
-int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt)
-{
-    if (symtab == NULL || id == NULL || stmt == NULL)
-        return 0;
-
-    IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
-    if (ids == NULL)
-        return 0;
-
-    id_set_add(ids, id);
-    int removed = remove_mutation_statement_set(symtab, ids, stmt);
-    id_set_destroy(ids);
-    return removed;
-}
-
-int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var_assign)
-{
-    if (symtab == NULL || id == NULL || var_assign == NULL)
-        return 0;
-
-    IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
-    if (ids == NULL)
-        return 0;
-
-    id_set_add(ids, id);
-    int removed = remove_mutation_var_assign_set(symtab, ids, var_assign);
-    id_set_destroy(ids);
-    return removed;
-}
-
-int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *body_statement)
-{
-    if (symtab == NULL || id == NULL || body_statement == NULL)
-        return 0;
-
-    IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
-    if (ids == NULL)
-        return 0;
-
-    id_set_add(ids, id);
-    int removed = remove_mutation_compound_statement_set(symtab, ids, body_statement);
-    id_set_destroy(ids);
     return removed;
 }
 
