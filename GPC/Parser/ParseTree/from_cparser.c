@@ -755,6 +755,9 @@ static int map_mulop_tag(int tag) {
     case PASCAL_T_INTDIV: return DIV;
     case PASCAL_T_MOD: return MOD;
     case PASCAL_T_AND: return AND;
+    case PASCAL_T_XOR: return XOR;
+    case PASCAL_T_SHL: return SHL;
+    case PASCAL_T_SHR: return SHR;
     default: return UNKNOWN_TYPE;
     }
 }
@@ -854,6 +857,9 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
     case PASCAL_T_INTDIV:
     case PASCAL_T_MOD:
     case PASCAL_T_AND:
+    case PASCAL_T_XOR:
+    case PASCAL_T_SHL:
+    case PASCAL_T_SHR:
         return mk_mulop(node->line, map_mulop_tag(type), left, right);
     case PASCAL_T_EQ:
     case PASCAL_T_NE:
@@ -911,6 +917,9 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_GE:
     case PASCAL_T_AND:
     case PASCAL_T_OR:
+    case PASCAL_T_XOR:
+    case PASCAL_T_SHL:
+    case PASCAL_T_SHR:
         return convert_binary_expr(expr_node, expr_node->typ);
     case PASCAL_T_NEG:
     case PASCAL_T_POS:

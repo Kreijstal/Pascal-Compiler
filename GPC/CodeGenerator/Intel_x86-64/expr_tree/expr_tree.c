@@ -720,6 +720,25 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             {
                 inst_list = gencode_modulus(left, right, inst_list);
             }
+            else if(type == XOR)
+            {
+                snprintf(buffer, 50, "\txorl\t%s, %s\n", right, left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == SHL)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tsall\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == SHR)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tsarl\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
             else
             {
                 assert(0 && "Bad mulop type!");
