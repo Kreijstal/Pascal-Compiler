@@ -17,8 +17,8 @@ int main()
     fprintf(stderr, "INITIAL TABLE:\n");
     PrintHashTable(table, stderr, 0);
 
-    AddIdentToTable(table, "meow", HASHVAR_INTEGER, HASHTYPE_VAR, NULL, NULL);
-    AddIdentToTable(table, "lol", HASHVAR_REAL, HASHTYPE_ARRAY, NULL, NULL);
+    AddIdentToTable(table, "meow", HASHVAR_INTEGER, HASHTYPE_VAR, NULL, NULL, NULL);
+    AddIdentToTable(table, "lol", HASHVAR_REAL, HASHTYPE_ARRAY, NULL, NULL, NULL);
 
     fprintf(stderr, "TABLE:\n");
     PrintHashTable(table, stderr, 0);
@@ -26,14 +26,14 @@ int main()
     fprintf(stderr, "%d\n", (FindIdentInTable(table, "meow") != NULL));
     fprintf(stderr, "%d\n", (FindIdentInTable(table, "meow1") != NULL));
 
-    fprintf(stderr, "%d\n", AddIdentToTable(table, "meow", HASHVAR_INTEGER, HASHTYPE_ARRAY, NULL, NULL));
-    AddIdentToTable(table, "meow1", HASHVAR_REAL, HASHTYPE_ARRAY, NULL, NULL);
+    fprintf(stderr, "%d\n", AddIdentToTable(table, "meow", HASHVAR_INTEGER, HASHTYPE_ARRAY, NULL, NULL, NULL));
+    AddIdentToTable(table, "meow1", HASHVAR_REAL, HASHTYPE_ARRAY, NULL, NULL, NULL);
     fprintf(stderr, "TABLE:\n");
     PrintHashTable(table, stderr, 0);
 
     AddIdentToTable(table, "test_proc", HASHVAR_PROCEDURE, HASHTYPE_PROCEDURE,
         PushListNodeBack(CreateListNode("arg1", LIST_STRING),
-        CreateListNode("arg1", LIST_STRING)), NULL);
+        CreateListNode("arg1", LIST_STRING)), NULL, NULL);
 
     PrintHashTable(table, stderr, 0);
 

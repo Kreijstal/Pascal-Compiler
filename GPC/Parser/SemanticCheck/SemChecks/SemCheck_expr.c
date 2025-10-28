@@ -23,6 +23,7 @@
 #include "../../ParseTree/type_tags.h"
 
 int is_type_ir(int *type);
+static int types_numeric_compatible(int lhs, int rhs);
 int is_and_or(int *type);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 
@@ -61,7 +62,16 @@ void set_hash_meta(HashNode_t *node, int mutating)
 int is_type_ir(int *type)
 {
     assert(type != NULL);
-    return (*type == INT_TYPE || *type == REAL_TYPE);
+    return (*type == INT_TYPE || *type == REAL_TYPE || *type == LONGINT_TYPE);
+}
+
+static int types_numeric_compatible(int lhs, int rhs)
+{
+    if (lhs == rhs)
+        return 1;
+    if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+        return 1;
+    return 0;
 }
 /* Checks if a type is a relational AND or OR */
 int is_and_or(int *type)
@@ -79,6 +89,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
     {
         case HASHVAR_INTEGER:
             *type = INT_TYPE;
+            break;
+        case HASHVAR_LONGINT:
+            *type = LONGINT_TYPE;
             break;
         case HASHVAR_REAL:
             *type = REAL_TYPE;
@@ -128,6 +141,7 @@ int semcheck_expr_main(int *type_return,
     assert(type_return != NULL);
 
     return_val = 0;
+    expr->resolved_type = UNKNOWN_TYPE;
     switch(expr->type)
     {
         case EXPR_RELOP:
@@ -176,6 +190,7 @@ int semcheck_expr_main(int *type_return,
             break;
     }
 
+    expr->resolved_type = *type_return;
     return return_val;
 }
 
@@ -211,7 +226,7 @@ int semcheck_relop(int *type_return,
     }
     else
     {
-        if(type_first != type_second)
+        if(!types_numeric_compatible(type_first, type_second))
         {
             fprintf(stderr, "Error on line %d, relational types do not match!\n\n",
                 expr->line_num);
@@ -289,7 +304,7 @@ int semcheck_addop(int *type_return,
     return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
 
     /* Checking types */
-    if(type_first != type_second)
+    if(!types_numeric_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch on addop!\n\n",
             expr->line_num);
@@ -302,7 +317,7 @@ int semcheck_addop(int *type_return,
         ++return_val;
     }
 
-    *type_return = type_first;
+    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
     return return_val;
 }
 
@@ -325,7 +340,7 @@ int semcheck_mulop(int *type_return,
     return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
 
     /* Checking types */
-    if(type_first != type_second)
+    if(!types_numeric_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch on mulop!\n\n",
             expr->line_num);
@@ -338,7 +353,7 @@ int semcheck_mulop(int *type_return,
         ++return_val;
     }
 
-    *type_return = type_first;
+    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
     return return_val;
 }
 
@@ -443,7 +458,7 @@ int semcheck_arrayaccess(int *type_return,
 
     /***** THEN VERIFY EXPRESSION INSIDE *****/
     return_val += semcheck_expr_main(&expr_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
-    if(expr_type != INT_TYPE)
+    if(expr_type != INT_TYPE && expr_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in array index expression!\n\n",
             expr->line_num);

@@ -30,4 +30,6 @@ int semcheck_expr_func(int *type_return,
 int semcheck_expr_main(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
+void set_hash_meta(HashNode_t *node, int mutating);
+
 #endif

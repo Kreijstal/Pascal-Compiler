@@ -10,6 +10,7 @@
 #include <string.h>
 #include "../../List/List.h"
 #include "../../ParseTree/tree.h"
+#include "../../../identifier_utils.h"
 #include "HashTable.h"
 
 /* Gives a new hash tables with NULL'd out list pointers */
@@ -28,7 +29,8 @@ HashTable_t *InitHashTable()
 /* Adds an identifier to the table */
 /* Returns 1 if successfully added, 0 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type)
+    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
+    struct TypeAlias *type_alias)
 {
     ListNode_t *list, *cur;
     HashNode_t *hash_node;
@@ -37,7 +39,11 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
     assert(table != NULL);
     assert(id != NULL);
 
-    hash = hashpjw(id);
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return 1;
+
+    hash = hashpjw(canonical_id);
     list = table->table[hash];
     if(list == NULL)
     {
@@ -46,6 +52,13 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = strdup(id);
+        if (hash_node->id == NULL)
+        {
+            free(hash_node);
+            free(canonical_id);
+            return 1;
+        }
+        hash_node->canonical_id = canonical_id;
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->record_type = record_type;
@@ -57,6 +70,8 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->array_start = 0;
         hash_node->array_end = 0;
         hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        hash_node->type_alias = type_alias;
 
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -67,7 +82,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         while(cur != NULL)
         {
             hash_node = (HashNode_t *)cur->cur;
-            if(strcmp(hash_node->id, id) == 0)
+            if(strcmp(hash_node->canonical_id, canonical_id) == 0)
             {
                 int is_new_proc_func = (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
                 int is_existing_proc_func = (hash_node->hash_type == HASHTYPE_PROCEDURE || hash_node->hash_type == HASHTYPE_FUNCTION);
@@ -75,6 +90,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
                 if (!is_new_proc_func || !is_existing_proc_func)
                 {
                     // If either is not a proc/func, it's a redeclaration error.
+                    free(canonical_id);
                     return 1;
                 }
             }
@@ -87,6 +103,13 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
         hash_node->id = strdup(id);
+        if (hash_node->id == NULL)
+        {
+            free(hash_node);
+            free(canonical_id);
+            return 1;
+        }
+        hash_node->canonical_id = canonical_id;
         hash_node->mangled_id = mangled_id;
         hash_node->args = args;
         hash_node->record_type = record_type;
@@ -98,6 +121,8 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->array_start = 0;
         hash_node->array_end = 0;
         hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        hash_node->type_alias = type_alias;
 
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;
@@ -115,10 +140,15 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
     assert(table != NULL);
     assert(id != NULL);
 
-    hash = hashpjw(id);
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
     list = table->table[hash];
     if(list == NULL)
     {
+        free(canonical_id);
         return NULL;
     }
     else
@@ -126,14 +156,16 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
         while(list != NULL)
         {
             hash_node = (HashNode_t *)list->cur;
-            if(strcmp(hash_node->id, id) == 0)
+            if(strcmp(hash_node->canonical_id, canonical_id) == 0)
             {
+                free(canonical_id);
                 return hash_node;
             }
 
             list = list->next;
         }
 
+        free(canonical_id);
         return NULL;
     }
 }
@@ -149,13 +181,17 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
     assert(table != NULL);
     assert(id != NULL);
 
-    hash = hashpjw(id);
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
     list = table->table[hash];
 
     while(list != NULL)
     {
         hash_node = (HashNode_t *)list->cur;
-        if(strcmp(hash_node->id, id) == 0)
+        if(strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
             if(matches == NULL)
                 matches = CreateListNode(hash_node, LIST_UNSPECIFIED);
@@ -165,6 +201,7 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
         list = list->next;
     }
 
+    free(canonical_id);
     return matches;
 }
 
@@ -193,6 +230,8 @@ void DestroyHashTable(HashTable_t *table)
             hash_node = (HashNode_t *)cur->cur;
             if (hash_node->id != NULL)
                 free(hash_node->id);
+            if (hash_node->canonical_id != NULL)
+                free(hash_node->canonical_id);
             if(hash_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
                 DestroyBuiltin(hash_node);
 

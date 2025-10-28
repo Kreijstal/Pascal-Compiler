@@ -21,6 +21,44 @@
 
 
 /* Code generation for expressions */
+static const char *describe_expression_kind(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return "unknown";
+
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+            return "variable reference";
+        case EXPR_ARRAY_ACCESS:
+            return "array access";
+        case EXPR_FUNCTION_CALL:
+            return "function call";
+        case EXPR_ADDOP:
+            return "additive expression";
+        case EXPR_MULOP:
+            return "multiplicative expression";
+        case EXPR_SIGN_TERM:
+            return "signed term";
+        case EXPR_RELOP:
+            return "relational expression";
+        case EXPR_INUM:
+            return "integer literal";
+        default:
+            return "expression";
+    }
+}
+
+ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64)
+{
+    assert(src_reg32 != NULL);
+    assert(dst_reg64 != NULL);
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", src_reg32, dst_reg64);
+    return add_inst(inst_list, buffer);
+}
+
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -158,58 +196,125 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         element_size = DOUBLEWORD;
 
     int lower_bound = array_node->array_lower_bound;
-    char buffer[100];
+    char buffer[128];
 
-    if (lower_bound > 0)
+    if (array_node->is_dynamic)
     {
-        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else if (lower_bound < 0)
-    {
-        snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    int scaled_sizes[] = {1, 2, 4, 8};
-    int can_scale = 0;
-    for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
-    {
-        if (element_size == scaled_sizes[i])
+        Register_t *base_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (base_reg == NULL)
         {
-            can_scale = 1;
-            break;
+            fprintf(stderr, "ERROR: Unable to allocate register for dynamic array base.\n");
+            exit(1);
         }
-    }
 
-    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
-
-    if (can_scale)
-    {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, base_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        if (element_size != 1)
+
+        if (lower_bound > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+            snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (lower_bound < 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
         }
 
-        StackNode_t *offset_temp = find_in_temp("array_index_offset");
-        if (offset_temp == NULL)
-            offset_temp = add_l_t("array_index_offset");
+        inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
+        int scaled_sizes[] = {1, 2, 4, 8};
+        int can_scale = 0;
+        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+        {
+            if (element_size == scaled_sizes[i])
+            {
+                can_scale = 1;
+                break;
+            }
+        }
 
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (can_scale)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n", base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (element_size != 1)
+            {
+                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
 
-        snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+            StackNode_t *offset_temp = find_in_temp("array_index_offset");
+            if (offset_temp == NULL)
+                offset_temp = add_l_t("array_index_offset");
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        free_reg(get_reg_stack(), base_reg);
+    }
+    else
+    {
+        if (lower_bound > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (lower_bound < 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        int scaled_sizes[] = {1, 2, 4, 8};
+        int can_scale = 0;
+        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+        {
+            if (element_size == scaled_sizes[i])
+            {
+                can_scale = 1;
+                break;
+            }
+        }
+
+        inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+
+        if (can_scale)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp,%s,%d), %s\n", array_node->offset, index_reg->bit_64, element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (element_size != 1)
+            {
+                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            StackNode_t *offset_temp = find_in_temp("array_index_offset");
+            if (offset_temp == NULL)
+                offset_temp = add_l_t("array_index_offset");
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, offset_temp->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t-%d(%%rbp), %s\n", offset_temp->offset, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     *out_reg = index_reg;
@@ -227,6 +332,11 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     char buffer[100];
     snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
+
+    if (expr->resolved_type == LONGINT_TYPE)
+    {
+        inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
+    }
 
     free_reg(get_reg_stack(), addr_reg);
     return inst_list;
@@ -315,19 +425,33 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     if(proc_node != NULL)
         formal_args = proc_node->args;
 
+    typedef struct ArgInfo
+    {
+        Register_t *reg;
+        struct Expression *expr;
+    } ArgInfo;
+
+    int total_args = 0;
+    for (ListNode_t *cur = args; cur != NULL; cur = cur->next)
+        ++total_args;
+
+    ArgInfo *arg_infos = NULL;
+    if (total_args > 0)
+    {
+        arg_infos = (ArgInfo *)calloc((size_t)total_args, sizeof(ArgInfo));
+        if (arg_infos == NULL)
+        {
+            fprintf(stderr, "ERROR: Failed to allocate argument metadata.\n");
+            exit(1);
+        }
+    }
+
     arg_num = 0;
     while(args != NULL)
     {
         CODEGEN_DEBUG("DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
         struct Expression *arg_expr = (struct Expression *)args->cur;
         CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
-
-        arg_reg_char = get_arg_reg64_num(arg_num);
-        if(arg_reg_char == NULL)
-        {
-            fprintf(stderr, "ERROR: Could not get arg register: %d\n", arg_num);
-            exit(1);
-        }
 
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
@@ -336,10 +460,40 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
-            assert(arg_expr->type == EXPR_VAR_ID);
-            StackNode_t *var_node = find_label(arg_expr->expr_data.id);
-            snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
-            inst_list = add_inst(inst_list, buffer);
+            if (arg_expr->type == EXPR_VAR_ID)
+            {
+                StackNode_t *var_node = find_label(arg_expr->expr_data.id);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    fprintf(stderr, "ERROR: Unable to allocate register for by-reference argument.\n");
+                    exit(1);
+                }
+
+                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = addr_reg;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+            }
+            else if (arg_expr->type == EXPR_ARRAY_ACCESS)
+            {
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = addr_reg;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+            }
+            else
+            {
+                fprintf(stderr, "Error: unsupported expression type for var parameter\n");
+                assert(0);
+            }
         }
         else
         {
@@ -350,9 +504,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
-            snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
-            free_reg(get_reg_stack(), top_reg);
-            inst_list = add_inst(inst_list, buffer);
+            if (arg_infos != NULL)
+            {
+                arg_infos[arg_num].reg = top_reg;
+                arg_infos[arg_num].expr = arg_expr;
+            }
         }
 
         args = args->next;
@@ -360,6 +516,35 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             formal_args = formal_args->next;
         ++arg_num;
     }
+
+    for (int i = 0; i < arg_num; ++i)
+    {
+        arg_reg_char = get_arg_reg64_num(i);
+        if (arg_reg_char == NULL)
+        {
+            fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
+            exit(1);
+        }
+
+        Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
+        struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
+        if (stored_reg == NULL)
+        {
+            const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
+            fprintf(stderr,
+                    "ERROR: Missing evaluated register for argument %d in call to %s (%s).\n",
+                    i,
+                    proc_name,
+                    describe_expression_kind(source_expr));
+            exit(1);
+        }
+
+        snprintf(buffer, 50, "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), stored_reg);
+    }
+
+    free(arg_infos);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

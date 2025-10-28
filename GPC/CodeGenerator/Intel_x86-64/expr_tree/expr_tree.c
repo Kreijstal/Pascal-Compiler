@@ -542,9 +542,18 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             switch(type)
             {
                 case PLUS:
-                    snprintf(buffer, 50, "\taddl\t%s, %s\n", right, left);
+                {
+                    /*
+                     * The expression tree emits the literal 1 as the string "$1". Detecting that
+                     * special case lets us use INC instead of ADD to save an instruction byte.
+                     */
+                    if(strcmp(right, "$1") == 0)
+                        snprintf(buffer, 50, "\tincl\t%s\n", left);
+                    else
+                        snprintf(buffer, 50, "\taddl\t%s, %s\n", right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
+                }
                 case MINUS:
                     snprintf(buffer, 50, "\tsubl\t%s, %s\n", right, left);
                     inst_list = add_inst(inst_list, buffer);

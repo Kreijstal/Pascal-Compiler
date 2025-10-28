@@ -86,18 +86,28 @@ static int map_type_name(const char *name, char **type_id_out) {
         return UNKNOWN_TYPE;
     }
     if (strcasecmp(name, "integer") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("integer");
         return INT_TYPE;
     }
     if (strcasecmp(name, "longint") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");
         return LONGINT_TYPE;
     }
     if (strcasecmp(name, "real") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("real");
         return REAL_TYPE;
     }
     if (strcasecmp(name, "string") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("string");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "single") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("single");
         return REAL_TYPE;
     }
     if (type_id_out != NULL) {
@@ -108,7 +118,9 @@ static int map_type_name(const char *name, char **type_id_out) {
 
 static struct RecordType *convert_record_type(ast_t *record_node);
 static struct Expression *convert_expression(ast_t *expr_node);
+static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
+static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out, ArrayTypeInfo *array_info) {
     if (type_id_out != NULL)
@@ -143,9 +155,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct Record
         }
         return result;
     }
-
     if (spec_node->typ == PASCAL_T_ARRAY_TYPE) {
         if (array_info != NULL) {
+            array_info->is_array = 1;
             ast_t *range_node = spec_node->child;
             if (range_node != NULL && range_node->typ == PASCAL_T_RANGE_TYPE) {
                 ast_t *lower = range_node->child;
@@ -155,8 +167,26 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct Record
                     lower->sym != NULL && upper->sym != NULL) {
                     array_info->start = atoi(lower->sym->name);
                     array_info->end = atoi(upper->sym->name);
-                    array_info->is_array = 1;
                 }
+                ast_t *element_node = range_node;
+                while (element_node != NULL && element_node->next != NULL)
+                    element_node = element_node->next;
+                if (element_node != NULL && element_node->typ == PASCAL_T_IDENTIFIER) {
+                    char *dup = dup_symbol(element_node);
+                    int mapped = map_type_name(dup, &array_info->element_type_id);
+                    array_info->element_type = mapped;
+                    if (mapped != UNKNOWN_TYPE && array_info->element_type_id != NULL) {
+                        free(array_info->element_type_id);
+                        array_info->element_type_id = NULL;
+                    }
+                    if (mapped == UNKNOWN_TYPE && array_info->element_type_id == NULL)
+                        array_info->element_type_id = dup;
+                    else if (mapped != UNKNOWN_TYPE)
+                        free(dup);
+                }
+            } else {
+                array_info->start = 0;
+                array_info->end = -1;
                 ast_t *element_node = range_node;
                 while (element_node != NULL && element_node->next != NULL)
                     element_node = element_node->next;
@@ -345,7 +375,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         ListNode_t *next_id = id_node->next;
         id_node->next = NULL;
         char *type_id_copy = type_id != NULL ? strdup(type_id) : NULL;
-        Tree_t *param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param);
+        Tree_t *param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL);
         append_node(&result, param_decl, LIST_TREE);
         id_node = next_id;
     }
@@ -372,28 +402,51 @@ static ListNode_t *convert_param_list(ast_t **cursor) {
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {
     ast_t *cur = decl_node->child;
+    ast_t *first_non_identifier = cur;
+    while (first_non_identifier != NULL && first_non_identifier->typ == PASCAL_T_IDENTIFIER)
+        first_non_identifier = first_non_identifier->next;
 
     ListNode_t *ids = convert_identifier_list(&cur);
     if (ids == NULL) {
         fprintf(stderr, "ERROR: variable declaration missing identifier list.\n");
         return NULL;
     }
-
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
     ArrayTypeInfo array_info = {0};
-
-    if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(cur, &type_id, NULL, &array_info);
-        cur = cur->next;
-    } else {
-        char *type_name = pop_last_identifier(&ids);
+    ast_t *type_node = first_non_identifier;
+    if (type_node != NULL && type_node->typ == PASCAL_T_TYPE_SPEC) {
+        var_type = convert_type_spec(type_node, &type_id, NULL, &array_info);
+        cur = type_node->next;
+    } else if (type_node != NULL && type_node->typ == PASCAL_T_IDENTIFIER && type_node->next == NULL) {
+        char *type_name = dup_symbol(type_node);
         if (type_name != NULL) {
             var_type = map_type_name(type_name, &type_id);
-            if (var_type == UNKNOWN_TYPE && type_id == NULL) {
+            if (var_type == UNKNOWN_TYPE && type_id == NULL)
                 type_id = type_name;
-            } else {
+            else
                 free(type_name);
+        }
+        cur = type_node->next;
+    } else {
+        cur = type_node;
+    }
+
+    if (var_type == UNKNOWN_TYPE && (type_node == NULL || var_type == UNKNOWN_TYPE)) {
+        ast_t *search = decl_node->child;
+        while (search != NULL && search->typ == PASCAL_T_IDENTIFIER)
+            search = search->next;
+        if (search != NULL && search->typ == PASCAL_T_TYPE_SPEC) {
+            var_type = convert_type_spec(search, &type_id, NULL, &array_info);
+        } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
+            char *type_name = dup_symbol(search);
+            if (type_name != NULL) {
+                int mapped = map_type_name(type_name, &type_id);
+                if (mapped == UNKNOWN_TYPE && type_id == NULL)
+                    type_id = type_name;
+                else
+                    free(type_name);
+                var_type = mapped;
             }
         }
     }
@@ -406,7 +459,46 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         return decl;
     }
 
-    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0);
+    int inferred = 0;
+    struct Statement *initializer_stmt = NULL;
+    if (cur != NULL) {
+        struct Expression *init_expr = convert_expression(cur);
+        if (init_expr != NULL) {
+            if (ids != NULL && ids->next == NULL) {
+                inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
+                char *var_name = (char *)ids->cur;
+                struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
+                initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
+            } else {
+                destroy_expr(init_expr);
+            }
+        }
+    }
+
+    if (var_type == UNKNOWN_TYPE && ids != NULL && ids->next != NULL && type_node == NULL) {
+        ListNode_t *prev = NULL;
+        ListNode_t *iter = ids;
+        while (iter->next != NULL) {
+            prev = iter;
+            iter = iter->next;
+        }
+        if (prev != NULL && iter != NULL && iter->type == LIST_STRING) {
+            char *type_name = strdup((char *)iter->cur);
+            if (type_name != NULL) {
+                int mapped = map_type_name(type_name, &type_id);
+                if (mapped == UNKNOWN_TYPE && type_id == NULL)
+                    type_id = type_name;
+                else
+                    free(type_name);
+                var_type = mapped;
+            }
+            prev->next = NULL;
+            free(iter->cur);
+            free(iter);
+        }
+    }
+
+    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt);
     return decl;
 }
 
@@ -504,18 +596,29 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
 
     char *type_id = NULL;
     struct RecordType *record_type = NULL;
+    ArrayTypeInfo array_info = {0};
+    int mapped_type = UNKNOWN_TYPE;
     if (spec_node != NULL)
-        convert_type_spec(spec_node, &type_id, &record_type, NULL);
+        mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &array_info);
 
     Tree_t *decl = NULL;
     if (record_type != NULL) {
         decl = mk_record_type(type_decl_node->line, id, record_type);
+    } else if (array_info.is_array) {
+        decl = mk_typealiasdecl(type_decl_node->line, id, 1, array_info.element_type,
+                                 array_info.element_type_id, array_info.start, array_info.end);
+        array_info.element_type_id = NULL;
+    } else if (mapped_type != UNKNOWN_TYPE || type_id != NULL) {
+        decl = mk_typealiasdecl(type_decl_node->line, id, 0, mapped_type, type_id, 0, 0);
+        type_id = NULL;
     } else {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
     }
 
     if (type_id != NULL)
         free(type_id);
+    if (array_info.element_type_id != NULL)
+        free(array_info.element_type_id);
 
     if (decl == NULL) {
         free(id);
@@ -692,6 +795,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_INTEGER:
         return mk_inum(expr_node->line, atoi(expr_node->sym->name));
     case PASCAL_T_STRING:
+    case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
@@ -767,6 +871,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
     case PASCAL_T_STRING:
+    case PASCAL_T_CHAR:
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
@@ -791,6 +896,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_unary_expr(expr_node);
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
+    case PASCAL_T_FIELD_WIDTH:
+        return convert_field_width_expr(expr_node);
     default:
         fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.\n",
                 expr_node->typ, expr_node->line);
@@ -804,14 +911,54 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListNode_t *args = NULL;
     ast_t *cur = arg_node;
 
+    /*
+     * cparser often wraps Pascal arguments in synthetic tuple/statement nodes. Unwrap each
+     * layer so we only convert real expressions and preserve field-width wrappers explicitly.
+     */
     while (cur != NULL && cur != ast_nil) {
-        struct Expression *expr = convert_expression(unwrap_pascal_node(cur));
-        if (expr != NULL)
-            append_node(&args, expr, LIST_EXPR);
+        ast_t *unwrapped = unwrap_pascal_node(cur);
+        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH) {
+            struct Expression *expr = convert_field_width_expr(unwrapped);
+            if (expr != NULL)
+                append_node(&args, expr, LIST_EXPR);
+        } else if (unwrapped != NULL) {
+            struct Expression *expr = convert_expression(unwrapped);
+            if (expr != NULL)
+                append_node(&args, expr, LIST_EXPR);
+        }
         cur = cur->next;
     }
 
     return args;
+}
+
+static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
+    if (field_width_node == NULL)
+        return NULL;
+
+    ast_t *base_node = field_width_node->child;
+    if (base_node == NULL)
+        return NULL;
+
+    struct Expression *base_expr = convert_expression(base_node);
+    if (base_expr == NULL)
+        return NULL;
+
+    ast_t *width_node = base_node->next;
+    if (width_node != NULL && width_node != ast_nil) {
+        struct Expression *width_expr = convert_expression(width_node);
+        base_expr->field_width = width_expr;
+    }
+
+    ast_t *precision_node = NULL;
+    if (width_node != NULL)
+        precision_node = width_node->next;
+    if (precision_node != NULL && precision_node != ast_nil) {
+        struct Expression *precision_expr = convert_expression(precision_node);
+        base_expr->field_precision = precision_expr;
+    }
+
+    return base_expr;
 }
 
 static struct Statement *convert_assignment(ast_t *assign_node) {
@@ -900,6 +1047,19 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         struct Expression *condition = convert_expression(cond);
         struct Statement *body_stmt = convert_statement(body);
         return mk_while(stmt_node->line, condition, body_stmt);
+    }
+    case PASCAL_T_REPEAT_STMT: {
+        ast_t *body_wrapper = stmt_node->child;
+        ast_t *cond_node = body_wrapper != NULL ? body_wrapper->next : NULL;
+
+        ListNode_t *body_list = NULL;
+        if (body_wrapper != NULL) {
+            ast_t *body_nodes = body_wrapper->child != NULL ? body_wrapper->child : body_wrapper;
+            body_list = convert_statement_list(body_nodes);
+        }
+
+        struct Expression *condition = convert_expression(cond_node);
+        return mk_repeat(stmt_node->line, body_list, condition);
     }
     case PASCAL_T_FOR_STMT: {
         ast_t *init_node = unwrap_pascal_node(stmt_node->child);

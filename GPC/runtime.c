@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -79,4 +81,76 @@ void gpc_sleep_ms(int milliseconds) {
         /* Retry until sleep completes */
     }
 #endif
+}
+
+typedef struct {
+    void *data;
+    int64_t length;
+} gpc_dynarray_descriptor_t;
+
+void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t element_size)
+{
+    if (descriptor_ptr == NULL || element_size <= 0)
+        return;
+
+    if (new_length < 0)
+        new_length = 0;
+
+    gpc_dynarray_descriptor_t *descriptor = (gpc_dynarray_descriptor_t *)descriptor_ptr;
+    size_t old_length = descriptor->length > 0 ? (size_t)descriptor->length : 0;
+    size_t target_length = (size_t)new_length;
+
+    size_t alloc_length = target_length;
+    if (alloc_length < SIZE_MAX)
+        alloc_length += 1; /* Provide a spare slot to tolerate off-by-one accesses. */
+
+    size_t new_size = alloc_length * (size_t)element_size;
+    if (new_size == 0)
+    {
+        free(descriptor->data);
+        descriptor->data = NULL;
+        descriptor->length = 0;
+        return;
+    }
+
+    void *new_data = realloc(descriptor->data, new_size);
+    if (new_data == NULL)
+    {
+        /* Allocation failure leaves the array unchanged. */
+        return;
+    }
+
+    if (target_length > old_length)
+    {
+        size_t old_bytes = old_length * (size_t)element_size;
+        size_t new_bytes = target_length * (size_t)element_size;
+        if (new_bytes > old_bytes)
+            memset((char *)new_data + old_bytes, 0, new_bytes - old_bytes);
+    }
+
+    descriptor->data = new_data;
+    descriptor->length = new_length;
+}
+
+void gpc_write_integer(int width, int64_t value)
+{
+    if (width > 0)
+        printf("%*lld", width, (long long)value);
+    else
+        printf("%lld", (long long)value);
+}
+
+void gpc_write_string(int width, const char *value)
+{
+    if (value == NULL)
+        value = "";
+    if (width > 0)
+        printf("%*s", width, value);
+    else
+        printf("%s", value);
+}
+
+void gpc_write_newline(void)
+{
+    putchar('\n');
 }
