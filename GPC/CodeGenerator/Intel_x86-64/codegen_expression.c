@@ -57,6 +57,22 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
     return reg;
 }
 
+static ListNode_t *codegen_expr_via_tree(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    expr_node_t *expr_tree = build_expr_tree(expr);
+    Register_t *target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+    if (target_reg == NULL)
+    {
+        free_expr_tree(expr_tree);
+        return inst_list;
+    }
+
+    inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+    free_reg(get_reg_stack(), target_reg);
+    free_expr_tree(expr_tree);
+    return inst_list;
+}
+
 ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64)
 {
     assert(src_reg32 != NULL);
@@ -74,88 +90,40 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     #endif
     assert(expr != NULL);
     assert(ctx != NULL);
-    expr_node_t *expr_tree = NULL;
-    Register_t *target_reg;
-
     CODEGEN_DEBUG("DEBUG: Generating code for expression type %d\n", expr->type);
 
     switch(expr->type) {
         case EXPR_VAR_ID:
             CODEGEN_DEBUG("DEBUG: Processing variable ID expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_ARRAY_ACCESS:
             CODEGEN_DEBUG("DEBUG: Processing array access expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_MULOP:
             CODEGEN_DEBUG("DEBUG: Processing mulop expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_INUM:
             CODEGEN_DEBUG("DEBUG: Processing integer constant expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_BOOL:
             CODEGEN_DEBUG("DEBUG: Processing boolean constant expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
@@ -168,48 +136,21 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             return codegen_simple_relop(expr, inst_list, ctx, NULL);
         case EXPR_ADDOP:
             CODEGEN_DEBUG("DEBUG: Processing addop expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_SIGN_TERM:
             CODEGEN_DEBUG("DEBUG: Processing sign term expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
         case EXPR_FUNCTION_CALL:
             CODEGEN_DEBUG("DEBUG: Processing function call expression\n");
-            expr_tree = build_expr_tree(expr);
-            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
-            if (target_reg == NULL)
-            {
-                free_expr_tree(expr_tree);
-                return inst_list;
-            }
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-            free_reg(get_reg_stack(), target_reg);
-            free_expr_tree(expr_tree);
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif

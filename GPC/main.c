@@ -254,6 +254,7 @@ int main(int argc, char **argv)
     install_stack_trace_handler();
     Tree_t *prelude_tree, *user_tree;
     int required_args, args_left;
+    int exit_status = 0;
 
     required_args = 3;
 
@@ -344,7 +345,18 @@ int main(int argc, char **argv)
 
             codegen(user_tree, argv[1], &ctx, symtab);
 
+            int codegen_failed = codegen_had_error(&ctx);
             fclose(ctx.output_file);
+            if (codegen_failed)
+            {
+                fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
+                remove(argv[2]);
+                exit_status = 1;
+            }
+        }
+        else if (sem_result > 0)
+        {
+            exit_status = sem_result;
         }
         DestroySymTab(symtab);
 
@@ -366,6 +378,7 @@ int main(int argc, char **argv)
             user_tree = NULL;
         }
     }
+    return exit_status;
 }
 
 void set_flags(char **optional_args, int count)
