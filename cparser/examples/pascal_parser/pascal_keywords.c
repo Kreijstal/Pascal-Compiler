@@ -20,7 +20,7 @@ const char* pascal_reserved_keywords[] = {
     "class", "object", "private", "public", "protected", "published",
     "property", "inherited", "self", "constructor", "destructor",
     // Additional Pascal keywords
-    "function", "procedure", "program", "unit", "uses", "interface", "implementation",
+    "function", "procedure", "program", "unit", "uses", "interface", "implementation", "break",
     NULL
 };
 

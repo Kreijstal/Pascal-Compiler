@@ -17,6 +17,9 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+static ListNode_t *codegen_break(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
 {
@@ -25,6 +28,45 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     if (message != NULL)
         codegen_report_error(ctx, "%s", message);
     return inst_list;
+}
+
+static void codegen_push_loop_exit(CodeGenContext *ctx, const char *label)
+{
+    if (ctx == NULL || label == NULL)
+        return;
+
+    LoopExitLabel *node = (LoopExitLabel *)malloc(sizeof(LoopExitLabel));
+    if (node == NULL)
+        return;
+    node->label = strdup(label);
+    if (node->label == NULL)
+    {
+        free(node);
+        return;
+    }
+    node->previous = ctx->loop_exit_stack;
+    ctx->loop_exit_stack = node;
+}
+
+static void codegen_pop_loop_exit(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    LoopExitLabel *node = ctx->loop_exit_stack;
+    if (node == NULL)
+        return;
+
+    ctx->loop_exit_stack = node->previous;
+    free(node->label);
+    free(node);
+}
+
+static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_exit_stack == NULL)
+        return NULL;
+    return ctx->loop_exit_stack->label;
 }
 
 static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
@@ -121,6 +163,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             break;
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_BREAK:
+            inst_list = codegen_break(stmt, inst_list, ctx);
             break;
         case STMT_ASM_BLOCK:
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
@@ -357,6 +402,104 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     return inst_list;
 }
 
+static ListNode_t *codegen_break(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    (void)stmt;
+    if (ctx == NULL)
+        return inst_list;
+
+    const char *exit_label = codegen_current_loop_exit(ctx);
+    if (exit_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: BREAK encountered outside of loop.");
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL)
+        return inst_list;
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *delta_expr = (args->next != NULL) ? (struct Expression *)args->next->cur : NULL;
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    Register_t *delta_reg = NULL;
+    if (delta_expr != NULL)
+    {
+        inst_list = codegen_evaluate_expr(delta_expr, inst_list, ctx, &delta_reg);
+        if (codegen_had_error(ctx) || delta_reg == NULL)
+        {
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+    }
+    else
+    {
+        delta_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (delta_reg == NULL)
+        {
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", delta_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (value_reg == NULL)
+    {
+        free_reg(get_reg_stack(), delta_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    int target_type = (target_expr != NULL) ? target_expr->resolved_type : UNKNOWN_TYPE;
+    int delta_type = (delta_expr != NULL) ? delta_expr->resolved_type : (target_type == LONGINT_TYPE ? LONGINT_TYPE : INT_TYPE);
+
+    char buffer[64];
+    if (target_type == LONGINT_TYPE)
+    {
+        if (delta_type == INT_TYPE)
+            inst_list = codegen_sign_extend32_to64(inst_list, delta_reg->bit_32, delta_reg->bit_64);
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", delta_reg->bit_64, value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, value_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\taddl\t%s, %s\n", delta_reg->bit_32, value_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    free_reg(get_reg_stack(), value_reg);
+    free_reg(get_reg_stack(), delta_reg);
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+}
+
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -405,6 +548,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
     {
         inst_list = codegen_builtin_move(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Inc"))
+    {
+        inst_list = codegen_builtin_inc(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
@@ -655,10 +807,12 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     int relop_type, inverse;
     struct Expression *expr;
     struct Statement *while_stmt;
-    char label1[18], label2[18], buffer[50];
+    char label1[18], label2[18], exit_label[18], buffer[50];
 
     gen_label(label1, 18, ctx);
     gen_label(label2, 18, ctx);
+    gen_label(exit_label, 18, ctx);
+    codegen_push_loop_exit(ctx, exit_label);
     while_stmt = stmt->stmt_data.while_data.while_stmt;
     expr = stmt->stmt_data.while_data.relop_expr;
 
@@ -676,6 +830,11 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
 
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    codegen_pop_loop_exit(ctx);
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -692,11 +851,13 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    char body_label[18], buffer[50];
+    char body_label[18], exit_label[18], buffer[50];
     int relop_type, inverse;
     ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
 
     gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
+    codegen_push_loop_exit(ctx, exit_label);
     snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
 
@@ -710,6 +871,11 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
     inverse = 1;
     inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    codegen_pop_loop_exit(ctx);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -731,10 +897,12 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     int relop_type, inverse;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
     struct Statement *for_body, *for_assign, *update_stmt;
-    char label1[18], label2[18], buffer[50];
+    char label1[18], label2[18], exit_label[18], buffer[50];
 
     gen_label(label1, 18, ctx);
     gen_label(label2, 18, ctx);
+    gen_label(exit_label, 18, ctx);
+    codegen_push_loop_exit(ctx, exit_label);
     for_body = stmt->stmt_data.for_data.do_for;
     expr = stmt->stmt_data.for_data.to;
 
@@ -770,6 +938,11 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 
     inverse = 0;
     inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    codegen_pop_loop_exit(ctx);
 
     free(comparison_expr);
     free(one_expr);

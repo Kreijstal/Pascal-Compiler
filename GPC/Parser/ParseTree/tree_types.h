@@ -8,10 +8,12 @@
 
 #include "../List/List.h"
 
+struct HashNode;
+
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR,
-    STMT_ASM_BLOCK};
+    STMT_BREAK, STMT_ASM_BLOCK};
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
 
@@ -68,7 +70,7 @@ struct Statement
             char *id;
             char *mangled_id;
             ListNode_t *expr_args;
-        struct HashNode *resolved_proc;
+            struct HashNode *resolved_proc;
         } procedure_call_data;
 
         /* Compound Statements */
@@ -181,7 +183,7 @@ struct Expression
             char *id;
             char *mangled_id;
             ListNode_t *args_expr;
-        struct HashNode *resolved_func;
+            struct HashNode *resolved_func;
         } function_call_data;
 
         /* Integer number */

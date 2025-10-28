@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -170,6 +171,229 @@ static char *gpc_alloc_empty_string(void)
     if (empty != NULL)
         empty[0] = '\0';
     return empty;
+}
+
+int64_t gpc_string_length(const char *value)
+{
+    if (value == NULL)
+        return 0;
+    return (int64_t)strlen(value);
+}
+
+char *gpc_string_copy(const char *source, int64_t index, int64_t count)
+{
+    if (source == NULL || count <= 0)
+        return gpc_alloc_empty_string();
+
+    size_t length = strlen(source);
+    if (index <= 0)
+        index = 1;
+
+    size_t start = (size_t)(index - 1);
+    if (start >= length)
+        return gpc_alloc_empty_string();
+
+    size_t available = length - start;
+    size_t copy_len = (size_t)count;
+    if (copy_len > available)
+        copy_len = available;
+
+    char *result = (char *)malloc(copy_len + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+
+    memcpy(result, source + start, copy_len);
+    result[copy_len] = '\0';
+    return result;
+}
+
+char *gpc_int_to_string(int64_t value)
+{
+    char buffer[32];
+    int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    if (written < 0)
+        return gpc_alloc_empty_string();
+    char *result = strdup(buffer);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+    return result;
+}
+
+int64_t gpc_now(void)
+{
+    time_t current = time(NULL);
+    if (current < 0)
+        return 0;
+    return (int64_t)current;
+}
+
+static char *gpc_translate_datetime_format(const char *format)
+{
+    if (format == NULL)
+        return strdup("%Y-%m-%d %H:%M:%S");
+
+    size_t len = strlen(format);
+    size_t capacity = len * 4 + 16;
+    char *buffer = (char *)malloc(capacity);
+    if (buffer == NULL)
+        return strdup("%Y-%m-%d %H:%M:%S");
+
+    size_t out = 0;
+    for (size_t i = 0; format[i] != '\0'; )
+    {
+        char ch = format[i];
+        if (ch == '\'')
+        {
+            ++i;
+            while (format[i] != '\0' && format[i] != '\'')
+            {
+                if (out + 2 >= capacity)
+                {
+                    capacity *= 2;
+                    char *temp = (char *)realloc(buffer, capacity);
+                    if (temp == NULL)
+                    {
+                        free(buffer);
+                        return strdup("%Y-%m-%d %H:%M:%S");
+                    }
+                    buffer = temp;
+                }
+                if (format[i] == '%')
+                    buffer[out++] = '%';
+                buffer[out++] = format[i++];
+            }
+            if (format[i] == '\'')
+                ++i;
+            continue;
+        }
+
+        size_t count = 1;
+        while (format[i + count] == ch)
+            ++count;
+
+        char lower = (char)tolower((unsigned char)ch);
+        const char *replacement = NULL;
+        switch (lower)
+        {
+            case 'y':
+                replacement = (count >= 4) ? "%Y" : "%y";
+                break;
+            case 'm':
+                replacement = "%m";
+                break;
+            case 'd':
+                replacement = "%d";
+                break;
+            case 'h':
+                replacement = "%H";
+                break;
+            case 'n':
+                replacement = "%M";
+                break;
+            case 's':
+                replacement = "%S";
+                break;
+            case 't':
+                if (count >= 2)
+                    replacement = "%p";
+                break;
+            default:
+                break;
+        }
+
+        if (replacement != NULL)
+        {
+            size_t repl_len = strlen(replacement);
+            if (out + repl_len + 1 >= capacity)
+            {
+                capacity = (out + repl_len + 1) * 2;
+                char *temp = (char *)realloc(buffer, capacity);
+                if (temp == NULL)
+                {
+                    free(buffer);
+                    return strdup("%Y-%m-%d %H:%M:%S");
+                }
+                buffer = temp;
+            }
+            memcpy(buffer + out, replacement, repl_len);
+            out += repl_len;
+        }
+        else
+        {
+            if (out + 2 >= capacity)
+            {
+                capacity *= 2;
+                char *temp = (char *)realloc(buffer, capacity);
+                if (temp == NULL)
+                {
+                    free(buffer);
+                    return strdup("%Y-%m-%d %H:%M:%S");
+                }
+                buffer = temp;
+            }
+            if (ch == '%')
+                buffer[out++] = '%';
+            buffer[out++] = ch;
+        }
+
+        i += count;
+    }
+
+    if (out >= capacity)
+    {
+        char *temp = (char *)realloc(buffer, out + 1);
+        if (temp != NULL)
+            buffer = temp;
+    }
+    buffer[out] = '\0';
+    return buffer;
+}
+
+char *gpc_format_datetime(const char *format, int64_t datetime)
+{
+    char *strftime_format = gpc_translate_datetime_format(format);
+    if (strftime_format == NULL)
+        return gpc_alloc_empty_string();
+
+    time_t raw_time = (time_t)datetime;
+    struct tm tm_value;
+    struct tm *tm_ptr = localtime(&raw_time);
+    if (tm_ptr == NULL)
+    {
+        free(strftime_format);
+        return gpc_alloc_empty_string();
+    }
+    tm_value = *tm_ptr;
+
+    size_t buffer_size = 64;
+    char *result = NULL;
+    for (int attempt = 0; attempt < 5; ++attempt)
+    {
+        char *buffer = (char *)malloc(buffer_size);
+        if (buffer == NULL)
+            break;
+        size_t written = strftime(buffer, buffer_size, strftime_format, &tm_value);
+        if (written > 0)
+        {
+            result = buffer;
+            break;
+        }
+        free(buffer);
+        buffer_size *= 2;
+    }
+
+    free(strftime_format);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+    return result;
+}
+
+int64_t gpc_dynarray_length(const void *descriptor_ptr)
+{
+    if (descriptor_ptr == NULL)
+        return 0;
+    const gpc_dynarray_descriptor_t *descriptor = (const gpc_dynarray_descriptor_t *)descriptor_ptr;
+    return (descriptor->length < 0) ? 0 : descriptor->length;
 }
 
 void gpc_move(void *dest, const void *src, size_t count)

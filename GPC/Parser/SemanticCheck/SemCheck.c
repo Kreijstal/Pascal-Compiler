@@ -360,6 +360,12 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(move_name);
     }
 
+    char *inc_name = strdup("Inc");
+    if (inc_name != NULL) {
+        AddBuiltinProc(symtab, inc_name, NULL);
+        free(inc_name);
+    }
+
     char *sizeof_name = strdup("SizeOf");
     if (sizeof_name != NULL) {
         AddBuiltinFunction(symtab, sizeof_name, HASHVAR_LONGINT);
@@ -376,6 +382,36 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (ord_name != NULL) {
         AddBuiltinFunction(symtab, ord_name, HASHVAR_LONGINT);
         free(ord_name);
+    }
+
+    char *length_name = strdup("Length");
+    if (length_name != NULL) {
+        AddBuiltinFunction(symtab, length_name, HASHVAR_LONGINT);
+        free(length_name);
+    }
+
+    char *copy_name = strdup("Copy");
+    if (copy_name != NULL) {
+        AddBuiltinFunction(symtab, copy_name, HASHVAR_PCHAR);
+        free(copy_name);
+    }
+
+    char *inttostr_name = strdup("IntToStr");
+    if (inttostr_name != NULL) {
+        AddBuiltinFunction(symtab, inttostr_name, HASHVAR_PCHAR);
+        free(inttostr_name);
+    }
+
+    char *now_name = strdup("Now");
+    if (now_name != NULL) {
+        AddBuiltinFunction(symtab, now_name, HASHVAR_LONGINT);
+        free(now_name);
+    }
+
+    char *formatdt_name = strdup("FormatDateTime");
+    if (formatdt_name != NULL) {
+        AddBuiltinFunction(symtab, formatdt_name, HASHVAR_PCHAR);
+        free(formatdt_name);
     }
 
     /* Builtins are now in stdlib.p */

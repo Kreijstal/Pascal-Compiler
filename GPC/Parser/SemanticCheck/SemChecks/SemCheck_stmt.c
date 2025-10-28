@@ -24,15 +24,15 @@
 #include "../../ParseTree/type_tags.h"
 #include "../../../identifier_utils.h"
 
-int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth);
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
-int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
-int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
-int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
-int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
-int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth);
+int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth);
+int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth);
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth);
+int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
 static int var_type_to_expr_type(enum VarType var_type)
@@ -173,6 +173,61 @@ static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int m
     return return_val;
 }
 
+static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL)
+    {
+        fprintf(stderr, "Error on line %d, Inc expects at least one argument.\n", stmt->line_num);
+        return 1;
+    }
+
+    if (args->next != NULL && args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Inc expects at most two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *delta_expr = (args->next != NULL) ? (struct Expression *)args->next->cur : NULL;
+
+    int return_val = 0;
+    if (target_expr == NULL || (target_expr->type != EXPR_VAR_ID && target_expr->type != EXPR_ARRAY_ACCESS))
+    {
+        fprintf(stderr, "Error on line %d, Inc target must be a variable or array element.\n", stmt->line_num);
+        return_val++;
+    }
+
+    int target_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_type != INT_TYPE && target_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Inc target must be integer or longint.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    if (delta_expr != NULL)
+    {
+        int delta_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&delta_type, symtab, delta_expr, INT_MAX, NO_MUTATE);
+        if (delta_type != INT_TYPE && delta_type != LONGINT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, Inc increment must be integer or longint.\n", stmt->line_num);
+            ++return_val;
+        }
+        else if (target_type == INT_TYPE && delta_type != INT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, Inc increment type must match the target integer type.\n", stmt->line_num);
+            ++return_val;
+        }
+    }
+
+    return return_val;
+}
+
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -228,17 +283,17 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_stmt_main(symtab, stmt, max_scope_lev);
+    return semcheck_stmt_main(symtab, stmt, max_scope_lev, 0);
 }
 
 /* Semantic check on a function statement (no side effects allowed) */
 int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt)
 {
-    return semcheck_stmt_main(symtab, stmt, 0);
+    return semcheck_stmt_main(symtab, stmt, 0, 0);
 }
 
 /* Main semantic checking */
-int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth)
 {
     int return_val;
 
@@ -257,23 +312,31 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_COMPOUND_STATEMENT:
-            return_val += semcheck_compoundstmt(symtab, stmt, max_scope_lev);
+            return_val += semcheck_compoundstmt(symtab, stmt, max_scope_lev, loop_depth);
             break;
 
         case STMT_IF_THEN:
-            return_val += semcheck_ifthen(symtab, stmt, max_scope_lev);
+            return_val += semcheck_ifthen(symtab, stmt, max_scope_lev, loop_depth);
             break;
 
         case STMT_WHILE:
-            return_val += semcheck_while(symtab, stmt, max_scope_lev);
+            return_val += semcheck_while(symtab, stmt, max_scope_lev, loop_depth);
             break;
 
         case STMT_REPEAT:
-            return_val += semcheck_repeat(symtab, stmt, max_scope_lev);
+            return_val += semcheck_repeat(symtab, stmt, max_scope_lev, loop_depth);
             break;
 
         case STMT_FOR:
-            return_val += semcheck_for(symtab, stmt, max_scope_lev);
+            return_val += semcheck_for(symtab, stmt, max_scope_lev, loop_depth);
+            break;
+
+        case STMT_BREAK:
+            if (loop_depth <= 0)
+            {
+                fprintf(stderr, "Error on line %d, BREAK statement not within a loop.\n", stmt->line_num);
+                ++return_val;
+            }
             break;
 
         case STMT_ASM_BLOCK:
@@ -396,6 +459,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Move",
         semcheck_builtin_move, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Inc",
+        semcheck_builtin_inc, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
@@ -537,7 +606,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 }
 
 /** COMPOUNT_STMT **/
-int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth)
 {
     int return_val;
     ListNode_t *stmt_list;
@@ -552,7 +621,7 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
         assert(stmt_list->type == LIST_STMT);
 
         return_val += semcheck_stmt_main(symtab,
-            (struct Statement *)stmt_list->cur, max_scope_lev);
+            (struct Statement *)stmt_list->cur, max_scope_lev, loop_depth);
 
         stmt_list = stmt_list->next;
     }
@@ -562,7 +631,7 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
 }
 
 /** IF_THEN **/
-int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth)
 {
     int return_val;
     int if_type;
@@ -587,15 +656,15 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         ++return_val;
     }
 
-    return_val += semcheck_stmt_main(symtab, if_stmt, max_scope_lev);
+    return_val += semcheck_stmt_main(symtab, if_stmt, max_scope_lev, loop_depth);
     if(else_stmt != NULL)
-        return_val += semcheck_stmt_main(symtab, else_stmt, max_scope_lev);
+        return_val += semcheck_stmt_main(symtab, else_stmt, max_scope_lev, loop_depth);
 
     return return_val;
 }
 
 /** WHILE **/
-int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth)
 {
     int return_val;
     int while_type;
@@ -618,13 +687,13 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         ++return_val;
     }
 
-    return_val += semcheck_stmt_main(symtab, while_stmt, max_scope_lev);
+    return_val += semcheck_stmt_main(symtab, while_stmt, max_scope_lev, loop_depth + 1);
 
     return return_val;
 }
 
 /** REPEAT **/
-int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth)
 {
     int return_val = 0;
     int until_type = UNKNOWN_TYPE;
@@ -639,7 +708,7 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     {
         struct Statement *body_stmt = (struct Statement *)body_list->cur;
         if (body_stmt != NULL)
-            return_val += semcheck_stmt_main(symtab, body_stmt, max_scope_lev);
+            return_val += semcheck_stmt_main(symtab, body_stmt, max_scope_lev, loop_depth + 1);
         body_list = body_list->next;
     }
 
@@ -655,7 +724,7 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 }
 
 /** FOR **/
-int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev, int loop_depth)
 {
     int return_val;
     int for_type, to_type;
@@ -705,7 +774,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         ++return_val;
     }
 
-    return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev);
+    return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev, loop_depth + 1);
 
     return return_val;
 }

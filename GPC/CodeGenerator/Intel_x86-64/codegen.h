@@ -131,6 +131,11 @@ static inline int codegen_target_is_windows(void)
     This struct holds all the state that was previously global,
     allowing for a more modular and re-entrant design.
 */
+typedef struct LoopExitLabel {
+    char *label;
+    struct LoopExitLabel *previous;
+} LoopExitLabel;
+
 typedef struct {
     int label_counter;
     int write_label_counter;
@@ -138,6 +143,7 @@ typedef struct {
     SymTab_t *symtab;
     gpc_target_abi_t target_abi;
     int had_error;
+    LoopExitLabel *loop_exit_stack;
 } CodeGenContext;
 
 /* Generates a label */

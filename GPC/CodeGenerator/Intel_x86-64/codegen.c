@@ -23,6 +23,21 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 
+static int codegen_element_size_from_type(enum VarType var_type)
+{
+    switch (var_type)
+    {
+        case HASHVAR_REAL:
+        case HASHVAR_LONGINT:
+        case HASHVAR_PCHAR:
+            return 8;
+        case HASHVAR_BOOLEAN:
+            return 1;
+        default:
+            return DOUBLEWORD;
+    }
+}
+
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
@@ -235,6 +250,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_stack_home_space_bytes = (ctx->target_abi == GPC_TARGET_ABI_WINDOWS) ? 32 : 0;
 
     ctx->symtab = symtab;
+    ctx->loop_exit_stack = NULL;
 
     CODEGEN_DEBUG("DEBUG: ENTERING codegen\n");
     init_stackmng();
@@ -466,10 +482,10 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
              while(id_list != NULL)
              {
-                 if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
-                 {
-                     struct TypeAlias *alias = type_node->type_alias;
-                     int element_size = (type_node->var_type == HASHVAR_REAL) ? 8 : 4;
+                if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
+                {
+                    struct TypeAlias *alias = type_node->type_alias;
+                    int element_size = codegen_element_size_from_type(type_node->var_type);
                      if (alias->is_open_array)
                      {
                          add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
@@ -498,31 +514,38 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     if (type_node != NULL)
                         var_kind = type_node->var_type;
 
-                    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL || var_kind == HASHVAR_PCHAR)
-                        alloc_size = 8;
-                    else
-                        alloc_size = DOUBLEWORD;
+                    alloc_size = codegen_element_size_from_type(var_kind);
 
                     add_l_x((char *)id_list->cur, alloc_size);
                 }
                 id_list = id_list->next;
             };
         }
-         else if (tree->type == TREE_ARR_DECL)
-         {
-             id_list = tree->tree_data.arr_decl_data.ids;
-             int length = tree->tree_data.arr_decl_data.e_range - tree->tree_data.arr_decl_data.s_range + 1;
-             if (length < 0)
-                 length = 0;
-             int total_size = length * DOUBLEWORD;
-             if (total_size <= 0)
-                 total_size = DOUBLEWORD;
-             while (id_list != NULL)
-             {
-                 add_array((char *)id_list->cur, total_size, DOUBLEWORD, tree->tree_data.arr_decl_data.s_range);
-                 id_list = id_list->next;
-             }
-         }
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            id_list = tree->tree_data.arr_decl_data.ids;
+            int length = tree->tree_data.arr_decl_data.e_range - tree->tree_data.arr_decl_data.s_range + 1;
+            if (length < 0)
+                length = 0;
+
+            enum VarType var_kind = HASHVAR_INTEGER;
+            if (tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                var_kind = HASHVAR_LONGINT;
+            else if (tree->tree_data.arr_decl_data.type == REAL_TYPE)
+                var_kind = HASHVAR_REAL;
+            else if (tree->tree_data.arr_decl_data.type == BOOL)
+                var_kind = HASHVAR_BOOLEAN;
+
+            int element_size = codegen_element_size_from_type(var_kind);
+            int total_size = length * element_size;
+            if (total_size <= 0)
+                total_size = element_size;
+            while (id_list != NULL)
+            {
+                add_array((char *)id_list->cur, total_size, element_size, tree->tree_data.arr_decl_data.s_range);
+                id_list = id_list->next;
+            }
+        }
 
          cur = cur->next;
      }
