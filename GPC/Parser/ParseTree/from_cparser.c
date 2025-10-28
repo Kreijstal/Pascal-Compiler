@@ -1050,6 +1050,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         char *code = collect_asm_text(stmt_node->child);
         return mk_asmblock(stmt_node->line, code);
     }
+    case PASCAL_T_BREAK_STMT:
+        return mk_break(stmt_node->line);
     case PASCAL_T_BEGIN_BLOCK:
         return convert_block(stmt_node);
     case PASCAL_T_IF_STMT: {

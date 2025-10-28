@@ -17,6 +17,173 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+
+static void codegen_push_break_target(CodeGenContext *ctx, const char *label)
+{
+    if (ctx == NULL || label == NULL)
+        return;
+
+    char *label_copy = strdup(label);
+    if (label_copy == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Failed to allocate memory for break target.");
+        return;
+    }
+
+    ListNode_t *node = CreateListNode(label_copy, LIST_STRING);
+    if (node == NULL)
+    {
+        free(label_copy);
+        codegen_report_error(ctx, "ERROR: Failed to allocate break target node.");
+        return;
+    }
+
+    node->next = ctx->break_target_stack;
+    ctx->break_target_stack = node;
+}
+
+static void codegen_pop_break_target(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->break_target_stack == NULL)
+        return;
+
+    ListNode_t *head = ctx->break_target_stack;
+    ctx->break_target_stack = head->next;
+    free(head->cur);
+    free(head);
+}
+
+static const char *codegen_current_break_target(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->break_target_stack == NULL)
+        return NULL;
+    return (const char *)ctx->break_target_stack->cur;
+}
+
+static int codegen_size_from_type_tag(int type_tag)
+{
+    switch (type_tag)
+    {
+        case LONGINT_TYPE:
+        case REAL_TYPE:
+        case STRING_TYPE:
+            return 8;
+        case BOOL:
+            return 1;
+        case INT_TYPE:
+            return DOUBLEWORD;
+        default:
+            return 0;
+    }
+}
+
+static int codegen_size_from_var_type(enum VarType var_type)
+{
+    switch (var_type)
+    {
+        case HASHVAR_LONGINT:
+        case HASHVAR_REAL:
+        case HASHVAR_PCHAR:
+            return 8;
+        case HASHVAR_BOOLEAN:
+            return 1;
+        case HASHVAR_INTEGER:
+            return DOUBLEWORD;
+        default:
+            return 0;
+    }
+}
+
+static int codegen_size_from_alias(CodeGenContext *ctx, struct TypeAlias *alias, int depth)
+{
+    if (alias == NULL || depth > 8)
+        return 0;
+
+    if (alias->is_array)
+    {
+        int element_size = codegen_size_from_type_tag(alias->array_element_type);
+        if (element_size > 0)
+            return element_size;
+
+        if (ctx != NULL && ctx->symtab != NULL && alias->array_element_type_id != NULL)
+        {
+            HashNode_t *element_node = NULL;
+            if (FindIdent(&element_node, ctx->symtab, alias->array_element_type_id) >= 0 &&
+                element_node != NULL)
+            {
+                if (element_node->element_size > 0)
+                    return element_node->element_size;
+
+                element_size = codegen_size_from_var_type(element_node->var_type);
+                if (element_size > 0)
+                    return element_size;
+
+                if (element_node->type_alias != NULL)
+                    return codegen_size_from_alias(ctx, element_node->type_alias, depth + 1);
+            }
+        }
+
+        return 0;
+    }
+
+    int base_size = codegen_size_from_type_tag(alias->base_type);
+    if (base_size > 0)
+        return base_size;
+
+    if (ctx != NULL && ctx->symtab != NULL && alias->target_type_id != NULL)
+    {
+        HashNode_t *target_node = NULL;
+        if (FindIdent(&target_node, ctx->symtab, alias->target_type_id) >= 0 && target_node != NULL)
+        {
+            if (target_node->element_size > 0)
+                return target_node->element_size;
+
+            base_size = codegen_size_from_var_type(target_node->var_type);
+            if (base_size > 0)
+                return base_size;
+
+            if (target_node->type_alias != NULL)
+                return codegen_size_from_alias(ctx, target_node->type_alias, depth + 1);
+        }
+    }
+
+    return 0;
+}
+
+static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
+    struct Expression *array_expr)
+{
+    if (array_node != NULL && array_node->element_size > 0)
+        return array_node->element_size;
+
+    int element_size = 0;
+
+    if (ctx != NULL && ctx->symtab != NULL && array_expr != NULL && array_expr->type == EXPR_VAR_ID)
+    {
+        HashNode_t *array_info = NULL;
+        if (FindIdent(&array_info, ctx->symtab, array_expr->expr_data.id) >= 0 && array_info != NULL)
+        {
+            if (array_info->element_size > 0)
+                element_size = array_info->element_size;
+
+            if (element_size <= 0)
+                element_size = codegen_size_from_var_type(array_info->var_type);
+
+            if (element_size <= 0 && array_info->type_alias != NULL)
+                element_size = codegen_size_from_alias(ctx, array_info->type_alias, 0);
+        }
+    }
+
+    if (element_size <= 0)
+        element_size = DOUBLEWORD;
+
+    if (array_node != NULL)
+        array_node->element_size = element_size;
+
+    return element_size;
+}
+
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
 {
@@ -122,6 +289,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_BREAK:
+            inst_list = codegen_break_stmt(stmt, inst_list, ctx);
+            break;
         case STMT_ASM_BLOCK:
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
@@ -163,6 +333,8 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         return inst_list;
     }
 
+    int element_size = codegen_dynamic_array_element_size(ctx, array_node, array_expr);
+
     inst_list = codegen_expr(len_expr, inst_list, ctx);
     if (codegen_had_error(ctx))
         return inst_list;
@@ -188,7 +360,7 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", length_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", array_node->element_size);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", element_size);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -197,7 +369,7 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", length_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", array_node->element_size);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", element_size);
         inst_list = add_inst(inst_list, buffer);
     }
 
@@ -272,6 +444,109 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL)
+        return inst_list;
+
+    struct Expression *target_expr = (struct Expression *)args_expr->cur;
+    struct Expression *value_expr = (args_expr->next != NULL) ? (struct Expression *)args_expr->next->cur : NULL;
+
+    Register_t *increment_reg = NULL;
+    if (value_expr != NULL)
+    {
+        inst_list = codegen_expr(value_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
+        increment_reg = front_reg_stack(get_reg_stack());
+    }
+    else
+    {
+        increment_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (increment_reg == NULL)
+            return inst_list;
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", increment_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    int target_is_long = (target_expr != NULL && target_expr->resolved_type == LONGINT_TYPE);
+    if (target_is_long)
+        inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32, increment_reg->bit_64);
+
+    if (target_expr != NULL && target_expr->type == EXPR_VAR_ID)
+    {
+        StackNode_t *var_node = find_label(target_expr->expr_data.id);
+        char buffer[128];
+        if (var_node != NULL)
+        {
+            if (target_is_long)
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%%rbp)\n", increment_reg->bit_64, var_node->offset);
+            else
+                snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%%rbp)\n", increment_reg->bit_32, var_node->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (nonlocal_flag() == 1)
+        {
+            int offset = 0;
+            inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
+            if (target_is_long)
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%s)\n", increment_reg->bit_64, offset, current_non_local_reg64());
+            else
+                snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%s)\n", increment_reg->bit_32, offset, current_non_local_reg64());
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            codegen_report_error(ctx, "ERROR: Unable to locate variable %s for Inc.", target_expr->expr_data.id);
+        }
+    }
+    else if (target_expr != NULL && target_expr->type == EXPR_ARRAY_ACCESS)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_array_element_address(target_expr, inst_list, ctx, &addr_reg);
+        if (!codegen_had_error(ctx) && addr_reg != NULL)
+        {
+            char buffer[128];
+            if (target_is_long)
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), addr_reg);
+        }
+    }
+    else
+    {
+        codegen_report_error(ctx, "ERROR: Unsupported Inc target.");
+    }
+
+    free_reg(get_reg_stack(), increment_reg);
+    return inst_list;
+}
+
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    (void)stmt;
+    if (ctx == NULL)
+        return inst_list;
+
+    const char *target = codegen_current_break_target(ctx);
+    if (target == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: BREAK statement used outside of a loop.");
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", target);
+    return add_inst(inst_list, buffer);
+}
+
 static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t *inst_list,
                                               CodeGenContext *ctx, int append_newline)
 {
@@ -279,34 +554,22 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         return inst_list;
 
     int is_windows = codegen_target_is_windows();
-    const char *width_dest32 = is_windows ? "%ecx" : "%edi";
+    const char *width_dest64 = is_windows ? "%rcx" : "%rdi";
     const char *value_dest64 = is_windows ? "%rdx" : "%rsi";
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     while (args != NULL)
     {
         struct Expression *expr = (struct Expression *)args->cur;
-        Register_t *width_reg = NULL;
+        char buffer[128];
 
+        Register_t *width_reg = NULL;
         if (expr != NULL && expr->field_width != NULL)
         {
             expr_node_t *width_tree = build_expr_tree(expr->field_width);
             width_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_reg);
             free_expr_tree(width_tree);
-        }
-
-        char buffer[128];
-        if (width_reg != NULL)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", width_reg->bit_32, width_dest32);
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), width_reg);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", width_dest32);
-            inst_list = add_inst(inst_list, buffer);
         }
 
         int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
@@ -331,6 +594,17 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
 
         free_reg(get_reg_stack(), value_reg);
+
+        if (width_reg != NULL)
+        {
+            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
+            free_reg(get_reg_stack(), width_reg);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         inst_list = codegen_vect_reg(inst_list, 0);
 
@@ -405,6 +679,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
     {
         inst_list = codegen_builtin_move(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Inc"))
+    {
+        inst_list = codegen_builtin_inc(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
@@ -655,26 +938,32 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     int relop_type, inverse;
     struct Expression *expr;
     struct Statement *while_stmt;
-    char label1[18], label2[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], buffer[50];
 
-    gen_label(label1, 18, ctx);
-    gen_label(label2, 18, ctx);
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     while_stmt = stmt->stmt_data.while_data.while_stmt;
     expr = stmt->stmt_data.while_data.relop_expr;
 
     inverse = 0;
-    inst_list = gencode_jmp(NORMAL_JMP, inverse, label1, inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, inverse, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label2);
+    snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
+    codegen_push_break_target(ctx, exit_label);
     inst_list = codegen_stmt(while_stmt, inst_list, ctx, symtab);
+    codegen_pop_break_target(ctx);
 
-    snprintf(buffer, 50, "%s:\n", label1);
+    snprintf(buffer, 50, "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
 
     inverse = 0;
-    inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -692,24 +981,30 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    char body_label[18], buffer[50];
+    char body_label[18], exit_label[18], buffer[50];
     int relop_type, inverse;
     ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
 
     gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
 
+    codegen_push_break_target(ctx, exit_label);
     while (body_list != NULL)
     {
         struct Statement *body_stmt = (struct Statement *)body_list->cur;
         inst_list = codegen_stmt(body_stmt, inst_list, ctx, symtab);
         body_list = body_list->next;
     }
+    codegen_pop_break_target(ctx);
 
     inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
     inverse = 1;
     inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -731,10 +1026,11 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     int relop_type, inverse;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
     struct Statement *for_body, *for_assign, *update_stmt;
-    char label1[18], label2[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], buffer[50];
 
-    gen_label(label1, 18, ctx);
-    gen_label(label2, 18, ctx);
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     for_body = stmt->stmt_data.for_data.do_for;
     expr = stmt->stmt_data.for_data.to;
 
@@ -756,20 +1052,25 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
     inverse = 0;
-    inst_list = gencode_jmp(NORMAL_JMP, inverse, label1, inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, inverse, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label2);
+    snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
+    codegen_push_break_target(ctx, exit_label);
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
+    codegen_pop_break_target(ctx);
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
 
-    snprintf(buffer, 50, "%s:\n", label1);
+    snprintf(buffer, 50, "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_simple_relop(comparison_expr, inst_list, ctx, &relop_type);
 
     inverse = 0;
-    inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     free(comparison_expr);
     free(one_expr);
