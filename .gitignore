@@ -15,3 +15,15 @@ GPC/Parser/LexAndYacc/Grammar.output
 
 # Test output
 tests/output/
+
+# Root-level scratch artifacts that should live under tests/output or build/
+/*.s
+/*.p
+/*.log
+/*.tmp
+/*.out
+/for
+/mod_test
+/simple_test
+/test_harness
+/_codeql_detected_source_root
