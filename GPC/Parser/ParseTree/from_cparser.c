@@ -799,6 +799,8 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
         return mk_inum(expr_node->line, strtoll(expr_node->sym->name, NULL, 10));
+    case PASCAL_T_REAL:
+        return mk_rnum(expr_node->line, strtof(expr_node->sym->name, NULL));
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
@@ -882,6 +884,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
 
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
+    case PASCAL_T_REAL:
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
     case PASCAL_T_BOOLEAN:
@@ -914,8 +917,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
     default:
-        fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.\n",
+        fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.",
                 expr_node->typ, expr_node->line);
+        if (expr_node->sym != NULL && expr_node->sym->name != NULL)
+            fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
+        fprintf(stderr, "\n");
         break;
     }
 

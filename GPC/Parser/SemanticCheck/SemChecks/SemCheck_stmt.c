@@ -292,6 +292,29 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 /****** STMT SEMCHECKS *******/
 
 /** VAR_ASSIGN **/
+static const char *type_tag_to_name(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE:
+            return "integer";
+        case LONGINT_TYPE:
+            return "longint";
+        case REAL_TYPE:
+            return "real";
+        case STRING_TYPE:
+            return "string";
+        case BOOL:
+            return "boolean";
+        case PROCEDURE:
+            return "procedure";
+        case UNKNOWN_TYPE:
+            return "unknown";
+        default:
+            return "unsupported";
+    }
+}
+
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val;
@@ -317,8 +340,15 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
               (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
         {
-            fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
-                    stmt->line_num);
+            const char *lhs_name = "<expression>";
+            if (var != NULL && var->type == EXPR_VAR_ID)
+                lhs_name = var->expr_data.id;
+            fprintf(stderr,
+                "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
+                stmt->line_num,
+                lhs_name,
+                type_tag_to_name(type_first),
+                type_tag_to_name(type_second));
             ++return_val;
         }
     }

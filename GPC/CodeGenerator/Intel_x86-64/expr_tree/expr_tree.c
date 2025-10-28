@@ -27,6 +27,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
+static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
 ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     ListNode_t *inst_list);
@@ -156,6 +158,12 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     {
         inst_list = gencode_sign_term(node, inst_list, ctx, target_reg);
     }
+    else if(node->expr->type == EXPR_ADDOP &&
+        node->expr->expr_data.addop_data.addop_type == PLUS &&
+        node->expr->resolved_type == STRING_TYPE)
+    {
+        inst_list = gencode_string_concat(node, inst_list, ctx, target_reg);
+    }
     /* CASE 0 */
     else if(expr_tree_is_leaf(node) == 1)
     {
@@ -182,6 +190,71 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
         assert(0 && "Unsupported case in codegen!");
     }
 
+    return inst_list;
+}
+
+static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (node == NULL || node->left_expr == NULL || node->right_expr == NULL)
+        return inst_list;
+
+    char buffer[128];
+    Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
+
+    if (rhs_reg == NULL)
+    {
+        StackNode_t *spill_loc = add_l_t("str_concat_rhs");
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", spill_loc->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n", spill_loc->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    else
+    {
+        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
+
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", rhs_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", rhs_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_concat\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (rhs_reg != NULL)
+        free_reg(get_reg_stack(), rhs_reg);
+    free_arg_regs();
     return inst_list;
 }
 

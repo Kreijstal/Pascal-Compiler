@@ -171,3 +171,26 @@ void gpc_move(void *dest, const void *src, size_t count)
 
     memmove(dest, src, count);
 }
+
+char *gpc_string_concat(const char *lhs, const char *rhs)
+{
+    if (lhs == NULL)
+        lhs = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + rhs_len;
+
+    char *result = (char *)malloc(total + 1);
+    if (result == NULL)
+        return "";
+
+    if (lhs_len > 0)
+        memcpy(result, lhs, lhs_len);
+    if (rhs_len > 0)
+        memcpy(result + lhs_len, rhs, rhs_len);
+    result[total] = '\0';
+    return result;
+}

@@ -490,6 +490,9 @@ static int types_numeric_compatible(int lhs, int rhs)
         return 1;
     if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
         return 1;
+    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE)) ||
+        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE)))
+        return 1;
     return 0;
 }
 /* Checks if a type is a relational AND or OR */
@@ -754,6 +757,12 @@ int semcheck_addop(int *type_return,
         return return_val;
     }
 
+    if (op_type == PLUS && type_first == STRING_TYPE && type_second == STRING_TYPE)
+    {
+        *type_return = STRING_TYPE;
+        return return_val;
+    }
+
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
@@ -768,7 +777,12 @@ int semcheck_addop(int *type_return,
         ++return_val;
     }
 
-    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        *type_return = REAL_TYPE;
+    else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        *type_return = LONGINT_TYPE;
+    else
+        *type_return = type_first;
     return return_val;
 }
 
@@ -817,7 +831,12 @@ int semcheck_mulop(int *type_return,
         ++return_val;
     }
 
-    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        *type_return = REAL_TYPE;
+    else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        *type_return = LONGINT_TYPE;
+    else
+        *type_return = type_first;
     return return_val;
 }
 

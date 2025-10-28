@@ -484,6 +484,29 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_string_concatenation(self):
+        """Tests that string addition produces a concatenated result."""
+        input_file = os.path.join(TEST_CASES_DIR, "string_concat_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("string_concat_demo execution timed out")
+            return
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "Hello World\n")
+
     def test_sysutils_unit(self):
         """Tests that the SysUtils unit links and provides basic helpers."""
         input_file = os.path.join(TEST_CASES_DIR, "sysutils_demo.p")
