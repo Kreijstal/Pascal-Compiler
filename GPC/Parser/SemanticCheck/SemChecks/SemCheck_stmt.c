@@ -280,6 +280,11 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             /* No semantic checking needed for asm blocks */
             break;
 
+        case STMT_EXIT:
+        case STMT_BREAK:
+            /* No semantic checking needed for simple control flow statements */
+            break;
+
         default:
             assert(0 && "Bad type in semcheck_stmt!");
             break;
