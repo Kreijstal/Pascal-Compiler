@@ -44,6 +44,8 @@ static const char *describe_expression_kind(const struct Expression *expr)
             return "relational expression";
         case EXPR_INUM:
             return "integer literal";
+        case EXPR_RNUM:
+            return "real literal";
         default:
             return "expression";
     }
@@ -116,6 +118,13 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             return inst_list;
         case EXPR_INUM:
             CODEGEN_DEBUG("DEBUG: Processing integer constant expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_RNUM:
+            CODEGEN_DEBUG("DEBUG: Processing real constant expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

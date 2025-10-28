@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <stdint.h>
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -72,6 +73,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_VAR_ID:
         case EXPR_ARRAY_ACCESS:
         case EXPR_INUM:
+        case EXPR_RNUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
         case EXPR_BOOL:
@@ -418,7 +420,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
 
-    int use_qword = (expr->type == EXPR_INUM && expr->resolved_type == LONGINT_TYPE);
+    int use_qword = (expr->resolved_type == LONGINT_TYPE || expr->resolved_type == REAL_TYPE);
 
 #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf,
@@ -594,6 +596,15 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
         case EXPR_INUM:
             snprintf(buffer, buf_len, "$%lld", expr->expr_data.i_num);
             break;
+
+        case EXPR_RNUM:
+        {
+            double value = expr->expr_data.r_num;
+            int64_t bits;
+            memcpy(&bits, &value, sizeof(bits));
+            snprintf(buffer, buf_len, "$%lld", (long long)bits);
+            break;
+        }
 
         case EXPR_BOOL:
             snprintf(buffer, buf_len, "$%d", expr->expr_data.bool_value ? 1 : 0);

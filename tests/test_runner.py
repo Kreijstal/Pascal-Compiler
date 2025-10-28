@@ -225,6 +225,15 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(os.path.exists(ast_file))
         self.assertGreater(os.path.getsize(ast_file), 0)
 
+    def test_real_literal_codegen(self):
+        """Compiling a real literal should succeed and materialize the IEEE-754 bits."""
+        input_file = os.path.join(TEST_CASES_DIR, "real_literal.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "real_literal.s")
+        run_compiler(input_file, asm_file)
+        asm = read_file_content(asm_file)
+        literal_bits = "4609434218613702656"
+        self.assertIn(literal_bits, asm)
+
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
         if shutil.which("valgrind") is None:

@@ -52,24 +52,33 @@ begin
 end;
 
 function DigitToString(Value: longint): AnsiString;
+var
+    DigitValue: longint;
 begin
-    if Value <= 0 then
+    if Value < 0 then
+        DigitValue := 0
+    else if Value > 9 then
+        DigitValue := 9
+    else
+        DigitValue := Value;
+
+    if DigitValue = 0 then
         DigitToString := '0'
-    else if Value = 1 then
+    else if DigitValue = 1 then
         DigitToString := '1'
-    else if Value = 2 then
+    else if DigitValue = 2 then
         DigitToString := '2'
-    else if Value = 3 then
+    else if DigitValue = 3 then
         DigitToString := '3'
-    else if Value = 4 then
+    else if DigitValue = 4 then
         DigitToString := '4'
-    else if Value = 5 then
+    else if DigitValue = 5 then
         DigitToString := '5'
-    else if Value = 6 then
+    else if DigitValue = 6 then
         DigitToString := '6'
-    else if Value = 7 then
+    else if DigitValue = 7 then
         DigitToString := '7'
-    else if Value = 8 then
+    else if DigitValue = 8 then
         DigitToString := '8'
     else
         DigitToString := '9';
