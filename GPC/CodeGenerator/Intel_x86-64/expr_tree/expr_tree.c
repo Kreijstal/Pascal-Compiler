@@ -543,6 +543,10 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             {
                 case PLUS:
                 {
+                    /*
+                     * The expression tree emits the literal 1 as the string "$1". Detecting that
+                     * special case lets us use INC instead of ADD to save an instruction byte.
+                     */
                     if(strcmp(right, "$1") == 0)
                         snprintf(buffer, 50, "\tincl\t%s\n", left);
                     else

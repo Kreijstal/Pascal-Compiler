@@ -21,6 +21,44 @@
 
 
 /* Code generation for expressions */
+static const char *describe_expression_kind(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return "unknown";
+
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+            return "variable reference";
+        case EXPR_ARRAY_ACCESS:
+            return "array access";
+        case EXPR_FUNCTION_CALL:
+            return "function call";
+        case EXPR_ADDOP:
+            return "additive expression";
+        case EXPR_MULOP:
+            return "multiplicative expression";
+        case EXPR_SIGN_TERM:
+            return "signed term";
+        case EXPR_RELOP:
+            return "relational expression";
+        case EXPR_INUM:
+            return "integer literal";
+        default:
+            return "expression";
+    }
+}
+
+ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64)
+{
+    assert(src_reg32 != NULL);
+    assert(dst_reg64 != NULL);
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", src_reg32, dst_reg64);
+    return add_inst(inst_list, buffer);
+}
+
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -183,8 +221,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             inst_list = add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
         int scaled_sizes[] = {1, 2, 4, 8};
         int can_scale = 0;
@@ -250,8 +287,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             }
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
         if (can_scale)
         {
@@ -299,8 +335,7 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
 
     if (expr->resolved_type == LONGINT_TYPE)
     {
-        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", target_reg->bit_32, target_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
     }
 
     free_reg(get_reg_stack(), addr_reg);
@@ -393,6 +428,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     typedef struct ArgInfo
     {
         Register_t *reg;
+        struct Expression *expr;
     } ArgInfo;
 
     int total_args = 0;
@@ -438,14 +474,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                 inst_list = add_inst(inst_list, buffer);
 
                 if (arg_infos != NULL)
+                {
                     arg_infos[arg_num].reg = addr_reg;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
             }
             else if (arg_expr->type == EXPR_ARRAY_ACCESS)
             {
                 Register_t *addr_reg = NULL;
                 inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
                 if (arg_infos != NULL)
+                {
                     arg_infos[arg_num].reg = addr_reg;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
             }
             else
             {
@@ -463,7 +505,10 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             free_expr_tree(expr_tree);
 
             if (arg_infos != NULL)
+            {
                 arg_infos[arg_num].reg = top_reg;
+                arg_infos[arg_num].expr = arg_expr;
+            }
         }
 
         args = args->next;
@@ -482,9 +527,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         }
 
         Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
+        struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
         if (stored_reg == NULL)
         {
-            fprintf(stderr, "ERROR: Missing evaluated register for argument %d\n", i);
+            const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
+            fprintf(stderr,
+                    "ERROR: Missing evaluated register for argument %d in call to %s (%s).\n",
+                    i,
+                    proc_name,
+                    describe_expression_kind(source_expr));
             exit(1);
         }
 

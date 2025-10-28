@@ -34,6 +34,40 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
+typedef int (*builtin_semcheck_handler_t)(SymTab_t *, struct Statement *, int);
+
+static int try_resolve_builtin_procedure(SymTab_t *symtab,
+    struct Statement *stmt,
+    const char *expected_name,
+    builtin_semcheck_handler_t handler,
+    int max_scope_lev,
+    int *handled)
+{
+    if (handled != NULL)
+        *handled = 0;
+
+    if (symtab == NULL || stmt == NULL || expected_name == NULL || handler == NULL)
+        return 0;
+
+    char *proc_id = stmt->stmt_data.procedure_call_data.id;
+    if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
+        return 0;
+
+    HashNode_t *builtin_node = NULL;
+    if (FindIdent(&builtin_node, symtab, proc_id) != -1 && builtin_node != NULL &&
+        builtin_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    {
+        stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        builtin_node->referenced += 1;
+        if (handled != NULL)
+            *handled = 1;
+        return handler(symtab, stmt, max_scope_lev);
+    }
+
+    return 0;
+}
+
 static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -257,35 +291,23 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
-    // Handle SetLength specially - it's a builtin with variable arguments
-    if (proc_id != NULL && pascal_identifier_equals(proc_id, "SetLength"))
-    {
-        HashNode_t *setlength_node = NULL;
-        if (FindIdent(&setlength_node, symtab, proc_id) != -1 && setlength_node != NULL &&
-            setlength_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
-        {
-            stmt->stmt_data.procedure_call_data.resolved_proc = setlength_node;
-            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-            setlength_node->referenced += 1;
-            return_val += semcheck_builtin_setlength(symtab, stmt, max_scope_lev);
-            return return_val;
-        }
-    }
+    int handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",
+        semcheck_builtin_setlength, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
 
-    if (proc_id != NULL &&
-        (pascal_identifier_equals(proc_id, "write") || pascal_identifier_equals(proc_id, "writeln")))
-    {
-        HashNode_t *write_node = NULL;
-        if (FindIdent(&write_node, symtab, proc_id) != -1 && write_node != NULL &&
-            write_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
-        {
-            stmt->stmt_data.procedure_call_data.resolved_proc = write_node;
-            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-            write_node->referenced += 1;
-            return_val += semcheck_builtin_write_like(symtab, stmt, max_scope_lev);
-            return return_val;
-        }
-    }
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "write",
+        semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "writeln",
+        semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
 
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
     assert(mangled_name != NULL);

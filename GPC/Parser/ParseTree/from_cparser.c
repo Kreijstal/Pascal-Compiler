@@ -911,6 +911,10 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListNode_t *args = NULL;
     ast_t *cur = arg_node;
 
+    /*
+     * cparser often wraps Pascal arguments in synthetic tuple/statement nodes. Unwrap each
+     * layer so we only convert real expressions and preserve field-width wrappers explicitly.
+     */
     while (cur != NULL && cur != ast_nil) {
         ast_t *unwrapped = unwrap_pascal_node(cur);
         if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH) {

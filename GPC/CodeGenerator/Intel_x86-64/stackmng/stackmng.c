@@ -441,7 +441,7 @@ RegStack_t *init_reg_stack()
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
-    reg_stack->num_registers = 9;
+    reg_stack->num_registers = NUM_CALLER_SAVED_REGISTERS;
 
     return reg_stack;
 }

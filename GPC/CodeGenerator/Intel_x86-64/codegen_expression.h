@@ -18,6 +18,8 @@ ListNode_t *codegen_array_access(struct Expression *, ListNode_t *, CodeGenConte
 ListNode_t *codegen_array_element_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 
+ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64);
+
 /* (DEPRECATED) */
 ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, CodeGenContext *ctx);
