@@ -141,6 +141,7 @@ int semcheck_expr_main(int *type_return,
     assert(type_return != NULL);
 
     return_val = 0;
+    expr->resolved_type = UNKNOWN_TYPE;
     switch(expr->type)
     {
         case EXPR_RELOP:
@@ -189,6 +190,7 @@ int semcheck_expr_main(int *type_return,
             break;
     }
 
+    expr->resolved_type = *type_return;
     return return_val;
 }
 

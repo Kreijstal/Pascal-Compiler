@@ -1,0 +1,20 @@
+[PROGRAM:SimpleExpr]
+  [ARGS]:
+  [USES]:
+  [CONST_DECLS]:
+  [TYPE_DECLS]:
+  [VAR_DECLS]:
+    [VARDECL of type integer]
+      x
+  [SUBPROGRAMS]:
+  [BODY]:
+    [COMPOUND_STMT]:
+      [VARASSIGN]:
+        [VAR]:
+          [VAR_ID:x]
+        [EXPR]:
+          [ADDOP:17]:
+            [LEFT]:
+              [I_NUM:2]
+            [RIGHT]:
+              [I_NUM:3]

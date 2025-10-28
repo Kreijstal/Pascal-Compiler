@@ -131,3 +131,26 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
     descriptor->data = new_data;
     descriptor->length = new_length;
 }
+
+void gpc_write_integer(int width, int64_t value)
+{
+    if (width > 0)
+        printf("%*lld", width, (long long)value);
+    else
+        printf("%lld", (long long)value);
+}
+
+void gpc_write_string(int width, const char *value)
+{
+    if (value == NULL)
+        value = "";
+    if (width > 0)
+        printf("%*s", width, value);
+    else
+        printf("%s", value);
+}
+
+void gpc_write_newline(void)
+{
+    putchar('\n');
+}

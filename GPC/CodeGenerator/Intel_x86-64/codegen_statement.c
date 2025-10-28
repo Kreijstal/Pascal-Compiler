@@ -13,6 +13,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../identifier_utils.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
@@ -140,6 +141,90 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t *inst_list,
+                                              CodeGenContext *ctx, int append_newline)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    int is_windows = codegen_target_is_windows();
+    const char *width_dest32 = is_windows ? "%ecx" : "%edi";
+    const char *value_dest64 = is_windows ? "%rdx" : "%rsi";
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        Register_t *width_reg = NULL;
+
+        if (expr != NULL && expr->field_width != NULL)
+        {
+            expr_node_t *width_tree = build_expr_tree(expr->field_width);
+            width_reg = get_free_reg(get_reg_stack(), &inst_list);
+            inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_reg);
+            free_expr_tree(width_tree);
+        }
+
+        char buffer[128];
+        if (width_reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", width_reg->bit_32, width_dest32);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), width_reg);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", width_dest32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
+        expr_node_t *expr_tree = build_expr_tree(expr);
+        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
+        free_expr_tree(expr_tree);
+
+        if (expr_type == STRING_TYPE)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (expr_type == LONGINT_TYPE)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", value_reg->bit_32, value_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        free_reg(get_reg_stack(), value_reg);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+
+        const char *call_target = "gpc_write_integer";
+        if (expr_type == STRING_TYPE)
+            call_target = "gpc_write_string";
+
+        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+
+        args = args->next;
+    }
+
+    if (append_newline)
+    {
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
+        free_arg_regs();
+    }
+
+    return inst_list;
+}
+
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -156,10 +241,29 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
 
-    if (stmt->stmt_data.procedure_call_data.id != NULL &&
-        strcmp(stmt->stmt_data.procedure_call_data.id, "SetLength") == 0)
+    const char *proc_id_lookup = stmt->stmt_data.procedure_call_data.id;
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetLength"))
     {
         inst_list = codegen_builtin_setlength(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "write"))
+    {
+        inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 0);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "writeln"))
+    {
+        inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 1);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

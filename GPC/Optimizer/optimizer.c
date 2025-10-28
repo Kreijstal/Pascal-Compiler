@@ -18,15 +18,15 @@
 #include <assert.h>
 #include <string.h>
 #include "optimizer.h"
-#include "../flags.h"
+#include "pass_manager.h"
 #include "../Parser/ParseTree/tree.h"
 #include "../Parser/ParseTree/tree_types.h"
 #include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../Parser/ParseTree/type_tags.h"
 
-void optimize_prog(SymTab_t *symtab, Tree_t *prog);
-void optimize_subprog(SymTab_t *symtab, Tree_t *sub);
+static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog);
+static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub);
 
 void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls);
 int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt);
@@ -50,126 +50,130 @@ void optimize(SymTab_t *symtab, Tree_t *tree)
     assert(symtab != NULL);
     assert(tree != NULL);
 
-    switch(tree->type)
-    {
-        case TREE_PROGRAM_TYPE:
-            optimize_prog(symtab, tree);
-            break;
-
-        case TREE_SUBPROGRAM:
-            optimize_subprog(symtab, tree);
-            break;
-
-        default:
-            assert(0 && "Unsupported tree type given to optimizer!");
-            break;
-    }
+    optimizer_pass_manager_run(symtab, tree);
 }
 
-/* Optimizes a program */
-void optimize_prog(SymTab_t *symtab, Tree_t *prog)
+static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog)
 {
     assert(symtab != NULL);
     assert(prog != NULL);
     assert(prog->type == TREE_PROGRAM_TYPE);
 
-    ListNode_t *vars_to_check, *vars_to_remove, *cur;
-    struct Program *prog_data;
-    int num_removed;
+    struct Program *prog_data = &prog->tree_data.program_data;
+    if (prog_data->body_statement == NULL)
+        return;
 
-    prog_data = &prog->tree_data.program_data;
-    vars_to_check = vars_to_remove = NULL;
+    ListNode_t *vars_to_check = NULL;
+    ListNode_t *vars_to_remove = NULL;
+    ListNode_t *cur;
+    int num_removed = 0;
 
-    if(optimize_flag() >= 2)
+    decrement_self_references(symtab, prog_data->body_statement);
+    set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
+
+    cur = vars_to_remove;
+    while (cur != NULL)
     {
-        decrement_self_references(symtab, prog_data->body_statement);
-        set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
+        num_removed += remove_mutation_statement(symtab, (char *)cur->cur, prog_data->body_statement);
+        remove_var_decls(symtab, (char *)cur->cur, prog_data->var_declaration);
 
-        cur = vars_to_remove;
-        num_removed = 0;
-        while(cur != NULL)
+        cur = cur->next;
+
+        if (cur == NULL && num_removed > 0)
         {
-            #ifdef DEBUG_OPTIMIZER
-                fprintf(stderr, "OPTIMIZER: Removing unreferenced variable %s\n",
-                    (char *)cur->cur);
-            #endif
+            DestroyList(vars_to_check);
+            DestroyList(vars_to_remove);
 
-            num_removed += remove_mutation_statement(symtab, (char *)cur->cur, prog_data->body_statement);
-            remove_var_decls(symtab, (char *)cur->cur, prog_data->var_declaration);
-
-            cur = cur->next;
-
-            if(cur == NULL && num_removed > 0)
-            {
-                DestroyList(vars_to_check);
-                DestroyList(vars_to_remove);
-
-                set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
-                cur = vars_to_remove;
-                num_removed = 0;
-            }
+            set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
+            cur = vars_to_remove;
+            num_removed = 0;
         }
-        DestroyList(vars_to_check);
-        DestroyList(vars_to_remove);
     }
 
-    if(optimize_flag() >= 1)
-    {
-        simplify_stmt_expr(prog_data->body_statement);
-    }
+    DestroyList(vars_to_check);
+    DestroyList(vars_to_remove);
 }
 
-/* Optimizes a subprogram */
-void optimize_subprog(SymTab_t *symtab, Tree_t *sub)
+static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub)
 {
     assert(symtab != NULL);
     assert(sub != NULL);
     assert(sub->type == TREE_SUBPROGRAM);
 
-    ListNode_t *vars_to_check, *vars_to_remove, *cur;
-    struct Subprogram *sub_data;
-    int num_removed;
+    struct Subprogram *sub_data = &sub->tree_data.subprogram_data;
+    if (sub_data->statement_list == NULL)
+        return;
 
-    sub_data = &sub->tree_data.subprogram_data;
-    vars_to_check = vars_to_remove = NULL;
+    ListNode_t *vars_to_check = NULL;
+    ListNode_t *vars_to_remove = NULL;
+    ListNode_t *cur;
+    int num_removed = 0;
 
-    if(optimize_flag() >= 2)
+    decrement_self_references(symtab, sub_data->statement_list);
+    set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
+
+    cur = vars_to_remove;
+    while (cur != NULL)
     {
-        decrement_self_references(symtab, sub_data->statement_list);
-        set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
+        num_removed += remove_mutation_statement(symtab, (char *)cur->cur, sub_data->statement_list);
+        remove_var_decls(symtab, (char *)cur->cur, sub_data->declarations);
 
-        cur = vars_to_remove;
-        num_removed = 0;
-        while(cur != NULL)
+        cur = cur->next;
+
+        if (cur == NULL && num_removed > 0)
         {
-            #ifdef DEBUG_OPTIMIZER
-                fprintf(stderr, "OPTIMIZER: Removing unreferenced variable %s\n",
-                    (char *)cur->cur);
-            #endif
+            DestroyList(vars_to_check);
+            DestroyList(vars_to_remove);
 
-            num_removed += remove_mutation_statement(symtab, (char *)cur->cur, sub_data->statement_list);
-            remove_var_decls(symtab, (char *)cur->cur, sub_data->declarations);
-
-            cur = cur->next;
-
-            if(cur == NULL && num_removed > 0)
-            {
-                DestroyList(vars_to_check);
-                DestroyList(vars_to_remove);
-
-                set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
-                cur = vars_to_remove;
-                num_removed = 0;
-            }
+            set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
+            cur = vars_to_remove;
+            num_removed = 0;
         }
-
-        DestroyList(vars_to_check);
-        DestroyList(vars_to_remove);
     }
 
-    if(optimize_flag() >= 1)
+    DestroyList(vars_to_check);
+    DestroyList(vars_to_remove);
+}
+
+void optimizer_pass_dead_code_elimination(SymTab_t *symtab, Tree_t *tree)
+{
+    assert(symtab != NULL);
+    assert(tree != NULL);
+
+    switch (tree->type)
     {
-        simplify_stmt_expr(sub_data->statement_list);
+        case TREE_PROGRAM_TYPE:
+            run_dead_code_elimination_program(symtab, tree);
+            break;
+
+        case TREE_SUBPROGRAM:
+            run_dead_code_elimination_subprogram(symtab, tree);
+            break;
+
+        default:
+            break;
+    }
+}
+
+void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree)
+{
+    (void)symtab;
+    assert(tree != NULL);
+
+    switch (tree->type)
+    {
+        case TREE_PROGRAM_TYPE:
+            if (tree->tree_data.program_data.body_statement != NULL)
+                simplify_stmt_expr(tree->tree_data.program_data.body_statement);
+            break;
+
+        case TREE_SUBPROGRAM:
+            if (tree->tree_data.subprogram_data.statement_list != NULL)
+                simplify_stmt_expr(tree->tree_data.subprogram_data.statement_list);
+            break;
+
+        default:
+            break;
     }
 }
 

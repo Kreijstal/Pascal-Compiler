@@ -25,6 +25,7 @@ enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, 
 typedef struct HashNode
 {
     char *id;
+    char *canonical_id;
     char *mangled_id;
     enum HashType hash_type;
     enum VarType var_type;

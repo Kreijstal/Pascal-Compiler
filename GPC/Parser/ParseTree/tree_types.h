@@ -192,6 +192,9 @@ struct Expression
         /* String literal */
         char *string;
     } expr_data;
+    struct Expression *field_width;
+    struct Expression *field_precision;
+    int resolved_type;
 };
 
 
