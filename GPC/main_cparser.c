@@ -33,6 +33,7 @@
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParseTree/from_cparser.h"
+#include "Parser/pascal_frontend.h"
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
@@ -292,54 +293,6 @@ static void set_flags(char **optional_args, int count)
     }
 }
 
-static char *read_file(const char *path, size_t *out_len)
-{
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-    {
-        fprintf(stderr, "Error: Cannot open file '%s'\n", path);
-        return NULL;
-    }
-
-    if (fseek(f, 0, SEEK_END) != 0)
-    {
-        fprintf(stderr, "Error: Failed to seek file '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    long size = ftell(f);
-    if (size < 0)
-    {
-        fprintf(stderr, "Error: Failed to determine file size for '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    if (fseek(f, 0, SEEK_SET) != 0)
-    {
-        fprintf(stderr, "Error: Failed to rewind file '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    char *buffer = malloc((size_t)size + 1);
-    if (buffer == NULL)
-    {
-        fprintf(stderr, "Error: Memory allocation failed while reading '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    size_t read = fread(buffer, 1, (size_t)size, f);
-    fclose(f);
-
-    buffer[read] = '\0';
-    if (out_len != NULL)
-        *out_len = read;
-    return buffer;
-}
-
 static void mark_stdlib_var_params(ListNode_t *subprograms)
 {
     for (ListNode_t *node = subprograms; node != NULL; node = node->next)
@@ -372,184 +325,28 @@ static void mark_stdlib_var_params(ListNode_t *subprograms)
     }
 }
 
-static void report_parse_error(const char *path, ParseError *err)
-{
-    if (err == NULL)
-        return;
-
-    fprintf(stderr, "Parse error in %s:\n", path);
-    fprintf(stderr, "  Line %d, Column %d: %s\n",
-            err->line, err->col,
-            err->message ? err->message : "unknown error");
-    if (err->unexpected)
-        fprintf(stderr, "  Unexpected: %s\n", err->unexpected);
-}
-
-static const char *skip_utf8_bom(const char *cursor, const char *end)
-{
-    if (end - cursor >= 3 &&
-        (unsigned char)cursor[0] == 0xEF &&
-        (unsigned char)cursor[1] == 0xBB &&
-        (unsigned char)cursor[2] == 0xBF)
-    {
-        return cursor + 3;
-    }
-    return cursor;
-}
-
-static const char *skip_whitespace_and_comments(const char *cursor, const char *end)
-{
-    while (cursor < end)
-    {
-        unsigned char ch = (unsigned char)*cursor;
-        if (isspace(ch))
-        {
-            ++cursor;
-            continue;
-        }
-
-        if (ch == '{')
-        {
-            ++cursor;
-            while (cursor < end && *cursor != '}')
-                ++cursor;
-            if (cursor < end)
-                ++cursor;
-            continue;
-        }
-
-        if (ch == '(' && (cursor + 1) < end && cursor[1] == '*')
-        {
-            cursor += 2;
-            while ((cursor + 1) < end && !(cursor[0] == '*' && cursor[1] == ')'))
-                ++cursor;
-            if ((cursor + 1) < end)
-                cursor += 2;
-            else
-                cursor = end;
-            continue;
-        }
-
-        if (ch == '/' && (cursor + 1) < end && cursor[1] == '/')
-        {
-            cursor += 2;
-            while (cursor < end && *cursor != '\n')
-                ++cursor;
-            continue;
-        }
-
-        break;
-    }
-
-    return cursor;
-}
-
-static bool buffer_starts_with_unit(const char *buffer, size_t length)
-{
-    const char *cursor = buffer;
-    const char *end = buffer + length;
-    cursor = skip_utf8_bom(cursor, end);
-    cursor = skip_whitespace_and_comments(cursor, end);
-
-    const char *keyword = "unit";
-    size_t keyword_len = strlen(keyword);
-    if ((size_t)(end - cursor) < keyword_len)
-        return false;
-
-    if (strncasecmp(cursor, keyword, keyword_len) != 0)
-        return false;
-
-    const char *after = cursor + keyword_len;
-    if (after < end && (isalnum((unsigned char)*after) || *after == '_'))
-        return false;
-
-    return true;
-}
-
 static bool parse_pascal_file(const char *path, Tree_t **out_tree, bool convert_to_tree)
 {
-    size_t length = 0;
-    char *buffer = read_file(path, &length);
-    if (buffer == NULL)
-        return false;
-
-    combinator_t *parser = new_combinator();
-    bool is_unit = buffer_starts_with_unit(buffer, length);
-    if (is_unit)
-        init_pascal_unit_parser(&parser);
-    else
-        init_pascal_complete_program_parser(&parser);
-
-    input_t *input = new_input();
-    input->buffer = buffer;
-    input->length = (int)length;
-
-    if (ast_nil == NULL)
-    {
-        ast_nil = new_ast();
-        ast_nil->typ = PASCAL_T_NONE;
-    }
-
-    file_to_parse = (char *)path;
-
-    ParseResult result = parse(input, parser);
     Tree_t *tree = NULL;
-    bool success = false;
-    if (!result.is_success)
+    ParseError *error = NULL;
+    bool success = pascal_parse_source(path, convert_to_tree, &tree, &error);
+    if (!success)
     {
-        report_parse_error(path, result.value.error);
-        if (result.value.error != NULL)
-            free_error(result.value.error);
+        pascal_print_parse_error(path, error);
+        if (error != NULL)
+            free_error(error);
     }
-    else
-    {
-        if (input->start < input->length)
-        {
-            fprintf(stderr,
-                    "Warning: Parser did not consume entire input for %s (at position %d of %d)\n",
-                    path, input->start, input->length);
-        }
-
-        if (convert_to_tree)
-        {
-            tree = tree_from_pascal_ast(result.value.ast);
-            if (tree == NULL)
-            {
-                fprintf(stderr, "Error: Failed to convert AST for '%s' to legacy parse tree.\n", path);
-            }
-            else
-            {
-                success = true;
-            }
-        }
-        else
-        {
-            success = true;
-        }
-
-        free_ast(result.value.ast);
-    }
-
-    free(buffer);
-    free(input);
-    file_to_parse = NULL;
-    free_combinator(parser);
-    if (!success && tree != NULL)
-        destroy_tree(tree);
 
     if (out_tree != NULL)
     {
-        if (convert_to_tree)
-        {
-            if (success)
-                *out_tree = tree;
-            else
-                *out_tree = NULL;
-        }
+        if (success && convert_to_tree)
+            *out_tree = tree;
         else
-        {
             *out_tree = NULL;
-        }
+    }
+    else if (tree != NULL && convert_to_tree)
+    {
+        destroy_tree(tree);
     }
 
     return success;
