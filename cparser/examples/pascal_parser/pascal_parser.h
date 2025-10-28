@@ -37,6 +37,8 @@ typedef enum {
     PASCAL_T_XOR,
     PASCAL_T_SHL,
     PASCAL_T_SHR,
+    PASCAL_T_ROL,
+    PASCAL_T_ROR,
     PASCAL_T_ADDR,
     PASCAL_T_DEREF,
     PASCAL_T_RANGE,

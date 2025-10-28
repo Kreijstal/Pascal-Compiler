@@ -42,5 +42,7 @@
 #define XOR                 23
 #define SHL                 24
 #define SHR                 25
+#define ROL                 26
+#define ROR                 27
 
 #endif /* TYPE_TAGS_H */
