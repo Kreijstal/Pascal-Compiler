@@ -125,6 +125,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         return error_count;
     }
 
+    const char *mangled_name = NULL;
     if (arg_type == STRING_TYPE)
     {
         if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
@@ -168,27 +169,14 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             return 0;
         }
 
-        if (expr->expr_data.function_call_data.mangled_id != NULL)
-        {
-            free(expr->expr_data.function_call_data.mangled_id);
-            expr->expr_data.function_call_data.mangled_id = NULL;
-        }
-
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_ord_string");
-        if (expr->expr_data.function_call_data.mangled_id == NULL)
-        {
-            fprintf(stderr, "Error: failed to allocate mangled name for Ord.\\n");
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-
-        expr->expr_data.function_call_data.resolved_func = NULL;
-        *type_return = LONGINT_TYPE;
-        expr->resolved_type = LONGINT_TYPE;
-        return 0;
+        mangled_name = "gpc_ord_string";
+    }
+    else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
+    {
+        mangled_name = "gpc_ord_longint";
     }
 
-    if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
+    if (mangled_name != NULL)
     {
         if (expr->expr_data.function_call_data.mangled_id != NULL)
         {
@@ -196,7 +184,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
 
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_ord_longint");
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Ord.\\n");
@@ -1143,7 +1131,7 @@ int semcheck_funccall(int *type_return,
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
 
-    if (id != NULL && strcmp(id, "SizeOf") == 0)
+    if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "Chr"))

@@ -164,6 +164,14 @@ void gpc_write_boolean(int width, int value)
         printf("%s", text);
 }
 
+static char *gpc_alloc_empty_string(void)
+{
+    char *empty = (char *)malloc(1);
+    if (empty != NULL)
+        empty[0] = '\0';
+    return empty;
+}
+
 void gpc_move(void *dest, const void *src, size_t count)
 {
     if (dest == NULL || src == NULL || count == 0)
@@ -185,7 +193,7 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
 
     char *result = (char *)malloc(total + 1);
     if (result == NULL)
-        return "";
+        return gpc_alloc_empty_string();
 
     if (lhs_len > 0)
         memcpy(result, lhs, lhs_len);
@@ -204,7 +212,7 @@ char *gpc_chr(int64_t value)
 
     char *result = (char *)malloc(2);
     if (result == NULL)
-        return "";
+        return gpc_alloc_empty_string();
 
     result[0] = (char)(value & 0xFF);
     result[1] = '\0';
