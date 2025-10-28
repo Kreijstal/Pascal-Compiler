@@ -109,8 +109,7 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, descriptor_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
-    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", length_reg->bit_32, length_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
 
     if (codegen_target_is_windows())
     {
@@ -196,8 +195,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", value_reg->bit_32, value_dest64);
-            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
         }
 
         free_reg(get_reg_stack(), value_reg);

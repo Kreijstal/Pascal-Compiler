@@ -48,14 +48,6 @@ begin
     succ := i + 1;
 end;
 
-function max(a, b: integer): integer;
-begin
-    if a >= b then
-        max := a
-    else
-        max := b;
-end;
-
 procedure halt;
 begin
     assembler;
