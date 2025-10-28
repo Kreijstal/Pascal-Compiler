@@ -205,6 +205,8 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
 
 struct Statement *mk_asmblock(int line_num, char *code);
 
+struct Statement *mk_break(int line_num);
+
 /* Expression routines */
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
                                 struct Expression *right);

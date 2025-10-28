@@ -448,6 +448,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     typedef struct ArgInfo
     {
         Register_t *reg;
+        StackNode_t *spill;
         struct Expression *expr;
     } ArgInfo;
 
@@ -495,8 +496,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 
                 if (arg_infos != NULL)
                 {
-                    arg_infos[arg_num].reg = addr_reg;
-                    arg_infos[arg_num].expr = arg_expr;
+                arg_infos[arg_num].reg = addr_reg;
+                arg_infos[arg_num].spill = NULL;
+                arg_infos[arg_num].expr = arg_expr;
                 }
             }
             else if (arg_expr->type == EXPR_ARRAY_ACCESS)
@@ -505,8 +507,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                 inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
                 if (arg_infos != NULL)
                 {
-                    arg_infos[arg_num].reg = addr_reg;
-                    arg_infos[arg_num].expr = arg_expr;
+                arg_infos[arg_num].reg = addr_reg;
+                arg_infos[arg_num].spill = NULL;
+                arg_infos[arg_num].expr = arg_expr;
                 }
             }
             else
@@ -527,6 +530,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             if (arg_infos != NULL)
             {
                 arg_infos[arg_num].reg = top_reg;
+                arg_infos[arg_num].spill = NULL;
                 arg_infos[arg_num].expr = arg_expr;
             }
         }
@@ -537,7 +541,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         ++arg_num;
     }
 
-    for (int i = 0; i < arg_num; ++i)
+    for (int i = arg_num - 1; i >= 0; --i)
     {
         arg_reg_char = get_arg_reg64_num(i);
         if (arg_reg_char == NULL)
@@ -546,22 +550,48 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             exit(1);
         }
 
+        if (arg_infos != NULL)
+        {
+            for (int j = 0; j < i; ++j)
+            {
+                if (arg_infos[j].reg != NULL &&
+                    strcmp(arg_infos[j].reg->bit_64, arg_reg_char) == 0)
+                {
+                    StackNode_t *spill = add_l_t("arg_spill");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        arg_infos[j].reg->bit_64, spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), arg_infos[j].reg);
+                    arg_infos[j].reg = NULL;
+                    arg_infos[j].spill = spill;
+                }
+            }
+        }
+
         Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
         struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
-        if (stored_reg == NULL)
+        if (stored_reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), stored_reg);
+        }
+        else if (arg_infos != NULL && arg_infos[i].spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                arg_infos[i].spill->offset, arg_reg_char);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
         {
             const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
             fprintf(stderr,
-                    "ERROR: Missing evaluated register for argument %d in call to %s (%s).\n",
+                    "ERROR: Missing evaluated value for argument %d in call to %s (%s).\n",
                     i,
                     proc_name,
                     describe_expression_kind(source_expr));
             exit(1);
         }
-
-        snprintf(buffer, 50, "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
-        inst_list = add_inst(inst_list, buffer);
-        free_reg(get_reg_stack(), stored_reg);
     }
 
     free(arg_infos);
