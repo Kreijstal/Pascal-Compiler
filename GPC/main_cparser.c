@@ -727,9 +727,17 @@ int main(int argc, char **argv)
         ctx.write_label_counter = 1;
         ctx.symtab = symtab;
         ctx.target_abi = current_target_abi();
+        ctx.had_error = 0;
 
         codegen(user_tree, input_file, &ctx, symtab);
+        int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
+        if (codegen_failed)
+        {
+            fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
+            remove(output_file);
+            exit_code = 1;
+        }
     }
     else
     {

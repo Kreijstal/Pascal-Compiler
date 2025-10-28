@@ -220,6 +220,22 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           list_print(tree->tree_data.var_decl_data.ids, f, num_indent+1);
           break;
 
+        case TREE_CONST_DECL:
+          if (tree->tree_data.const_decl_data.type_id != NULL)
+            fprintf(f, "[CONSTDECL %s of type %s]\n",
+                tree->tree_data.const_decl_data.id,
+                tree->tree_data.const_decl_data.type_id);
+          else
+            fprintf(f, "[CONSTDECL %s]\n", tree->tree_data.const_decl_data.id);
+
+          if (tree->tree_data.const_decl_data.value != NULL)
+          {
+              print_indent(f, num_indent+1);
+              fprintf(f, "[VALUE]:\n");
+              expr_print(tree->tree_data.const_decl_data.value, f, num_indent+2);
+          }
+          break;
+
         case TREE_ARR_DECL:
           if (tree->tree_data.arr_decl_data.type_id != NULL)
             fprintf(f, "[ARRDECL of type %s in range(%d, %d)]\n",
@@ -457,7 +473,7 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
 
         case EXPR_INUM:
-          fprintf(f, "[I_NUM:%d]\n", expr->expr_data.i_num);
+          fprintf(f, "[I_NUM:%lld]\n", expr->expr_data.i_num);
           break;
 
         case EXPR_RNUM:
@@ -1264,7 +1280,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     return new_expr;
 }
 
-struct Expression *mk_inum(int line_num, int i_num)
+struct Expression *mk_inum(int line_num, long long i_num)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));

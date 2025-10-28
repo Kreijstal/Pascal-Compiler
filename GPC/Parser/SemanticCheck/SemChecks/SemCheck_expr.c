@@ -22,6 +22,7 @@
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
+#include "../../../identifier_utils.h"
 
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
@@ -43,6 +44,166 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     long long *size_out, int depth, int line_num);
 static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num);
+static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Chr expects exactly one argument.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr,
+        max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Chr expects an integer argument.\\n",
+            expr->line_num);
+        error_count++;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_chr");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Chr.\\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        *type_return = STRING_TYPE;
+        expr->resolved_type = STRING_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Ord expects exactly one argument.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr,
+        max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    const char *mangled_name = NULL;
+    if (arg_type == STRING_TYPE)
+    {
+        if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
+        {
+            char *literal = arg_expr->expr_data.string;
+            if (literal == NULL || literal[0] == '\0')
+            {
+                fprintf(stderr, "Error on line %d, Ord expects a non-empty character literal.\\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            if (literal[1] != '\0')
+            {
+                fprintf(stderr, "Error on line %d, Ord expects a single character literal.\\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            unsigned char ordinal_value = (unsigned char)literal[0];
+
+            destroy_list(expr->expr_data.function_call_data.args_expr);
+            expr->expr_data.function_call_data.args_expr = NULL;
+            if (expr->expr_data.function_call_data.id != NULL)
+            {
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = NULL;
+            }
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                free(expr->expr_data.function_call_data.mangled_id);
+                expr->expr_data.function_call_data.mangled_id = NULL;
+            }
+            expr->expr_data.function_call_data.resolved_func = NULL;
+
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = ordinal_value;
+            expr->resolved_type = LONGINT_TYPE;
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
+        mangled_name = "gpc_ord_string";
+    }
+    else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
+    {
+        mangled_name = "gpc_ord_longint";
+    }
+
+    if (mangled_name != NULL)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Ord.\\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        *type_return = LONGINT_TYPE;
+        expr->resolved_type = LONGINT_TYPE;
+        return 0;
+    }
+
+    fprintf(stderr, "Error on line %d, Ord expects an integer or character argument.\\n",
+        expr->line_num);
+    *type_return = UNKNOWN_TYPE;
+    return 1;
+}
+
 static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 
@@ -59,6 +220,11 @@ static long long sizeof_from_type_tag(int type_tag)
         case STRING_TYPE:
             return POINTER_SIZE_BYTES;
         case BOOL:
+            /*
+             * Standalone booleans occupy 4 bytes to keep stack accesses aligned,
+             * but packed arrays of boolean elements are emitted as 1 byte each.
+             * Document the distinction so sizeof(boolean) users are not surprised.
+             */
             return 4;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
@@ -416,12 +582,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 expr->line_num);
             error_count++;
         }
-        else if (computed_size > INT_MAX)
-        {
-            fprintf(stderr, "Error on line %d, SizeOf result %lld is too large for current literal support.\n",
-                expr->line_num, computed_size);
-            error_count++;
-        }
+        /* No upper-bound clamp: computed_size already stored in a long long literal. */
     }
 
     if (error_count == 0)
@@ -441,7 +602,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         expr->expr_data.function_call_data.resolved_func = NULL;
 
         expr->type = EXPR_INUM;
-        expr->expr_data.i_num = (int)computed_size;
+        expr->expr_data.i_num = computed_size;
         expr->resolved_type = LONGINT_TYPE;
         *type_return = LONGINT_TYPE;
         return 0;
@@ -489,6 +650,9 @@ static int types_numeric_compatible(int lhs, int rhs)
     if (lhs == rhs)
         return 1;
     if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+        return 1;
+    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE)) ||
+        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE)))
         return 1;
     return 0;
 }
@@ -596,7 +760,10 @@ int semcheck_expr_main(int *type_return,
 
         /*** BASE CASES ***/
         case EXPR_INUM:
-            *type_return = INT_TYPE;
+            if (expr->expr_data.i_num > INT_MAX || expr->expr_data.i_num < INT_MIN)
+                *type_return = LONGINT_TYPE;
+            else
+                *type_return = INT_TYPE;
             break;
 
         case EXPR_RNUM:
@@ -751,6 +918,12 @@ int semcheck_addop(int *type_return,
         return return_val;
     }
 
+    if (op_type == PLUS && type_first == STRING_TYPE && type_second == STRING_TYPE)
+    {
+        *type_return = STRING_TYPE;
+        return return_val;
+    }
+
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
@@ -765,7 +938,12 @@ int semcheck_addop(int *type_return,
         ++return_val;
     }
 
-    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        *type_return = REAL_TYPE;
+    else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        *type_return = LONGINT_TYPE;
+    else
+        *type_return = type_first;
     return return_val;
 }
 
@@ -814,7 +992,12 @@ int semcheck_mulop(int *type_return,
         ++return_val;
     }
 
-    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        *type_return = REAL_TYPE;
+    else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        *type_return = LONGINT_TYPE;
+    else
+        *type_return = type_first;
     return return_val;
 }
 
@@ -948,8 +1131,14 @@ int semcheck_funccall(int *type_return,
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
 
-    if (id != NULL && strcmp(id, "SizeOf") == 0)
+    if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Chr"))
+        return semcheck_builtin_chr(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Ord"))
+        return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 

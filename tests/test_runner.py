@@ -1,6 +1,9 @@
-import subprocess
+import argparse
 import os
 import shutil
+import subprocess
+import sys
+import traceback
 import unittest
 
 # Path to the compiler executable
@@ -12,6 +15,7 @@ TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
+EXEC_TIMEOUT = 5
 
 # The compiler is built by Meson now, so this function is not needed.
 
@@ -24,19 +28,93 @@ def run_compiler(input_file, output_file, flags=None):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     command = [GPC_PATH, input_file, output_file] + flags
-    print(f"--- Running compiler: {' '.join(command)} ---")
+    print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
-        print(result.stderr) # The compiler prints status messages to stderr
+        print(result.stderr, file=sys.stderr) # The compiler prints status messages to stderr
         return result.stderr
     except subprocess.CalledProcessError as e:
-        print(f"--- Compiler execution failed ---")
-        print(f"--- stdout: {e.stdout} ---")
-        print(f"--- stderr: {e.stderr} ---")
+        print(f"--- Compiler execution failed ---", file=sys.stderr)
+        print(f"--- stdout: {e.stdout} ---", file=sys.stderr)
+        print(f"--- stderr: {e.stderr} ---", file=sys.stderr)
         # Still raise the exception, but return stderr if it exists
         if e.stderr:
             return e.stderr
         raise
+
+
+class TAPTestResult(unittest.TestResult):
+    def __init__(self, stream):
+        super().__init__()
+        self.stream = stream
+        self._test_index = 0
+
+    def _emit(self, line):
+        self.stream.write(f"{line}\n")
+        self.stream.flush()
+
+    def _emit_diagnostic(self, text):
+        for raw_line in text.rstrip().splitlines():
+            self._emit(f"# {raw_line}")
+
+    def _test_name(self, test):
+        try:
+            return test.id()
+        except AttributeError:
+            return str(test)
+
+    def startTest(self, test):
+        super().startTest(test)
+        self._test_index += 1
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self._emit(f"ok {self._test_index} - {self._test_name(test)}")
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self._emit(f"ok {self._test_index} - {self._test_name(test)} # SKIP {reason}")
+
+    def addExpectedFailure(self, test, err):
+        super().addExpectedFailure(test, err)
+        self._emit(
+            f"ok {self._test_index} - {self._test_name(test)} # TODO expected failure"
+        )
+
+    def addUnexpectedSuccess(self, test):
+        super().addUnexpectedSuccess(test)
+        self._emit(
+            f"not ok {self._test_index} - {self._test_name(test)} # Unexpected success"
+        )
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._emit(f"not ok {self._test_index} - {self._test_name(test)}")
+        self._emit_diagnostic("Failure:")
+        self._emit_diagnostic("".join(traceback.format_exception(*err)))
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._emit(f"not ok {self._test_index} - {self._test_name(test)}")
+        self._emit_diagnostic("Error:")
+        self._emit_diagnostic("".join(traceback.format_exception(*err)))
+
+
+class TAPTestRunner:
+    def __init__(self, stream=None):
+        self.stream = stream or sys.stdout
+
+    def run(self, test):
+        result = TAPTestResult(self.stream)
+        test_count = test.countTestCases()
+        result.startTestRun()
+        try:
+            result.stream.write(f"1..{test_count}\n")
+            result.stream.flush()
+            test(result)
+        finally:
+            result.stopTestRun()
+        return result
 
 def read_file_content(filepath):
     """Reads and returns the content of a file."""
@@ -46,7 +124,7 @@ def read_file_content(filepath):
 class TestCompiler(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The compiler is already built by Meson.
+        cls._ensure_compiler_built()
         # Create output directories
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
@@ -54,6 +132,53 @@ class TestCompiler(unittest.TestCase):
         cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
         cls._compile_runtime()
         cls._build_ctypes_helper_library()
+
+    @classmethod
+    def _ensure_compiler_built(cls):
+        """Builds the compiler via Meson if the gpc binary is missing."""
+        if os.path.exists(GPC_PATH):
+            return
+
+        meson = shutil.which("meson")
+        if meson is None:
+            raise RuntimeError(
+                "Meson is required to build the compiler but is not available in PATH"
+            )
+
+        build_root = build_dir
+        build_ninja = os.path.join(build_root, "build.ninja")
+        # Configure the build directory if it has not been set up yet.
+        if not os.path.exists(build_ninja):
+            try:
+                subprocess.run(
+                    [meson, "setup", build_root],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(
+                    "Meson setup failed:\n"
+                    f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+                )
+
+        try:
+            subprocess.run(
+                [meson, "compile", "-C", build_root],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                "Meson compile failed:\n"
+                f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+            )
+
+        if not os.path.exists(GPC_PATH):
+            raise RuntimeError(
+                f"Meson build completed but did not produce compiler at {GPC_PATH}"
+            )
 
     @classmethod
     def _compile_runtime(cls):
@@ -209,6 +334,30 @@ class TestCompiler(unittest.TestCase):
                 expected = read_file_content(expected_path)
                 self.assertEqual(actual, expected)
 
+    def test_bell_numbers_sample_parses(self):
+        """Ensures the large BellNumbers sample that uses "+=" parses successfully."""
+        input_file = os.path.join(TEST_CASES_DIR, "bell_numbers.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bell_numbers_parse_only.s")
+        ast_file = os.path.join(TEST_OUTPUT_DIR, "bell_numbers.ast")
+
+        run_compiler(
+            input_file,
+            asm_file,
+            flags=["-parse-only", "--dump-ast", ast_file],
+        )
+
+        self.assertTrue(os.path.exists(ast_file))
+        self.assertGreater(os.path.getsize(ast_file), 0)
+
+    def test_real_literal_codegen(self):
+        """Compiling a real literal should succeed and materialize the IEEE-754 bits."""
+        input_file = os.path.join(TEST_CASES_DIR, "real_literal.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "real_literal.s")
+        run_compiler(input_file, asm_file)
+        asm = read_file_content(asm_file)
+        literal_bits = "4609434218613702656"
+        self.assertIn(literal_bits, asm)
+
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
         if shutil.which("valgrind") is None:
@@ -269,6 +418,7 @@ class TestCompiler(unittest.TestCase):
             capture_output=True,
             text=True,
             env=env,
+            timeout=EXEC_TIMEOUT,
         )
 
         self.assertEqual(result.stdout.strip(), "42")
@@ -287,7 +437,7 @@ class TestCompiler(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=EXEC_TIMEOUT,
         )
 
         self.assertEqual(result.stdout, "42\n7\n1\n")
@@ -319,7 +469,7 @@ class TestCompiler(unittest.TestCase):
                         input=input_str,
                         capture_output=True,
                         text=True,
-                        timeout=5 # Add a timeout to prevent hanging
+                        timeout=EXEC_TIMEOUT # Add a timeout to prevent hanging
                     )
                     # Compare trimmed output to tolerate the runtime's trailing whitespace
                     self.assertEqual(process.stdout.strip(), expected_output.strip())
@@ -346,7 +496,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "Hello, World!\n")
             self.assertEqual(process.returncode, 0)
@@ -366,7 +516,7 @@ class TestCompiler(unittest.TestCase):
             [executable_file],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=EXEC_TIMEOUT,
         )
         self.assertEqual(process.stdout, "5\n")
         self.assertEqual(process.returncode, 0)
@@ -385,7 +535,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=EXEC_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             self.fail("array_const execution timed out")
@@ -408,7 +558,7 @@ class TestCompiler(unittest.TestCase):
 
         # Run the executable and verify the output so we know the program ran.
         try:
-            process = subprocess.run([executable_file], capture_output=True, text=True, timeout=5)
+            process = subprocess.run([executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT)
             self.assertEqual(process.stdout, "42\n")
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
@@ -433,7 +583,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             expected_output = read_file_content(expected_output_file)
             self.assertEqual(process.stdout, expected_output)
@@ -460,12 +610,35 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "1\n")
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+    def test_string_concatenation(self):
+        """Tests that string addition produces a concatenated result."""
+        input_file = os.path.join(TEST_CASES_DIR, "string_concat_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("string_concat_demo execution timed out")
+            return
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "Hello World\n")
 
     def test_sysutils_unit(self):
         """Tests that the SysUtils unit links and provides basic helpers."""
@@ -481,7 +654,8 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                # A bounded timeout keeps runaway ctypes demos from hanging CI forever.
+                timeout=EXEC_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
@@ -492,6 +666,33 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
+
+    def test_ord_builtin(self):
+        """Ensures the Ord builtin converts characters to their ordinal values."""
+        input_file = os.path.join(TEST_CASES_DIR, "ord_builtin.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("Ord builtin execution timed out.")
+            return
+
+        self.assertEqual(process.returncode, 0)
+        lines = process.stdout.strip().splitlines()
+        self.assertGreaterEqual(len(lines), 3)
+        self.assertEqual(lines[0].strip(), "55")
+        self.assertEqual(lines[1].strip(), "48")
+        self.assertEqual(lines[2].strip(), "5")
 
     def test_ctypes_unit(self):
         """Ensures the ctypes unit exposes C compatible aliases."""
@@ -507,7 +708,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=EXEC_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
@@ -549,7 +750,7 @@ class TestCompiler(unittest.TestCase):
             input=zahlen_input,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=EXEC_TIMEOUT,
         )
 
         # Verify that both even and odd buckets are populated correctly.
@@ -593,7 +794,7 @@ class TestCompiler(unittest.TestCase):
                 input="3",
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout.strip(), "123456")
             self.assertEqual(process.returncode, 0)
@@ -601,5 +802,23 @@ class TestCompiler(unittest.TestCase):
             self.fail("Test execution timed out.")
 
 
+def _load_suite():
+    return unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--tap", action="store_true")
+    args, remaining = parser.parse_known_args()
+
+    if args.tap or os.environ.get("GPC_TEST_PROTOCOL", "").lower() == "tap":
+        suite = _load_suite()
+        runner = TAPTestRunner()
+        result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
+
+    unittest.main(argv=[sys.argv[0]] + remaining)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    main()

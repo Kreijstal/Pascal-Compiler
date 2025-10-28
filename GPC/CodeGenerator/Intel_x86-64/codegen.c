@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <assert.h>
 #include <string.h>
 #include "register_types.h"
@@ -26,6 +27,27 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
 
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
+
+void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    if (fmt != NULL && fmt[0] != '\0')
+    {
+        size_t len = strlen(fmt);
+        if (len == 0 || fmt[len - 1] != '\n')
+            fputc('\n', stderr);
+    }
+    va_end(args);
+    if (ctx != NULL)
+        ctx->had_error = 1;
+}
+
+int codegen_had_error(const CodeGenContext *ctx)
+{
+    return (ctx != NULL) ? ctx->had_error : 0;
+}
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
