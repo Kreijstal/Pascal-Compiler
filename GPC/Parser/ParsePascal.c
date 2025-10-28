@@ -3,78 +3,65 @@
     Runs the pascal parser on the given file
 */
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
-#include "ParsePascal.h"
+
 #include "ErrVars.h"
+#include "ParsePascal.h"
 #include "ParseTree/tree.h"
 #include "ParseTree/tree_types.h"
-#include "List/List.h"
 #include "SemanticCheck/SemCheck.h"
-#include "ParseTree/type_tags.h"
+#include "pascal_frontend.h"
 
-extern FILE *yyin;
-extern int yyparse();
-
-/* Initializes parser globals */
-void InitParser();
+static void InitParser();
 
 Tree_t *ParsePascalOnly(char *file)
 {
     assert(file != NULL);
-    /**** CREATING THE PARSE TREE ****/
-    if(file != NULL)
-    {
-        yyin = fopen(file, "r");
-        if(yyin == NULL)
-        {
-            fprintf(stderr, "Error opening file: %s\n", file);
-            exit(1);
-        }
-        file_to_parse = file;
-    }
-    else
-        file_to_parse = NULL;
 
     InitParser();
-    yyparse();
 
-    #ifdef DEBUG_BISON
-        if(parse_tree != NULL)
-            tree_print(parse_tree, stderr, 0);
-    #endif
+    Tree_t *tree = NULL;
+    ParseError *error = NULL;
+    if (!pascal_parse_source(file, true, &tree, &error))
+    {
+        pascal_print_parse_error(file, error);
+        if (error != NULL)
+            free_error(error);
+        return NULL;
+    }
 
-    return parse_tree;
+    parse_tree = tree;
+    return tree;
 }
 
 Tree_t *ParsePascal(char *file)
 {
     assert(file != NULL);
-    int semcheck_return;
+
     Tree_t *tree = ParsePascalOnly(file);
+    if (tree == NULL)
+        return NULL;
 
-    /**** SEMANTIC CHECKING ****/
-    if(tree != NULL)
+    int sem_result = 0;
+    SymTab_t *symtab = start_semcheck(tree, &sem_result);
+    DestroySymTab(symtab);
+
+    if (sem_result > 0)
     {
-        int sem_result;
-        SymTab_t *symtab = start_semcheck(tree, &sem_result);
-        semcheck_return = sem_result;
-        DestroySymTab(symtab);
-
-        if(semcheck_return > 0)
-        {
-            destroy_tree(tree);
-            tree = NULL;
-        }
+        destroy_tree(tree);
+        parse_tree = NULL;
+        return NULL;
     }
 
     return tree;
 }
 
-void InitParser()
+static void InitParser()
 {
     line_num = 1;
     col_num = 1;
     parse_tree = NULL;
+    file_to_parse = NULL;
 }

@@ -677,6 +677,16 @@ void destroy_stmt(struct Statement *stmt)
 void destroy_expr(struct Expression *expr)
 {
     assert(expr != NULL);
+    if (expr->field_width != NULL)
+    {
+        destroy_expr(expr->field_width);
+        expr->field_width = NULL;
+    }
+    if (expr->field_precision != NULL)
+    {
+        destroy_expr(expr->field_precision);
+        expr->field_precision = NULL;
+    }
     switch(expr->type)
     {
         case EXPR_RELOP:
@@ -1138,6 +1148,16 @@ struct Statement *mk_asmblock(int line_num, char *code)
 }
 
 /*********** Expression routines ***************/
+static void init_expression(struct Expression *expr, int line_num, enum ExprType type)
+{
+    assert(expr != NULL);
+    expr->line_num = line_num;
+    expr->type = type;
+    expr->field_width = NULL;
+    expr->field_precision = NULL;
+    expr->resolved_type = UNKNOWN_TYPE;
+}
+
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
                                 struct Expression *right)
 {
@@ -1145,8 +1165,7 @@ struct Expression *mk_relop(int line_num, int type, struct Expression *left,
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_RELOP;
+    init_expression(new_expr, line_num, EXPR_RELOP);
     new_expr->expr_data.relop_data.type = type;
     new_expr->expr_data.relop_data.left = left;
     new_expr->expr_data.relop_data.right = right;
@@ -1160,8 +1179,7 @@ struct Expression *mk_signterm(int line_num, struct Expression *sign_term)
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_SIGN_TERM;
+    init_expression(new_expr, line_num, EXPR_SIGN_TERM);
     new_expr->expr_data.sign_term = sign_term;
 
     return new_expr;
@@ -1174,8 +1192,7 @@ struct Expression *mk_addop(int line_num, int type, struct Expression *left,
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_ADDOP;
+    init_expression(new_expr, line_num, EXPR_ADDOP);
     new_expr->expr_data.addop_data.addop_type = type;
     new_expr->expr_data.addop_data.left_expr = left;
     new_expr->expr_data.addop_data.right_term = right;
@@ -1190,8 +1207,7 @@ struct Expression *mk_mulop(int line_num, int type, struct Expression *left,
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_MULOP;
+    init_expression(new_expr, line_num, EXPR_MULOP);
     new_expr->expr_data.mulop_data.mulop_type = type;
     new_expr->expr_data.mulop_data.left_term = left;
     new_expr->expr_data.mulop_data.right_factor = right;
@@ -1205,8 +1221,7 @@ struct Expression *mk_varid(int line_num, char *id)
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_VAR_ID;
+    init_expression(new_expr, line_num, EXPR_VAR_ID);
     new_expr->expr_data.id = id;
 
     return new_expr;
@@ -1218,8 +1233,7 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_ARRAY_ACCESS;
+    init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
     new_expr->expr_data.array_access_data.id = id;
     new_expr->expr_data.array_access_data.array_expr = index_expr;
 
@@ -1232,8 +1246,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_FUNCTION_CALL;
+    init_expression(new_expr, line_num, EXPR_FUNCTION_CALL);
     new_expr->expr_data.function_call_data.id = id;
     new_expr->expr_data.function_call_data.mangled_id = NULL;
     new_expr->expr_data.function_call_data.args_expr = args;
@@ -1248,8 +1261,7 @@ struct Expression *mk_inum(int line_num, int i_num)
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_INUM;
+    init_expression(new_expr, line_num, EXPR_INUM);
     new_expr->expr_data.i_num = i_num;
 
     return new_expr;
@@ -1261,8 +1273,7 @@ struct Expression *mk_string(int line_num, char *string)
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_STRING;
+    init_expression(new_expr, line_num, EXPR_STRING);
     new_expr->expr_data.string = string;
 
     return new_expr;
@@ -1274,8 +1285,7 @@ struct Expression *mk_rnum(int line_num, float r_num)
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
-    new_expr->line_num = line_num;
-    new_expr->type = EXPR_RNUM;
+    init_expression(new_expr, line_num, EXPR_RNUM);
     new_expr->expr_data.r_num = r_num;
 
     return new_expr;

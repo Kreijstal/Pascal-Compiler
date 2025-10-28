@@ -17,21 +17,135 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <ctype.h>
 #include "optimizer.h"
-#include "../flags.h"
+#include "pass_manager.h"
 #include "../Parser/ParseTree/tree.h"
 #include "../Parser/ParseTree/tree_types.h"
 #include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../Parser/ParseTree/type_tags.h"
+#include "../identifier_utils.h"
 
-void optimize_prog(SymTab_t *symtab, Tree_t *prog);
-void optimize_subprog(SymTab_t *symtab, Tree_t *sub);
+#define DEAD_VAR_ID_BUCKETS 64
 
-void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls);
-int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt);
-int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var_assign);
-int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *);
+typedef struct IdSetEntry
+{
+    char *id;
+    struct IdSetEntry *next;
+} IdSetEntry;
+
+typedef struct IdSet
+{
+    size_t bucket_count;
+    IdSetEntry **buckets;
+} IdSet;
+
+static size_t id_set_hash(const char *id, size_t bucket_count)
+{
+    size_t hash = 5381;
+    while (id != NULL && *id != '\0')
+    {
+        hash = ((hash << 5) + hash) ^ (size_t)tolower((unsigned char)*id);
+        ++id;
+    }
+    return bucket_count == 0 ? 0 : hash % bucket_count;
+}
+
+static IdSet *id_set_create(size_t bucket_count)
+{
+    IdSet *set = (IdSet *)calloc(1, sizeof(IdSet));
+    if (set == NULL)
+        return NULL;
+
+    set->bucket_count = bucket_count;
+    set->buckets = (IdSetEntry **)calloc(bucket_count, sizeof(IdSetEntry *));
+    if (set->buckets == NULL)
+    {
+        free(set);
+        return NULL;
+    }
+    return set;
+}
+
+static void id_set_destroy(IdSet *set)
+{
+    if (set == NULL)
+        return;
+
+    for (size_t i = 0; i < set->bucket_count; ++i)
+    {
+        IdSetEntry *cur = set->buckets[i];
+        while (cur != NULL)
+        {
+            IdSetEntry *next = cur->next;
+            free(cur->id);
+            free(cur);
+            cur = next;
+        }
+    }
+
+    free(set->buckets);
+    free(set);
+}
+
+static void id_set_add(IdSet *set, const char *id)
+{
+    if (set == NULL || id == NULL)
+        return;
+
+    size_t index = id_set_hash(id, set->bucket_count);
+    IdSetEntry *cur = set->buckets[index];
+    while (cur != NULL)
+    {
+        if (pascal_identifier_equals(cur->id, id))
+            return;
+        cur = cur->next;
+    }
+
+    IdSetEntry *entry = (IdSetEntry *)malloc(sizeof(IdSetEntry));
+    if (entry == NULL)
+        return;
+
+    size_t len = strlen(id);
+    entry->id = (char *)malloc(len + 1);
+    if (entry->id == NULL)
+    {
+        free(entry);
+        return;
+    }
+
+    memcpy(entry->id, id, len + 1);
+    entry->next = set->buckets[index];
+    set->buckets[index] = entry;
+}
+
+static int id_set_contains(const IdSet *set, const char *id)
+{
+    if (set == NULL || id == NULL)
+        return 0;
+
+    size_t index = id_set_hash(id, set->bucket_count);
+    IdSetEntry *cur = set->buckets[index];
+    while (cur != NULL)
+    {
+        if (pascal_identifier_equals(cur->id, id))
+            return 1;
+        cur = cur->next;
+    }
+    return 0;
+}
+
+static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog);
+static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub);
+
+static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *stmt);
+static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids, struct Statement *var_assign);
+static int remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *compound);
+static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *var_decls);
+static int remove_dead_variables_batch(SymTab_t *symtab, ListNode_t *vars_to_remove, struct Statement *stmt_root, ListNode_t *var_decls);
+
+static optimizer_runner_fn g_optimizer_runner = optimizer_pass_manager_run;
 
 void simplify_stmt_expr(struct Statement *);
 int simplify_expr(struct Expression **);
@@ -45,131 +159,154 @@ void set_vars_lists(SymTab_t *, ListNode_t *, ListNode_t **, ListNode_t **);
 void add_to_list(ListNode_t **, void *obj);
 
 /* The main entry point for the optimizer */
+void optimizer_set_runner(optimizer_runner_fn runner)
+{
+    if (runner == NULL)
+        g_optimizer_runner = optimizer_pass_manager_run;
+    else
+        g_optimizer_runner = runner;
+}
+
 void optimize(SymTab_t *symtab, Tree_t *tree)
 {
     assert(symtab != NULL);
     assert(tree != NULL);
 
-    switch(tree->type)
-    {
-        case TREE_PROGRAM_TYPE:
-            optimize_prog(symtab, tree);
-            break;
-
-        case TREE_SUBPROGRAM:
-            optimize_subprog(symtab, tree);
-            break;
-
-        default:
-            assert(0 && "Unsupported tree type given to optimizer!");
-            break;
-    }
+    g_optimizer_runner(symtab, tree);
 }
 
-/* Optimizes a program */
-void optimize_prog(SymTab_t *symtab, Tree_t *prog)
+static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog)
 {
     assert(symtab != NULL);
     assert(prog != NULL);
     assert(prog->type == TREE_PROGRAM_TYPE);
 
-    ListNode_t *vars_to_check, *vars_to_remove, *cur;
-    struct Program *prog_data;
-    int num_removed;
+    struct Program *prog_data = &prog->tree_data.program_data;
+    if (prog_data->body_statement == NULL)
+        return;
 
-    prog_data = &prog->tree_data.program_data;
-    vars_to_check = vars_to_remove = NULL;
+    ListNode_t *vars_to_check = NULL;
+    ListNode_t *vars_to_remove = NULL;
 
-    if(optimize_flag() >= 2)
+    decrement_self_references(symtab, prog_data->body_statement);
+    set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
+
+    while (vars_to_remove != NULL)
     {
-        decrement_self_references(symtab, prog_data->body_statement);
-        set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
+        int removed = remove_dead_variables_batch(symtab, vars_to_remove,
+            prog_data->body_statement, prog_data->var_declaration);
+        if (removed == 0)
+            break;
 
-        cur = vars_to_remove;
-        num_removed = 0;
-        while(cur != NULL)
-        {
-            #ifdef DEBUG_OPTIMIZER
-                fprintf(stderr, "OPTIMIZER: Removing unreferenced variable %s\n",
-                    (char *)cur->cur);
-            #endif
-
-            num_removed += remove_mutation_statement(symtab, (char *)cur->cur, prog_data->body_statement);
-            remove_var_decls(symtab, (char *)cur->cur, prog_data->var_declaration);
-
-            cur = cur->next;
-
-            if(cur == NULL && num_removed > 0)
-            {
-                DestroyList(vars_to_check);
-                DestroyList(vars_to_remove);
-
-                set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
-                cur = vars_to_remove;
-                num_removed = 0;
-            }
-        }
         DestroyList(vars_to_check);
         DestroyList(vars_to_remove);
+        vars_to_check = NULL;
+        vars_to_remove = NULL;
+
+        set_vars_lists(symtab, prog_data->var_declaration, &vars_to_check, &vars_to_remove);
     }
 
-    if(optimize_flag() >= 1)
-    {
-        simplify_stmt_expr(prog_data->body_statement);
-    }
+    DestroyList(vars_to_check);
+    DestroyList(vars_to_remove);
 }
 
-/* Optimizes a subprogram */
-void optimize_subprog(SymTab_t *symtab, Tree_t *sub)
+static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub)
 {
     assert(symtab != NULL);
     assert(sub != NULL);
     assert(sub->type == TREE_SUBPROGRAM);
 
-    ListNode_t *vars_to_check, *vars_to_remove, *cur;
-    struct Subprogram *sub_data;
-    int num_removed;
+    struct Subprogram *sub_data = &sub->tree_data.subprogram_data;
+    if (sub_data->statement_list == NULL)
+        return;
 
-    sub_data = &sub->tree_data.subprogram_data;
-    vars_to_check = vars_to_remove = NULL;
+    ListNode_t *vars_to_check = NULL;
+    ListNode_t *vars_to_remove = NULL;
 
-    if(optimize_flag() >= 2)
+    decrement_self_references(symtab, sub_data->statement_list);
+    set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
+
+    while (vars_to_remove != NULL)
     {
-        decrement_self_references(symtab, sub_data->statement_list);
-        set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
-
-        cur = vars_to_remove;
-        num_removed = 0;
-        while(cur != NULL)
-        {
-            #ifdef DEBUG_OPTIMIZER
-                fprintf(stderr, "OPTIMIZER: Removing unreferenced variable %s\n",
-                    (char *)cur->cur);
-            #endif
-
-            num_removed += remove_mutation_statement(symtab, (char *)cur->cur, sub_data->statement_list);
-            remove_var_decls(symtab, (char *)cur->cur, sub_data->declarations);
-
-            cur = cur->next;
-
-            if(cur == NULL && num_removed > 0)
-            {
-                DestroyList(vars_to_check);
-                DestroyList(vars_to_remove);
-
-                set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
-                cur = vars_to_remove;
-                num_removed = 0;
-            }
-        }
+        int removed = remove_dead_variables_batch(symtab, vars_to_remove,
+            sub_data->statement_list, sub_data->declarations);
+        if (removed == 0)
+            break;
 
         DestroyList(vars_to_check);
         DestroyList(vars_to_remove);
+        vars_to_check = NULL;
+        vars_to_remove = NULL;
+
+        set_vars_lists(symtab, sub_data->declarations, &vars_to_check, &vars_to_remove);
     }
 
-    if(optimize_flag() >= 1)
+    DestroyList(vars_to_check);
+    DestroyList(vars_to_remove);
+}
+
+static int remove_dead_variables_batch(SymTab_t *symtab, ListNode_t *vars_to_remove,
+    struct Statement *stmt_root, ListNode_t *var_decls)
+{
+    if (vars_to_remove == NULL)
+        return 0;
+
+    IdSet *ids = id_set_create(DEAD_VAR_ID_BUCKETS);
+    if (ids == NULL)
+        return 0;
+
+    for (ListNode_t *cur = vars_to_remove; cur != NULL; cur = cur->next)
+        id_set_add(ids, (const char *)cur->cur);
+
+    int removed = 0;
+    if (stmt_root != NULL)
+        removed += remove_mutation_statement_set(symtab, ids, stmt_root);
+    if (var_decls != NULL)
+        removed += remove_var_decls_set(symtab, ids, var_decls);
+
+    id_set_destroy(ids);
+    return removed;
+}
+
+void optimizer_pass_dead_code_elimination(SymTab_t *symtab, Tree_t *tree)
+{
+    assert(symtab != NULL);
+    assert(tree != NULL);
+
+    switch (tree->type)
     {
-        simplify_stmt_expr(sub_data->statement_list);
+        case TREE_PROGRAM_TYPE:
+            run_dead_code_elimination_program(symtab, tree);
+            break;
+
+        case TREE_SUBPROGRAM:
+            run_dead_code_elimination_subprogram(symtab, tree);
+            break;
+
+        default:
+            break;
+    }
+}
+
+void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree)
+{
+    (void)symtab;
+    assert(tree != NULL);
+
+    switch (tree->type)
+    {
+        case TREE_PROGRAM_TYPE:
+            if (tree->tree_data.program_data.body_statement != NULL)
+                simplify_stmt_expr(tree->tree_data.program_data.body_statement);
+            break;
+
+        case TREE_SUBPROGRAM:
+            if (tree->tree_data.subprogram_data.statement_list != NULL)
+                simplify_stmt_expr(tree->tree_data.subprogram_data.statement_list);
+            break;
+
+        default:
+            break;
     }
 }
 
@@ -211,65 +348,61 @@ void decrement_self_references(SymTab_t *symtab, struct Statement *stmt)
     }
 }
 
-/* Removes all variable declarations matching an id */
-void remove_var_decls(SymTab_t *symtab, char *id, ListNode_t *var_decls)
+/* Removes all variable declarations matching an identifier set */
+static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *var_decls)
 {
-    Tree_t *var_decl;
-    ListNode_t *prev, *ids, *temp;
+    int removed = 0;
 
-    assert(symtab != NULL);
-    assert(id != NULL);
-    assert(var_decls != NULL);
+    if (symtab == NULL || ids == NULL || var_decls == NULL)
+        return 0;
 
-    while(var_decls != NULL)
+    while (var_decls != NULL)
     {
-        var_decl = (Tree_t *)var_decls->cur;
+        Tree_t *var_decl = (Tree_t *)var_decls->cur;
         assert(var_decl->type == TREE_VAR_DECL);
 
-        ids = var_decl->tree_data.var_decl_data.ids;
-        prev = NULL;
-        while(ids != NULL)
+        ListNode_t *decl_ids = var_decl->tree_data.var_decl_data.ids;
+        ListNode_t *prev = NULL;
+        while (decl_ids != NULL)
         {
-            if(strcmp((char *)ids->cur, id) == 0)
+            char *candidate = (char *)decl_ids->cur;
+            if (id_set_contains(ids, candidate))
             {
-                free(ids->cur);
-                temp = ids->next;
-                free(ids);
-                ids = temp;
-                if(prev == NULL)
-                {
-                    var_decl->tree_data.var_decl_data.ids = ids;
-                }
+                free(decl_ids->cur);
+                ListNode_t *next = decl_ids->next;
+                free(decl_ids);
+                decl_ids = next;
+                if (prev == NULL)
+                    var_decl->tree_data.var_decl_data.ids = decl_ids;
                 else
-                {
-                    prev->next = ids;
-                }
-
-                return;
+                    prev->next = decl_ids;
+                ++removed;
+                continue;
             }
 
-            prev = ids;
-            ids = ids->next;
+            prev = decl_ids;
+            decl_ids = decl_ids->next;
         }
 
         var_decls = var_decls->next;
     }
+
+    return removed;
 }
 
-/* Removes mutation statements that mutate an ID */
-/* Returns >1 if removal occurred */
-int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt)
+/* Removes mutation statements that mutate identifiers contained in the set */
+static int remove_mutation_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *stmt)
 {
-    assert(symtab != NULL);
-    assert(stmt != NULL);
-    assert(id != NULL);
-    switch(stmt->type)
+    if (symtab == NULL || ids == NULL || stmt == NULL)
+        return 0;
+
+    switch (stmt->type)
     {
         case STMT_VAR_ASSIGN:
-            return remove_mutation_var_assign(symtab, id, stmt);
+            return remove_mutation_var_assign_set(symtab, ids, stmt);
 
         case STMT_COMPOUND_STATEMENT:
-            return remove_mutation_compound_statement(symtab, id, stmt);
+            return remove_mutation_compound_statement_set(symtab, ids, stmt);
 
         case STMT_PROCEDURE_CALL:
             return 0;
@@ -278,71 +411,59 @@ int remove_mutation_statement(SymTab_t *symtab, char *id, struct Statement *stmt
             #ifdef DEBUG_OPTIMIZER
                 fprintf(stderr, "OPTIMIZER: Unsupported statement at line %d\n", stmt->line_num);
             #endif
-
             return 0;
     }
 }
 
 /* Removes the var assign if applicable */
 /* Decrements the reference counter for the removed expression if removed */
-int remove_mutation_var_assign(SymTab_t *symtab, char *id, struct Statement *var_assign)
+static int remove_mutation_var_assign_set(SymTab_t *symtab, const IdSet *ids, struct Statement *var_assign)
 {
     assert(var_assign != NULL);
     assert(var_assign->type == STMT_VAR_ASSIGN);
-    assert(id != NULL);
 
-    struct Expression *var;
-
-    var = var_assign->stmt_data.var_assign_data.var;
+    struct Expression *var = var_assign->stmt_data.var_assign_data.var;
+    assert(var != NULL);
     assert(var->type == EXPR_VAR_ID);
-    if(strcmp(var->expr_data.id, id) == 0)
-    {
-        #ifdef DEBUG_OPTIMIZER
-            fprintf(stderr, "OPTIMIZER: Removing var assign at line %d\n", var_assign->line_num);
-        #endif
 
-        decrement_reference_expr(symtab, var_assign->stmt_data.var_assign_data.expr);
-        destroy_stmt(var_assign);
+    if (!id_set_contains(ids, var->expr_data.id))
+        return 0;
 
-        return 1;
-    }
+    #ifdef DEBUG_OPTIMIZER
+        fprintf(stderr, "OPTIMIZER: Removing var assign at line %d\n", var_assign->line_num);
+    #endif
 
-    return 0;
+    decrement_reference_expr(symtab, var_assign->stmt_data.var_assign_data.expr);
+    destroy_stmt(var_assign);
+
+    return 1;
 }
 
 /* Removes all mutation statements from a list of statements */
-int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statement *body_statement)
+static int remove_mutation_compound_statement_set(SymTab_t *symtab, const IdSet *ids, struct Statement *body_statement)
 {
     assert(body_statement != NULL);
     assert(body_statement->type == STMT_COMPOUND_STATEMENT);
-    assert(id != NULL);
 
-    ListNode_t *statement_list, *prev, *temp;
-    struct Statement *stmt;
-    int return_val;
+    ListNode_t *statement_list = body_statement->stmt_data.compound_statement;
+    ListNode_t *prev = NULL;
+    int removed = 0;
 
-    statement_list = body_statement->stmt_data.compound_statement;
-    prev = NULL;
-    return_val = 0;
-    while(statement_list != NULL)
+    while (statement_list != NULL)
     {
-        stmt = (struct Statement *)statement_list->cur;
-        if(remove_mutation_statement(symtab, id, stmt) > 0)
+        struct Statement *stmt = (struct Statement *)statement_list->cur;
+        if (remove_mutation_statement_set(symtab, ids, stmt) > 0)
         {
-            ++return_val;
+            ++removed;
 
-            temp = statement_list->next;
+            ListNode_t *next = statement_list->next;
             free(statement_list);
-            statement_list = temp;
+            statement_list = next;
 
-            if(prev == NULL)
-            {
+            if (prev == NULL)
                 body_statement->stmt_data.compound_statement = statement_list;
-            }
             else
-            {
                 prev->next = statement_list;
-            }
         }
         else
         {
@@ -351,7 +472,7 @@ int remove_mutation_compound_statement(SymTab_t *symtab, char *id, struct Statem
         }
     }
 
-    return return_val;
+    return removed;
 }
 
 /* Simplifies expressions by combining operations on constant numbers */

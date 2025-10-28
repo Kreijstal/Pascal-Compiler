@@ -11,6 +11,7 @@
 #include "../register_types.h"
 #include "../codegen.h"
 #include "../../../Parser/List/List.h"
+#include "../../../identifier_utils.h"
 
 /* Sets num_args_alloced to 0 */
 void free_arg_regs(void)
@@ -93,7 +94,12 @@ void pop_stackscope()
     global_stackmng->cur_scope = free_stackscope(global_stackmng->cur_scope);
 }
 
-/* Adds doubleword to t */
+static inline int align_up(int value, int alignment)
+{
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+/* Adds temporary storage to t */
 StackNode_t *add_l_t(char *label)
 {
     assert(global_stackmng != NULL);
@@ -104,14 +110,20 @@ StackNode_t *add_l_t(char *label)
     StackNode_t *new_node;
     int offset;
 
+    /* Reserve space that can hold pointer-sized temporaries. */
+    int temp_size = (int)sizeof(void *);
+    if (temp_size < DOUBLEWORD)
+        temp_size = DOUBLEWORD;
+
     cur_scope = global_stackmng->cur_scope;
 
-    cur_scope->t_offset += DOUBLEWORD;
+    cur_scope->t_offset = align_up(cur_scope->t_offset, temp_size);
+    cur_scope->t_offset += temp_size;
 
     offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
-    new_node = init_stack_node(offset, label, DOUBLEWORD);
+    new_node = init_stack_node(offset, label, temp_size);
 
     if(cur_scope->t == NULL)
     {
@@ -365,23 +377,61 @@ RegStack_t *init_reg_stack()
     reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
     assert(reg_stack != NULL);
 
-    /* RAX */
-    Register_t *rax;
-    rax = (Register_t *)malloc(sizeof(Register_t));
+    /* Caller-saved general purpose registers available for expression evaluation */
+    Register_t *rax = (Register_t *)malloc(sizeof(Register_t));
     assert(rax != NULL);
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
 
-    /* R10 */
-    Register_t *r10;
-    r10 = (Register_t *)malloc(sizeof(Register_t));
+    Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
+    assert(rcx != NULL);
+    rcx->bit_64 = strdup("%rcx");
+    rcx->bit_32 = strdup("%ecx");
+
+    Register_t *rdx = (Register_t *)malloc(sizeof(Register_t));
+    assert(rdx != NULL);
+    rdx->bit_64 = strdup("%rdx");
+    rdx->bit_32 = strdup("%edx");
+
+    Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
+    assert(rsi != NULL);
+    rsi->bit_64 = strdup("%rsi");
+    rsi->bit_32 = strdup("%esi");
+
+    Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
+    assert(rdi != NULL);
+    rdi->bit_64 = strdup("%rdi");
+    rdi->bit_32 = strdup("%edi");
+
+    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r8 != NULL);
+    r8->bit_64 = strdup("%r8");
+    r8->bit_32 = strdup("%r8d");
+
+    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r9 != NULL);
+    r9->bit_64 = strdup("%r9");
+    r9->bit_32 = strdup("%r9d");
+
+    Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
     assert(r10 != NULL);
     r10->bit_64 = strdup("%r10");
     r10->bit_32 = strdup("%r10d");
 
+    Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r11 != NULL);
+    r11->bit_64 = strdup("%r11");
+    r11->bit_32 = strdup("%r11d");
 
     registers = CreateListNode(rax, LIST_UNSPECIFIED);
+    registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(rdx, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
 
     /*
     registers = CreateListNode(rdi, LIST_UNSPECIFIED);
@@ -391,7 +441,7 @@ RegStack_t *init_reg_stack()
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
-    reg_stack->num_registers = 2;
+    reg_stack->num_registers = NUM_CALLER_SAVED_REGISTERS;
 
     return reg_stack;
 }
@@ -637,7 +687,7 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
     while(cur_li != NULL)
     {
         cur_node = (StackNode_t *)cur_li->cur;
-        if(strcmp(cur_node->label, label) == 0)
+        if(pascal_identifier_equals(cur_node->label, label))
         {
             return cur_node;
         }
@@ -660,7 +710,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
     while(cur_li != NULL)
     {
         cur_node = (StackNode_t *)cur_li->cur;
-        if(strcmp(cur_node->label, label) == 0)
+        if(pascal_identifier_equals(cur_node->label, label))
         {
             return cur_node;
         }
@@ -683,7 +733,7 @@ StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
     while(cur_li != NULL)
     {
         cur_node = (StackNode_t *)cur_li->cur;
-        if(strcmp(cur_node->label, label) == 0)
+        if(pascal_identifier_equals(cur_node->label, label))
         {
             return cur_node;
         }

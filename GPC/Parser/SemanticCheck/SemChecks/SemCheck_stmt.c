@@ -21,6 +21,7 @@
 #include "../../ParseTree/tree_types.h"
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
+#include "../../../identifier_utils.h"
 
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
@@ -32,6 +33,40 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
+
+typedef int (*builtin_semcheck_handler_t)(SymTab_t *, struct Statement *, int);
+
+static int try_resolve_builtin_procedure(SymTab_t *symtab,
+    struct Statement *stmt,
+    const char *expected_name,
+    builtin_semcheck_handler_t handler,
+    int max_scope_lev,
+    int *handled)
+{
+    if (handled != NULL)
+        *handled = 0;
+
+    if (symtab == NULL || stmt == NULL || expected_name == NULL || handler == NULL)
+        return 0;
+
+    char *proc_id = stmt->stmt_data.procedure_call_data.id;
+    if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
+        return 0;
+
+    HashNode_t *builtin_node = NULL;
+    if (FindIdent(&builtin_node, symtab, proc_id) != -1 && builtin_node != NULL &&
+        builtin_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    {
+        stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        builtin_node->referenced += 1;
+        if (handled != NULL)
+            *handled = 1;
+        return handler(symtab, stmt, max_scope_lev);
+    }
+
+    return 0;
+}
 
 static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
@@ -79,6 +114,58 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     {
         fprintf(stderr, "Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
         ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_index = 1;
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        int expr_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, or string.\n",
+                    stmt->line_num, arg_index);
+            ++return_val;
+        }
+
+        if (expr != NULL && expr->field_width != NULL)
+        {
+            int width_type = UNKNOWN_TYPE;
+            return_val += semcheck_expr_main(&width_type, symtab, expr->field_width, INT_MAX, NO_MUTATE);
+            if (width_type != INT_TYPE && width_type != LONGINT_TYPE)
+            {
+                fprintf(stderr, "Error on line %d, field width for argument %d must be an integer.\n",
+                        stmt->line_num, arg_index);
+                ++return_val;
+            }
+        }
+
+        if (expr != NULL && expr->field_precision != NULL)
+        {
+            int precision_type = UNKNOWN_TYPE;
+            return_val += semcheck_expr_main(&precision_type, symtab, expr->field_precision, INT_MAX, NO_MUTATE);
+            if (precision_type != INT_TYPE && precision_type != LONGINT_TYPE)
+            {
+                fprintf(stderr, "Error on line %d, field precision for argument %d must be an integer.\n",
+                        stmt->line_num, arg_index);
+                ++return_val;
+            }
+        }
+
+        args = args->next;
+        ++arg_index;
     }
 
     return return_val;
@@ -204,6 +291,24 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
+    int handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",
+        semcheck_builtin_setlength, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "write",
+        semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "writeln",
+        semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
     assert(mangled_name != NULL);
 
@@ -262,12 +367,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     else
     {
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
-        if (sym_return->hash_type == HASHTYPE_BUILTIN_PROCEDURE && proc_id != NULL &&
-            strcmp(proc_id, "SetLength") == 0)
-        {
-            return_val += semcheck_builtin_setlength(symtab, stmt, max_scope_lev);
-            return return_val;
-        }
 
         if(scope_return > max_scope_lev)
         {
@@ -488,7 +587,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(for_type != INT_TYPE)
+        if(for_type != INT_TYPE && for_type != LONGINT_TYPE)
         {
             fprintf(stderr, "Error on line %d, expected int in \"for\" assignment!\n\n",
                     stmt->line_num);
@@ -507,7 +606,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     do_for = stmt->stmt_data.for_data.do_for;
 
     return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
-    if(to_type != INT_TYPE)
+    if(to_type != INT_TYPE && to_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in \"to\" assignment!\n\n",
                 stmt->line_num);
@@ -541,11 +640,16 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
 
     if(type_first != type_second)
     {
-        fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
-                for_assign->line_num);
-        ++return_val;
+        // Allow integer/longint compatibility
+        if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+              (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
+        {
+            fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
+                    for_assign->line_num);
+            ++return_val;
+        }
     }
-    if(type_first != INT_TYPE)
+    if(type_first != INT_TYPE && type_first != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in \"for\" assignment statement!\n\n",
                 for_assign->line_num);

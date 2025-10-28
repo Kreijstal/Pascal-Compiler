@@ -118,6 +118,7 @@ static int map_type_name(const char *name, char **type_id_out) {
 
 static struct RecordType *convert_record_type(ast_t *record_node);
 static struct Expression *convert_expression(ast_t *expr_node);
+static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 
@@ -794,6 +795,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_INTEGER:
         return mk_inum(expr_node->line, atoi(expr_node->sym->name));
     case PASCAL_T_STRING:
+    case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
@@ -869,6 +871,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
     case PASCAL_T_STRING:
+    case PASCAL_T_CHAR:
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
@@ -893,6 +896,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_unary_expr(expr_node);
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
+    case PASCAL_T_FIELD_WIDTH:
+        return convert_field_width_expr(expr_node);
     default:
         fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.\n",
                 expr_node->typ, expr_node->line);
@@ -906,14 +911,54 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListNode_t *args = NULL;
     ast_t *cur = arg_node;
 
+    /*
+     * cparser often wraps Pascal arguments in synthetic tuple/statement nodes. Unwrap each
+     * layer so we only convert real expressions and preserve field-width wrappers explicitly.
+     */
     while (cur != NULL && cur != ast_nil) {
-        struct Expression *expr = convert_expression(unwrap_pascal_node(cur));
-        if (expr != NULL)
-            append_node(&args, expr, LIST_EXPR);
+        ast_t *unwrapped = unwrap_pascal_node(cur);
+        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH) {
+            struct Expression *expr = convert_field_width_expr(unwrapped);
+            if (expr != NULL)
+                append_node(&args, expr, LIST_EXPR);
+        } else if (unwrapped != NULL) {
+            struct Expression *expr = convert_expression(unwrapped);
+            if (expr != NULL)
+                append_node(&args, expr, LIST_EXPR);
+        }
         cur = cur->next;
     }
 
     return args;
+}
+
+static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
+    if (field_width_node == NULL)
+        return NULL;
+
+    ast_t *base_node = field_width_node->child;
+    if (base_node == NULL)
+        return NULL;
+
+    struct Expression *base_expr = convert_expression(base_node);
+    if (base_expr == NULL)
+        return NULL;
+
+    ast_t *width_node = base_node->next;
+    if (width_node != NULL && width_node != ast_nil) {
+        struct Expression *width_expr = convert_expression(width_node);
+        base_expr->field_width = width_expr;
+    }
+
+    ast_t *precision_node = NULL;
+    if (width_node != NULL)
+        precision_node = width_node->next;
+    if (precision_node != NULL && precision_node != ast_nil) {
+        struct Expression *precision_expr = convert_expression(precision_node);
+        base_expr->field_precision = precision_expr;
+    }
+
+    return base_expr;
 }
 
 static struct Statement *convert_assignment(ast_t *assign_node) {

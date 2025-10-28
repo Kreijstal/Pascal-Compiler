@@ -27,6 +27,8 @@ typedef struct StackNode StackNode_t;
 typedef struct RegStack RegStack_t;
 typedef struct Register Register_t;
 
+#define NUM_CALLER_SAVED_REGISTERS 9
+
 /* Helper for getting special registers */
 extern int num_args_alloced;
 void free_arg_regs(void);
