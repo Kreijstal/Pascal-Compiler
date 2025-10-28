@@ -117,9 +117,13 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     if(type_first != type_second)
     {
-        fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
-                stmt->line_num);
-        ++return_val;
+        if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+              (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
+        {
+            fprintf(stderr, "Error on line %d, type mismatch in assignment statement!\n\n",
+                    stmt->line_num);
+            ++return_val;
+        }
     }
 
     return return_val;

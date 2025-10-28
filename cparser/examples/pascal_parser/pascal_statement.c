@@ -135,6 +135,21 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
+    // Repeat statement: repeat statement_list until expression
+    combinator_t* repeat_stmt_list = seq(new_combinator(), PASCAL_T_STATEMENT_LIST,
+        sep_by(lazy(stmt_parser), token(match(";"))),    // statements separated by semicolons
+        optional(token(match(";"))),                     // optional trailing semicolon
+        NULL
+    );
+
+    combinator_t* repeat_stmt = seq(new_combinator(), PASCAL_T_REPEAT_STMT,
+        token(keyword_ci("repeat")),           // repeat keyword (case-insensitive)
+        repeat_stmt_list,                      // repeated statements
+        token(keyword_ci("until")),           // until keyword (case-insensitive)
+        lazy(expr_parser),                     // termination expression
+        NULL
+    );
+
     // With statement: with expression do statement
     combinator_t* with_stmt = seq(new_combinator(), PASCAL_T_WITH_STMT,
         token(keyword_ci("with")),               // with keyword (case-insensitive)
@@ -283,6 +298,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         asm_stmt,                             // inline assembly blocks
         if_stmt,                              // if statements
         for_stmt,                             // for statements
+        repeat_stmt,                          // repeat statements
         while_stmt,                           // while statements
         with_stmt,                            // with statements
         assignment,                            // assignment statements

@@ -15,6 +15,7 @@
 #include "../../List/List.h"
 
 struct RecordType;
+struct TypeAlias;
 
 enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_CONST, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
     HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
@@ -24,6 +25,7 @@ enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, 
 typedef struct HashNode
 {
     char *id;
+    char *canonical_id;
     char *mangled_id;
     enum HashType hash_type;
     enum VarType var_type;
@@ -41,6 +43,8 @@ typedef struct HashNode
     int array_start;
     int array_end;
     int element_size;
+    int is_dynamic_array;
+    struct TypeAlias *type_alias;
 
 } HashNode_t;
 
@@ -57,7 +61,8 @@ HashTable_t *InitHashTable();
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type);
+    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
+    struct TypeAlias *type_alias);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */

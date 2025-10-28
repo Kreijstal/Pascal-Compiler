@@ -27,6 +27,8 @@ typedef struct StackNode StackNode_t;
 typedef struct RegStack RegStack_t;
 typedef struct Register Register_t;
 
+#define NUM_CALLER_SAVED_REGISTERS 9
+
 /* Helper for getting special registers */
 extern int num_args_alloced;
 void free_arg_regs(void);
@@ -51,6 +53,7 @@ StackNode_t *add_l_t(char *);
 StackNode_t *add_l_x(char *);
 StackNode_t *add_l_z(char *);
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
+StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound);
 StackNode_t *find_in_temp(char *);
 StackNode_t *find_label(char *);
 RegStack_t *get_reg_stack();
@@ -118,6 +121,7 @@ typedef struct StackNode
     int is_array;
     int array_lower_bound;
     int element_size;
+    int is_dynamic;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */

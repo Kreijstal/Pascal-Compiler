@@ -59,7 +59,8 @@ int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum Var
 int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args);
 
 /* Pushes a new type onto the current scope (head) */
-int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, struct RecordType *record_type);
+int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
+    struct RecordType *record_type, struct TypeAlias *type_alias);
 
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */

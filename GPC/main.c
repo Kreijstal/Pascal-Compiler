@@ -306,6 +306,23 @@ int main(int argc, char **argv)
 
         unit_set_destroy(&visited_units);
 
+        if (parse_only_flag())
+        {
+            FILE *out = fopen(argv[2], "w");
+            if (out == NULL)
+            {
+                fprintf(stderr, "ERROR: Failed to open output file: %s\n", argv[2]);
+                exit(1);
+            }
+            fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
+            fprintf(out, "; parse-only mode: no code generated\n");
+            fclose(out);
+
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            return 0;
+        }
+
         int sem_result;
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if(sem_result == 0)
@@ -376,6 +393,11 @@ void set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "O2 optimizations enabled!\n\n");
             set_o2_flag();
+        }
+        else if(strcmp(arg, "-parse-only") == 0 || strcmp(arg, "--parse-only") == 0)
+        {
+            fprintf(stderr, "Parse-only mode enabled.\n\n");
+            set_parse_only_flag();
         }
         else if(strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
         {

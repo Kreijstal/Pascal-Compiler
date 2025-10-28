@@ -6,7 +6,6 @@ libunwind_platform = compiler.find_library('unwind-x86_64', required: false)
 inc_dirs = include_directories(
   '.',
   'Parser',
-  'Parser/LexAndYacc',
   'Parser/ParseTree',
   'Parser/List',
   'Parser/SemanticCheck/HashTable',
@@ -40,6 +39,8 @@ gpc_cparser_sources = [
   'Parser/ParseTree/from_cparser.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
+  'Parser/parser_error.c',
+  'Parser/pascal_frontend.c',
   'Parser/SemanticCheck/SemCheck.c',
   'Parser/SemanticCheck/HashTable/HashTable.c',
   'Parser/SemanticCheck/SymTab/SymTab.c',
@@ -53,6 +54,7 @@ gpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
+  'Optimizer/pass_manager.c',
   'stacktrace.c',
 ]
 

@@ -159,7 +159,7 @@ void codegen_stack_space(CodeGenContext *ctx);
 void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
-void codegen_function_locals(ListNode_t *, CodeGenContext *ctx);
+void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);

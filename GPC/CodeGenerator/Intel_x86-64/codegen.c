@@ -22,6 +22,8 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 
+ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
 
@@ -388,10 +390,11 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
 
-    codegen_function_locals(data->var_declaration, ctx);
+    codegen_function_locals(data->var_declaration, ctx, symtab);
     codegen_subprograms(data->subprograms, ctx, symtab);
 
     inst_list = NULL;
+    inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
     codegen_function_header(prgm_name, ctx);
@@ -409,7 +412,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 }
 
 /* Pushes function locals onto the stack */
-void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
+void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -429,14 +432,41 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
          if (tree->type == TREE_VAR_DECL)
          {
              id_list = tree->tree_data.var_decl_data.ids;
-             if(tree->tree_data.var_decl_data.type == REAL_TYPE)
+             HashNode_t *type_node = NULL;
+             if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL)
+                 FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+
+             if(tree->tree_data.var_decl_data.type == REAL_TYPE &&
+                 (type_node == NULL || type_node->type_alias == NULL || !type_node->type_alias->is_array))
              {
                  fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
              }
 
              while(id_list != NULL)
              {
-                 add_l_x((char *)id_list->cur);
+                 if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
+                 {
+                     struct TypeAlias *alias = type_node->type_alias;
+                     int element_size = (type_node->var_type == HASHVAR_REAL) ? 8 : 4;
+                     if (alias->is_open_array)
+                     {
+                         add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
+                     }
+                     else
+                     {
+                         int length = alias->array_end - alias->array_start + 1;
+                         if (length < 0)
+                             length = 0;
+                         int total_size = length * element_size;
+                         if (total_size <= 0)
+                             total_size = element_size;
+                         add_array((char *)id_list->cur, total_size, element_size, alias->array_start);
+                     }
+                 }
+                 else
+                 {
+                     add_l_x((char *)id_list->cur);
+                 }
                  id_list = id_list->next;
              };
          }
@@ -535,9 +565,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx);
-    codegen_function_locals(proc->declarations, ctx);
+    codegen_function_locals(proc->declarations, ctx, symtab);
 
     codegen_subprograms(proc->subprograms, ctx, symtab);
+    inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
@@ -575,9 +606,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
     return_var = add_l_x(func->id);
-    codegen_function_locals(func->declarations, ctx);
+    codegen_function_locals(func->declarations, ctx, symtab);
 
     codegen_subprograms(func->subprograms, ctx, symtab);
+    inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
     inst_list = add_inst(inst_list, buffer);
@@ -646,5 +678,51 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    return inst_list;
+}
+
+ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+    while (decls != NULL)
+    {
+        Tree_t *decl = (Tree_t *)decls->cur;
+        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        {
+            HashNode_t *type_node = NULL;
+            if (decl->tree_data.var_decl_data.type_id != NULL)
+                FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id);
+
+            if (type_node != NULL && type_node->type_alias != NULL &&
+                type_node->type_alias->is_array && type_node->type_alias->is_open_array)
+            {
+                ListNode_t *ids = decl->tree_data.var_decl_data.ids;
+                while (ids != NULL)
+                {
+                    char *var_name = (char *)ids->cur;
+                    StackNode_t *array_node = find_label(var_name);
+                    if (array_node != NULL && array_node->is_dynamic)
+                    {
+                        char buffer[128];
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", array_node->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        int length_offset = array_node->offset - 2 * DOUBLEWORD;
+                        if (length_offset < array_node->offset)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", length_offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    ids = ids->next;
+                }
+            }
+
+            struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+            if (init_stmt != NULL)
+                inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+        }
+        decls = decls->next;
+    }
     return inst_list;
 }

@@ -33,6 +33,7 @@
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParseTree/from_cparser.h"
+#include "Parser/pascal_frontend.h"
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
@@ -64,6 +65,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -non-local            Enable non-local variable chasing (experimental)\n");
     fprintf(stderr, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
     fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
+    fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
 }
 
 static int file_is_readable(const char *path)
@@ -81,6 +83,25 @@ static char *duplicate_path(const char *path)
         fprintf(stderr, "Error: Memory allocation failed while duplicating path '%s'\n", path);
 
     return dup;
+}
+
+static bool dump_ast_to_requested_path(Tree_t *tree)
+{
+    const char *path = dump_ast_path();
+    if (path == NULL || tree == NULL)
+        return true;
+
+    FILE *fp = fopen(path, "w");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "ERROR: Failed to open AST dump file: %s\n", path);
+        return false;
+    }
+
+    tree_print(tree, fp, 0);
+    fclose(fp);
+    fprintf(stderr, "AST written to %s\n", path);
+    return true;
 }
 
 #ifdef _WIN32
@@ -192,6 +213,11 @@ static void set_flags(char **optional_args, int count)
             fprintf(stderr, "O2 optimizations enabled!\n\n");
             set_o2_flag();
         }
+        else if (strcmp(arg, "-parse-only") == 0 || strcmp(arg, "--parse-only") == 0)
+        {
+            fprintf(stderr, "Parse-only mode enabled.\n\n");
+            set_parse_only_flag();
+        }
         else if (strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
         {
             fprintf(stderr, "Target ABI: Windows x64\n\n");
@@ -242,6 +268,20 @@ static void set_flags(char **optional_args, int count)
                 exit(1);
             }
         }
+        else if ((strcmp(arg, "--dump-ast") == 0 || strcmp(arg, "-dump-ast") == 0) && count > 1)
+        {
+            const char *path = optional_args[i + 1];
+            set_dump_ast_path(path);
+            fprintf(stderr, "AST dump enabled: %s\n\n", path);
+            --count;
+            ++i;
+        }
+        else if (strncmp(arg, "--dump-ast=", 11) == 0)
+        {
+            const char *path = arg + 11;
+            set_dump_ast_path(path);
+            fprintf(stderr, "AST dump enabled: %s\n\n", path);
+        }
         else
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
@@ -251,54 +291,6 @@ static void set_flags(char **optional_args, int count)
         --count;
         ++i;
     }
-}
-
-static char *read_file(const char *path, size_t *out_len)
-{
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-    {
-        fprintf(stderr, "Error: Cannot open file '%s'\n", path);
-        return NULL;
-    }
-
-    if (fseek(f, 0, SEEK_END) != 0)
-    {
-        fprintf(stderr, "Error: Failed to seek file '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    long size = ftell(f);
-    if (size < 0)
-    {
-        fprintf(stderr, "Error: Failed to determine file size for '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    if (fseek(f, 0, SEEK_SET) != 0)
-    {
-        fprintf(stderr, "Error: Failed to rewind file '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    char *buffer = malloc((size_t)size + 1);
-    if (buffer == NULL)
-    {
-        fprintf(stderr, "Error: Memory allocation failed while reading '%s'\n", path);
-        fclose(f);
-        return NULL;
-    }
-
-    size_t read = fread(buffer, 1, (size_t)size, f);
-    fclose(f);
-
-    buffer[read] = '\0';
-    if (out_len != NULL)
-        *out_len = read;
-    return buffer;
 }
 
 static void mark_stdlib_var_params(ListNode_t *subprograms)
@@ -333,156 +325,31 @@ static void mark_stdlib_var_params(ListNode_t *subprograms)
     }
 }
 
-static void report_parse_error(const char *path, ParseError *err)
+static bool parse_pascal_file(const char *path, Tree_t **out_tree, bool convert_to_tree)
 {
-    if (err == NULL)
-        return;
-
-    fprintf(stderr, "Parse error in %s:\n", path);
-    fprintf(stderr, "  Line %d, Column %d: %s\n",
-            err->line, err->col,
-            err->message ? err->message : "unknown error");
-    if (err->unexpected)
-        fprintf(stderr, "  Unexpected: %s\n", err->unexpected);
-}
-
-static const char *skip_utf8_bom(const char *cursor, const char *end)
-{
-    if (end - cursor >= 3 &&
-        (unsigned char)cursor[0] == 0xEF &&
-        (unsigned char)cursor[1] == 0xBB &&
-        (unsigned char)cursor[2] == 0xBF)
-    {
-        return cursor + 3;
-    }
-    return cursor;
-}
-
-static const char *skip_whitespace_and_comments(const char *cursor, const char *end)
-{
-    while (cursor < end)
-    {
-        unsigned char ch = (unsigned char)*cursor;
-        if (isspace(ch))
-        {
-            ++cursor;
-            continue;
-        }
-
-        if (ch == '{')
-        {
-            ++cursor;
-            while (cursor < end && *cursor != '}')
-                ++cursor;
-            if (cursor < end)
-                ++cursor;
-            continue;
-        }
-
-        if (ch == '(' && (cursor + 1) < end && cursor[1] == '*')
-        {
-            cursor += 2;
-            while ((cursor + 1) < end && !(cursor[0] == '*' && cursor[1] == ')'))
-                ++cursor;
-            if ((cursor + 1) < end)
-                cursor += 2;
-            else
-                cursor = end;
-            continue;
-        }
-
-        if (ch == '/' && (cursor + 1) < end && cursor[1] == '/')
-        {
-            cursor += 2;
-            while (cursor < end && *cursor != '\n')
-                ++cursor;
-            continue;
-        }
-
-        break;
-    }
-
-    return cursor;
-}
-
-static bool buffer_starts_with_unit(const char *buffer, size_t length)
-{
-    const char *cursor = buffer;
-    const char *end = buffer + length;
-    cursor = skip_utf8_bom(cursor, end);
-    cursor = skip_whitespace_and_comments(cursor, end);
-
-    const char *keyword = "unit";
-    size_t keyword_len = strlen(keyword);
-    if ((size_t)(end - cursor) < keyword_len)
-        return false;
-
-    if (strncasecmp(cursor, keyword, keyword_len) != 0)
-        return false;
-
-    const char *after = cursor + keyword_len;
-    if (after < end && (isalnum((unsigned char)*after) || *after == '_'))
-        return false;
-
-    return true;
-}
-
-static Tree_t *parse_pascal_file(const char *path)
-{
-    size_t length = 0;
-    char *buffer = read_file(path, &length);
-    if (buffer == NULL)
-        return NULL;
-
-    combinator_t *parser = new_combinator();
-    bool is_unit = buffer_starts_with_unit(buffer, length);
-    if (is_unit)
-        init_pascal_unit_parser(&parser);
-    else
-        init_pascal_complete_program_parser(&parser);
-
-    input_t *input = new_input();
-    input->buffer = buffer;
-    input->length = (int)length;
-
-    if (ast_nil == NULL)
-    {
-        ast_nil = new_ast();
-        ast_nil->typ = PASCAL_T_NONE;
-    }
-
-    file_to_parse = (char *)path;
-
-    ParseResult result = parse(input, parser);
     Tree_t *tree = NULL;
-    if (!result.is_success)
+    ParseError *error = NULL;
+    bool success = pascal_parse_source(path, convert_to_tree, &tree, &error);
+    if (!success)
     {
-        report_parse_error(path, result.value.error);
-        if (result.value.error != NULL)
-            free_error(result.value.error);
-    }
-    else
-    {
-        if (input->start < input->length)
-        {
-            fprintf(stderr,
-                    "Warning: Parser did not consume entire input for %s (at position %d of %d)\n",
-                    path, input->start, input->length);
-        }
-
-        tree = tree_from_pascal_ast(result.value.ast);
-        if (tree == NULL)
-        {
-            fprintf(stderr, "Error: Failed to convert AST for '%s' to legacy parse tree.\n", path);
-        }
-        free_ast(result.value.ast);
+        pascal_print_parse_error(path, error);
+        if (error != NULL)
+            free_error(error);
     }
 
-    free(buffer);
-    free(input);
-    file_to_parse = NULL;
-    free_combinator(parser);
-    return tree;
+    if (out_tree != NULL)
+    {
+        if (success && convert_to_tree)
+            *out_tree = tree;
+        else
+            *out_tree = NULL;
+    }
+    else if (tree != NULL && convert_to_tree)
+    {
+        destroy_tree(tree);
+    }
+
+    return success;
 }
 
 typedef struct
@@ -667,11 +534,18 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
 
-    Tree_t *unit_tree = parse_pascal_file(path);
+    Tree_t *unit_tree = NULL;
+    bool ok = parse_pascal_file(path, &unit_tree, true);
     free(path);
-    if (unit_tree == NULL)
+    if (!ok)
     {
         fprintf(stderr, "ERROR: Failed to load unit '%s'.\n", unit_name);
+        exit(1);
+    }
+
+    if (unit_tree == NULL)
+    {
+        fprintf(stderr, "ERROR: Failed to convert unit '%s' into legacy parse tree.\n", unit_name);
         exit(1);
     }
 
@@ -707,6 +581,7 @@ int main(int argc, char **argv)
     if (argc < 3)
     {
         print_usage(argv[0]);
+        clear_dump_ast_path();
         return 1;
     }
 
@@ -721,21 +596,90 @@ int main(int argc, char **argv)
     if (stdlib_path == NULL)
     {
         fprintf(stderr, "Error: Unable to locate stdlib.p. Set GPC_STDLIB or run from the project root.\n");
+        clear_dump_ast_path();
         return 1;
     }
 
-    Tree_t *prelude_tree = parse_pascal_file(stdlib_path);
-    if (prelude_tree == NULL)
+    bool parse_only = parse_only_flag();
+    bool convert_to_tree = !parse_only || dump_ast_path() != NULL;
+
+    Tree_t *prelude_tree = NULL;
+    if (!parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree))
     {
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
         free(stdlib_path);
+        clear_dump_ast_path();
         return 1;
     }
 
-    Tree_t *user_tree = parse_pascal_file(input_file);
-    if (user_tree == NULL)
+    Tree_t *user_tree = NULL;
+    if (!parse_pascal_file(input_file, &user_tree, convert_to_tree))
     {
-        destroy_tree(prelude_tree);
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
         free(stdlib_path);
+        clear_dump_ast_path();
+        return 1;
+    }
+
+    if (!dump_ast_to_requested_path(user_tree))
+    {
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
+        free(stdlib_path);
+        clear_dump_ast_path();
+        if (ast_nil != NULL)
+        {
+            free(ast_nil);
+            ast_nil = NULL;
+        }
+        return 1;
+    }
+
+    if (parse_only)
+    {
+        FILE *out = fopen(output_file, "w");
+        if (out == NULL)
+        {
+            fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
+            if (prelude_tree != NULL)
+                destroy_tree(prelude_tree);
+            if (user_tree != NULL)
+                destroy_tree(user_tree);
+            free(stdlib_path);
+            clear_dump_ast_path();
+            return 1;
+        }
+        fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
+        fprintf(out, "; parse-only mode: no code generated\n");
+        fclose(out);
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
+        free(stdlib_path);
+        if (ast_nil != NULL)
+        {
+            free(ast_nil);
+            ast_nil = NULL;
+        }
+        clear_dump_ast_path();
+        return 0;
+    }
+
+    if (prelude_tree == NULL || user_tree == NULL)
+    {
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
+        free(stdlib_path);
+        clear_dump_ast_path();
         return 1;
     }
 
@@ -776,6 +720,7 @@ int main(int argc, char **argv)
             DestroySymTab(symtab);
             destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            clear_dump_ast_path();
             return 1;
         }
         ctx.label_counter = 1;
@@ -804,7 +749,11 @@ int main(int argc, char **argv)
     }
 
     if (sem_result > 0)
+    {
+        clear_dump_ast_path();
         return exit_code > 0 ? exit_code : 1;
+    }
 
+    clear_dump_ast_path();
     return exit_code;
 }

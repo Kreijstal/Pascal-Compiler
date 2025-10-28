@@ -1,5 +1,6 @@
 import subprocess
 import os
+import shutil
 import unittest
 
 # Path to the compiler executable
@@ -9,6 +10,7 @@ build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
 GPC_PATH = os.path.join(build_dir, "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
+GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
 
 # The compiler is built by Meson now, so this function is not needed.
@@ -145,6 +147,56 @@ class TestCompiler(unittest.TestCase):
         # Instead, we will check that the stack allocation is smaller than the unoptimized one.
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
 
+    def test_parser_ast_dump_matches_golden(self):
+        """Ensures the AST dump matches the golden files for representative programs."""
+        cases = {
+            "helloworld": os.path.join(TEST_CASES_DIR, "helloworld.p"),
+            "simple_expr": os.path.join(TEST_CASES_DIR, "simple_expr.p"),
+        }
+
+        for name, input_file in cases.items():
+            with self.subTest(case=name):
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{name}_parse_only.s")
+                ast_file = os.path.join(TEST_OUTPUT_DIR, f"{name}.ast")
+                run_compiler(
+                    input_file,
+                    asm_file,
+                    flags=["-parse-only", "--dump-ast", ast_file],
+                )
+                actual = read_file_content(ast_file)
+                expected_path = os.path.join(GOLDEN_AST_DIR, f"{name}.ast")
+                expected = read_file_content(expected_path)
+                self.assertEqual(actual, expected)
+
+    def test_parse_only_has_no_leaks_under_valgrind(self):
+        """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
+        if shutil.which("valgrind") is None:
+            self.skipTest("valgrind is not installed")
+
+        input_file = os.path.join(TEST_CASES_DIR, "helloworld.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "helloworld_valgrind.s")
+        ast_file = os.path.join(TEST_OUTPUT_DIR, "helloworld_valgrind.ast")
+
+        command = [
+            "valgrind",
+            "--leak-check=full",
+            "--error-exitcode=1",
+            GPC_PATH,
+            input_file,
+            asm_file,
+            "-parse-only",
+            "--dump-ast",
+            ast_file,
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(
+                "Valgrind reported memory issues:\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+        self.assertTrue(os.path.exists(ast_file))
 
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
@@ -206,6 +258,24 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+    def test_repeat_type_inference(self):
+        """Tests repeat-until loops and variable type inference."""
+        input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(process.stdout, "5\n")
+        self.assertEqual(process.returncode, 0)
 
     def test_array_consts(self):
         """Tests that const declarations and array indexing work together."""
@@ -328,6 +398,60 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
+
+    def test_zahlen_program_compiles(self):
+        """Ensures the zahlen classification demo compiles successfully."""
+        input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen.s")
+
+        # Compile without parse-only flag
+        try:
+            run_compiler(input_file, asm_file)
+            self.assertTrue(os.path.exists(asm_file))
+            # Check that it's not in parse-only mode
+            content = read_file_content(asm_file)
+            self.assertNotIn("parse-only mode", content)
+            # Check that it contains assembly code
+            self.assertIn(".text", content)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"zahlen.p compilation failed: {e}")
+
+    def test_zahlen_program_runs(self):
+        """Ensures the zahlen classification demo compiles and executes with dynamic arrays."""
+        input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        zahlen_input = "5\n12\n-7\n0\n3\n4\n"
+        process = subprocess.run(
+            [executable_file],
+            input=zahlen_input,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        # Verify that both even and odd buckets are populated correctly.
+        expected_output_lines = [
+            "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n",
+            "         gerade       ungerade       Positive       Negative\n",
+            "Gerade Zahlen\n",
+            "4 0 12 \n",
+            "Ungerade Zahlen\n",
+            "3 -7 \n",
+            "Positive Zahlen\n",
+            "4 3 0 12 \n",
+            "Negative Zahlen\n",
+            "-7 \n",
+        ]
+        expected_output = "".join(expected_output_lines)
+
+        self.assertEqual(process.stdout, expected_output)
+        self.assertEqual(process.returncode, 0)
+
 
     def test_for_program(self):
         """Tests the for program."""

@@ -12,8 +12,6 @@
 #ifndef OPTIMIZER_H
 #define OPTIMIZER_H
 
-#define DEBUG_OPTIMIZER
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
@@ -22,6 +20,11 @@
 #include "../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../Parser/SemanticCheck/HashTable/HashTable.h"
 
+typedef void (*optimizer_runner_fn)(SymTab_t *, Tree_t *);
+
+void optimizer_set_runner(optimizer_runner_fn runner);
 void optimize(SymTab_t *, Tree_t *);
+void optimizer_pass_constant_folding(SymTab_t *symtab, Tree_t *tree);
+void optimizer_pass_dead_code_elimination(SymTab_t *symtab, Tree_t *tree);
 
 #endif

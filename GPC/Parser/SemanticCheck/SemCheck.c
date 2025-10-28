@@ -14,8 +14,10 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 #include "SemCheck.h"
 #include "../../flags.h"
+#include "../../identifier_utils.h"
 #include "../../Optimizer/optimizer.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
@@ -32,7 +34,7 @@ void semcheck_add_builtins(SymTab_t *symtab);
 /* Main is a special keyword at the moment for code generation */
 int semcheck_id_not_main(char *id)
 {
-    if(strcmp(id, "main") == 0)
+    if(pascal_identifier_equals(id, "main"))
     {
         fprintf(stderr, "ERROR: main is special keyword, it cannot be a program, or subprogram\n");
         return 1;
@@ -189,16 +191,49 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
-        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-            var_type = HASHVAR_RECORD;
-        else
-            var_type = HASHVAR_INTEGER;
-
         struct RecordType *record_info = NULL;
-        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-            record_info = tree->tree_data.type_decl_data.info.record;
+        struct TypeAlias *alias_info = NULL;
 
-        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type, record_info);
+        switch (tree->tree_data.type_decl_data.kind)
+        {
+            case TYPE_DECL_RECORD:
+                var_type = HASHVAR_RECORD;
+                record_info = tree->tree_data.type_decl_data.info.record;
+                break;
+            case TYPE_DECL_ALIAS:
+            {
+                alias_info = &tree->tree_data.type_decl_data.info.alias;
+                if (alias_info->is_array)
+                {
+                    int element_type = alias_info->array_element_type;
+                    if (element_type == REAL_TYPE)
+                        var_type = HASHVAR_REAL;
+                    else if (element_type == LONGINT_TYPE)
+                        var_type = HASHVAR_LONGINT;
+                    else
+                        var_type = HASHVAR_INTEGER;
+                }
+                else
+                {
+                    int base_type = alias_info->base_type;
+                    if (base_type == REAL_TYPE)
+                        var_type = HASHVAR_REAL;
+                    else if (base_type == LONGINT_TYPE)
+                        var_type = HASHVAR_LONGINT;
+                    else if (base_type == INT_TYPE)
+                        var_type = HASHVAR_INTEGER;
+                    else
+                        var_type = HASHVAR_UNTYPED;
+                }
+                break;
+            }
+            default:
+                var_type = HASHVAR_INTEGER;
+                break;
+        }
+
+        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
+            record_info, alias_info);
 
         if(func_return > 0)
         {
@@ -252,10 +287,48 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType(symtab, pchar_name, HASHVAR_PCHAR);
         free(pchar_name);
     }
+    char *integer_name = strdup("integer");
+    if (integer_name != NULL) {
+        AddBuiltinType(symtab, integer_name, HASHVAR_INTEGER);
+        free(integer_name);
+    }
+    char *longint_name = strdup("longint");
+    if (longint_name != NULL) {
+        AddBuiltinType(symtab, longint_name, HASHVAR_LONGINT);
+        free(longint_name);
+    }
+    char *real_name = strdup("real");
+    if (real_name != NULL) {
+        AddBuiltinType(symtab, real_name, HASHVAR_REAL);
+        free(real_name);
+    }
+    char *single_name = strdup("single");
+    if (single_name != NULL) {
+        AddBuiltinType(symtab, single_name, HASHVAR_REAL);
+        free(single_name);
+    }
     char *string_name = strdup("string");
     if (string_name != NULL) {
         AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
         free(string_name);
+    }
+
+    char *setlength_name = strdup("SetLength");
+    if (setlength_name != NULL) {
+        AddBuiltinProc(symtab, setlength_name, NULL);
+        free(setlength_name);
+    }
+
+    char *write_name = strdup("write");
+    if (write_name != NULL) {
+        AddBuiltinProc(symtab, write_name, NULL);
+        free(write_name);
+    }
+
+    char *writeln_name = strdup("writeln");
+    if (writeln_name != NULL) {
+        AddBuiltinProc(symtab, writeln_name, NULL);
+        free(writeln_name);
     }
 
     /* Builtins are now in stdlib.p */
@@ -342,7 +415,7 @@ int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num)
 /* A return value greater than 0 indicates how many errors occurred */
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 {
-    ListNode_t *cur, *ids;
+    ListNode_t *cur, *ids, *ids_head;
     Tree_t *tree;
     int return_val, func_return;
 
@@ -361,9 +434,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
 
         if (tree->type == TREE_VAR_DECL)
-            ids = tree->tree_data.var_decl_data.ids;
+            ids_head = tree->tree_data.var_decl_data.ids;
         else
-            ids = tree->tree_data.arr_decl_data.ids;
+            ids_head = tree->tree_data.arr_decl_data.ids;
+
+        ids = ids_head;
+
+        HashNode_t *resolved_type = NULL;
+        if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.type_id != NULL)
+            FindIdent(&resolved_type, symtab, tree->tree_data.var_decl_data.type_id);
 
         while(ids != NULL)
         {
@@ -375,8 +454,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             {
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
-                    HashNode_t *type_node;
-                    if (FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id) == -1)
+                    HashNode_t *type_node = resolved_type;
+                    if (type_node == NULL)
                     {
                         fprintf(stderr, "Error on line %d, undefined type %s!\n",
                             tree->line_num, tree->tree_data.var_decl_data.type_id);
@@ -386,25 +465,74 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     else
                     {
                         var_type = type_node->var_type;
+                        if (type_node->type_alias != NULL && type_node->type_alias->is_array)
+                        {
+                            struct TypeAlias *alias = type_node->type_alias;
+                            int element_size;
+                            if (var_type == HASHVAR_REAL)
+                                element_size = 8;
+                            else if (var_type == HASHVAR_LONGINT)
+                                element_size = 8;
+                            else
+                                element_size = 4;
+                            int start = alias->array_start;
+                            int end = alias->array_end;
+                            if (alias->is_open_array)
+                            {
+                                start = 0;
+                                end = -1;
+                            }
+
+                            func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
+                                start, end, element_size);
+
+                            if (func_return == 0)
+                            {
+                                HashNode_t *array_node = NULL;
+                                if (FindIdent(&array_node, symtab, (char *)ids->cur) != -1 && array_node != NULL)
+                                {
+                                    array_node->is_dynamic_array = alias->is_open_array;
+                                    array_node->type_alias = alias;
+                                    if (alias->is_open_array)
+                                    {
+                                        array_node->array_start = start;
+                                        array_node->array_end = end;
+                                    }
+                                }
+                            }
+
+                            goto next_identifier;
+                        }
                     }
                 }
-                else if(tree->tree_data.var_decl_data.type == INT_TYPE || tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                else if (tree->tree_data.var_decl_data.inferred_type)
+                    var_type = HASHVAR_UNTYPED;
+                else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if(tree->tree_data.var_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
-
                 func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
             }
             /* Array declarations */
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                if(tree->tree_data.arr_decl_data.type == INT_TYPE || tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                if(tree->tree_data.arr_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
+                else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                    var_type = HASHVAR_LONGINT;
                 else
                     var_type = HASHVAR_REAL;
 
-                int element_size = (var_type == HASHVAR_REAL) ? 8 : 8;
+                int element_size;
+                if (var_type == HASHVAR_REAL)
+                    element_size = 8;
+                else if (var_type == HASHVAR_LONGINT)
+                    element_size = 8;
+                else
+                    element_size = 4;
                 func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
                     tree->tree_data.arr_decl_data.s_range, tree->tree_data.arr_decl_data.e_range, element_size);
             }
@@ -417,10 +545,94 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 return_val += func_return;
             }
 
+next_identifier:
             ids = ids->next;
         }
 
         cur = cur->next;
+
+        if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.initializer != NULL)
+        {
+            if (ids_head == NULL || ids_head->next != NULL)
+            {
+                fprintf(stderr, "Error on line %d, type inference initializers must declare a single identifier.\n",
+                    tree->line_num);
+                ++return_val;
+            }
+            else
+            {
+                char *var_name = (char *)ids_head->cur;
+                HashNode_t *var_node = NULL;
+                if (FindIdent(&var_node, symtab, var_name) == -1 || var_node == NULL)
+                {
+                    fprintf(stderr, "Error on line %d, failed to resolve variable %s for initializer.\n",
+                        tree->line_num, var_name);
+                    ++return_val;
+                }
+                else
+                {
+                    struct Statement *init_stmt = tree->tree_data.var_decl_data.initializer;
+                    struct Expression *init_expr = init_stmt->stmt_data.var_assign_data.expr;
+                    int expr_type = UNKNOWN_TYPE;
+                    return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
+
+                    if (expr_type == UNKNOWN_TYPE)
+                    {
+                        fprintf(stderr, "Error on line %d, unable to infer type for %s.\n", tree->line_num, var_name);
+                        ++return_val;
+                    }
+                    else
+                    {
+                        enum VarType inferred_var_type = HASHVAR_UNTYPED;
+                        int normalized_type = expr_type;
+
+                        switch(expr_type)
+                        {
+                            case INT_TYPE:
+                            case LONGINT_TYPE:
+                            case BOOL:
+                                inferred_var_type = HASHVAR_INTEGER;
+                                normalized_type = INT_TYPE;
+                                break;
+                            case REAL_TYPE:
+                                inferred_var_type = HASHVAR_REAL;
+                                normalized_type = REAL_TYPE;
+                                break;
+                            case STRING_TYPE:
+                                inferred_var_type = HASHVAR_PCHAR;
+                                normalized_type = STRING_TYPE;
+                                if (tree->tree_data.var_decl_data.type_id == NULL)
+                                    tree->tree_data.var_decl_data.type_id = strdup("string");
+                                break;
+                            default:
+                                fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",
+                                    tree->line_num, var_name);
+                                ++return_val;
+                                inferred_var_type = HASHVAR_UNTYPED;
+                                break;
+                        }
+
+                        if (tree->tree_data.var_decl_data.inferred_type)
+                        {
+                            if (inferred_var_type != HASHVAR_UNTYPED)
+                            {
+                                tree->tree_data.var_decl_data.type = normalized_type;
+                                var_node->var_type = inferred_var_type;
+                            }
+                        }
+                        else
+                        {
+                            if (inferred_var_type != var_node->var_type)
+                            {
+                                fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
+                                    tree->line_num, var_name);
+                                ++return_val;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
     }
 
