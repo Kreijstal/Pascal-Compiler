@@ -1117,6 +1117,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             return NULL;
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt);
     }
+    case PASCAL_T_EXIT_STMT:
+        return mk_exit(stmt_node->line);
     default: {
         const char *name = tag_name(stmt_node->typ);
         fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",

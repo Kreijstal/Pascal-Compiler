@@ -125,6 +125,20 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_ASM_BLOCK:
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
+        case STMT_EXIT:
+            /* EXIT statement - generate a jump to the current procedure/function epilogue */
+            /* For now, we'll use a simple return instruction */
+            /* TODO: Track loop/procedure context for proper epilogue jumps */
+            inst_list = add_inst(inst_list, "\t# EXIT statement\n");
+            /* In x86-64, we need to clean up and return - simplified version */
+            inst_list = add_inst(inst_list, "\tleave\n");
+            inst_list = add_inst(inst_list, "\tret\n");
+            break;
+        case STMT_BREAK:
+            /* BREAK statement - exit from current loop */
+            /* TODO: Track loop context and generate proper jump to loop end */
+            inst_list = add_inst(inst_list, "\t# BREAK statement (not fully implemented)\n");
+            break;
         default:
             assert(0 && "Unrecognized statement type in codegen");
             break;

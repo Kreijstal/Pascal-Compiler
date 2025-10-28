@@ -689,6 +689,11 @@ void destroy_stmt(struct Statement *stmt)
           free(stmt->stmt_data.asm_block_data.code);
           break;
 
+        case STMT_EXIT:
+        case STMT_BREAK:
+          /* No data to free for simple control flow statements */
+          break;
+
           default:
             fprintf(stderr, "BAD TYPE IN stmt_print!\n");
             exit(1);
@@ -1168,6 +1173,30 @@ struct Statement *mk_asmblock(int line_num, char *code)
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_ASM_BLOCK;
     new_stmt->stmt_data.asm_block_data.code = code;
+
+    return new_stmt;
+}
+
+struct Statement *mk_exit(int line_num)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_EXIT;
+
+    return new_stmt;
+}
+
+struct Statement *mk_break(int line_num)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_BREAK;
 
     return new_stmt;
 }
