@@ -534,7 +534,17 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        int value_type = assign_expr != NULL ? assign_expr->resolved_type : UNKNOWN_TYPE;
+        const char *value_operand = value_reg->bit_32;
+        const char *store_mnemonic = "movl";
+
+        if (value_type == LONGINT_TYPE || value_type == STRING_TYPE)
+        {
+            value_operand = value_reg->bit_64;
+            store_mnemonic = "movq";
+        }
+
+        snprintf(buffer, 50, "\t%s\t%s, (%s)\n", store_mnemonic, value_operand, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), value_reg);
