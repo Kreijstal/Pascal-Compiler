@@ -94,7 +94,12 @@ void pop_stackscope()
     global_stackmng->cur_scope = free_stackscope(global_stackmng->cur_scope);
 }
 
-/* Adds doubleword to t */
+static inline int align_up(int value, int alignment)
+{
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+/* Adds temporary storage to t */
 StackNode_t *add_l_t(char *label)
 {
     assert(global_stackmng != NULL);
@@ -105,14 +110,20 @@ StackNode_t *add_l_t(char *label)
     StackNode_t *new_node;
     int offset;
 
+    /* Reserve space that can hold pointer-sized temporaries. */
+    int temp_size = (int)sizeof(void *);
+    if (temp_size < DOUBLEWORD)
+        temp_size = DOUBLEWORD;
+
     cur_scope = global_stackmng->cur_scope;
 
-    cur_scope->t_offset += DOUBLEWORD;
+    cur_scope->t_offset = align_up(cur_scope->t_offset, temp_size);
+    cur_scope->t_offset += temp_size;
 
     offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
-    new_node = init_stack_node(offset, label, DOUBLEWORD);
+    new_node = init_stack_node(offset, label, temp_size);
 
     if(cur_scope->t == NULL)
     {

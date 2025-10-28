@@ -382,16 +382,14 @@ class TestCompiler(unittest.TestCase):
             timeout=5,
         )
 
-        # The original program currently emits an empty odd-number list because of logic
-        # in the Pascal source. Capture the existing output so we can detect compiler
-        # regressions while documenting the known behaviour of the sample.
+        # Verify that both even and odd buckets are populated correctly.
         expected_output_lines = [
             "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n",
             "         gerade       ungerade       Positive       Negative\n",
             "Gerade Zahlen\n",
             "4 0 12 \n",
             "Ungerade Zahlen\n",
-            "\n",
+            "3 -7 \n",
             "Positive Zahlen\n",
             "4 3 0 12 \n",
             "Negative Zahlen\n",
