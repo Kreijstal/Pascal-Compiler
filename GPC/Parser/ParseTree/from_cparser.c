@@ -110,6 +110,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("single");
         return REAL_TYPE;
     }
+    if (strcasecmp(name, "boolean") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("boolean");
+        return BOOL;
+    }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
     }
@@ -793,10 +798,19 @@ static struct Expression *convert_factor(ast_t *expr_node) {
 
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
-        return mk_inum(expr_node->line, atoi(expr_node->sym->name));
+        return mk_inum(expr_node->line, strtoll(expr_node->sym->name, NULL, 10));
+    case PASCAL_T_REAL:
+        return mk_rnum(expr_node->line, strtof(expr_node->sym->name, NULL));
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
+    case PASCAL_T_BOOLEAN:
+        if (expr_node->sym != NULL && expr_node->sym->name != NULL) {
+            const char *value = expr_node->sym->name;
+            int bool_value = (strcasecmp(value, "true") == 0);
+            return mk_bool(expr_node->line, bool_value);
+        }
+        return mk_bool(expr_node->line, 0);
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_FUNC_CALL: {
@@ -870,8 +884,10 @@ static struct Expression *convert_expression(ast_t *expr_node) {
 
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
+    case PASCAL_T_REAL:
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
+    case PASCAL_T_BOOLEAN:
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
@@ -894,13 +910,18 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_NEG:
     case PASCAL_T_POS:
         return convert_unary_expr(expr_node);
+    case PASCAL_T_NOT:
+        return mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
     default:
-        fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.\n",
+        fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.",
                 expr_node->typ, expr_node->line);
+        if (expr_node->sym != NULL && expr_node->sym->name != NULL)
+            fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
+        fprintf(stderr, "\n");
         break;
     }
 

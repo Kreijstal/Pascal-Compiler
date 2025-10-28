@@ -19,7 +19,7 @@ struct TypeAlias;
 
 enum HashType{HASHTYPE_VAR, HASHTYPE_ARRAY, HASHTYPE_CONST, HASHTYPE_PROCEDURE, HASHTYPE_FUNCTION,
     HASHTYPE_FUNCTION_RETURN, HASHTYPE_BUILTIN_PROCEDURE, HASHTYPE_TYPE};
-enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD, HASHVAR_ARRAY};
+enum VarType{HASHVAR_INTEGER, HASHVAR_LONGINT, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED, HASHVAR_PCHAR, HASHVAR_RECORD, HASHVAR_ARRAY, HASHVAR_BOOLEAN};
 
 /* Items we put in the hash table */
 typedef struct HashNode
@@ -37,7 +37,7 @@ typedef struct HashNode
     int mutated;
 
     int is_constant;
-    int const_int_value;
+    long long const_int_value;
 
     int is_array;
     int array_start;

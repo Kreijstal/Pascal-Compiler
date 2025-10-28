@@ -47,10 +47,10 @@ int main() {
 
     // Create dummy context and symtab
     CodeGenContext *ctx = (CodeGenContext *)calloc(1, sizeof(CodeGenContext));
-    ctx->target_abi = current_target_abi();
+   ctx->target_abi = current_target_abi();
     init_stackmng();
     push_stackscope();
-    add_l_x("i");
+    add_l_x("i", DOUBLEWORD);
 
     printf("Finding label 'i'...\n");
     StackNode_t *var_node = find_label("i");

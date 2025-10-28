@@ -8,6 +8,7 @@
 */
 
 #include <stdlib.h>
+#include <limits.h>
 #include <stdio.h>
 #include <assert.h>
 #include "SymTab.h"
@@ -36,6 +37,14 @@ int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args)
     assert(id != NULL);
 
     return AddIdentToTable(symtab->builtins, id, NULL, HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args, NULL, NULL);
+}
+
+int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    return AddIdentToTable(symtab->builtins, id, NULL, return_type, HASHTYPE_FUNCTION, NULL, NULL, NULL);
 }
 
 /* Adds a built-in type */
@@ -117,7 +126,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
     }
 }
 
-int PushConstOntoScope(SymTab_t *symtab, char *id, int value)
+int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
@@ -128,7 +137,10 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, int value)
     if (FindIdentInTable(symtab->builtins, id) == NULL)
     {
         cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        int result = AddIdentToTable(cur_hash, id, NULL, HASHVAR_INTEGER, HASHTYPE_CONST, NULL, NULL, NULL);
+        enum VarType stored_type = HASHVAR_INTEGER;
+        if (value > INT_MAX || value < INT_MIN)
+            stored_type = HASHVAR_LONGINT;
+        int result = AddIdentToTable(cur_hash, id, NULL, stored_type, HASHTYPE_CONST, NULL, NULL, NULL);
         if (result == 0)
         {
             HashNode_t *node = FindIdentInTable(cur_hash, id);
