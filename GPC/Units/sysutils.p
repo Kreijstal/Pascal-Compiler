@@ -62,26 +62,7 @@ begin
     else
         DigitValue := Value;
 
-    if DigitValue = 0 then
-        DigitToString := '0'
-    else if DigitValue = 1 then
-        DigitToString := '1'
-    else if DigitValue = 2 then
-        DigitToString := '2'
-    else if DigitValue = 3 then
-        DigitToString := '3'
-    else if DigitValue = 4 then
-        DigitToString := '4'
-    else if DigitValue = 5 then
-        DigitToString := '5'
-    else if DigitValue = 6 then
-        DigitToString := '6'
-    else if DigitValue = 7 then
-        DigitToString := '7'
-    else if DigitValue = 8 then
-        DigitToString := '8'
-    else
-        DigitToString := '9';
+    DigitToString := Chr(Ord('0') + DigitValue);
 end;
 
 function IntToStr(value: longint): AnsiString;

@@ -1,6 +1,6 @@
-import subprocess
 import os
 import shutil
+import subprocess
 import unittest
 
 # Path to the compiler executable
@@ -47,7 +47,7 @@ def read_file_content(filepath):
 class TestCompiler(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The compiler is already built by Meson.
+        cls._ensure_compiler_built()
         # Create output directories
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
@@ -55,6 +55,53 @@ class TestCompiler(unittest.TestCase):
         cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
         cls._compile_runtime()
         cls._build_ctypes_helper_library()
+
+    @classmethod
+    def _ensure_compiler_built(cls):
+        """Builds the compiler via Meson if the gpc binary is missing."""
+        if os.path.exists(GPC_PATH):
+            return
+
+        meson = shutil.which("meson")
+        if meson is None:
+            raise RuntimeError(
+                "Meson is required to build the compiler but is not available in PATH"
+            )
+
+        build_root = build_dir
+        build_ninja = os.path.join(build_root, "build.ninja")
+        # Configure the build directory if it has not been set up yet.
+        if not os.path.exists(build_ninja):
+            try:
+                subprocess.run(
+                    [meson, "setup", build_root],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(
+                    "Meson setup failed:\n"
+                    f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+                )
+
+        try:
+            subprocess.run(
+                [meson, "compile", "-C", build_root],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                "Meson compile failed:\n"
+                f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+            )
+
+        if not os.path.exists(GPC_PATH):
+            raise RuntimeError(
+                f"Meson build completed but did not produce compiler at {GPC_PATH}"
+            )
 
     @classmethod
     def _compile_runtime(cls):
@@ -542,6 +589,33 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
+
+    def test_ord_builtin(self):
+        """Ensures the Ord builtin converts characters to their ordinal values."""
+        input_file = os.path.join(TEST_CASES_DIR, "ord_builtin.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("Ord builtin execution timed out.")
+            return
+
+        self.assertEqual(process.returncode, 0)
+        lines = process.stdout.strip().splitlines()
+        self.assertGreaterEqual(len(lines), 3)
+        self.assertEqual(lines[0].strip(), "55")
+        self.assertEqual(lines[1].strip(), "48")
+        self.assertEqual(lines[2].strip(), "5")
 
     def test_ctypes_unit(self):
         """Ensures the ctypes unit exposes C compatible aliases."""

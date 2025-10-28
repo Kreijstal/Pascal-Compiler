@@ -194,3 +194,32 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     result[total] = '\0';
     return result;
 }
+
+char *gpc_chr(int64_t value)
+{
+    if (value < 0)
+        value = 0;
+    else if (value > 255)
+        value = 255;
+
+    char *result = (char *)malloc(2);
+    if (result == NULL)
+        return "";
+
+    result[0] = (char)(value & 0xFF);
+    result[1] = '\0';
+    return result;
+}
+
+int64_t gpc_ord_string(const char *value)
+{
+    if (value == NULL || value[0] == '\0')
+        return 0;
+
+    return (unsigned char)value[0];
+}
+
+int64_t gpc_ord_longint(int64_t value)
+{
+    return value;
+}

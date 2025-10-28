@@ -366,6 +366,18 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(sizeof_name);
     }
 
+    char *chr_name = strdup("Chr");
+    if (chr_name != NULL) {
+        AddBuiltinFunction(symtab, chr_name, HASHVAR_PCHAR);
+        free(chr_name);
+    }
+
+    char *ord_name = strdup("Ord");
+    if (ord_name != NULL) {
+        AddBuiltinFunction(symtab, ord_name, HASHVAR_LONGINT);
+        free(ord_name);
+    }
+
     /* Builtins are now in stdlib.p */
 }
 
