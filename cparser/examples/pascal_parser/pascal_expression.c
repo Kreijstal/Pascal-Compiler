@@ -764,6 +764,8 @@ void init_pascal_expression_parser(combinator_t** p) {
     expr_altern(*p, 6, PASCAL_T_MOD, token(match("%")));
     expr_altern(*p, 6, PASCAL_T_SHL, token(keyword_ci("shl")));
     expr_altern(*p, 6, PASCAL_T_SHR, token(keyword_ci("shr")));
+    expr_altern(*p, 6, PASCAL_T_ROL, token(keyword_ci("rol")));
+    expr_altern(*p, 6, PASCAL_T_ROR, token(keyword_ci("ror")));
 
     // Precedence 7: Unary operators
     expr_insert(*p, 7, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
