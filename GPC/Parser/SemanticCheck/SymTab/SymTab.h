@@ -32,6 +32,9 @@ SymTab_t *InitSymTab();
 /* Returns 1 if failed, 0 otherwise */
 int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args);
 
+/* Adds a built-in function */
+int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type);
+
 /* Adds a built-in type */
 int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type);
 
@@ -44,7 +47,7 @@ int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
 /* Pushes a new array onto the current scope (head) */
 int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int start, int end, int element_size);
 
-int PushConstOntoScope(SymTab_t *symtab, char *id, int value);
+int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
 
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */

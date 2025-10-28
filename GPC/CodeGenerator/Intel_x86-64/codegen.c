@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <assert.h>
 #include <string.h>
 #include "register_types.h"
@@ -26,6 +27,27 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
 
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
+
+void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    if (fmt != NULL && fmt[0] != '\0')
+    {
+        size_t len = strlen(fmt);
+        if (len == 0 || fmt[len - 1] != '\n')
+            fputc('\n', stderr);
+    }
+    va_end(args);
+    if (ctx != NULL)
+        ctx->had_error = 1;
+}
+
+int codegen_had_error(const CodeGenContext *ctx)
+{
+    return (ctx != NULL) ? ctx->had_error : 0;
+}
 
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
@@ -462,14 +484,30 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                              total_size = element_size;
                          add_array((char *)id_list->cur, total_size, element_size, alias->array_start);
                      }
-                 }
-                 else
-                 {
-                     add_l_x((char *)id_list->cur);
-                 }
-                 id_list = id_list->next;
-             };
-         }
+                }
+                else
+                {
+                    int alloc_size = DOUBLEWORD;
+                    enum VarType var_kind = HASHVAR_INTEGER;
+                    if (symtab != NULL)
+                    {
+                        HashNode_t *var_info = NULL;
+                        if (FindIdent(&var_info, symtab, (char *)id_list->cur) >= 0 && var_info != NULL)
+                            var_kind = var_info->var_type;
+                    }
+                    if (type_node != NULL)
+                        var_kind = type_node->var_type;
+
+                    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL || var_kind == HASHVAR_PCHAR)
+                        alloc_size = 8;
+                    else
+                        alloc_size = DOUBLEWORD;
+
+                    add_l_x((char *)id_list->cur, alloc_size);
+                }
+                id_list = id_list->next;
+            };
+        }
          else if (tree->type == TREE_ARR_DECL)
          {
              id_list = tree->tree_data.arr_decl_data.ids;
@@ -611,13 +649,28 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
-    return_var = add_l_x(func->id);
+    int return_size = DOUBLEWORD;
+    if (symtab != NULL)
+    {
+        HashNode_t *func_node = NULL;
+        if (FindIdent(&func_node, symtab, func->id) >= 0 && func_node != NULL)
+        {
+            if (func_node->var_type == HASHVAR_LONGINT || func_node->var_type == HASHVAR_REAL || func_node->var_type == HASHVAR_PCHAR)
+                return_size = 8;
+            else if (func_node->var_type == HASHVAR_BOOLEAN)
+                return_size = DOUBLEWORD;
+        }
+    }
+    return_var = add_l_x(func->id, return_size);
     codegen_function_locals(func->declarations, ctx, symtab);
 
     codegen_subprograms(func->subprograms, ctx, symtab);
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
-    snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+    if (return_var->size >= 8)
+        snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
+    else
+        snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
     inst_list = add_inst(inst_list, buffer);
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
