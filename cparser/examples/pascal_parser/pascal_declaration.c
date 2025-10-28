@@ -160,7 +160,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
         range_type(PASCAL_T_RANGE_TYPE),                // range types like 1..100
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^integer
-        // Note: Removed simple type names to avoid keyword conflicts for now
+        token(cident(PASCAL_T_IDENTIFIER)),             // simple aliases like Foo = integer
         NULL
     );
 

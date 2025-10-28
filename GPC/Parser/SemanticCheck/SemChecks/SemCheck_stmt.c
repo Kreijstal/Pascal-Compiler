@@ -16,6 +16,7 @@
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
 #include "../NameMangling.h"
+#include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
@@ -33,6 +34,23 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
+
+static int var_type_to_expr_type(enum VarType var_type)
+{
+    switch (var_type)
+    {
+        case HASHVAR_INTEGER:
+            return INT_TYPE;
+        case HASHVAR_LONGINT:
+            return LONGINT_TYPE;
+        case HASHVAR_REAL:
+            return REAL_TYPE;
+        case HASHVAR_PCHAR:
+            return STRING_TYPE;
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
 
 typedef int (*builtin_semcheck_handler_t)(SymTab_t *, struct Statement *, int);
 
@@ -403,12 +421,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = arg_decl->tree_data.var_decl_data.type;
-                if(expected_type == -1 && arg_decl->tree_data.var_decl_data.type_id != NULL)
+                if ((expected_type == -1 || expected_type == UNKNOWN_TYPE) &&
+                    arg_decl->tree_data.var_decl_data.type_id != NULL)
                 {
-                    HashNode_t *type_node;
-                    if(FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1)
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1 &&
+                        type_node != NULL)
                     {
-                        expected_type = type_node->var_type;
+                        expected_type = var_type_to_expr_type(type_node->var_type);
                     }
                 }
 

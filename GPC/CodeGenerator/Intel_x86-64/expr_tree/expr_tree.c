@@ -286,7 +286,6 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(node != NULL);
     assert(node->expr != NULL);
     assert(node->expr->type == EXPR_SIGN_TERM);
-    assert(inst_list != NULL);
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
