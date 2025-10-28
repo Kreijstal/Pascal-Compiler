@@ -606,7 +606,9 @@ void destroy_tree(Tree_t *tree)
 
 void destroy_stmt(struct Statement *stmt)
 {
-    assert(stmt != NULL);
+    if (stmt == NULL)
+        return;
+
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
