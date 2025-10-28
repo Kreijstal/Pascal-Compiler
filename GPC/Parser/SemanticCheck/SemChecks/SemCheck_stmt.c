@@ -285,6 +285,40 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             /* No semantic checking needed for simple control flow statements */
             break;
 
+        case STMT_CASE:
+            /* Check the selector expression */
+            {
+                int selector_type;
+                return_val += semcheck_expr(&selector_type, symtab, stmt->stmt_data.case_data.selector_expr, max_scope_lev, 0);
+            }
+            
+            /* Check each case branch */
+            {
+                ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
+                while (branch_node != NULL) {
+                    struct CaseBranch *branch = (struct CaseBranch *)branch_node->cur;
+                    if (branch != NULL) {
+                        /* Check case labels */
+                        ListNode_t *label_node = branch->labels;
+                        while (label_node != NULL) {
+                            struct Expression *label_expr = (struct Expression *)label_node->cur;
+                            int label_type;
+                            return_val += semcheck_expr(&label_type, symtab, label_expr, max_scope_lev, 0);
+                            label_node = label_node->next;
+                        }
+                        /* Check the branch statement */
+                        if (branch->stmt != NULL)
+                            return_val += semcheck_stmt(symtab, branch->stmt, max_scope_lev);
+                    }
+                    branch_node = branch_node->next;
+                }
+            }
+            
+            /* Check the else statement if present */
+            if (stmt->stmt_data.case_data.else_stmt != NULL)
+                return_val += semcheck_stmt(symtab, stmt->stmt_data.case_data.else_stmt, max_scope_lev);
+            break;
+
         default:
             assert(0 && "Bad type in semcheck_stmt!");
             break;

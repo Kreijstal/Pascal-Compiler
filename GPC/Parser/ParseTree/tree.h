@@ -209,6 +209,8 @@ struct Statement *mk_exit(int line_num);
 
 struct Statement *mk_break(int line_num);
 
+struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt);
+
 /* Expression routines */
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
                                 struct Expression *right);

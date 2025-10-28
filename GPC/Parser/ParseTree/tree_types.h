@@ -42,6 +42,13 @@ struct RecordType
     ListNode_t *fields;
 };
 
+/* Case branch structure */
+struct CaseBranch
+{
+    ListNode_t *labels;  /* List of integer expressions representing case labels */
+    struct Statement *stmt;
+};
+
 /* A statement subtree */
 struct Statement
 {
@@ -109,6 +116,14 @@ struct Statement
                 struct Expression *var; /* Grammar will validate the correctness */
             } for_assign_data;
         } for_data;
+
+        /* CASE */
+        struct Case
+        {
+            struct Expression *selector_expr;
+            ListNode_t *branches;  /* List of CaseBranch */
+            struct Statement *else_stmt;  /* Optional else branch */
+        } case_data;
     } stmt_data;
 };
 
