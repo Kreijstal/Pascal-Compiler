@@ -1138,15 +1138,36 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                 /* Walk through children of the branch */
                 ast_t *child = cur->child;
                 while (child != NULL) {
-                    if (child->typ == PASCAL_T_CASE_LABEL) {
-                        /* Extract the label value */
+                    if (child->typ == PASCAL_T_CASE_LABEL_LIST) {
+                        /* CASE_LABEL_LIST contains the labels */
+                        ast_t *label_node = child->child;
+                        while (label_node != NULL) {
+                            if (label_node->typ == PASCAL_T_CASE_LABEL && label_node->child != NULL) {
+                                struct Expression *label_expr = convert_expression(label_node->child);
+                                if (label_expr != NULL) {
+                                    append_node(&labels, label_expr, LIST_EXPR);
+                                }
+                            } else if (label_node->typ == PASCAL_T_INTEGER || 
+                                       label_node->typ == PASCAL_T_IDENTIFIER) {
+                                /* Direct value */
+                                struct Expression *label_expr = convert_expression(label_node);
+                                if (label_expr != NULL) {
+                                    append_node(&labels, label_expr, LIST_EXPR);
+                                }
+                            }
+                            label_node = label_node->next;
+                        }
+                    } else if (child->typ == PASCAL_T_CASE_LABEL) {
+                        /* Single CASE_LABEL (not in a list) */
                         if (child->child != NULL) {
                             struct Expression *label_expr = convert_expression(child->child);
-                            if (label_expr != NULL)
+                            if (label_expr != NULL) {
                                 append_node(&labels, label_expr, LIST_EXPR);
+                            }
                         }
                     } else if (child->typ == PASCAL_T_STATEMENT || 
-                               child->typ == PASCAL_T_FUNC_CALL) {
+                               child->typ == PASCAL_T_FUNC_CALL ||
+                               child->typ == PASCAL_T_BEGIN_BLOCK) {
                         /* This is the statement for this branch */
                         branch_stmt = convert_statement(child);
                         break; /* Statement is last */
