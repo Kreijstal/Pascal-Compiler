@@ -154,3 +154,20 @@ void gpc_write_newline(void)
 {
     putchar('\n');
 }
+
+void gpc_write_boolean(int width, int value)
+{
+    const char *text = value ? "TRUE" : "FALSE";
+    if (width > 0)
+        printf("%*s", width, text);
+    else
+        printf("%s", text);
+}
+
+void gpc_move(void *dest, const void *src, size_t count)
+{
+    if (dest == NULL || src == NULL || count == 0)
+        return;
+
+    memmove(dest, src, count);
+}

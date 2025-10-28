@@ -72,6 +72,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_INUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
+        case EXPR_BOOL:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -513,6 +514,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
         case EXPR_INUM:
             snprintf(buffer, buf_len, "$%d", expr->expr_data.i_num);
+            break;
+
+        case EXPR_BOOL:
+            snprintf(buffer, buf_len, "$%d", expr->expr_data.bool_value ? 1 : 0);
             break;
 
         default:

@@ -468,6 +468,10 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           fprintf(f, "[STRING:%s]\n", expr->expr_data.string);
           break;
 
+        case EXPR_BOOL:
+          fprintf(f, "[BOOL:%s]\n", expr->expr_data.bool_value ? "TRUE" : "FALSE");
+          break;
+
         default:
           fprintf(stderr, "BAD TYPE IN expr_print!\n");
           exit(1);
@@ -732,6 +736,9 @@ void destroy_expr(struct Expression *expr)
 
         case EXPR_STRING:
           free(expr->expr_data.string);
+          break;
+
+        case EXPR_BOOL:
           break;
 
         default:
@@ -1289,6 +1296,18 @@ struct Expression *mk_rnum(int line_num, float r_num)
 
     init_expression(new_expr, line_num, EXPR_RNUM);
     new_expr->expr_data.r_num = r_num;
+
+    return new_expr;
+}
+
+struct Expression *mk_bool(int line_num, int value)
+{
+    struct Expression *new_expr;
+    new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_BOOL);
+    new_expr->expr_data.bool_value = (value != 0);
 
     return new_expr;
 }

@@ -32,6 +32,9 @@ SymTab_t *InitSymTab();
 /* Returns 1 if failed, 0 otherwise */
 int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args);
 
+/* Adds a built-in function */
+int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type);
+
 /* Adds a built-in type */
 int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type);
 

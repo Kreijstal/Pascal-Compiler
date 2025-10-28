@@ -38,6 +38,14 @@ int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args)
     return AddIdentToTable(symtab->builtins, id, NULL, HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args, NULL, NULL);
 }
 
+int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    return AddIdentToTable(symtab->builtins, id, NULL, return_type, HASHTYPE_FUNCTION, NULL, NULL, NULL);
+}
+
 /* Adds a built-in type */
 int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type)
 {

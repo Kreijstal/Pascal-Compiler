@@ -131,8 +131,8 @@ StackNode_t *add_l_t(char *label)
     return new_node;
 }
 
-/* Adds doubleword to x */
-StackNode_t *add_l_x(char *label)
+/* Adds storage to x */
+StackNode_t *add_l_x(char *label, int size)
 {
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
@@ -144,12 +144,20 @@ StackNode_t *add_l_x(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    cur_scope->x_offset += DOUBLEWORD;
+    if (size <= 0)
+        size = DOUBLEWORD;
+
+    int aligned_size = size;
+    if (aligned_size % DOUBLEWORD != 0)
+        aligned_size = ((aligned_size + DOUBLEWORD - 1) / DOUBLEWORD) * DOUBLEWORD;
+
+    cur_scope->x_offset += aligned_size;
 
     offset = current_stack_home_space() +
         cur_scope->z_offset + cur_scope->x_offset;
 
-    new_node = init_stack_node(offset, label, DOUBLEWORD);
+    new_node = init_stack_node(offset, label, aligned_size);
+    new_node->element_size = size;
 
     if(cur_scope->x == NULL)
     {

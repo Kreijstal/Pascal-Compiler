@@ -226,5 +226,7 @@ struct Expression *mk_rnum(int line_num, float r_num);
 
 struct Expression *mk_string(int line_num, char *string);
 
+struct Expression *mk_bool(int line_num, int value);
+
 
 #endif

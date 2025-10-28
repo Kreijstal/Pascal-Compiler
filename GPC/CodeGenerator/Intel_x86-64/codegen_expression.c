@@ -116,6 +116,17 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_BOOL:
+            CODEGEN_DEBUG("DEBUG: Processing boolean constant expression\n");
+            expr_tree = build_expr_tree(expr);
+            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+            free_reg(get_reg_stack(), target_reg);
+            free_expr_tree(expr_tree);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         case EXPR_RELOP:
             CODEGEN_DEBUG("DEBUG: Processing relational operator expression\n");
             #ifdef DEBUG_CODEGEN

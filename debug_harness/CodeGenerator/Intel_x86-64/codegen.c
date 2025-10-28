@@ -436,7 +436,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx)
 
              while(id_list != NULL)
              {
-                 add_l_x((char *)id_list->cur);
+                add_l_x((char *)id_list->cur, DOUBLEWORD);
                  id_list = id_list->next;
              };
          }
@@ -574,7 +574,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
     inst_list = NULL;
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
-    return_var = add_l_x(func->id);
+    return_var = add_l_x(func->id, DOUBLEWORD);
     codegen_function_locals(func->declarations, ctx);
 
     codegen_subprograms(func->subprograms, ctx, symtab);
