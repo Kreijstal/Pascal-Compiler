@@ -358,6 +358,55 @@ class TestCompiler(unittest.TestCase):
         literal_bits = "4609434218613702656"
         self.assertIn(literal_bits, asm)
 
+    def test_bitwise_operations_execute(self):
+        """Bitwise shifts and rotates should execute correctly and match expected output."""
+        input_file = os.path.join(TEST_CASES_DIR, "bitwise_ops.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitwise_ops.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "bitwise_ops")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_path = os.path.join(TEST_CASES_DIR, "bitwise_ops.expected")
+        expected_output = read_file_content(expected_path)
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            expected_output.strip().splitlines(),
+        )
+
+    def test_bitshift_codegen_emits_rotate_instructions(self):
+        """Code generation should emit rotate instructions for ROL and ROR expressions."""
+        input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitshift_expr.s")
+
+        run_compiler(input_file, asm_file)
+        asm = read_file_content(asm_file)
+
+        self.assertIn("\tsall\t", asm)
+        self.assertIn("\tsarl\t", asm)
+        self.assertIn("\troll\t", asm)
+        self.assertIn("\trorl\t", asm)
+
+    def test_bitshift_malformed_input_reports_error(self):
+        """Malformed bitshift expressions should surface a descriptive parse error."""
+        input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr_malformed.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitshift_expr_malformed.s")
+
+        stderr = run_compiler(input_file, asm_file)
+
+        self.assertIsNotNone(stderr)
+        lowered = stderr.lower()
+        self.assertIn("parse error", lowered)
+        self.assertIn("expected", lowered)
+
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
         if shutil.which("valgrind") is None:

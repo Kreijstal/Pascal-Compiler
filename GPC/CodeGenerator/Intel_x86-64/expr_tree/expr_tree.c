@@ -739,6 +739,20 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 snprintf(buffer, 50, "\tsarl\t%%cl, %s\n", left);
                 inst_list = add_inst(inst_list, buffer);
             }
+            else if(type == ROL)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\troll\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == ROR)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\trorl\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
             else
             {
                 assert(0 && "Bad mulop type!");
