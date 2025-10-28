@@ -522,6 +522,10 @@ void destroy_list(ListNode_t *list)
             case LIST_RECORD_FIELD:
                 destroy_record_field((struct RecordField *)cur->cur);
                 break;
+            case LIST_CASE_BRANCH:
+                /* Case branches are handled specially in destroy_stmt for STMT_CASE */
+                /* Don't free the branch here as it's already freed there */
+                break;
             default:
                 fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
                 exit(1);
@@ -692,6 +696,26 @@ void destroy_stmt(struct Statement *stmt)
         case STMT_EXIT:
         case STMT_BREAK:
           /* No data to free for simple control flow statements */
+          break;
+
+        case STMT_CASE:
+          destroy_expr(stmt->stmt_data.case_data.selector_expr);
+          /* Destroy case branches */
+          {
+              ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
+              while (branch_node != NULL) {
+                  struct CaseBranch *branch = (struct CaseBranch *)branch_node->cur;
+                  if (branch != NULL) {
+                      destroy_list(branch->labels);
+                      destroy_stmt(branch->stmt);
+                      free(branch);
+                  }
+                  branch_node = branch_node->next;
+              }
+              destroy_list(stmt->stmt_data.case_data.branches);
+          }
+          if (stmt->stmt_data.case_data.else_stmt != NULL)
+              destroy_stmt(stmt->stmt_data.case_data.else_stmt);
           break;
 
           default:
@@ -1197,6 +1221,21 @@ struct Statement *mk_break(int line_num)
 
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_BREAK;
+
+    return new_stmt;
+}
+
+struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_CASE;
+    new_stmt->stmt_data.case_data.selector_expr = selector;
+    new_stmt->stmt_data.case_data.branches = branches;
+    new_stmt->stmt_data.case_data.else_stmt = else_stmt;
 
     return new_stmt;
 }

@@ -1119,6 +1119,59 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
+    case PASCAL_T_CASE_STMT: {
+        ast_t *selector = stmt_node->child;
+        ast_t *branches_start = selector != NULL ? selector->next : NULL;
+        
+        struct Expression *selector_expr = convert_expression(selector);
+        ListNode_t *branches = NULL;
+        struct Statement *else_stmt = NULL;
+        
+        /* Walk through all siblings after the selector */
+        ast_t *cur = branches_start;
+        while (cur != NULL) {
+            if (cur->typ == PASCAL_T_CASE_BRANCH) {
+                /* Process this branch */
+                ListNode_t *labels = NULL;
+                struct Statement *branch_stmt = NULL;
+                
+                /* Walk through children of the branch */
+                ast_t *child = cur->child;
+                while (child != NULL) {
+                    if (child->typ == PASCAL_T_CASE_LABEL) {
+                        /* Extract the label value */
+                        if (child->child != NULL) {
+                            struct Expression *label_expr = convert_expression(child->child);
+                            if (label_expr != NULL)
+                                append_node(&labels, label_expr, LIST_EXPR);
+                        }
+                    } else if (child->typ == PASCAL_T_STATEMENT || 
+                               child->typ == PASCAL_T_FUNC_CALL) {
+                        /* This is the statement for this branch */
+                        branch_stmt = convert_statement(child);
+                        break; /* Statement is last */
+                    }
+                    child = child->next;
+                }
+                
+                /* Create the branch */
+                struct CaseBranch *branch = (struct CaseBranch *)malloc(sizeof(struct CaseBranch));
+                if (branch != NULL) {
+                    branch->labels = labels;
+                    branch->stmt = branch_stmt;
+                    append_node(&branches, branch, LIST_CASE_BRANCH);
+                }
+            } else if (cur->typ == PASCAL_T_ELSE) {
+                /* Optional else clause */
+                if (cur->child != NULL) {
+                    else_stmt = convert_statement(cur->child);
+                }
+            }
+            cur = cur->next;
+        }
+        
+        return mk_case(stmt_node->line, selector_expr, branches, else_stmt);
+    }
     default: {
         const char *name = tag_name(stmt_node->typ);
         fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",

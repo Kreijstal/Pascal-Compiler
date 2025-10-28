@@ -139,6 +139,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             /* TODO: Track loop context and generate proper jump to loop end */
             inst_list = add_inst(inst_list, "\t# BREAK statement (not fully implemented)\n");
             break;
+        case STMT_CASE:
+            inst_list = codegen_case(stmt, inst_list, ctx, symtab);
+            break;
         default:
             assert(0 && "Unrecognized statement type in codegen");
             break;
@@ -789,6 +792,118 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     free(one_expr);
     free(update_expr);
     free(update_stmt);
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+    return inst_list;
+}
+
+/* Code generation for case statements */
+ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_CASE);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    char end_label[18], buffer[100];
+    gen_label(end_label, 18, ctx);
+    
+    /* Evaluate the selector expression once and store it */
+    struct Expression *selector = stmt->stmt_data.case_data.selector_expr;
+    inst_list = codegen_expr(selector, inst_list, ctx);
+    
+    /* Get a register to hold the selector value */
+    Register_t *selector_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (selector_reg == NULL) {
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for case selector");
+        return inst_list;
+    }
+    
+    /* Pop the selector value into the register */
+    snprintf(buffer, sizeof(buffer), "\tpopq\t%s\n", selector_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    
+    /* Generate code for each case branch */
+    ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
+    if (branch_node == NULL) {
+        /* No branches - just evaluate selector and discard */
+        free_reg(get_reg_stack(), selector_reg);
+        return inst_list;
+    }
+    
+    while (branch_node != NULL) {
+        struct CaseBranch *branch = (struct CaseBranch *)branch_node->cur;
+        if (branch != NULL && branch->labels != NULL) {
+            char branch_label[18], next_branch_label[18];
+            gen_label(branch_label, 18, ctx);
+            gen_label(next_branch_label, 18, ctx);
+            
+            /* Check each label in this branch */
+            ListNode_t *label_node = branch->labels;
+            while (label_node != NULL) {
+                struct Expression *label_expr = (struct Expression *)label_node->cur;
+                
+                /* Evaluate the label expression */
+                if (label_expr->type == EXPR_INUM) {
+                    /* Simple integer literal - direct comparison */
+                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n", 
+                             label_expr->expr_data.i_num, selector_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
+                    inst_list = add_inst(inst_list, buffer);
+                } else {
+                    /* Complex expression - evaluate and compare */
+                    inst_list = codegen_expr(label_expr, inst_list, ctx);
+                    Register_t *label_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (label_reg != NULL) {
+                        snprintf(buffer, sizeof(buffer), "\tpopq\t%s\n", label_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n", 
+                                 label_reg->bit_64, selector_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), label_reg);
+                    }
+                }
+                
+                label_node = label_node->next;
+            }
+            
+            /* If no match, jump to next branch */
+            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", next_branch_label);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Branch matched - execute statement */
+            snprintf(buffer, sizeof(buffer), "%s:\n", branch_label);
+            inst_list = add_inst(inst_list, buffer);
+            if (branch->stmt != NULL)
+                inst_list = codegen_stmt(branch->stmt, inst_list, ctx, symtab);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", end_label);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Next branch label */
+            snprintf(buffer, sizeof(buffer), "%s:\n", next_branch_label);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        branch_node = branch_node->next;
+    }
+    
+    /* Else clause or fall-through */
+    if (stmt->stmt_data.case_data.else_stmt != NULL) {
+        inst_list = codegen_stmt(stmt->stmt_data.case_data.else_stmt, inst_list, ctx, symtab);
+    }
+    
+    /* End label */
+    snprintf(buffer, sizeof(buffer), "%s:\n", end_label);
+    inst_list = add_inst(inst_list, buffer);
+    
+    free_reg(get_reg_stack(), selector_reg);
+    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
