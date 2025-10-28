@@ -1,0 +1,12 @@
+[PROGRAM:HelloWorld]
+  [ARGS]:
+  [USES]:
+  [CONST_DECLS]:
+  [TYPE_DECLS]:
+  [VAR_DECLS]:
+  [SUBPROGRAMS]:
+  [BODY]:
+    [COMPOUND_STMT]:
+      [PROCEDURE_CALL:writeln]:
+        [ARGS]:
+          [STRING:Hello, World!]
