@@ -382,18 +382,22 @@ class TestCompiler(unittest.TestCase):
             timeout=5,
         )
 
-        expected_output = (
-            "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n"
-            "         gerade       ungerade       Positive       Negative\n"
-            "Gerade Zahlen\n"
-            "4 0 12 \n"
-            "Ungerade Zahlen\n"
-            "\n"
-            "Positive Zahlen\n"
-            "4 3 0 12 \n"
-            "Negative Zahlen\n"
-            "-7 \n"
-        )
+        # The original program currently emits an empty odd-number list because of logic
+        # in the Pascal source. Capture the existing output so we can detect compiler
+        # regressions while documenting the known behaviour of the sample.
+        expected_output_lines = [
+            "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n",
+            "         gerade       ungerade       Positive       Negative\n",
+            "Gerade Zahlen\n",
+            "4 0 12 \n",
+            "Ungerade Zahlen\n",
+            "\n",
+            "Positive Zahlen\n",
+            "4 3 0 12 \n",
+            "Negative Zahlen\n",
+            "-7 \n",
+        ]
+        expected_output = "".join(expected_output_lines)
 
         self.assertEqual(process.stdout, expected_output)
         self.assertEqual(process.returncode, 0)

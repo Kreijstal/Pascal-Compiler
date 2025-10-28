@@ -390,19 +390,32 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     if(proc_node != NULL)
         formal_args = proc_node->args;
 
+    typedef struct ArgInfo
+    {
+        Register_t *reg;
+    } ArgInfo;
+
+    int total_args = 0;
+    for (ListNode_t *cur = args; cur != NULL; cur = cur->next)
+        ++total_args;
+
+    ArgInfo *arg_infos = NULL;
+    if (total_args > 0)
+    {
+        arg_infos = (ArgInfo *)calloc((size_t)total_args, sizeof(ArgInfo));
+        if (arg_infos == NULL)
+        {
+            fprintf(stderr, "ERROR: Failed to allocate argument metadata.\n");
+            exit(1);
+        }
+    }
+
     arg_num = 0;
     while(args != NULL)
     {
         CODEGEN_DEBUG("DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
         struct Expression *arg_expr = (struct Expression *)args->cur;
         CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
-
-        arg_reg_char = get_arg_reg64_num(arg_num);
-        if(arg_reg_char == NULL)
-        {
-            fprintf(stderr, "ERROR: Could not get arg register: %d\n", arg_num);
-            exit(1);
-        }
 
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
@@ -414,16 +427,25 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             if (arg_expr->type == EXPR_VAR_ID)
             {
                 StackNode_t *var_node = find_label(arg_expr->expr_data.id);
-                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, arg_reg_char);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    fprintf(stderr, "ERROR: Unable to allocate register for by-reference argument.\n");
+                    exit(1);
+                }
+
+                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
+
+                if (arg_infos != NULL)
+                    arg_infos[arg_num].reg = addr_reg;
             }
             else if (arg_expr->type == EXPR_ARRAY_ACCESS)
             {
                 Register_t *addr_reg = NULL;
                 inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
-                snprintf(buffer, 256, "\tmovq\t%s, %s\n", addr_reg->bit_64, arg_reg_char);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), addr_reg);
+                if (arg_infos != NULL)
+                    arg_infos[arg_num].reg = addr_reg;
             }
             else
             {
@@ -440,9 +462,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
-            snprintf(buffer, 50, "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg_char);
-            free_reg(get_reg_stack(), top_reg);
-            inst_list = add_inst(inst_list, buffer);
+            if (arg_infos != NULL)
+                arg_infos[arg_num].reg = top_reg;
         }
 
         args = args->next;
@@ -450,6 +471,29 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             formal_args = formal_args->next;
         ++arg_num;
     }
+
+    for (int i = 0; i < arg_num; ++i)
+    {
+        arg_reg_char = get_arg_reg64_num(i);
+        if (arg_reg_char == NULL)
+        {
+            fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
+            exit(1);
+        }
+
+        Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
+        if (stored_reg == NULL)
+        {
+            fprintf(stderr, "ERROR: Missing evaluated register for argument %d\n", i);
+            exit(1);
+        }
+
+        snprintf(buffer, 50, "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), stored_reg);
+    }
+
+    free(arg_infos);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
