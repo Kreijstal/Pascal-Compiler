@@ -64,6 +64,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -non-local            Enable non-local variable chasing (experimental)\n");
     fprintf(stderr, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
     fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
+    fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
 }
 
 static int file_is_readable(const char *path)
@@ -81,6 +82,25 @@ static char *duplicate_path(const char *path)
         fprintf(stderr, "Error: Memory allocation failed while duplicating path '%s'\n", path);
 
     return dup;
+}
+
+static bool dump_ast_to_requested_path(Tree_t *tree)
+{
+    const char *path = dump_ast_path();
+    if (path == NULL || tree == NULL)
+        return true;
+
+    FILE *fp = fopen(path, "w");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "ERROR: Failed to open AST dump file: %s\n", path);
+        return false;
+    }
+
+    tree_print(tree, fp, 0);
+    fclose(fp);
+    fprintf(stderr, "AST written to %s\n", path);
+    return true;
 }
 
 #ifdef _WIN32
@@ -246,6 +266,20 @@ static void set_flags(char **optional_args, int count)
                 fprintf(stderr, "ERROR: Unknown target ABI '%s'\n", value);
                 exit(1);
             }
+        }
+        else if ((strcmp(arg, "--dump-ast") == 0 || strcmp(arg, "-dump-ast") == 0) && count > 1)
+        {
+            const char *path = optional_args[i + 1];
+            set_dump_ast_path(path);
+            fprintf(stderr, "AST dump enabled: %s\n\n", path);
+            --count;
+            ++i;
+        }
+        else if (strncmp(arg, "--dump-ast=", 11) == 0)
+        {
+            const char *path = arg + 11;
+            set_dump_ast_path(path);
+            fprintf(stderr, "AST dump enabled: %s\n\n", path);
         }
         else
         {
@@ -750,6 +784,7 @@ int main(int argc, char **argv)
     if (argc < 3)
     {
         print_usage(argv[0]);
+        clear_dump_ast_path();
         return 1;
     }
 
@@ -764,28 +799,48 @@ int main(int argc, char **argv)
     if (stdlib_path == NULL)
     {
         fprintf(stderr, "Error: Unable to locate stdlib.p. Set GPC_STDLIB or run from the project root.\n");
+        clear_dump_ast_path();
         return 1;
     }
 
     bool parse_only = parse_only_flag();
+    bool convert_to_tree = !parse_only || dump_ast_path() != NULL;
 
     Tree_t *prelude_tree = NULL;
-    if (!parse_pascal_file(stdlib_path, &prelude_tree, !parse_only))
+    if (!parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree))
     {
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
         free(stdlib_path);
+        clear_dump_ast_path();
         return 1;
     }
 
     Tree_t *user_tree = NULL;
-    if (!parse_pascal_file(input_file, &user_tree, !parse_only))
+    if (!parse_pascal_file(input_file, &user_tree, convert_to_tree))
     {
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
         if (user_tree != NULL)
             destroy_tree(user_tree);
         free(stdlib_path);
+        clear_dump_ast_path();
+        return 1;
+    }
+
+    if (!dump_ast_to_requested_path(user_tree))
+    {
+        if (prelude_tree != NULL)
+            destroy_tree(prelude_tree);
+        if (user_tree != NULL)
+            destroy_tree(user_tree);
+        free(stdlib_path);
+        clear_dump_ast_path();
+        if (ast_nil != NULL)
+        {
+            free(ast_nil);
+            ast_nil = NULL;
+        }
         return 1;
     }
 
@@ -800,6 +855,7 @@ int main(int argc, char **argv)
             if (user_tree != NULL)
                 destroy_tree(user_tree);
             free(stdlib_path);
+            clear_dump_ast_path();
             return 1;
         }
         fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
@@ -815,6 +871,7 @@ int main(int argc, char **argv)
             free(ast_nil);
             ast_nil = NULL;
         }
+        clear_dump_ast_path();
         return 0;
     }
 
@@ -825,6 +882,7 @@ int main(int argc, char **argv)
         if (user_tree != NULL)
             destroy_tree(user_tree);
         free(stdlib_path);
+        clear_dump_ast_path();
         return 1;
     }
 
@@ -865,6 +923,7 @@ int main(int argc, char **argv)
             DestroySymTab(symtab);
             destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            clear_dump_ast_path();
             return 1;
         }
         ctx.label_counter = 1;
@@ -893,7 +952,11 @@ int main(int argc, char **argv)
     }
 
     if (sem_result > 0)
+    {
+        clear_dump_ast_path();
         return exit_code > 0 ? exit_code : 1;
+    }
 
+    clear_dump_ast_path();
     return exit_code;
 }

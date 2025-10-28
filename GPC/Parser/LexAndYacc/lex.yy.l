@@ -13,6 +13,8 @@
     #include "Grammar.tab.h"
     #include "../ParseTree/type_tags.h"
 
+    #define YY_USER_ACTION col_num += yyleng;
+
     char asm_buffer[1024];
     int if_stack[100];
     int if_stack_ptr = 0;
@@ -51,6 +53,7 @@ pascal_string \'([^\']|\'\')*\'
 <COMMENT_MODE>(.|\n) {
     if (yytext[0] == '\n') {
         line_num++;
+        col_num = 1;
     }
 }
 
@@ -117,7 +120,12 @@ pascal_string \'([^\']|\'\')*\'
     }
 }
 <IGNORE_MODE>"{$endIf}" { if (if_stack_ptr > 0) if_stack_ptr--; if(if_stack_ptr == 0 || if_stack[if_stack_ptr-1]==1) BEGIN(INITIAL); }
-<IGNORE_MODE>(.|\n) {}
+<IGNORE_MODE>(.|\n) {
+    if (yytext[0] == '\n') {
+        ++line_num;
+        col_num = 1;
+    }
+}
 
 "}" { /* might be needed for asmMode */ return '}'; }
 
@@ -128,10 +136,18 @@ pascal_string \'([^\']|\'\')*\'
     #endif
 
     int i;
-    for(i = 0; i < strlen(yytext); ++i)
+    col_num -= yyleng;
+    for(i = 0; i < (int)strlen(yytext); ++i)
     {
         if(yytext[i] == '\n')
+        {
             ++line_num;
+            col_num = 1;
+        }
+        else
+        {
+            ++col_num;
+        }
     }
 }
 
@@ -140,6 +156,7 @@ pascal_string \'([^\']|\'\')*\'
         fprintf(stderr, "\n");
     #endif
     ++line_num;
+    col_num = 1;
 }
 
 

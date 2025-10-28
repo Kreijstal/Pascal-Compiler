@@ -2,25 +2,20 @@
 /* If byacc panics from conflicts, look in y.output */
 
 %{
-    #include <stdio.h>
-    #include <stdlib.h>
-    #include <string.h> // For strstr, strncpy, strcspn
-    #include <ctype.h>  // For isprint
-    #include "ErrVars.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-    void yyerror(const char *s); /* Forward declaration for const-correctness */
-    #include "tree.h"
-    #include "List.h"
 
-    extern int yylex(void);
-    extern char *yytext;
-    extern int yyleng;
+#include "ErrVars.h"
+#include "parser_error.h"
+#include "tree.h"
+#include "List.h"
 
-    /*extern FILE *yyin;*/
-    extern int yylex(void); // Standard declaration for yylex
-    extern char *yytext;    // Declare Flex's global variable
-    extern int yyleng;   
+void yyerror(const char *s);
+extern int yylex(void);
+extern char *yytext;
+extern int yyleng;
 %}
 
 %define parse.error verbose
@@ -893,67 +888,7 @@ sign
 
 %%
 
-void yyerror(const char *s) {
-    // Debug output
-    fprintf(stderr, "Debug yyerror: s = \"%s\", yytext = \"%s\", yyleng = %d, line_num = %d, col_num = %d, file_to_parse = %s\n",
-        s, (yytext ? yytext : "null"), yyleng, line_num, col_num, (file_to_parse ? file_to_parse : "null"));
-
-    // Main error message
-    fprintf(stderr, "Error");
-    if (file_to_parse != NULL && *file_to_parse != '\0') {
-        fprintf(stderr, " in '%s'", file_to_parse);
-    }
-
-    // Calculate column position
-    int current_yyleng = (yytext ? yyleng : 0);
-    int start_col = col_num > current_yyleng ? col_num - current_yyleng + 1 : 1;
-    fprintf(stderr, " (line %d, column %d)", line_num, start_col);
-    fprintf(stderr, ": %s\n", s);
-
-    // Handle unexpected token display
-    if (yytext != NULL && *yytext != '\0') {
-        char sanitized_yytext[100];
-        strncpy(sanitized_yytext, yytext, sizeof(sanitized_yytext) - 1);
-        sanitized_yytext[sizeof(sanitized_yytext) - 1] = '\0';
-        
-        // Sanitize non-printable characters
-        for (char *p = sanitized_yytext; *p; ++p) {
-            if (!isprint((unsigned char)*p) && *p != '\n' && *p != '\t') {
-                *p = '?';
-            }
-        }
-        
-        // Only print if 's' doesn't already feature the token
-        if (strstr(s, "unexpected") == NULL || strstr(s, sanitized_yytext) == NULL) {
-            fprintf(stderr, "  Unexpected token: \"%s\"\n", sanitized_yytext);
-        }
-    }
-    
-    // Context line printing
-    if (file_to_parse != NULL) {
-        FILE* f_ctx = fopen(file_to_parse, "r");
-        if (f_ctx) {
-            char line_buf[256];
-            int current_line = 1;
-            
-            while (current_line < line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
-                current_line++;
-            }
-            
-            if (current_line == line_num && fgets(line_buf, sizeof(line_buf), f_ctx)) {
-                line_buf[strcspn(line_buf, "\n\r")] = 0;
-                fprintf(stderr, "  Context: %s\n", line_buf);
-                
-                if (start_col > 0) {
-                    fprintf(stderr, "           ");
-                    for (int i = 1; i < start_col; i++) {
-                        fprintf(stderr, " ");
-                    }
-                    fprintf(stderr, "^\n");
-                }
-            }
-            fclose(f_ctx);
-        }
-    }
-    fprintf(stderr, "\n");
+void yyerror(const char *s)
+{
+    parser_error_report(s, yytext, yyleng);
 }

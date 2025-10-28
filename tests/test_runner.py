@@ -1,5 +1,6 @@
 import subprocess
 import os
+import shutil
 import unittest
 
 # Path to the compiler executable
@@ -9,6 +10,7 @@ build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
 GPC_PATH = os.path.join(build_dir, "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
+GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
 
 # The compiler is built by Meson now, so this function is not needed.
@@ -145,6 +147,56 @@ class TestCompiler(unittest.TestCase):
         # Instead, we will check that the stack allocation is smaller than the unoptimized one.
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
 
+    def test_parser_ast_dump_matches_golden(self):
+        """Ensures the AST dump matches the golden files for representative programs."""
+        cases = {
+            "helloworld": os.path.join(TEST_CASES_DIR, "helloworld.p"),
+            "simple_expr": os.path.join(TEST_CASES_DIR, "simple_expr.p"),
+        }
+
+        for name, input_file in cases.items():
+            with self.subTest(case=name):
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{name}_parse_only.s")
+                ast_file = os.path.join(TEST_OUTPUT_DIR, f"{name}.ast")
+                run_compiler(
+                    input_file,
+                    asm_file,
+                    flags=["-parse-only", "--dump-ast", ast_file],
+                )
+                actual = read_file_content(ast_file)
+                expected_path = os.path.join(GOLDEN_AST_DIR, f"{name}.ast")
+                expected = read_file_content(expected_path)
+                self.assertEqual(actual, expected)
+
+    def test_parse_only_has_no_leaks_under_valgrind(self):
+        """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
+        if shutil.which("valgrind") is None:
+            self.skipTest("valgrind is not installed")
+
+        input_file = os.path.join(TEST_CASES_DIR, "helloworld.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "helloworld_valgrind.s")
+        ast_file = os.path.join(TEST_OUTPUT_DIR, "helloworld_valgrind.ast")
+
+        command = [
+            "valgrind",
+            "--leak-check=full",
+            "--error-exitcode=1",
+            GPC_PATH,
+            input_file,
+            asm_file,
+            "-parse-only",
+            "--dump-ast",
+            ast_file,
+        ]
+
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(
+                "Valgrind reported memory issues:\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+        self.assertTrue(os.path.exists(ast_file))
 
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""

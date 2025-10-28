@@ -40,6 +40,7 @@ gpc_cparser_sources = [
   'Parser/ParseTree/from_cparser.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
+  'Parser/parser_error.c',
   'Parser/SemanticCheck/SemCheck.c',
   'Parser/SemanticCheck/HashTable/HashTable.c',
   'Parser/SemanticCheck/SymTab/SymTab.c',
@@ -53,6 +54,7 @@ gpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
+  'Optimizer/pass_manager.c',
   'stacktrace.c',
 ]
 
