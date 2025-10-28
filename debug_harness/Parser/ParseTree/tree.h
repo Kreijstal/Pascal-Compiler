@@ -214,7 +214,7 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
 
 struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
 
-struct Expression *mk_inum(int line_num, int i_num);
+struct Expression *mk_inum(int line_num, long long i_num);
 struct Expression *mk_rnum(int line_num, float r_num);
 
 struct Expression *mk_string(int line_num, char *string);

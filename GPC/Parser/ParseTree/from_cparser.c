@@ -798,7 +798,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
 
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
-        return mk_inum(expr_node->line, atoi(expr_node->sym->name));
+        return mk_inum(expr_node->line, strtoll(expr_node->sym->name, NULL, 10));
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
@@ -884,6 +884,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_INTEGER:
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
+    case PASCAL_T_BOOLEAN:
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:

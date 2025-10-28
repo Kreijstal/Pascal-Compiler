@@ -49,6 +49,14 @@ static const char *describe_expression_kind(const struct Expression *expr)
     }
 }
 
+static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *ctx, const char *usage)
+{
+    Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == NULL)
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for %s.", usage);
+    return reg;
+}
+
 ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64)
 {
     assert(src_reg32 != NULL);
@@ -75,7 +83,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_VAR_ID:
             CODEGEN_DEBUG("DEBUG: Processing variable ID expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -86,7 +99,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_ARRAY_ACCESS:
             CODEGEN_DEBUG("DEBUG: Processing array access expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -97,7 +115,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_MULOP:
             CODEGEN_DEBUG("DEBUG: Processing mulop expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -108,7 +131,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_INUM:
             CODEGEN_DEBUG("DEBUG: Processing integer constant expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -119,7 +147,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_BOOL:
             CODEGEN_DEBUG("DEBUG: Processing boolean constant expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -136,7 +169,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_ADDOP:
             CODEGEN_DEBUG("DEBUG: Processing addop expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -147,7 +185,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_SIGN_TERM:
             CODEGEN_DEBUG("DEBUG: Processing sign term expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -158,7 +201,12 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
         case EXPR_FUNCTION_CALL:
             CODEGEN_DEBUG("DEBUG: Processing function call expression\n");
             expr_tree = build_expr_tree(expr);
-            target_reg = get_free_reg(get_reg_stack(), &inst_list);
+            target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
+            if (target_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
             free_reg(get_reg_stack(), target_reg);
             free_expr_tree(expr_tree);
@@ -183,23 +231,24 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     const char *array_id = expr->expr_data.array_access_data.id;
     if (array_id == NULL)
     {
-        fprintf(stderr, "ERROR: Missing array identifier in access expression.\n");
-        exit(1);
+        codegen_report_error(ctx, "ERROR: Missing array identifier in access expression.");
+        return inst_list;
     }
 
     inst_list = codegen_expr(expr->expr_data.array_access_data.array_expr, inst_list, ctx);
-    Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (codegen_had_error(ctx))
+        return inst_list;
+    Register_t *index_reg = codegen_try_get_reg(&inst_list, ctx, "array index");
     if (index_reg == NULL)
-    {
-        fprintf(stderr, "ERROR: Unable to allocate register for array index.\n");
-        exit(1);
-    }
+        return inst_list;
 
     StackNode_t *array_node = find_label((char *)array_id);
     if (array_node == NULL || array_node->is_array == 0)
     {
-        fprintf(stderr, "ERROR: Array %s not found on stack (non-local arrays unsupported).\n", array_id);
-        exit(1);
+        codegen_report_error(ctx,
+            "ERROR: Array %s not found on stack (non-local arrays unsupported).", array_id);
+        free_reg(get_reg_stack(), index_reg);
+        return inst_list;
     }
 
     int element_size = array_node->element_size;
@@ -211,11 +260,11 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     if (array_node->is_dynamic)
     {
-        Register_t *base_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *base_reg = codegen_try_get_reg(&inst_list, ctx, "dynamic array base");
         if (base_reg == NULL)
         {
-            fprintf(stderr, "ERROR: Unable to allocate register for dynamic array base.\n");
-            exit(1);
+            free_reg(get_reg_stack(), index_reg);
+            return inst_list;
         }
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, base_reg->bit_64);
@@ -339,6 +388,8 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
 
     Register_t *addr_reg = NULL;
     inst_list = codegen_array_element_address(expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
 
     char buffer[100];
     snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);

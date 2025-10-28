@@ -59,6 +59,11 @@ static long long sizeof_from_type_tag(int type_tag)
         case STRING_TYPE:
             return POINTER_SIZE_BYTES;
         case BOOL:
+            /*
+             * Standalone booleans occupy 4 bytes to keep stack accesses aligned,
+             * but packed arrays of boolean elements are emitted as 1 byte each.
+             * Document the distinction so sizeof(boolean) users are not surprised.
+             */
             return 4;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
@@ -416,12 +421,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 expr->line_num);
             error_count++;
         }
-        else if (computed_size > INT_MAX)
-        {
-            fprintf(stderr, "Error on line %d, SizeOf result %lld is too large for current literal support.\n",
-                expr->line_num, computed_size);
-            error_count++;
-        }
+        /* No upper-bound clamp: computed_size already stored in a long long literal. */
     }
 
     if (error_count == 0)
@@ -441,7 +441,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         expr->expr_data.function_call_data.resolved_func = NULL;
 
         expr->type = EXPR_INUM;
-        expr->expr_data.i_num = (int)computed_size;
+        expr->expr_data.i_num = computed_size;
         expr->resolved_type = LONGINT_TYPE;
         *type_return = LONGINT_TYPE;
         return 0;
@@ -596,7 +596,10 @@ int semcheck_expr_main(int *type_return,
 
         /*** BASE CASES ***/
         case EXPR_INUM:
-            *type_return = INT_TYPE;
+            if (expr->expr_data.i_num > INT_MAX || expr->expr_data.i_num < INT_MIN)
+                *type_return = LONGINT_TYPE;
+            else
+                *type_return = INT_TYPE;
             break;
 
         case EXPR_RNUM:

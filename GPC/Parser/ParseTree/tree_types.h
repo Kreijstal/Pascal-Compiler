@@ -185,7 +185,7 @@ struct Expression
         } function_call_data;
 
         /* Integer number */
-        int i_num;
+        long long i_num;
 
         /* Real number */
         float r_num;

@@ -500,7 +500,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
                     node != NULL && node->hash_type == HASHTYPE_CONST)
                 {
-                    snprintf(buffer, buf_len, "$%d", node->const_int_value);
+                    snprintf(buffer, buf_len, "$%lld", node->const_int_value);
                 }
                 else
                 {

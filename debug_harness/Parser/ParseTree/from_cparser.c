@@ -700,7 +700,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
 
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
-        return mk_inum(expr_node->line, atoi(expr_node->sym->name));
+        return mk_inum(expr_node->line, strtoll(expr_node->sym->name, NULL, 10));
     case PASCAL_T_STRING:
         return mk_string(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_IDENTIFIER:

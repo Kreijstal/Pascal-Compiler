@@ -12,6 +12,7 @@ TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
+EXEC_TIMEOUT = 5
 
 # The compiler is built by Meson now, so this function is not needed.
 
@@ -209,6 +210,21 @@ class TestCompiler(unittest.TestCase):
                 expected = read_file_content(expected_path)
                 self.assertEqual(actual, expected)
 
+    def test_bell_numbers_sample_parses(self):
+        """Ensures the large BellNumbers sample that uses "+=" parses successfully."""
+        input_file = os.path.join(TEST_CASES_DIR, "bell_numbers.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bell_numbers_parse_only.s")
+        ast_file = os.path.join(TEST_OUTPUT_DIR, "bell_numbers.ast")
+
+        run_compiler(
+            input_file,
+            asm_file,
+            flags=["-parse-only", "--dump-ast", ast_file],
+        )
+
+        self.assertTrue(os.path.exists(ast_file))
+        self.assertGreater(os.path.getsize(ast_file), 0)
+
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
         if shutil.which("valgrind") is None:
@@ -269,6 +285,7 @@ class TestCompiler(unittest.TestCase):
             capture_output=True,
             text=True,
             env=env,
+            timeout=EXEC_TIMEOUT,
         )
 
         self.assertEqual(result.stdout.strip(), "42")
@@ -287,7 +304,7 @@ class TestCompiler(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=EXEC_TIMEOUT,
         )
 
         self.assertEqual(result.stdout, "42\n7\n1\n")
@@ -319,7 +336,7 @@ class TestCompiler(unittest.TestCase):
                         input=input_str,
                         capture_output=True,
                         text=True,
-                        timeout=5 # Add a timeout to prevent hanging
+                        timeout=EXEC_TIMEOUT # Add a timeout to prevent hanging
                     )
                     # Compare trimmed output to tolerate the runtime's trailing whitespace
                     self.assertEqual(process.stdout.strip(), expected_output.strip())
@@ -346,7 +363,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "Hello, World!\n")
             self.assertEqual(process.returncode, 0)
@@ -366,7 +383,7 @@ class TestCompiler(unittest.TestCase):
             [executable_file],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=EXEC_TIMEOUT,
         )
         self.assertEqual(process.stdout, "5\n")
         self.assertEqual(process.returncode, 0)
@@ -385,7 +402,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=EXEC_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             self.fail("array_const execution timed out")
@@ -408,7 +425,7 @@ class TestCompiler(unittest.TestCase):
 
         # Run the executable and verify the output so we know the program ran.
         try:
-            process = subprocess.run([executable_file], capture_output=True, text=True, timeout=5)
+            process = subprocess.run([executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT)
             self.assertEqual(process.stdout, "42\n")
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
@@ -433,7 +450,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             expected_output = read_file_content(expected_output_file)
             self.assertEqual(process.stdout, expected_output)
@@ -460,7 +477,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "1\n")
             self.assertEqual(process.returncode, 0)
@@ -481,7 +498,8 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                # A bounded timeout keeps runaway ctypes demos from hanging CI forever.
+                timeout=EXEC_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
@@ -507,7 +525,7 @@ class TestCompiler(unittest.TestCase):
                 [executable_file],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=EXEC_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
@@ -549,7 +567,7 @@ class TestCompiler(unittest.TestCase):
             input=zahlen_input,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=EXEC_TIMEOUT,
         )
 
         # Verify that both even and odd buckets are populated correctly.
@@ -593,7 +611,7 @@ class TestCompiler(unittest.TestCase):
                 input="3",
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout.strip(), "123456")
             self.assertEqual(process.returncode, 0)

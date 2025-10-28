@@ -345,11 +345,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
 
+    int use_qword = (expr->type == EXPR_INUM && expr->resolved_type == LONGINT_TYPE);
+
 #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf, target_reg->bit_32);
+    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf,
+        use_qword ? target_reg->bit_64 : target_reg->bit_32);
 #endif
 
-    snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+    if (use_qword)
+        snprintf(buffer, 50, "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+    else
+        snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
 
     return add_inst(inst_list, buffer);
 }
@@ -500,7 +506,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
                     node != NULL && node->hash_type == HASHTYPE_CONST)
                 {
-                    snprintf(buffer, buf_len, "$%d", node->const_int_value);
+                    snprintf(buffer, buf_len, "$%lld", node->const_int_value);
                 }
                 else
                 {
@@ -513,7 +519,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             break;
 
         case EXPR_INUM:
-            snprintf(buffer, buf_len, "$%d", expr->expr_data.i_num);
+            snprintf(buffer, buf_len, "$%lld", expr->expr_data.i_num);
             break;
 
         case EXPR_BOOL:

@@ -727,6 +727,7 @@ int main(int argc, char **argv)
         ctx.write_label_counter = 1;
         ctx.symtab = symtab;
         ctx.target_abi = current_target_abi();
+        ctx.had_error = 0;
 
         codegen(user_tree, input_file, &ctx, symtab);
         fclose(ctx.output_file);

@@ -53,7 +53,7 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
 
-static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, int *out_value)
+static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
 {
     if (expr == NULL || out_value == NULL)
         return 1;
@@ -79,7 +79,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, int *o
         }
         case EXPR_SIGN_TERM:
         {
-            int value;
+            long long value;
             if (evaluate_const_expr(symtab, expr->expr_data.sign_term, &value) != 0)
                 return 1;
             *out_value = -value;
@@ -87,7 +87,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, int *o
         }
         case EXPR_ADDOP:
         {
-            int left, right;
+            long long left, right;
             if (evaluate_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
                 return 1;
             if (evaluate_const_expr(symtab, expr->expr_data.addop_data.right_term, &right) != 0)
@@ -107,7 +107,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, int *o
         }
         case EXPR_MULOP:
         {
-            int left, right;
+            long long left, right;
             if (evaluate_const_expr(symtab, expr->expr_data.mulop_data.left_term, &left) != 0)
                 return 1;
             if (evaluate_const_expr(symtab, expr->expr_data.mulop_data.right_factor, &right) != 0)
@@ -277,7 +277,7 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
 
-        int value = 0;
+        long long value = 0;
         if (evaluate_const_expr(symtab, tree->tree_data.const_decl_data.value, &value) != 0)
         {
             fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);

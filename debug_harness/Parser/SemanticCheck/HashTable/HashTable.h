@@ -36,7 +36,7 @@ typedef struct HashNode
     int mutated;
 
     int is_constant;
-    int const_int_value;
+    long long const_int_value;
 
     int is_array;
     int array_start;

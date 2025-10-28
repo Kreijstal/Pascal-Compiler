@@ -511,7 +511,8 @@ void simplify_stmt_expr(struct Statement *stmt)
 int simplify_expr(struct Expression **expr)
 {
     struct Expression *new_expr;
-    int return_val, return_val2, new_val;
+    int return_val, return_val2;
+    long long new_val;
 
     assert(expr != NULL);
     assert(*expr != NULL);

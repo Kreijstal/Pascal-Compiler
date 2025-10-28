@@ -424,7 +424,7 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
 
         case EXPR_INUM:
-          fprintf(f, "[I_NUM:%d]\n", expr->expr_data.i_num);
+          fprintf(f, "[I_NUM:%lld]\n", expr->expr_data.i_num);
           break;
 
         case EXPR_RNUM:
@@ -1135,7 +1135,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     return new_expr;
 }
 
-struct Expression *mk_inum(int line_num, int i_num)
+struct Expression *mk_inum(int line_num, long long i_num)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
