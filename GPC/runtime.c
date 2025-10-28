@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -11,6 +12,8 @@
 #include <errno.h>
 #include <unistd.h>
 #endif
+
+static char *gpc_alloc_empty_string(void);
 
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
@@ -88,6 +91,15 @@ typedef struct {
     int64_t length;
 } gpc_dynarray_descriptor_t;
 
+int64_t gpc_dynarray_length(void *descriptor_ptr)
+{
+    if (descriptor_ptr == NULL)
+        return 0;
+
+    gpc_dynarray_descriptor_t *descriptor = (gpc_dynarray_descriptor_t *)descriptor_ptr;
+    return descriptor->length;
+}
+
 void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t element_size)
 {
     if (descriptor_ptr == NULL || element_size <= 0)
@@ -132,6 +144,162 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
     descriptor->length = new_length;
 }
 
+int64_t gpc_length_string(const char *value)
+{
+    if (value == NULL)
+        return 0;
+    return (int64_t)strlen(value);
+}
+
+char *gpc_copy_string(const char *source, int64_t index, int64_t count)
+{
+    if (source == NULL)
+        source = "";
+
+    if (count <= 0)
+        return gpc_alloc_empty_string();
+
+    if (index < 1)
+        index = 1;
+
+    size_t src_len = strlen(source);
+    size_t start = (size_t)((index > 0) ? (index - 1) : 0);
+    if (start >= src_len)
+        return gpc_alloc_empty_string();
+
+    size_t max_count = (size_t)count;
+    if (start + max_count > src_len)
+        max_count = src_len - start;
+
+    char *result = (char *)malloc(max_count + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+
+    memcpy(result, source + start, max_count);
+    result[max_count] = '\0';
+    return result;
+}
+
+char *gpc_int_to_str(int64_t value)
+{
+    char buffer[32];
+    int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    if (written < 0)
+        return gpc_alloc_empty_string();
+
+    size_t length = (size_t)written;
+    char *result = (char *)malloc(length + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+
+    memcpy(result, buffer, length + 1);
+    return result;
+}
+
+int64_t gpc_now(void)
+{
+#ifdef _WIN32
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER ui;
+    ui.LowPart = ft.dwLowDateTime;
+    ui.HighPart = ft.dwHighDateTime;
+    return (int64_t)(ui.QuadPart / 10000ULL);
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+        return 0;
+    return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+#endif
+}
+
+static void append_char(char **buffer, size_t *length, size_t *capacity, char ch)
+{
+    if (*length + 1 >= *capacity)
+    {
+        size_t new_capacity = (*capacity < 32) ? 64 : (*capacity * 2);
+        char *new_buffer = (char *)realloc(*buffer, new_capacity);
+        if (new_buffer == NULL)
+            return;
+        *buffer = new_buffer;
+        *capacity = new_capacity;
+    }
+    (*buffer)[(*length)++] = ch;
+    (*buffer)[*length] = '\0';
+}
+
+static void append_string(char **buffer, size_t *length, size_t *capacity, const char *text)
+{
+    if (text == NULL)
+        return;
+    while (*text != '\0')
+        append_char(buffer, length, capacity, *text++);
+}
+
+char *gpc_format_datetime(const char *format, int64_t datetime_ms)
+{
+    if (format == NULL)
+        format = "";
+
+    int64_t total_ms = datetime_ms;
+    if (total_ms < 0)
+        total_ms = -total_ms;
+
+    int64_t hours = (total_ms / 3600000LL) % 24LL;
+    int64_t minutes = (total_ms / 60000LL) % 60LL;
+    int64_t seconds = (total_ms / 1000LL) % 60LL;
+    int64_t millis = total_ms % 1000LL;
+
+    size_t capacity = strlen(format) + 32;
+    char *result = (char *)malloc(capacity);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+    size_t length = 0;
+    result[0] = '\0';
+
+    for (size_t i = 0; format[i] != '\0'; )
+    {
+        char ch = format[i];
+        size_t run = 1;
+        while (format[i + run] != '\0' && toupper((unsigned char)format[i + run]) == toupper((unsigned char)ch))
+            ++run;
+
+        char upper = (char)toupper((unsigned char)ch);
+        char temp[32];
+        if (upper == 'H' || upper == 'N' || upper == 'S' || upper == 'Z')
+        {
+            int width = (int)run;
+            long long value = 0;
+            if (upper == 'H')
+                value = hours;
+            else if (upper == 'N')
+                value = minutes;
+            else if (upper == 'S')
+                value = seconds;
+            else if (upper == 'Z')
+            {
+                if (width < 3)
+                    width = 3;
+                value = millis;
+            }
+
+            if (upper == 'Z' && width > 6)
+                width = 6;
+
+            snprintf(temp, sizeof(temp), "%0*lld", width, value);
+            append_string(&result, &length, &capacity, temp);
+        }
+        else
+        {
+            for (size_t j = 0; j < run; ++j)
+                append_char(&result, &length, &capacity, format[i + j]);
+        }
+
+        i += run;
+    }
+
+    return result;
+}
 void gpc_write_integer(int width, int64_t value)
 {
     if (width > 0)

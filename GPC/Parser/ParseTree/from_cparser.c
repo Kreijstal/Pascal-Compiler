@@ -1101,6 +1101,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             return NULL;
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt);
     }
+    case PASCAL_T_BREAK_STMT:
+        return mk_break(stmt_node->line);
     default:
         break;
     }

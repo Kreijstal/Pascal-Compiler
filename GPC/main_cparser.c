@@ -728,6 +728,7 @@ int main(int argc, char **argv)
         ctx.symtab = symtab;
         ctx.target_abi = current_target_abi();
         ctx.had_error = 0;
+        ctx.break_label_depth = 0;
 
         codegen(user_tree, input_file, &ctx, symtab);
         int codegen_failed = codegen_had_error(&ctx);

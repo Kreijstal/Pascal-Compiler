@@ -173,6 +173,57 @@ static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int m
     return return_val;
 }
 
+static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (symtab == NULL || stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL)
+    {
+        fprintf(stderr, "Error on line %d, Inc expects at least one argument.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *amount_expr = (args->next != NULL) ? (struct Expression *)args->next->cur : NULL;
+
+    if (args->next != NULL && args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Inc expects at most two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int error_count = 0;
+    int target_type = UNKNOWN_TYPE;
+
+    if (target_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, Inc target argument is missing.\n", stmt->line_num);
+        return 1;
+    }
+
+    error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_type != INT_TYPE && target_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Inc target must be an integer variable.\n", stmt->line_num);
+        error_count++;
+    }
+
+    if (amount_expr != NULL)
+    {
+        int amount_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&amount_type, symtab, amount_expr, max_scope_lev, NO_MUTATE);
+        if (amount_type != INT_TYPE && amount_type != LONGINT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, Inc amount must be an integer expression.\n", stmt->line_num);
+            error_count++;
+        }
+    }
+
+    return error_count;
+}
+
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -274,6 +325,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_FOR:
             return_val += semcheck_for(symtab, stmt, max_scope_lev);
+            break;
+
+        case STMT_BREAK:
+            /* BREAK is validated during code generation when loop context is available. */
             break;
 
         case STMT_ASM_BLOCK:
@@ -378,6 +433,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     int handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",
         semcheck_builtin_setlength, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Inc",
+        semcheck_builtin_inc, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

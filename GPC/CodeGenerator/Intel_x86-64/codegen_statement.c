@@ -27,6 +27,36 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     return inst_list;
 }
 
+static void codegen_push_break_label(CodeGenContext *ctx, const char *label)
+{
+    if (ctx == NULL || label == NULL)
+        return;
+    if (ctx->break_label_depth >= CODEGEN_MAX_LOOP_DEPTH)
+    {
+        codegen_report_error(ctx, "ERROR: Loop nesting exceeds break stack capacity.");
+        return;
+    }
+    strncpy(ctx->break_label_stack[ctx->break_label_depth], label,
+        sizeof(ctx->break_label_stack[ctx->break_label_depth]) - 1);
+    ctx->break_label_stack[ctx->break_label_depth][sizeof(ctx->break_label_stack[ctx->break_label_depth]) - 1] = '\0';
+    ctx->break_label_depth += 1;
+}
+
+static void codegen_pop_break_label(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->break_label_depth > 0)
+        ctx->break_label_depth -= 1;
+}
+
+static const char *codegen_current_break_label(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->break_label_depth <= 0)
+        return NULL;
+    return ctx->break_label_stack[ctx->break_label_depth - 1];
+}
+
 static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
@@ -42,6 +72,24 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     free_expr_tree(expr_tree);
     *out_reg = reg;
     return inst_list;
+}
+
+static ListNode_t *codegen_break(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    (void)stmt;
+    if (ctx == NULL)
+        return inst_list;
+
+    const char *target_label = codegen_current_break_label(ctx);
+    if (target_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: BREAK used outside of a loop.");
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", target_label);
+    return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
@@ -121,6 +169,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             break;
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_BREAK:
+            inst_list = codegen_break(stmt, inst_list, ctx);
             break;
         case STMT_ASM_BLOCK:
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
@@ -272,6 +323,129 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Inc expects at least one argument.");
+        return inst_list;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *amount_expr = (args->next != NULL) ? (struct Expression *)args->next->cur : NULL;
+
+    if (args->next != NULL && args->next->next != NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Inc expects at most two arguments.");
+        return inst_list;
+    }
+
+    if (target_expr == NULL || target_expr->type != EXPR_VAR_ID)
+    {
+        codegen_report_error(ctx, "ERROR: Inc target must be a scalar variable.");
+        return inst_list;
+    }
+
+    int nonlocal_offset = 0;
+    int is_nonlocal = 0;
+    StackNode_t *var_node = find_label(target_expr->expr_data.id);
+    if (var_node == NULL)
+    {
+        if (nonlocal_flag() == 1)
+        {
+            is_nonlocal = 1;
+            inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &nonlocal_offset);
+            if (codegen_had_error(ctx))
+                return inst_list;
+
+            var_node = find_label(target_expr->expr_data.id);
+            if (var_node == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to resolve non-local variable for Inc.");
+                return inst_list;
+            }
+        }
+        else
+        {
+            codegen_report_error(ctx, "ERROR: Unable to locate variable for Inc.");
+            return inst_list;
+        }
+    }
+    else
+    {
+        nonlocal_offset = var_node->offset;
+    }
+
+    int use_qword = (var_node->size >= 8);
+
+    Register_t *value_reg = NULL;
+    if (amount_expr != NULL)
+    {
+        inst_list = codegen_expr(amount_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
+        value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for Inc amount.");
+    }
+    else
+    {
+        value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for Inc constant.");
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", value_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    if (use_qword)
+    {
+        int amount_is_long = (amount_expr != NULL && amount_expr->resolved_type == LONGINT_TYPE);
+        if (!amount_is_long)
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+    }
+
+    Register_t *acc_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (acc_reg == NULL)
+    {
+        free_reg(get_reg_stack(), value_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate register for Inc target.");
+    }
+
+    char buffer[128];
+    const char *base_reg64 = is_nonlocal ? current_non_local_reg64() : "%rbp";
+
+    if (use_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n", nonlocal_offset, base_reg64, acc_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%s), %s\n", nonlocal_offset, base_reg64, acc_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (use_qword)
+        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", value_reg->bit_64, acc_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\taddl\t%s, %s\n", value_reg->bit_32, acc_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (use_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%s)\n", acc_reg->bit_64, nonlocal_offset, base_reg64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%s)\n", acc_reg->bit_32, nonlocal_offset, base_reg64);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), acc_reg);
+    free_reg(get_reg_stack(), value_reg);
+
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t *inst_list,
                                               CodeGenContext *ctx, int append_newline)
 {
@@ -378,6 +552,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetLength"))
     {
         inst_list = codegen_builtin_setlength(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Inc"))
+    {
+        inst_list = codegen_builtin_inc(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
@@ -655,26 +838,32 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     int relop_type, inverse;
     struct Expression *expr;
     struct Statement *while_stmt;
-    char label1[18], label2[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], buffer[50];
 
-    gen_label(label1, 18, ctx);
-    gen_label(label2, 18, ctx);
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     while_stmt = stmt->stmt_data.while_data.while_stmt;
     expr = stmt->stmt_data.while_data.relop_expr;
 
     inverse = 0;
-    inst_list = gencode_jmp(NORMAL_JMP, inverse, label1, inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, inverse, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label2);
+    snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
+    codegen_push_break_label(ctx, exit_label);
     inst_list = codegen_stmt(while_stmt, inst_list, ctx, symtab);
+    codegen_pop_break_label(ctx);
 
-    snprintf(buffer, 50, "%s:\n", label1);
+    snprintf(buffer, 50, "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
 
     inverse = 0;
-    inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -692,24 +881,30 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    char body_label[18], buffer[50];
+    char body_label[18], exit_label[18], buffer[50];
     int relop_type, inverse;
     ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
 
     gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
 
+    codegen_push_break_label(ctx, exit_label);
     while (body_list != NULL)
     {
         struct Statement *body_stmt = (struct Statement *)body_list->cur;
         inst_list = codegen_stmt(body_stmt, inst_list, ctx, symtab);
         body_list = body_list->next;
     }
+    codegen_pop_break_label(ctx);
 
     inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
     inverse = 1;
     inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -731,10 +926,11 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     int relop_type, inverse;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
     struct Statement *for_body, *for_assign, *update_stmt;
-    char label1[18], label2[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], buffer[50];
 
-    gen_label(label1, 18, ctx);
-    gen_label(label2, 18, ctx);
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     for_body = stmt->stmt_data.for_data.do_for;
     expr = stmt->stmt_data.for_data.to;
 
@@ -756,20 +952,25 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
     inverse = 0;
-    inst_list = gencode_jmp(NORMAL_JMP, inverse, label1, inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, inverse, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label2);
+    snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
+    codegen_push_break_label(ctx, exit_label);
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
+    codegen_pop_break_label(ctx);
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
 
-    snprintf(buffer, 50, "%s:\n", label1);
+    snprintf(buffer, 50, "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_simple_relop(comparison_expr, inst_list, ctx, &relop_type);
 
     inverse = 0;
-    inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+
+    snprintf(buffer, 50, "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     free(comparison_expr);
     free(one_expr);

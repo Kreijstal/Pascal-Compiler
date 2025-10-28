@@ -45,6 +45,18 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
 static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num);
 static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_inttostr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {
     assert(type_return != NULL);
@@ -202,6 +214,235 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         expr->line_num);
     *type_return = UNKNOWN_TYPE;
     return 1;
+}
+
+static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    if (type_return == NULL || symtab == NULL || expr == NULL)
+        return 0;
+
+    assert(expr->type == EXPR_FUNCTION_CALL);
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (arg_type == STRING_TYPE)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_length_string");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Length.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        *type_return = LONGINT_TYPE;
+        expr->resolved_type = LONGINT_TYPE;
+        return 0;
+    }
+
+    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, arg_expr->expr_data.id) == -1 || node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, undeclared identifier \"%s\" in Length.\n",
+                expr->line_num, arg_expr->expr_data.id);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        set_hash_meta(node, NO_MUTATE);
+
+        if (node->hash_type == HASHTYPE_ARRAY)
+        {
+            if (node->is_dynamic_array)
+            {
+                if (expr->expr_data.function_call_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                }
+                expr->expr_data.function_call_data.mangled_id = strdup("__gpc_length_dynamic_array");
+                if (expr->expr_data.function_call_data.mangled_id == NULL)
+                {
+                    fprintf(stderr, "Error: failed to allocate mangled name for Length.\n");
+                    *type_return = UNKNOWN_TYPE;
+                    return 1;
+                }
+                expr->expr_data.function_call_data.resolved_func = NULL;
+                *type_return = LONGINT_TYPE;
+                expr->resolved_type = LONGINT_TYPE;
+                return 0;
+            }
+
+            long long length = (long long)node->array_end - (long long)node->array_start + 1;
+            if (length < 0)
+                length = 0;
+
+            destroy_list(expr->expr_data.function_call_data.args_expr);
+            expr->expr_data.function_call_data.args_expr = NULL;
+            if (expr->expr_data.function_call_data.id != NULL)
+            {
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = NULL;
+            }
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                free(expr->expr_data.function_call_data.mangled_id);
+                expr->expr_data.function_call_data.mangled_id = NULL;
+            }
+            expr->expr_data.function_call_data.resolved_func = NULL;
+
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = length;
+            expr->resolved_type = LONGINT_TYPE;
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+    }
+
+    fprintf(stderr, "Error on line %d, Length expects a string or array argument.\n", expr->line_num);
+    *type_return = UNKNOWN_TYPE;
+    return error_count + 1;
+}
+
+static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    if (type_return == NULL || symtab == NULL || expr == NULL)
+        return 0;
+
+    assert(expr->type == EXPR_FUNCTION_CALL);
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Copy expects exactly three arguments.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *source_expr = (struct Expression *)args->cur;
+    struct Expression *index_expr = (struct Expression *)args->next->cur;
+    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+
+    int source_type = UNKNOWN_TYPE;
+    int index_type = UNKNOWN_TYPE;
+    int count_type = UNKNOWN_TYPE;
+    int error_count = 0;
+
+    error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+
+    if (source_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Copy expects the first argument to be a string.\n", expr->line_num);
+        error_count++;
+    }
+    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Copy expects the second argument to be an integer index.\n", expr->line_num);
+        error_count++;
+    }
+    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Copy expects the third argument to be an integer count.\n", expr->line_num);
+        error_count++;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_copy_string");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for Copy.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    *type_return = STRING_TYPE;
+    expr->resolved_type = STRING_TYPE;
+    return 0;
+}
+
+static int semcheck_builtin_inttostr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    if (type_return == NULL || symtab == NULL || expr == NULL)
+        return 0;
+
+    assert(expr->type == EXPR_FUNCTION_CALL);
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, IntToStr expects exactly one argument.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *value_expr = (struct Expression *)args->cur;
+    int value_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (value_type != INT_TYPE && value_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, IntToStr expects an integer argument.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_int_to_str");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for IntToStr.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    *type_return = STRING_TYPE;
+    expr->resolved_type = STRING_TYPE;
+    return 0;
 }
 
 static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
@@ -1139,6 +1380,15 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "Ord"))
         return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Length"))
+        return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Copy"))
+        return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "IntToStr"))
+        return semcheck_builtin_inttostr(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 

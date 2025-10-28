@@ -203,6 +203,8 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
 struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Expression *to,
                               struct Statement *do_for);
 
+struct Statement *mk_break(int line_num);
+
 struct Statement *mk_asmblock(int line_num, char *code);
 
 /* Expression routines */

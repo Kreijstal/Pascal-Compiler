@@ -11,7 +11,7 @@
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR,
-    STMT_ASM_BLOCK};
+    STMT_BREAK, STMT_ASM_BLOCK};
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
 
@@ -109,6 +109,12 @@ struct Statement
                 struct Expression *var; /* Grammar will validate the correctness */
             } for_assign_data;
         } for_data;
+
+        /* Break statement */
+        struct Break
+        {
+            int placeholder;
+        } break_data;
     } stmt_data;
 };
 

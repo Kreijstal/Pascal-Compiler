@@ -389,6 +389,10 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           stmt_print(stmt->stmt_data.for_data.do_for, f, num_indent+1);
           break;
 
+        case STMT_BREAK:
+          fprintf(f, "[BREAK]\n");
+          break;
+
           case STMT_ASM_BLOCK:
             fprintf(f, "[ASM_BLOCK]:\n");
             print_indent(f, num_indent+1);
@@ -683,6 +687,10 @@ void destroy_stmt(struct Statement *stmt)
 
           destroy_expr(stmt->stmt_data.for_data.to);
           destroy_stmt(stmt->stmt_data.for_data.do_for);
+          break;
+
+        case STMT_BREAK:
+          /* Nothing to free */
           break;
 
         case STMT_ASM_BLOCK:
@@ -1157,6 +1165,19 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
   new_stmt->stmt_data.for_data.for_assign_data.var = for_var;
 
   return new_stmt;
+}
+
+struct Statement *mk_break(int line_num)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_BREAK;
+    new_stmt->stmt_data.break_data.placeholder = 0;
+
+    return new_stmt;
 }
 
 struct Statement *mk_asmblock(int line_num, char *code)

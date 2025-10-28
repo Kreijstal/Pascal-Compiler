@@ -45,10 +45,13 @@ end;
 
 function Now: TDateTime;
 var
-    tick: longint;
+    stamp: TDateTime;
 begin
-    tick := GetTickCount64();
-    Now := tick div 1000;
+    asm
+        call gpc_now
+        movq %rax, -8(%rbp)
+    end;
+    Now := stamp;
 end;
 
 function DigitToString(Value: longint): AnsiString;
@@ -101,8 +104,58 @@ begin
 end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
+    function PadNumber(Value: longint; Width: integer): AnsiString;
+    begin
+        PadNumber := IntToStr(Value);
+        while Length(PadNumber) < Width do
+            PadNumber := '0' + PadNumber;
+    end;
+
+var
+    i: integer;
+    run: integer;
+    ch: char;
+    hours, minutes, seconds, millis: longint;
+    remaining: longint;
+    token: AnsiString;
 begin
-    FormatDateTime := '00:00.000';
+    remaining := DateTime;
+    if remaining < 0 then
+        remaining := -remaining;
+
+    hours := (remaining div 3600000) mod 24;
+    minutes := (remaining div 60000) mod 60;
+    seconds := (remaining div 1000) mod 60;
+    millis := remaining mod 1000;
+
+    FormatDateTime := '';
+    i := 1;
+    while i <= Length(FormatStr) do
+    begin
+        ch := FormatStr[i];
+        run := 1;
+        while (i + run <= Length(FormatStr)) and
+              (UpCase(FormatStr[i + run]) = UpCase(ch)) do
+            Inc(run);
+
+        case UpCase(ch) of
+            'H': FormatDateTime := FormatDateTime + PadNumber(hours, run);
+            'N': FormatDateTime := FormatDateTime + PadNumber(minutes, run);
+            'S': FormatDateTime := FormatDateTime + PadNumber(seconds, run);
+            'Z': begin
+                    if run < 3 then
+                        run := 3;
+                    if run > 6 then
+                        run := 6;
+                    FormatDateTime := FormatDateTime + PadNumber(millis, run);
+                 end;
+        else
+            token := Copy(FormatStr, i, run);
+            FormatDateTime := FormatDateTime + token;
+        end;
+
+        Inc(i, run);
+    end;
 end;
 
 end.

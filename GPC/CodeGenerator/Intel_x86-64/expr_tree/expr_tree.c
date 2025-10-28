@@ -395,10 +395,61 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
+        const char *mangled = expr->expr_data.function_call_data.mangled_id;
+        const char *call_id = expr->expr_data.function_call_data.id;
+        if (mangled != NULL && strcmp(mangled, "__gpc_length_dynamic_array") == 0)
+        {
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            struct Expression *array_expr = (args != NULL) ? (struct Expression *)args->cur : NULL;
+            if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+            {
+                codegen_report_error(ctx, "ERROR: Length dynamic array argument must be a variable.");
+                return inst_list;
+            }
+
+            StackNode_t *array_node = find_label(array_expr->expr_data.id);
+            if (array_node == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Dynamic array %s not found for Length.", array_expr->expr_data.id);
+                return inst_list;
+            }
+
+            Register_t *descriptor_reg = codegen_try_get_reg(&inst_list, ctx, "dynamic array descriptor");
+            if (descriptor_reg == NULL)
+                return inst_list;
+
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, descriptor_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", descriptor_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", descriptor_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tgpc_dynarray_length\n");
+            free_arg_regs();
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), descriptor_reg);
+            return inst_list;
+        }
+
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx, expr->expr_data.function_call_data.resolved_func);
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+        if (expr->resolved_type == LONGINT_TYPE || expr->resolved_type == REAL_TYPE)
+            snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+        else
+            snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
     }

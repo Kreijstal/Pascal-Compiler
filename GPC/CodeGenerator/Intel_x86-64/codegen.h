@@ -110,6 +110,7 @@ extern int g_stack_home_space_bytes;
 #endif
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
+#define CODEGEN_MAX_LOOP_DEPTH 64
 
 static inline int codegen_target_is_windows(void)
 {
@@ -138,6 +139,8 @@ typedef struct {
     SymTab_t *symtab;
     gpc_target_abi_t target_abi;
     int had_error;
+    int break_label_depth;
+    char break_label_stack[CODEGEN_MAX_LOOP_DEPTH][32];
 } CodeGenContext;
 
 /* Generates a label */
