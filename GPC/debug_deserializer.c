@@ -24,8 +24,8 @@ struct Expression *deserialize_expression(FILE *fp) {
             break;
         }
         case EXPR_INUM: {
-            int i_num;
-            fscanf(fp, "%d", &i_num);
+            long long i_num;
+            fscanf(fp, "%lld", &i_num);
             expr->expr_data.i_num = i_num;
             break;
         }

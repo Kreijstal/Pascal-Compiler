@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 #include "SemCheck_expr.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
@@ -21,11 +22,595 @@
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
+#include "../../../identifier_utils.h"
 
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 int is_and_or(int *type);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
+int semcheck_arrayaccess(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+int semcheck_funccall(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+
+#define SIZEOF_RECURSION_LIMIT 64
+#define POINTER_SIZE_BYTES 8
+
+static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
+    long long *size_out, int depth, int line_num);
+static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
+    long long *size_out, int depth, int line_num);
+static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
+    long long *size_out, int depth, int line_num);
+static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
+    const char *type_id, long long *size_out, int depth, int line_num);
+static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Chr expects exactly one argument.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr,
+        max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Chr expects an integer argument.\\n",
+            expr->line_num);
+        error_count++;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_chr");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Chr.\\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        *type_return = STRING_TYPE;
+        expr->resolved_type = STRING_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Ord expects exactly one argument.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr,
+        max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    const char *mangled_name = NULL;
+    if (arg_type == STRING_TYPE)
+    {
+        if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
+        {
+            char *literal = arg_expr->expr_data.string;
+            if (literal == NULL || literal[0] == '\0')
+            {
+                fprintf(stderr, "Error on line %d, Ord expects a non-empty character literal.\\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            if (literal[1] != '\0')
+            {
+                fprintf(stderr, "Error on line %d, Ord expects a single character literal.\\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            unsigned char ordinal_value = (unsigned char)literal[0];
+
+            destroy_list(expr->expr_data.function_call_data.args_expr);
+            expr->expr_data.function_call_data.args_expr = NULL;
+            if (expr->expr_data.function_call_data.id != NULL)
+            {
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = NULL;
+            }
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                free(expr->expr_data.function_call_data.mangled_id);
+                expr->expr_data.function_call_data.mangled_id = NULL;
+            }
+            expr->expr_data.function_call_data.resolved_func = NULL;
+
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = ordinal_value;
+            expr->resolved_type = LONGINT_TYPE;
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
+        mangled_name = "gpc_ord_string";
+    }
+    else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
+    {
+        mangled_name = "gpc_ord_longint";
+    }
+
+    if (mangled_name != NULL)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Ord.\\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        *type_return = LONGINT_TYPE;
+        expr->resolved_type = LONGINT_TYPE;
+        return 0;
+    }
+
+    fprintf(stderr, "Error on line %d, Ord expects an integer or character argument.\\n",
+        expr->line_num);
+    *type_return = UNKNOWN_TYPE;
+    return 1;
+}
+
+static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+
+static long long sizeof_from_type_tag(int type_tag)
+{
+    switch(type_tag)
+    {
+        case INT_TYPE:
+            return 4;
+        case LONGINT_TYPE:
+            return 8;
+        case REAL_TYPE:
+            return 8;
+        case STRING_TYPE:
+            return POINTER_SIZE_BYTES;
+        case BOOL:
+            /*
+             * Standalone booleans occupy 4 bytes to keep stack accesses aligned,
+             * but packed arrays of boolean elements are emitted as 1 byte each.
+             * Document the distinction so sizeof(boolean) users are not surprised.
+             */
+            return 4;
+        case PROCEDURE:
+            return POINTER_SIZE_BYTES;
+        default:
+            return -1;
+    }
+}
+
+static long long sizeof_from_var_type(enum VarType var_type)
+{
+    switch(var_type)
+    {
+        case HASHVAR_INTEGER:
+            return 4;
+        case HASHVAR_LONGINT:
+            return 8;
+        case HASHVAR_REAL:
+            return 8;
+        case HASHVAR_PCHAR:
+            return POINTER_SIZE_BYTES;
+        case HASHVAR_BOOLEAN:
+            return 4;
+        case HASHVAR_PROCEDURE:
+            return POINTER_SIZE_BYTES;
+        default:
+            return -1;
+    }
+}
+
+static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
+    const char *type_id, long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type.\n",
+            line_num);
+        return 1;
+    }
+
+    if (type_tag != UNKNOWN_TYPE)
+    {
+        long long base_size = sizeof_from_type_tag(type_tag);
+        if (base_size >= 0)
+        {
+            *size_out = base_size;
+            return 0;
+        }
+    }
+
+    if (type_id != NULL)
+    {
+        HashNode_t *target_node = NULL;
+        if (FindIdent(&target_node, symtab, (char *)type_id) == -1 || target_node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, SizeOf references unknown type %s.\n",
+                line_num, type_id);
+            return 1;
+        }
+        return sizeof_from_hashnode(symtab, target_node, size_out, depth + 1, line_num);
+    }
+
+    fprintf(stderr, "Error on line %d, unable to resolve type information for SizeOf.\n",
+        line_num);
+    return 1;
+}
+
+static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
+    long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (record == NULL)
+    {
+        *size_out = 0;
+        return 0;
+    }
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record type.\n",
+            line_num);
+        return 1;
+    }
+
+    long long total = 0;
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_RECORD_FIELD);
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        long long field_size = 0;
+
+        if (field->nested_record != NULL)
+        {
+            if (sizeof_from_record(symtab, field->nested_record, &field_size,
+                    depth + 1, line_num) != 0)
+                return 1;
+        }
+        else
+        {
+            if (sizeof_from_type_ref(symtab, field->type, field->type_id,
+                    &field_size, depth + 1, line_num) != 0)
+                return 1;
+        }
+
+        total += field_size;
+        cur = cur->next;
+    }
+
+    *size_out = total;
+    return 0;
+}
+
+static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
+    long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (alias == NULL)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf encountered incomplete type alias.\n",
+            line_num);
+        return 1;
+    }
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type alias.\n",
+            line_num);
+        return 1;
+    }
+
+    if (alias->is_array)
+    {
+        if (alias->is_open_array || alias->array_end < alias->array_start)
+        {
+            fprintf(stderr, "Error on line %d, SizeOf cannot determine size of open array type.\n",
+                line_num);
+            return 1;
+        }
+
+        long long element_size = 0;
+        if (sizeof_from_type_ref(symtab, alias->array_element_type,
+                alias->array_element_type_id, &element_size, depth + 1, line_num) != 0)
+            return 1;
+
+        long long count = (long long)alias->array_end - (long long)alias->array_start + 1;
+        if (count < 0)
+        {
+            fprintf(stderr, "Error on line %d, invalid bounds for array type in SizeOf.\n",
+                line_num);
+            return 1;
+        }
+
+        *size_out = element_size * count;
+        return 0;
+    }
+
+    if (alias->base_type != UNKNOWN_TYPE)
+    {
+        return sizeof_from_type_ref(symtab, alias->base_type, NULL,
+            size_out, depth + 1, line_num);
+    }
+
+    if (alias->target_type_id != NULL)
+        return sizeof_from_type_ref(symtab, UNKNOWN_TYPE, alias->target_type_id,
+            size_out, depth + 1, line_num);
+
+    fprintf(stderr, "Error on line %d, SizeOf encountered unresolved type alias.\n",
+        line_num);
+    return 1;
+}
+
+static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
+    long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (node == NULL)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf encountered null symbol information.\n",
+            line_num);
+        return 1;
+    }
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving symbol.\n",
+            line_num);
+        return 1;
+    }
+
+    if (node->hash_type == HASHTYPE_TYPE)
+    {
+        if (node->record_type != NULL)
+            return sizeof_from_record(symtab, node->record_type, size_out,
+                depth + 1, line_num);
+        if (node->type_alias != NULL)
+            return sizeof_from_alias(symtab, node->type_alias, size_out,
+                depth + 1, line_num);
+
+        long long base = sizeof_from_var_type(node->var_type);
+        if (base >= 0)
+        {
+            *size_out = base;
+            return 0;
+        }
+    }
+
+    if (node->is_array)
+    {
+        if (node->is_dynamic_array || node->array_end < node->array_start)
+        {
+            fprintf(stderr, "Error on line %d, SizeOf cannot determine size of dynamic array %s.\n",
+                line_num, node->id);
+            return 1;
+        }
+
+        long long element_size = node->element_size;
+        if (element_size <= 0)
+        {
+            long long base = sizeof_from_var_type(node->var_type);
+            if (base < 0)
+            {
+                fprintf(stderr, "Error on line %d, SizeOf cannot determine element size for array %s.\n",
+                    line_num, node->id);
+                return 1;
+            }
+            element_size = base;
+        }
+
+        long long count = (long long)node->array_end - (long long)node->array_start + 1;
+        if (count < 0)
+        {
+            fprintf(stderr, "Error on line %d, invalid bounds for array %s in SizeOf.\n",
+                line_num, node->id);
+            return 1;
+        }
+
+        *size_out = element_size * count;
+        return 0;
+    }
+
+    if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
+        return sizeof_from_record(symtab, node->record_type, size_out,
+            depth + 1, line_num);
+
+    if (node->type_alias != NULL)
+        return sizeof_from_alias(symtab, node->type_alias, size_out,
+            depth + 1, line_num);
+
+    long long base = sizeof_from_var_type(node->var_type);
+    if (base >= 0)
+    {
+        *size_out = base;
+        return 0;
+    }
+
+    fprintf(stderr, "Error on line %d, SizeOf cannot determine size of %s.\n",
+        line_num, node->id != NULL ? node->id : "symbol");
+    return 1;
+}
+
+static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg = (struct Expression *)args->cur;
+    int error_count = 0;
+    long long computed_size = 0;
+
+    if (arg != NULL && arg->type == EXPR_VAR_ID)
+    {
+        char *arg_id = arg->expr_data.id;
+        HashNode_t *node = NULL;
+        int scope = FindIdent(&node, symtab, arg_id);
+        if (scope == -1 || node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, SizeOf references undeclared identifier %s.\n",
+                expr->line_num, arg_id);
+            error_count++;
+        }
+        else
+        {
+            if (node->hash_type != HASHTYPE_TYPE && scope > max_scope_lev)
+            {
+                fprintf(stderr, "Error on line %d, SizeOf cannot access %s due to scope restrictions.\n",
+                    expr->line_num, arg_id);
+                error_count++;
+            }
+
+            if (error_count == 0)
+            {
+                if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
+                    node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
+                {
+                    set_hash_meta(node, NO_MUTATE);
+                }
+                else if (node->hash_type != HASHTYPE_TYPE)
+                {
+                    fprintf(stderr, "Error on line %d, SizeOf argument %s is not a data object.\n",
+                        expr->line_num, arg_id);
+                    error_count++;
+                }
+            }
+
+            if (error_count == 0)
+            {
+                if (node->hash_type != HASHTYPE_TYPE && node->hash_type != HASHTYPE_ARRAY)
+                {
+                    int dummy_type = UNKNOWN_TYPE;
+                    error_count += semcheck_expr_main(&dummy_type, symtab, arg,
+                        max_scope_lev, NO_MUTATE);
+                }
+
+                if (error_count == 0)
+                    error_count += sizeof_from_hashnode(symtab, node, &computed_size,
+                        0, expr->line_num);
+            }
+        }
+    }
+    else
+    {
+        int arg_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
+        if (error_count == 0)
+            error_count += sizeof_from_type_ref(symtab, arg_type, NULL, &computed_size,
+                0, expr->line_num);
+    }
+
+    if (error_count == 0)
+    {
+        if (computed_size < 0)
+        {
+            fprintf(stderr, "Error on line %d, SizeOf produced an invalid result.\n",
+                expr->line_num);
+            error_count++;
+        }
+        /* No upper-bound clamp: computed_size already stored in a long long literal. */
+    }
+
+    if (error_count == 0)
+    {
+        destroy_list(expr->expr_data.function_call_data.args_expr);
+        expr->expr_data.function_call_data.args_expr = NULL;
+        if (expr->expr_data.function_call_data.id != NULL)
+        {
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = NULL;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.resolved_func = NULL;
+
+        expr->type = EXPR_INUM;
+        expr->expr_data.i_num = computed_size;
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
 
 int semcheck_relop(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
@@ -37,12 +622,7 @@ int semcheck_mulop(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 int semcheck_varid(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
-int semcheck_arrayaccess(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
-int semcheck_funccall(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
-
-/* Sets hash meta based on given mutating flag */
+    /* Sets hash meta based on given mutating flag */
 void set_hash_meta(HashNode_t *node, int mutating)
 {
     assert(node != NULL);
@@ -70,6 +650,9 @@ static int types_numeric_compatible(int lhs, int rhs)
     if (lhs == rhs)
         return 1;
     if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+        return 1;
+    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE)) ||
+        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE)))
         return 1;
     return 0;
 }
@@ -102,6 +685,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         case HASHVAR_PCHAR:
              *type = STRING_TYPE;
              break;
+        case HASHVAR_BOOLEAN:
+            *type = BOOL;
+            break;
         case HASHVAR_UNTYPED:
             *type = UNKNOWN_TYPE;
             break;
@@ -174,7 +760,10 @@ int semcheck_expr_main(int *type_return,
 
         /*** BASE CASES ***/
         case EXPR_INUM:
-            *type_return = INT_TYPE;
+            if (expr->expr_data.i_num > INT_MAX || expr->expr_data.i_num < INT_MIN)
+                *type_return = LONGINT_TYPE;
+            else
+                *type_return = INT_TYPE;
             break;
 
         case EXPR_RNUM:
@@ -183,6 +772,10 @@ int semcheck_expr_main(int *type_return,
         
         case EXPR_STRING:
             *type_return = STRING_TYPE;
+            break;
+
+        case EXPR_BOOL:
+            *type_return = BOOL;
             break;
 
         default:
@@ -226,14 +819,6 @@ int semcheck_relop(int *type_return,
     }
     else
     {
-        if(!types_numeric_compatible(type_first, type_second))
-        {
-            fprintf(stderr, "Error on line %d, relational types do not match!\n\n",
-                expr->line_num);
-            ++return_val;
-        }
-
-        /* Checking AND OR semantics */
         if(is_and_or(&expr->expr_data.relop_data.type))
         {
             if(type_first != BOOL || type_second != BOOL)
@@ -246,11 +831,28 @@ int semcheck_relop(int *type_return,
         }
         else
         {
-            if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
+            int relop_type = expr->expr_data.relop_data.type;
+            if (relop_type == EQ || relop_type == NE)
             {
-                fprintf(stderr, "Error on line %d, expected two int/reals between relational op!\n\n",
-                    expr->line_num);
-                ++return_val;
+                int numeric_ok = types_numeric_compatible(type_first, type_second) &&
+                                 is_type_ir(&type_first) && is_type_ir(&type_second);
+                int boolean_ok = (type_first == BOOL && type_second == BOOL);
+                if (!numeric_ok && !boolean_ok)
+                {
+                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric or boolean types!\n\n",
+                        expr->line_num);
+                    ++return_val;
+                }
+            }
+            else
+            {
+                if(!types_numeric_compatible(type_first, type_second) ||
+                   !is_type_ir(&type_first) || !is_type_ir(&type_second))
+                {
+                    fprintf(stderr, "Error on line %d, expected compatible numeric types between relational op!\n\n",
+                        expr->line_num);
+                    ++return_val;
+                }
             }
         }
     }
@@ -303,7 +905,26 @@ int semcheck_addop(int *type_return,
     return_val += semcheck_expr_main(&type_first, symtab, expr1, max_scope_lev, mutating);
     return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
 
-    /* Checking types */
+    int op_type = expr->expr_data.addop_data.addop_type;
+    if (op_type == OR)
+    {
+        if (type_first != BOOL || type_second != BOOL)
+        {
+            fprintf(stderr, "Error on line %d, expected boolean operands for OR expression!\n\n",
+                expr->line_num);
+            ++return_val;
+        }
+        *type_return = BOOL;
+        return return_val;
+    }
+
+    if (op_type == PLUS && type_first == STRING_TYPE && type_second == STRING_TYPE)
+    {
+        *type_return = STRING_TYPE;
+        return return_val;
+    }
+
+    /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch on addop!\n\n",
@@ -317,7 +938,12 @@ int semcheck_addop(int *type_return,
         ++return_val;
     }
 
-    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        *type_return = REAL_TYPE;
+    else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        *type_return = LONGINT_TYPE;
+    else
+        *type_return = type_first;
     return return_val;
 }
 
@@ -339,7 +965,20 @@ int semcheck_mulop(int *type_return,
     return_val += semcheck_expr_main(&type_first, symtab, expr1, max_scope_lev, mutating);
     return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
 
-    /* Checking types */
+    int op_type = expr->expr_data.mulop_data.mulop_type;
+    if (op_type == AND)
+    {
+        if (type_first != BOOL || type_second != BOOL)
+        {
+            fprintf(stderr, "Error on line %d, expected boolean operands for AND expression!\n\n",
+                expr->line_num);
+            ++return_val;
+        }
+        *type_return = BOOL;
+        return return_val;
+    }
+
+    /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
         fprintf(stderr, "Error on line %d, type mismatch on mulop!\n\n",
@@ -353,7 +992,12 @@ int semcheck_mulop(int *type_return,
         ++return_val;
     }
 
-    *type_return = (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE) ? LONGINT_TYPE : type_first;
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        *type_return = REAL_TYPE;
+    else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        *type_return = LONGINT_TYPE;
+    else
+        *type_return = type_first;
     return return_val;
 }
 
@@ -486,6 +1130,15 @@ int semcheck_funccall(int *type_return,
     return_val = 0;
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
+
+    if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
+        return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Chr"))
+        return semcheck_builtin_chr(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Ord"))
+        return semcheck_builtin_ord(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 

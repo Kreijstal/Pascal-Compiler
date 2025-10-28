@@ -17,7 +17,7 @@ void serialize_expression_recursive(FILE *fp, struct Expression *expr) {
             fprintf(fp, "%s\n", expr->expr_data.id);
             break;
         case EXPR_INUM:
-            fprintf(fp, "%d\n", expr->expr_data.i_num);
+            fprintf(fp, "%lld\n", expr->expr_data.i_num);
             break;
         case EXPR_STRING:
             fprintf(fp, "\"%s\"\n", expr->expr_data.string);

@@ -123,7 +123,8 @@ enum ExprType {
     EXPR_FUNCTION_CALL,
     EXPR_INUM,
     EXPR_RNUM,
-    EXPR_STRING
+    EXPR_STRING,
+    EXPR_BOOL
 };
 
 /* An expression subtree */
@@ -184,13 +185,16 @@ struct Expression
         } function_call_data;
 
         /* Integer number */
-        int i_num;
+        long long i_num;
 
         /* Real number */
         float r_num;
 
         /* String literal */
         char *string;
+
+        /* Boolean literal */
+        int bool_value;
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;

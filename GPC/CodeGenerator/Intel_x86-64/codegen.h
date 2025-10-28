@@ -137,6 +137,7 @@ typedef struct {
     FILE *output_file;
     SymTab_t *symtab;
     gpc_target_abi_t target_abi;
+    int had_error;
 } CodeGenContext;
 
 /* Generates a label */
@@ -157,6 +158,9 @@ void codegen_program_footer(CodeGenContext *ctx);
 void codegen_main(char *prgm_name, CodeGenContext *ctx);
 void codegen_stack_space(CodeGenContext *ctx);
 void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
+
+void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...);
+int codegen_had_error(const CodeGenContext *ctx);
 
 char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);

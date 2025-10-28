@@ -12,6 +12,47 @@ static combinator_t* asm_body(tag_t tag) {
     return until(match("end"), tag);  // Use raw match instead of token to preserve whitespace
 }
 
+// Transform "x += y" style compound assignments into a regular assignment
+// with the addition expression on the right-hand side.  This keeps the rest
+// of the compiler unaware of the compound assignment syntax while still
+// allowing us to accept programs that use it.
+static ast_t* transform_plus_assignment(ast_t* assignment_ast) {
+    if (assignment_ast == NULL || assignment_ast == ast_nil)
+        return assignment_ast;
+
+    ast_t* lhs = assignment_ast->child;
+    if (lhs == NULL)
+        return assignment_ast;
+
+    ast_t* rhs = lhs->next;
+    if (rhs == NULL)
+        return assignment_ast;
+
+    // Detach the right-hand side so copying the lhs does not duplicate it.
+    lhs->next = NULL;
+
+    ast_t* lhs_copy = copy_ast(lhs);
+    if (lhs_copy == NULL || lhs_copy == ast_nil) {
+        lhs->next = rhs;
+        return assignment_ast;
+    }
+
+    lhs_copy->line = lhs->line;
+    lhs_copy->col = lhs->col;
+
+    ast_t* add_node = new_ast();
+    add_node->typ = PASCAL_T_ADD;
+    add_node->child = lhs_copy;
+    add_node->next = NULL;
+    add_node->line = assignment_ast->line;
+    add_node->col = assignment_ast->col;
+
+    lhs_copy->next = rhs;
+    lhs->next = add_node;
+
+    return assignment_ast;
+}
+
 // --- Pascal Statement Parser Implementation ---
 void init_pascal_statement_parser(combinator_t** p) {
     // First create the expression parser to use within statements
@@ -44,11 +85,25 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // Assignment statement: lvalue := expression (no semicolon here)
-    combinator_t* assignment = seq(new_combinator(), PASCAL_T_ASSIGNMENT,
+    // Assignment statement: support both ":=" and "+=" compound assignments
+    combinator_t* simple_assignment = seq(new_combinator(), PASCAL_T_ASSIGNMENT,
         lvalue,                                // left-hand side (identifier or member access)
         token(match(":=")),                    // assignment operator
         lazy(expr_parser),                     // expression
+        NULL
+    );
+
+    combinator_t* plus_assignment_seq = seq(new_combinator(), PASCAL_T_ASSIGNMENT,
+        lvalue,
+        token(match("+=")),
+        lazy(expr_parser),
+        NULL
+    );
+    combinator_t* plus_assignment = map(plus_assignment_seq, transform_plus_assignment);
+
+    combinator_t* assignment = multi(new_combinator(), PASCAL_T_NONE,
+        plus_assignment,
+        simple_assignment,
         NULL
     );
 

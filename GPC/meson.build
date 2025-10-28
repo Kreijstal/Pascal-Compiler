@@ -66,12 +66,16 @@ gpc_cparser_exe = executable('gpc', gpc_cparser_sources,
 
 python = find_program('python3')
 test('Compiler tests', python,
-  args: [meson.project_source_root() / 'tests/test_runner.py'],
+  args: [
+    meson.project_source_root() / 'tests/test_runner.py',
+    '--tap',
+  ],
   workdir: meson.project_source_root(),
   depends: gpc_cparser_exe,
   env: [
     'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
     'MESON_BUILD_ROOT=' + meson.build_root()
     ],
-  timeout: 120,
+  protocol: 'tap',
+  timeout: 300,
 )
