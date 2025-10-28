@@ -115,6 +115,26 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("boolean");
         return BOOL;
     }
+    if (strcasecmp(name, "tdatetime") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("TDateTime");
+        return LONGINT_TYPE;
+    }
+    if (strcasecmp(name, "nativeuint") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("NativeUInt");
+        return LONGINT_TYPE;
+    }
+    if (strcasecmp(name, "uint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("UInt64");
+        return LONGINT_TYPE;
+    }
+    if (strcasecmp(name, "ansistring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("AnsiString");
+        return STRING_TYPE;
+    }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
     }
@@ -358,18 +378,37 @@ static ListNode_t *convert_param(ast_t *param_node) {
 
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
+    int id_count = 0;
+    for (ListNode_t *tmp = ids; tmp != NULL; tmp = tmp->next)
+        ++id_count;
+
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
         var_type = convert_type_spec(cur, &type_id, NULL, NULL);
         cur = cur->next;
-    } else {
-        char *type_name = pop_last_identifier(&ids);
+    } else if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER) {
+        char *type_name = dup_symbol(cur);
         if (type_name != NULL) {
             var_type = map_type_name(type_name, &type_id);
-            if (var_type == UNKNOWN_TYPE && type_id == NULL) {
+            if (var_type == UNKNOWN_TYPE && type_id == NULL)
                 type_id = type_name;
-            } else {
+            else
                 free(type_name);
-            }
+        }
+        cur = cur->next;
+        char *discard = pop_last_identifier(&ids);
+        if (discard != NULL)
+            free(discard);
+        if (id_count > 0)
+            --id_count;
+    } else if (id_count >= 2) {
+        char *discard = pop_last_identifier(&ids);
+        if (discard != NULL) {
+            --id_count;
+            var_type = map_type_name(discard, &type_id);
+            if (var_type == UNKNOWN_TYPE && type_id == NULL)
+                type_id = discard;
+            else
+                free(discard);
         }
     }
 

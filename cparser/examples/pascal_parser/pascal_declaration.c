@@ -45,14 +45,14 @@ combinator_t* create_pascal_param_parser(void) {
     combinator_t* var_param = seq(new_combinator(), PASCAL_T_PARAM,
         map(token(match("var")), map_var_modifier),
         create_param_name_list(),
-        create_param_type_spec(),
+        optional(create_param_type_spec()),
         NULL
     );
 
     combinator_t* const_param = seq(new_combinator(), PASCAL_T_PARAM,
         map(token(match("const")), map_const_modifier),
         create_param_name_list(),
-        create_param_type_spec(),
+        optional(create_param_type_spec()),
         NULL
     );
 
@@ -405,12 +405,17 @@ void init_pascal_procedure_parser(combinator_t** p) {
 
     // Parameter: [const|var] identifier1,identifier2,... : type
     combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+    combinator_t* param_type = seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
     combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
         optional(token(keyword_ci("const"))),        // optional const modifier
         optional(token(keyword_ci("var"))),          // optional var modifier
         param_name_list,                             // parameter name(s) - can be multiple comma-separated
-        token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // type name (simplified)
+        optional(param_type),                        // optional type specification for const/var params
         NULL
     );
 

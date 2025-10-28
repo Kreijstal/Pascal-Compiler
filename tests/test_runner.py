@@ -506,9 +506,17 @@ class TestCompiler(unittest.TestCase):
             return
 
         lines = process.stdout.strip().splitlines()
-        self.assertGreaterEqual(len(lines), 2)
+        self.assertEqual(len(lines), 10)
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
+        self.assertEqual(lines[2].strip(), "00:12.345")
+        self.assertEqual(lines[3].strip(), "-4096")
+        self.assertEqual(lines[4].strip(), "7")
+        self.assertEqual(lines[5].strip(), "8")
+        self.assertEqual(lines[6].strip(), "9")
+        self.assertEqual(lines[7].strip(), "4294967295")
+        self.assertEqual(lines[8].strip(), "4294967294")
+        self.assertEqual(lines[9].strip(), "1")
         self.assertEqual(process.returncode, 0)
 
     def test_ctypes_unit(self):
