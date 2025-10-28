@@ -877,6 +877,11 @@ static struct Expression *convert_unary_expr(ast_t *node) {
     return inner;
 }
 
+static const char *tag_name(tag_t tag) {
+    const char *name = pascal_tag_to_string(tag);
+    return (name != NULL) ? name : "UNKNOWN";
+}
+
 static struct Expression *convert_expression(ast_t *expr_node) {
     expr_node = unwrap_pascal_node(expr_node);
     if (expr_node == NULL)
@@ -916,13 +921,15 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_expression(expr_node->child);
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
-    default:
-        fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.",
-                expr_node->typ, expr_node->line);
+    default: {
+        const char *name = tag_name(expr_node->typ);
+        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
+                expr_node->typ, name, expr_node->line);
         if (expr_node->sym != NULL && expr_node->sym->name != NULL)
             fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
         fprintf(stderr, "\n");
         break;
+    }
     }
 
     return NULL;
@@ -1101,8 +1108,15 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             return NULL;
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt);
     }
-    default:
+    default: {
+        const char *name = tag_name(stmt_node->typ);
+        fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",
+                stmt_node->typ, name, stmt_node->line);
+        if (stmt_node->sym != NULL && stmt_node->sym->name != NULL)
+            fprintf(stderr, " (symbol: %s)", stmt_node->sym->name);
+        fprintf(stderr, "\n");
         break;
+    }
     }
 
     return NULL;
