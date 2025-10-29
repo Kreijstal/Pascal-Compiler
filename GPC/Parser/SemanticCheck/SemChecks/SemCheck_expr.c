@@ -271,7 +271,6 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     {
         if (static_length >= 0)
         {
-            destroy_expr(arg_expr);
             destroy_list(expr->expr_data.function_call_data.args_expr);
             expr->expr_data.function_call_data.args_expr = NULL;
             if (expr->expr_data.function_call_data.id != NULL)

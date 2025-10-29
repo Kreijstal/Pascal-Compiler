@@ -384,6 +384,11 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     {
         snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
+        if (expr->resolved_type == LONGINT_TYPE)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", target_reg->bit_32, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     free_reg(get_reg_stack(), addr_reg);

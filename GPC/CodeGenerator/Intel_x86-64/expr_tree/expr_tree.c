@@ -43,7 +43,8 @@ static const char *reg_name_for_type(Register_t *reg, struct Expression *expr)
         return NULL;
 
     int type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
-    if (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE)
+    if (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE ||
+        type == LONGINT_TYPE)
         return reg->bit_64;
     return reg->bit_32;
 }
@@ -54,7 +55,8 @@ static int expr_requires_qword(const struct Expression *expr)
         return 0;
 
     int type = expr->resolved_type;
-    return (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE);
+    return (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE ||
+        type == LONGINT_TYPE);
 }
 
 ListNode_t *gencode_divide_const_no_optimize(char *left, char *right, ListNode_t *inst_list);
@@ -290,8 +292,6 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 }
 
 /* Gencode for modulus */
-// left is right operand (B), right is left operand (A)
-// calculates A mod B, stores result in A's location (right)
 ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *inst_list, int use_qword)
 {
     StackNode_t *temp;
