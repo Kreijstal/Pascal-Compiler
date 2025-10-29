@@ -537,8 +537,12 @@ static ParseResult set_type_fn(input_t* in, void* args, char* parser_name) {
     free_combinator(of_keyword);
     free_ast(of_result.value.ast);
 
-    // Parse element type (usually an identifier)
-    combinator_t* element_type = token(cident(PASCAL_T_IDENTIFIER));
+    // Parse element type (identifier or subrange like 1..10)
+    combinator_t* element_type = multi(new_combinator(), PASCAL_T_NONE,
+        token(range_type(PASCAL_T_RANGE_TYPE)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
     ParseResult element_result = parse(in, element_type);
     if (!element_result.is_success) {
         discard_failure(element_result);

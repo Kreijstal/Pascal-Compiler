@@ -2481,6 +2481,54 @@ void test_pascal_set_operations_program(void) {
     free_combinator(p);
     free(input->buffer);
     free(input);
+
+    // Parse full program exercising set operations and subrange set types
+    p = new_combinator();
+    init_pascal_complete_program_parser(&p);
+    input = new_input();
+    const char* program_source =
+        "program SetOperations;\n"
+        "var\n"
+        "  odds: set of 1..10;\n"
+        "  evens: set of 1..10;\n"
+        "  mix: set of 1..10;\n"
+        "  result: set of 1..10;\n"
+        "begin\n"
+        "  odds := [1, 3, 5, 7, 9];\n"
+        "  evens := [2, 4, 6, 8, 10];\n"
+        "  mix := [3, 4, 5];\n"
+        "\n"
+        "  result := odds + mix;\n"
+        "  if 4 in result then\n"
+        "    writeln('union-has-4')\n"
+        "  else\n"
+        "    writeln('union-missing-4');\n"
+        "\n"
+        "  result := mix * evens;\n"
+        "  if 4 in result then\n"
+        "    writeln('intersection-has-4')\n"
+        "  else\n"
+        "    writeln('intersection-missing-4');\n"
+        "\n"
+        "  if 2 in [1, 2, 3] then\n"
+        "    writeln('constructor-has-2')\n"
+        "  else\n"
+        "    writeln('constructor-missing-2');\n"
+        "end.";
+    input->buffer = strdup(program_source);
+    input->length = strlen(program_source);
+
+    res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
 }
 
 void test_pascal_pointer_operations_program(void) {
