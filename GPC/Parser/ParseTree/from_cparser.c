@@ -1157,6 +1157,10 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         struct Expression *inner_expr = convert_expression(value_node);
         return mk_typecast(expr_node->line, target_type, target_type_id, inner_expr);
     }
+    case PASCAL_T_DEREF:
+        return mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));
+    case PASCAL_T_ADDR:
+        return mk_addressof(expr_node->line, convert_expression(expr_node->child));
     default: {
         const char *name = tag_name(expr_node->typ);
         fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",

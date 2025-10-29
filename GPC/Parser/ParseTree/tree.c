@@ -579,6 +579,24 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           fprintf(f, "[BOOL:%s]\n", expr->expr_data.bool_value ? "TRUE" : "FALSE");
           break;
 
+        case EXPR_POINTER_DEREF:
+          fprintf(f, "[POINTER_DEREF]\n");
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[POINTER]:\n");
+          expr_print(expr->expr_data.pointer_deref_data.pointer_expr, f, num_indent+1);
+          --num_indent;
+          break;
+
+        case EXPR_ADDR:
+          fprintf(f, "[ADDR]\n");
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[EXPR]:\n");
+          expr_print(expr->expr_data.addr_data.expr, f, num_indent+1);
+          --num_indent;
+          break;
+
         case EXPR_TYPECAST:
           fprintf(f, "[TYPECAST]\n");
           ++num_indent;
@@ -932,6 +950,22 @@ void destroy_expr(struct Expression *expr)
         case EXPR_BOOL:
           break;
 
+        case EXPR_POINTER_DEREF:
+          if (expr->expr_data.pointer_deref_data.pointer_expr != NULL)
+          {
+              destroy_expr(expr->expr_data.pointer_deref_data.pointer_expr);
+              expr->expr_data.pointer_deref_data.pointer_expr = NULL;
+          }
+          break;
+
+        case EXPR_ADDR:
+          if (expr->expr_data.addr_data.expr != NULL)
+          {
+              destroy_expr(expr->expr_data.addr_data.expr);
+              expr->expr_data.addr_data.expr = NULL;
+          }
+          break;
+
         case EXPR_TYPECAST:
           if (expr->expr_data.typecast_data.target_type_id != NULL)
           {
@@ -946,8 +980,13 @@ void destroy_expr(struct Expression *expr)
           break;
 
         default:
-          fprintf(stderr, "BAD TYPE IN expr_print!\n");
+          fprintf(stderr, "BAD TYPE IN destroy_expr!\n");
           exit(1);
+    }
+    if (expr->pointer_subtype_id != NULL)
+    {
+        free(expr->pointer_subtype_id);
+        expr->pointer_subtype_id = NULL;
     }
     free(expr);
 }
@@ -1483,6 +1522,8 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->field_width = NULL;
     expr->field_precision = NULL;
     expr->resolved_type = UNKNOWN_TYPE;
+    expr->pointer_subtype = UNKNOWN_TYPE;
+    expr->pointer_subtype_id = NULL;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -1563,6 +1604,30 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
     new_expr->expr_data.array_access_data.id = id;
     new_expr->expr_data.array_access_data.array_expr = index_expr;
+
+    return new_expr;
+}
+
+struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_expr)
+{
+    struct Expression *new_expr;
+    new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_POINTER_DEREF);
+    new_expr->expr_data.pointer_deref_data.pointer_expr = pointer_expr;
+
+    return new_expr;
+}
+
+struct Expression *mk_addressof(int line_num, struct Expression *expr)
+{
+    struct Expression *new_expr;
+    new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_ADDR);
+    new_expr->expr_data.addr_data.expr = expr;
 
     return new_expr;
 }

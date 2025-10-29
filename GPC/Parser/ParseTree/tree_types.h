@@ -186,6 +186,8 @@ enum ExprType {
     EXPR_RNUM,
     EXPR_STRING,
     EXPR_BOOL,
+    EXPR_POINTER_DEREF,
+    EXPR_ADDR,
     EXPR_TYPECAST
 };
 
@@ -258,6 +260,18 @@ struct Expression
         /* Boolean literal */
         int bool_value;
 
+        /* Pointer dereference */
+        struct PointerDeref
+        {
+            struct Expression *pointer_expr;
+        } pointer_deref_data;
+
+        /* Address-of operator */
+        struct AddressOf
+        {
+            struct Expression *expr;
+        } addr_data;
+
         /* Type cast */
         struct TypeCast
         {
@@ -269,6 +283,8 @@ struct Expression
     struct Expression *field_width;
     struct Expression *field_precision;
     int resolved_type;
+    int pointer_subtype;
+    char *pointer_subtype_id;
 };
 
 

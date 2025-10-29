@@ -917,6 +917,62 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         free_reg(get_reg_stack(), addr_reload);
         return inst_list;
     }
+    else if (var_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = var_expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
+            return inst_list;
+        }
+
+        expr_node_t *pointer_tree = build_expr_tree(pointer_expr);
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            free_expr_tree(pointer_tree);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for pointer assignment address.");
+        }
+
+        inst_list = gencode_expr_tree(pointer_tree, inst_list, ctx, addr_reg);
+        free_expr_tree(pointer_tree);
+
+        StackNode_t *addr_temp = add_l_t("pointer_addr");
+        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_temp->offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+
+        inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
+
+        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for pointer value.");
+
+        Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reload == NULL)
+        {
+            free_reg(get_reg_stack(), value_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for pointer store.");
+        }
+
+        snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        if (codegen_type_uses_qword(var_expr->resolved_type))
+            snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+        else
+            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reload);
+        return inst_list;
+    }
     else
     {
         assert(0 && "Unsupported assignment target");
