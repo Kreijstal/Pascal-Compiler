@@ -46,6 +46,9 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 {
     assert(expr != NULL);
 
+    if (expr->type == EXPR_TYPECAST && expr->expr_data.typecast_data.expr != NULL)
+        return build_expr_tree(expr->expr_data.typecast_data.expr);
+
     expr_node_t *new_node;
 
     new_node = (expr_node_t *)malloc(sizeof(expr_node_t));
@@ -77,6 +80,11 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
         case EXPR_BOOL:
+            new_node->left_expr = NULL;
+            new_node->right_expr = NULL;
+            break;
+
+        case EXPR_TYPECAST:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;

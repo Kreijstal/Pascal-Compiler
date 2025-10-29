@@ -562,6 +562,25 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_statement_extensions(self):
+        """Ensure extended statements parse, compile, and execute."""
+        input_file = os.path.join(TEST_CASES_DIR, "statement_extensions.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "112\n1\n3\n")
+
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
@@ -755,13 +774,13 @@ class TestCompiler(unittest.TestCase):
 
     def test_unsupported_expression_reports_tag_name(self):
         """Unsupported constructs should report the Pascal tag name for clarity."""
-        input_file = os.path.join(TEST_CASES_DIR, "typecast_expr.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "typecast_expr.s")
+        input_file = os.path.join(TEST_CASES_DIR, "unsupported_addr_expr.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "unsupported_addr_expr.s")
 
         stderr = run_compiler(input_file, asm_file)
 
         self.assertIn("unsupported expression tag", stderr)
-        self.assertIn("TYPECAST", stderr)
+        self.assertIn("ADDR", stderr)
 
     def test_ctypes_unit(self):
         """Ensures the ctypes unit exposes C compatible aliases."""
