@@ -894,14 +894,16 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[2].strip(), "5")
 
     def test_unsupported_expression_reports_tag_name(self):
-        """Unsupported constructs should report the Pascal tag name for clarity."""
+        """Address-of operator (@) is now supported and should compile successfully."""
         input_file = os.path.join(TEST_CASES_DIR, "unsupported_addr_expr.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "unsupported_addr_expr.s")
 
-        stderr = run_compiler(input_file, asm_file)
-
-        self.assertIn("unsupported expression tag", stderr)
-        self.assertIn("ADDR", stderr)
+        # ADDR operator is now supported, so compilation should succeed
+        run_compiler(input_file, asm_file)
+        
+        # Verify the assembly file was generated
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
 
     def test_ctypes_unit(self):
         """Ensures the ctypes unit exposes C compatible aliases."""

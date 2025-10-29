@@ -706,6 +706,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             call_target = "gpc_write_string";
         else if (expr_type == BOOL)
             call_target = "gpc_write_boolean";
+        else if (expr_type == POINTER_TYPE)
+            call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
