@@ -399,8 +399,25 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     // Note: Empty record is allowed in Pascal, so we don't require fields
     free_combinator(field_list);
 
-    // Parse "END" keyword
+    // Skip any additional record content (methods, variant parts, attributes, etc.) until the closing END.
     combinator_t* end_keyword = token(keyword_ci("end"));
+    combinator_t* skip_end_delimiter = token(keyword_ci("end"));
+    combinator_t* skip_to_end = until(skip_end_delimiter, PASCAL_T_NONE);
+    ParseResult skip_res = parse(in, skip_to_end);
+    if (skip_res.is_success) {
+        if (skip_res.value.ast != ast_nil) {
+            free_ast(skip_res.value.ast);
+        }
+    } else {
+        discard_failure(skip_res);
+        if (fields_ast) free_ast(fields_ast);
+        free_combinator(skip_to_end);
+        free_combinator(end_keyword);
+        return fail_with_message("Failed to parse record body", in, &state, parser_name);
+    }
+    free_combinator(skip_to_end);
+
+    // Parse "END" keyword
     ParseResult end_res = parse(in, end_keyword);
     if (!end_res.is_success) {
         discard_failure(end_res);
@@ -410,6 +427,22 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     }
     free_ast(end_res.value.ast);
     free_combinator(end_keyword);
+
+    // Optional trailing directives such as "deprecated" or "align" before the terminating semicolon.
+    InputState directive_state; save_input_state(in, &directive_state);
+    combinator_t* skip_semicolon_delim = token(match(";"));
+    combinator_t* skip_to_semicolon = until(skip_semicolon_delim, PASCAL_T_NONE);
+    ParseResult directive_res = parse(in, skip_to_semicolon);
+    if (directive_res.is_success) {
+        if (directive_res.value.ast != ast_nil) {
+            free_ast(directive_res.value.ast);
+        }
+        // The parser now sits at the semicolon (if present). Leave it for the caller to consume.
+    } else {
+        restore_input_state(in, &directive_state);
+        discard_failure(directive_res);
+    }
+    free_combinator(skip_to_semicolon);
 
     // Build AST
     ast_t* record_ast = new_ast();

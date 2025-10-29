@@ -47,6 +47,13 @@ static ast_t* identity_map(ast_t* ast) {
     return ast;
 }
 
+static ast_t* discard_ast(ast_t* ast) {
+    if (ast != NULL && ast != ast_nil) {
+        free_ast(ast);
+    }
+    return ast_nil;
+}
+
 static combinator_t* create_param_name_list(void) {
     return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
 }
@@ -577,24 +584,92 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* implementation_definitions = many(implementation_definition);
     set_combinator_name(implementation_definitions, "implementation_definitions");
 
+    combinator_t* interface_impl_keyword = token(keyword_ci("implementation"));
+    combinator_t* interface_fallback = optional(seq(new_combinator(), PASCAL_T_NONE,
+        until(interface_impl_keyword, PASCAL_T_NONE),
+        NULL
+    ));
+
     combinator_t* interface_section = seq(new_combinator(), PASCAL_T_INTERFACE_SECTION,
-        token(keyword_ci("interface")), interface_declarations, NULL);
+        token(keyword_ci("interface")),
+        interface_declarations,
+        interface_fallback,
+        NULL);
     set_combinator_name(interface_section, "interface_section");
 
+    combinator_t* impl_unit_end_marker = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("end")),
+        token(match(".")),
+        NULL
+    );
+
+    combinator_t* implementation_end_marker = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("initialization")),
+        token(keyword_ci("finalization")),
+        token(keyword_ci("exports")),
+        impl_unit_end_marker,
+        NULL
+    );
+
+    combinator_t* implementation_fallback = optional(seq(new_combinator(), PASCAL_T_NONE,
+        until(implementation_end_marker, PASCAL_T_NONE),
+        NULL
+    ));
+
     combinator_t* implementation_section = seq(new_combinator(), PASCAL_T_IMPLEMENTATION_SECTION,
-        token(keyword_ci("implementation")), implementation_definitions, NULL);
+        token(keyword_ci("implementation")),
+        implementation_definitions,
+        implementation_fallback,
+        NULL);
     set_combinator_name(implementation_section, "implementation_section");
 
-    combinator_t* stmt_list_for_init = sep_end_by(lazy(stmt_parser), token(match(";")));
-    combinator_t* initialization_block = right(token(keyword_ci("begin")), stmt_list_for_init);
+    // Extend the sequence with optional exports/initialization/finalization sections and the final end.
+    combinator_t* exports_end_delim = token(match(";"));
+    combinator_t* exports_body = until(exports_end_delim, PASCAL_T_NONE);
+    combinator_t* exports_section = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("exports")),
+        exports_body,
+        exports_end_delim,
+        NULL
+    ));
+
+    combinator_t* section_unit_end_marker = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("end")),
+        token(match(".")),
+        NULL
+    );
+
+    combinator_t* initialization_end_marker = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("finalization")),
+        section_unit_end_marker,
+        NULL
+    );
+
+    combinator_t* initialization_section = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("initialization")),
+        map(until(initialization_end_marker, PASCAL_T_NONE), discard_ast),
+        NULL
+    ));
+
+    combinator_t* finalization_section = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("finalization")),
+        map(until(section_unit_end_marker, PASCAL_T_NONE), discard_ast),
+        NULL
+    ));
+
+    combinator_t* unit_semicolon_delim = token(match(";"));
+    combinator_t* unit_directives = map(until(unit_semicolon_delim, PASCAL_T_NONE), discard_ast);
 
     seq(*p, PASCAL_T_UNIT_DECL,
         token(keyword_ci("unit")),
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        unit_directives,
         token(match(";")),
         interface_section,
         implementation_section,
-        optional(initialization_block),
+        exports_section,
+        initialization_section,
+        finalization_section,
         token(keyword_ci("end")),
         token(match(".")),
         NULL
