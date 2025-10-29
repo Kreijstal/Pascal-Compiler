@@ -28,8 +28,13 @@ static ast_t* map_var_modifier(ast_t* ast) {
     return make_modifier_node(ast, "var");
 }
 
+// Maps the 'out' keyword to a modifier node
 static ast_t* map_out_modifier(ast_t* ast) {
     return make_modifier_node(ast, "out");
+}
+
+static ast_t* identity_map(ast_t* ast) {
+    return ast;
 }
 
 static combinator_t* create_param_name_list(void) {
@@ -55,42 +60,38 @@ static combinator_t* create_param_type_spec(void) {
     );
 }
 
+static combinator_t* create_modifier_param(const char* keyword, ast_t* (*mapper)(ast_t*), const char* name) {
+    map_func transform = mapper != NULL ? mapper : identity_map;
+    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
+        map(token(match((char*)keyword)), transform),
+        create_param_name_list(),
+        create_param_type_spec(),
+        NULL
+    );
+    param->name = strdup(name);
+    return param;
+}
+
+static combinator_t* create_value_param(void) {
+    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
+        create_param_name_list(),
+        create_param_type_spec(),
+        NULL
+    );
+    param->name = strdup("value_param");
+    return param;
+}
+
 // Helper function to create parameter parser (reduces code duplication)
 combinator_t* create_pascal_param_parser(void) {
-    combinator_t* var_param = seq(new_combinator(), PASCAL_T_PARAM,
-        map(token(match("var")), map_var_modifier),
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-
-    combinator_t* const_param = seq(new_combinator(), PASCAL_T_PARAM,
-        map(token(match("const")), map_const_modifier),
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-
-    combinator_t* out_param = seq(new_combinator(), PASCAL_T_PARAM,
-        map(token(match("out")), map_out_modifier),
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-
-    combinator_t* value_param = seq(new_combinator(), PASCAL_T_PARAM,
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-
     combinator_t* param = multi(new_combinator(), PASCAL_T_NONE,
-        var_param,
-        const_param,
-        out_param,
-        value_param,
+        create_modifier_param("var", map_var_modifier, "var_param"),
+        create_modifier_param("const", map_const_modifier, "const_param"),
+        create_modifier_param("out", map_out_modifier, "out_param"),
+        create_value_param(),
         NULL
     );
+    param->name = strdup("param");
 
     return optional(between(
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
