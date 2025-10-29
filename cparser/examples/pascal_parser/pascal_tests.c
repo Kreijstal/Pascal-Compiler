@@ -67,6 +67,11 @@ static ast_t* find_first_node_of_type(ast_t* node, tag_t target) {
     return NULL;
 }
 
+static char* preprocess_pascal_source(const char* path,
+                                      const char* kind,
+                                      const char* name,
+                                      char* source);
+
 static char* load_pascal_snippet(const char* filename) {
     FILE* file = NULL;
     char* path = NULL;
@@ -151,11 +156,51 @@ static char* load_pascal_snippet(const char* filename) {
     result = buffer;
     buffer = NULL;  // Prevent cleanup from freeing it
 
+    result = preprocess_pascal_source(path, "snippet", filename, result);
+    if (!result) {
+        goto cleanup;
+    }
+
 cleanup:
     if (file) fclose(file);
     free(path);
     free(buffer);  // Only frees on error path
     return result;
+}
+
+static char* preprocess_pascal_source(const char* path,
+                                      const char* kind,
+                                      const char* name,
+                                      char* source) {
+    if (!source) {
+        return NULL;
+    }
+
+    PascalPreprocessor* pp = pascal_preprocessor_create();
+    if (!pp) {
+        fprintf(stderr, "Failed to allocate Pascal preprocessor for %s '%s'\n", kind, name);
+        free(source);
+        return NULL;
+    }
+
+    char* preprocess_error = NULL;
+    char* preprocessed = pascal_preprocess_buffer(pp, path, source, strlen(source), NULL, &preprocess_error);
+    pascal_preprocessor_free(pp);
+
+    if (!preprocessed) {
+        fprintf(stderr, "Failed to preprocess Pascal %s '%s'%s%s\n",
+                kind,
+                name,
+                preprocess_error ? ": " : "",
+                preprocess_error ? preprocess_error : "");
+        free(preprocess_error);
+        free(source);
+        return NULL;
+    }
+
+    free(preprocess_error);
+    free(source);
+    return preprocessed;
 }
 
 static size_t encode_utf8(uint32_t codepoint, char* out) {
@@ -331,6 +376,13 @@ static char* load_pascal_file(const char* filename) {
             }
             free(result);
             result = converted;
+        }
+    }
+
+    if (result) {
+        result = preprocess_pascal_source(path, "file", filename, result);
+        if (!result) {
+            goto cleanup;
         }
     }
 
