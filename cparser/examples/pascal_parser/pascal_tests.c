@@ -71,6 +71,45 @@ static char* preprocess_pascal_source(const char* path,
                                       const char* kind,
                                       const char* name,
                                       char* source);
+static char* load_pascal_snippet(const char* filename);
+
+typedef combinator_t* (*parser_getter_fn)(void);
+
+static void assert_pascal_snippet_parses(parser_getter_fn getter,
+                                         const char* snippet_name) {
+    combinator_t* parser = getter();
+    input_t* input = new_input();
+    TEST_ASSERT(input != NULL);
+    if (!input) {
+        return;
+    }
+
+    bool load_success = false;
+    bool parse_success = false;
+    char* program = load_pascal_snippet(snippet_name);
+
+    if (program != NULL) {
+        load_success = true;
+        input->buffer = program;
+        input->length = strlen(program);
+
+        ParseResult res = parse(input, parser);
+        parse_success = res.is_success;
+
+        if (res.is_success) {
+            free_ast(res.value.ast);
+        } else {
+            free_error(res.value.error);
+        }
+
+        free(program);
+    }
+
+    free(input);
+
+    TEST_ASSERT(load_success);
+    TEST_ASSERT(parse_success);
+}
 
 static char* load_pascal_snippet(const char* filename) {
     FILE* file = NULL;
@@ -2614,147 +2653,27 @@ void test_pascal_simple_const_declaration(void) {
 }
 
 void test_pascal_typed_constant(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("typed_constant_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free(input);
-        return;
-    }
-
-    input->buffer = program;
-    input->length = strlen(program);
-
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free(input);
+    assert_pascal_snippet_parses(get_unit_parser, "typed_constant_unit.pas");
 }
 
 void test_pascal_constant_dependency(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("constant_dependency_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free(input);
-        return;
-    }
-
-    input->buffer = program;
-    input->length = strlen(program);
-
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free(input);
+    assert_pascal_snippet_parses(get_unit_parser, "constant_dependency_unit.pas");
 }
 
 void test_pascal_set_typed_constant(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("set_of_enum_typed_constant.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free(input);
-        return;
-    }
-
-    input->buffer = program;
-    input->length = strlen(program);
-
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free(input);
+    assert_pascal_snippet_parses(get_unit_parser, "set_of_enum_typed_constant.pas");
 }
 
 void test_pascal_record_typed_constant(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("record_typed_constant_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free(input);
-        return;
-    }
-
-    input->buffer = program;
-    input->length = strlen(program);
-
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free(input);
+    assert_pascal_snippet_parses(get_unit_parser, "record_typed_constant_unit.pas");
 }
 
 void test_pascal_complex_if_directive(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("complex_if_directive_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free(input);
-        return;
-    }
-
-    input->buffer = program;
-    input->length = strlen(program);
-
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free(input);
+    assert_pascal_snippet_parses(get_unit_parser, "complex_if_directive_unit.pas");
 }
 
 void test_pascal_macro_include(void) {
-    combinator_t* p = get_unit_parser();
-    input_t* input = new_input();
-    char* program = load_pascal_snippet("macro_include_unit.pas");
-    TEST_ASSERT(program != NULL);
-    if (!program) {
-        free(input);
-        return;
-    }
-
-    input->buffer = program;
-    input->length = strlen(program);
-
-    ParseResult res = parse(input, p);
-    TEST_ASSERT(res.is_success);
-    if (res.is_success) {
-        free_ast(res.value.ast);
-    } else {
-        free_error(res.value.error);
-    }
-    free(input->buffer);
-    free(input);
+    assert_pascal_snippet_parses(get_unit_parser, "macro_include_unit.pas");
 }
 
 void test_pascal_var_section(void) {
