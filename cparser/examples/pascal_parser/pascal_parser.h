@@ -135,6 +135,7 @@ typedef enum {
     // Const section types
     PASCAL_T_CONST_SECTION,
     PASCAL_T_CONST_DECL,
+    PASCAL_T_CONST_VALUE,
     // Unit-related types
     PASCAL_T_UNIT_DECL,
     PASCAL_T_INTERFACE_SECTION,

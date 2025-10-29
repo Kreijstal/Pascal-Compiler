@@ -8,10 +8,18 @@
 
 #define MAX_INCLUDE_DEPTH 32
 
+typedef struct {
+    char *name;
+    char *value;
+} MacroDef;
+
 struct PascalPreprocessor {
     char **defines;
     size_t define_count;
     size_t define_capacity;
+    MacroDef *macros;
+    size_t macro_count;
+    size_t macro_capacity;
 };
 
 typedef struct {
@@ -69,7 +77,8 @@ static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol);
 static void trim(char **begin, char **end);
 static char *duplicate_range(const char *start, const char *end);
 static void extract_directory(const char *filename, char *buffer, size_t buffer_size);
-static bool resolve_include_path(const char *current_file, const char *directive_path, char **result_path);
+static bool string_builder_append_str(StringBuilder *sb, const char *str);
+static bool resolve_include_path(PascalPreprocessor *pp, const char *current_file, const char *directive_path, char **result_path);
 static bool parse_identifier(const char *start, const char *end, char **out_identifier);
 static void uppercase(char *str);
 static bool evaluate_if_directive(PascalPreprocessor *pp, const char *expression, bool *result);
@@ -77,6 +86,10 @@ static bool parse_defined_expression(const char **cursor, bool *value, PascalPre
 static bool parse_if_expression(const char **cursor, bool *value, PascalPreprocessor *pp);
 static bool parse_if_term(const char **cursor, bool *value, PascalPreprocessor *pp);
 static bool parse_if_factor(const char **cursor, bool *value, PascalPreprocessor *pp);
+static bool define_macro(PascalPreprocessor *pp, const char *symbol, const char *value);
+static bool undefine_macro(PascalPreprocessor *pp, const char *symbol);
+static const char *lookup_macro(const PascalPreprocessor *pp, const char *symbol);
+static bool expand_macros_in_path(const PascalPreprocessor *pp, const char *directive_path, char **expanded);
 
 PascalPreprocessor *pascal_preprocessor_create(void) {
     PascalPreprocessor *pp = calloc(1, sizeof(*pp));
@@ -94,6 +107,11 @@ void pascal_preprocessor_free(PascalPreprocessor *pp) {
         free(pp->defines[i]);
     }
     free(pp->defines);
+    for (size_t i = 0; i < pp->macro_count; ++i) {
+        free(pp->macros[i].name);
+        free(pp->macros[i].value);
+    }
+    free(pp->macros);
     free(pp);
 }
 
@@ -107,6 +125,18 @@ bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol) {
 
 bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *symbol) {
     return symbol_is_defined(pp, symbol);
+}
+
+bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol, const char *value) {
+    return define_macro(pp, symbol, value);
+}
+
+bool pascal_preprocessor_undefine_macro(PascalPreprocessor *pp, const char *symbol) {
+    return undefine_macro(pp, symbol);
+}
+
+const char *pascal_preprocessor_lookup_macro(const PascalPreprocessor *pp, const char *symbol) {
+    return lookup_macro(pp, symbol);
 }
 
 char *pascal_preprocess_buffer(PascalPreprocessor *pp,
@@ -330,7 +360,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             }
 
             char *resolved_path = NULL;
-            if (!resolve_include_path(filename, path_token, &resolved_path)) {
+            if (!resolve_include_path(pp, filename, path_token, &resolved_path)) {
                 bool err = set_error(error_message, "unable to resolve include '%s' in '%s'", path_token, filename ? filename : "<buffer>");
                 free(keyword);
                 free(content);
@@ -616,6 +646,18 @@ static void string_builder_free(StringBuilder *sb) {
     sb->capacity = 0;
 }
 
+static bool string_builder_append_str(StringBuilder *sb, const char *str) {
+    if (!str) {
+        return true;
+    }
+    while (*str) {
+        if (!string_builder_append_char(sb, *str++)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed) {
     if (*capacity >= needed) {
         return true;
@@ -844,19 +886,90 @@ static void extract_directory(const char *filename, char *buffer, size_t buffer_
     buffer[len] = '\0';
 }
 
-static bool resolve_include_path(const char *current_file, const char *directive_path, char **result_path) {
+static bool expand_macros_in_path(const PascalPreprocessor *pp, const char *directive_path, char **expanded) {
+    if (!directive_path || !expanded) {
+        return false;
+    }
+
+    StringBuilder sb;
+    string_builder_init(&sb);
+
+    size_t len = strlen(directive_path);
+    for (size_t i = 0; i < len; ) {
+        if (directive_path[i] == '%') {
+            size_t j = i + 1;
+            while (j < len && directive_path[j] != '%') {
+                ++j;
+            }
+            if (j < len) {
+                if (j == i + 1) {
+                    if (!string_builder_append_char(&sb, '%')) {
+                        string_builder_free(&sb);
+                        return false;
+                    }
+                } else {
+                    char *name = duplicate_range(directive_path + i + 1, directive_path + j);
+                    if (!name) {
+                        string_builder_free(&sb);
+                        return false;
+                    }
+                    uppercase(name);
+                    const char *value = lookup_macro(pp, name);
+                    if (value) {
+                        if (!string_builder_append_str(&sb, value)) {
+                            free(name);
+                            string_builder_free(&sb);
+                            return false;
+                        }
+                    } else {
+                        if (!string_builder_append_char(&sb, '%') ||
+                            !string_builder_append_str(&sb, name) ||
+                            !string_builder_append_char(&sb, '%')) {
+                            free(name);
+                            string_builder_free(&sb);
+                            return false;
+                        }
+                    }
+                    free(name);
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+
+        if (!string_builder_append_char(&sb, directive_path[i])) {
+            string_builder_free(&sb);
+            return false;
+        }
+        ++i;
+    }
+
+    *expanded = sb.data;
+    return true;
+}
+
+static bool resolve_include_path(PascalPreprocessor *pp, const char *current_file, const char *directive_path, char **result_path) {
     if (!directive_path || !result_path) {
         return false;
     }
     if (directive_path[0] == '\0') {
         return false;
     }
-    if (directive_path[0] == '/'
+
+    char *expanded_path = NULL;
+    if (!expand_macros_in_path(pp, directive_path, &expanded_path)) {
+        return false;
+    }
+
+    const char *path_to_use = expanded_path ? expanded_path : directive_path;
+
+    if (path_to_use[0] == '/'
 #ifdef _WIN32
-        || (strlen(directive_path) > 1 && directive_path[1] == ':')
+        || (strlen(path_to_use) > 1 && path_to_use[1] == ':')
 #endif
     ) {
-        *result_path = strdup(directive_path);
+        *result_path = strdup(path_to_use);
+        free(expanded_path);
         return *result_path != NULL;
     }
 
@@ -864,14 +977,16 @@ static bool resolve_include_path(const char *current_file, const char *directive
     extract_directory(current_file, directory, sizeof(directory));
 
     size_t dir_len = strlen(directory);
-    size_t path_len = strlen(directive_path);
+    size_t path_len = strlen(path_to_use);
     size_t total_len = dir_len + 1 + path_len + 1;
     char *combined = malloc(total_len);
     if (!combined) {
+        free(expanded_path);
         return false;
     }
-    snprintf(combined, total_len, "%s/%s", directory, directive_path);
+    snprintf(combined, total_len, "%s/%s", directory, path_to_use);
     *result_path = combined;
+    free(expanded_path);
     return true;
 }
 
@@ -1012,5 +1127,71 @@ static bool parse_defined_expression(const char **cursor, bool *value, PascalPre
     *value = symbol_is_defined(pp, symbol);
     free(symbol);
     return true;
+}
+
+static bool define_macro(PascalPreprocessor *pp, const char *symbol, const char *value) {
+    if (!pp || !symbol || !value) {
+        return false;
+    }
+    char *upper = strdup(symbol);
+    char *copy = strdup(value);
+    if (!upper || !copy) {
+        free(upper);
+        free(copy);
+        return false;
+    }
+    uppercase(upper);
+    for (size_t i = 0; i < pp->macro_count; ++i) {
+        if (strcmp(pp->macros[i].name, upper) == 0) {
+            free(pp->macros[i].value);
+            pp->macros[i].value = copy;
+            free(upper);
+            return true;
+        }
+    }
+    if (!ensure_capacity((void **)&pp->macros, sizeof(MacroDef), &pp->macro_capacity, pp->macro_count + 1)) {
+        free(upper);
+        free(copy);
+        return false;
+    }
+    pp->macros[pp->macro_count].name = upper;
+    pp->macros[pp->macro_count].value = copy;
+    ++pp->macro_count;
+    return true;
+}
+
+static bool undefine_macro(PascalPreprocessor *pp, const char *symbol) {
+    if (!pp || !symbol) {
+        return false;
+    }
+    char *upper = strdup(symbol);
+    if (!upper) {
+        return false;
+    }
+    uppercase(upper);
+    for (size_t i = 0; i < pp->macro_count; ++i) {
+        if (strcmp(pp->macros[i].name, upper) == 0) {
+            free(pp->macros[i].name);
+            free(pp->macros[i].value);
+            pp->macros[i] = pp->macros[pp->macro_count - 1];
+            --pp->macro_count;
+            free(upper);
+            return true;
+        }
+    }
+    free(upper);
+    return true;
+}
+
+static const char *lookup_macro(const PascalPreprocessor *pp, const char *symbol) {
+    if (!pp || !symbol) {
+        return NULL;
+    }
+    for (size_t i = 0; i < pp->macro_count; ++i) {
+        if (strcmp(pp->macros[i].name, symbol) == 0) {
+            return pp->macros[i].value;
+        }
+    }
+    return NULL;
 }
 

@@ -71,6 +71,45 @@ static char* preprocess_pascal_source(const char* path,
                                       const char* kind,
                                       const char* name,
                                       char* source);
+static char* load_pascal_snippet(const char* filename);
+
+typedef combinator_t* (*parser_getter_fn)(void);
+
+static void assert_pascal_snippet_parses(parser_getter_fn getter,
+                                         const char* snippet_name) {
+    combinator_t* parser = getter();
+    input_t* input = new_input();
+    TEST_ASSERT(input != NULL);
+    if (!input) {
+        return;
+    }
+
+    bool load_success = false;
+    bool parse_success = false;
+    char* program = load_pascal_snippet(snippet_name);
+
+    if (program != NULL) {
+        load_success = true;
+        input->buffer = program;
+        input->length = strlen(program);
+
+        ParseResult res = parse(input, parser);
+        parse_success = res.is_success;
+
+        if (res.is_success) {
+            free_ast(res.value.ast);
+        } else {
+            free_error(res.value.error);
+        }
+
+        free(program);
+    }
+
+    free(input);
+
+    TEST_ASSERT(load_success);
+    TEST_ASSERT(parse_success);
+}
 
 static char* load_pascal_snippet(const char* filename) {
     FILE* file = NULL;
@@ -182,6 +221,9 @@ static char* preprocess_pascal_source(const char* path,
         free(source);
         return NULL;
     }
+
+    // Provide minimal default macros used by snippets
+    pascal_preprocessor_define_macro(pp, "rtlpath", "../..");
 
     char* preprocess_error = NULL;
     char* preprocessed = pascal_preprocess_buffer(pp, path, source, strlen(source), NULL, &preprocess_error);
@@ -2610,6 +2652,30 @@ void test_pascal_simple_const_declaration(void) {
     free(input);
 }
 
+void test_pascal_typed_constant(void) {
+    assert_pascal_snippet_parses(get_unit_parser, "typed_constant_unit.pas");
+}
+
+void test_pascal_constant_dependency(void) {
+    assert_pascal_snippet_parses(get_unit_parser, "constant_dependency_unit.pas");
+}
+
+void test_pascal_set_typed_constant(void) {
+    assert_pascal_snippet_parses(get_unit_parser, "set_of_enum_typed_constant.pas");
+}
+
+void test_pascal_record_typed_constant(void) {
+    assert_pascal_snippet_parses(get_unit_parser, "record_typed_constant_unit.pas");
+}
+
+void test_pascal_complex_if_directive(void) {
+    assert_pascal_snippet_parses(get_unit_parser, "complex_if_directive_unit.pas");
+}
+
+void test_pascal_macro_include(void) {
+    assert_pascal_snippet_parses(get_unit_parser, "macro_include_unit.pas");
+}
+
 void test_pascal_var_section(void) {
     combinator_t* p = get_program_parser();
     input_t* input = new_input();
@@ -3613,6 +3679,12 @@ TEST_LIST = {
     // New failing tests for missing features
     { "test_pascal_enumerated_type_declaration", test_pascal_enumerated_type_declaration },
     { "test_pascal_simple_const_declaration", test_pascal_simple_const_declaration },
+    { "test_pascal_typed_constant", test_pascal_typed_constant },
+    { "test_pascal_constant_dependency", test_pascal_constant_dependency },
+    { "test_pascal_set_typed_constant", test_pascal_set_typed_constant },
+    { "test_pascal_record_typed_constant", test_pascal_record_typed_constant },
+    { "test_pascal_complex_if_directive", test_pascal_complex_if_directive },
+    { "test_pascal_macro_include", test_pascal_macro_include },
     { "test_pascal_set_operations_program", test_pascal_set_operations_program },
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
