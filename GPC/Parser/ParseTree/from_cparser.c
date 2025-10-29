@@ -39,6 +39,36 @@ typedef struct {
     char *file_type_id;
 } TypeInfo;
 
+static void destroy_type_info_contents(TypeInfo *info) {
+    if (info == NULL)
+        return;
+
+    if (info->element_type_id != NULL) {
+        free(info->element_type_id);
+        info->element_type_id = NULL;
+    }
+    if (info->pointer_type_id != NULL) {
+        free(info->pointer_type_id);
+        info->pointer_type_id = NULL;
+    }
+    if (info->set_element_type_id != NULL) {
+        free(info->set_element_type_id);
+        info->set_element_type_id = NULL;
+    }
+    if (info->file_type_id != NULL) {
+        free(info->file_type_id);
+        info->file_type_id = NULL;
+    }
+    if (info->enum_literals != NULL) {
+        destroy_list(info->enum_literals);
+        info->enum_literals = NULL;
+    }
+    if (info->array_dimensions != NULL) {
+        destroy_list(info->array_dimensions);
+        info->array_dimensions = NULL;
+    }
+}
+
 static char *dup_symbol(ast_t *node) {
     while (node != NULL) {
         if (node->sym != NULL && node->sym->name != NULL)
@@ -257,16 +287,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         free(nested_id);
                     if (nested_record != NULL)
                         destroy_record_type(nested_record);
-                    if (nested_info.array_dimensions != NULL)
-                        destroy_list(nested_info.array_dimensions);
-                    if (nested_info.pointer_type_id != NULL)
-                        free(nested_info.pointer_type_id);
-                    if (nested_info.set_element_type_id != NULL)
-                        free(nested_info.set_element_type_id);
-                    if (nested_info.enum_literals != NULL)
-                        destroy_list(nested_info.enum_literals);
-                    if (nested_info.file_type_id != NULL)
-                        free(nested_info.file_type_id);
+                    destroy_type_info_contents(&nested_info);
                 }
             }
         }
@@ -576,6 +597,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         char *element_type_id = type_info.element_type_id;
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
                                     type_info.start, type_info.end);
+        type_info.element_type_id = NULL;
+        destroy_type_info_contents(&type_info);
         return decl;
     }
 
@@ -634,16 +657,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
 
     Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt);
 
-    if (type_info.pointer_type_id != NULL)
-        free(type_info.pointer_type_id);
-    if (type_info.set_element_type_id != NULL)
-        free(type_info.set_element_type_id);
-    if (type_info.file_type_id != NULL)
-        free(type_info.file_type_id);
-    if (type_info.enum_literals != NULL)
-        destroy_list(type_info.enum_literals);
-    if (type_info.array_dimensions != NULL)
-        destroy_list(type_info.array_dimensions);
+    destroy_type_info_contents(&type_info);
 
     return decl;
 }
@@ -689,10 +703,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node) {
         if (type_id != NULL)
             free(type_id);
         free(id);
-        if (type_info.element_type_id != NULL)
-            free(type_info.element_type_id);
-        if (type_info.pointer_type_id != NULL)
-            free(type_info.pointer_type_id);
+        destroy_type_info_contents(&type_info);
         return NULL;
     }
 
@@ -707,16 +718,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node) {
 
     Tree_t *decl = mk_constdecl(const_decl_node->line, id, type_id, value_expr);
 
-    if (type_info.element_type_id != NULL)
-        free(type_info.element_type_id);
-    if (type_info.pointer_type_id != NULL)
-        free(type_info.pointer_type_id);
-    if (type_info.file_type_id != NULL)
-        free(type_info.file_type_id);
-    if (type_info.enum_literals != NULL)
-        destroy_list(type_info.enum_literals);
-    if (type_info.array_dimensions != NULL)
-        destroy_list(type_info.array_dimensions);
+    destroy_type_info_contents(&type_info);
 
     return decl;
 }
@@ -809,16 +811,7 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
 
     if (type_id != NULL)
         free(type_id);
-    if (type_info.element_type_id != NULL)
-        free(type_info.element_type_id);
-    if (type_info.pointer_type_id != NULL)
-        free(type_info.pointer_type_id);
-    if (type_info.set_element_type_id != NULL)
-        free(type_info.set_element_type_id);
-    if (type_info.enum_literals != NULL)
-        destroy_list(type_info.enum_literals);
-    if (type_info.array_dimensions != NULL)
-        destroy_list(type_info.array_dimensions);
+    destroy_type_info_contents(&type_info);
 
     if (decl == NULL) {
         free(id);
