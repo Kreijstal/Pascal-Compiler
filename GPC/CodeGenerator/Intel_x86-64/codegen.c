@@ -323,6 +323,8 @@ void codegen_rodata(CodeGenContext *ctx)
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
     fprintf(ctx->output_file, ".string \"%%d\"\n");
+    fprintf(ctx->output_file, ".format_str_lld:\n");
+    fprintf(ctx->output_file, ".string \"%%ld\"\n");
     fprintf(ctx->output_file, ".format_str_sn:\n");
     fprintf(ctx->output_file, ".string \"%%s\\n\"\n");
     fprintf(ctx->output_file, ".format_str_dn:\n");
@@ -522,7 +524,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                  if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
                  {
                      struct TypeAlias *alias = type_node->type_alias;
-                     int element_size = (type_node->var_type == HASHVAR_REAL) ? 8 : 4;
+                     int element_size = 4;  // Default to 4 bytes (integer)
+                     if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
+                         element_size = 8;
                      if (alias->is_open_array)
                      {
                          add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
@@ -776,8 +780,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
                 while(arg_ids != NULL)
                 {
-                    // Use 64-bit registers for strings and pointers, 32-bit for other types
-                    int use_64bit = (type == STRING_TYPE || type == POINTER_TYPE);
+                    // Var parameters are passed by reference (as pointers), so always use 64-bit
+                    // Also use 64-bit for strings and explicit pointers
+                    int is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    int use_64bit = is_var_param || (type == STRING_TYPE || type == POINTER_TYPE);
                     arg_reg = use_64bit ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
                     if(arg_reg == NULL)
                     {
