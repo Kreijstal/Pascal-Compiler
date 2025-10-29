@@ -211,6 +211,16 @@ struct Statement *mk_break(int line_num);
 
 struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt);
 
+struct Statement *mk_with(int line_num, struct Expression *context, struct Statement *body);
+
+struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts);
+
+struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts);
+
+struct Statement *mk_raise(int line_num, struct Expression *expr);
+
+struct Statement *mk_inherited(int line_num, struct Expression *expr);
+
 /* Expression routines */
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
                                 struct Expression *right);
@@ -233,6 +243,9 @@ struct Expression *mk_rnum(int line_num, float r_num);
 struct Expression *mk_string(int line_num, char *string);
 
 struct Expression *mk_bool(int line_num, int value);
+
+struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
+    struct Expression *expr);
 
 
 #endif

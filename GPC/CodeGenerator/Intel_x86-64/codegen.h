@@ -138,6 +138,9 @@ typedef struct {
     SymTab_t *symtab;
     gpc_target_abi_t target_abi;
     int had_error;
+    char **loop_exit_labels;
+    int loop_depth;
+    int loop_capacity;
 } CodeGenContext;
 
 /* Generates a label */

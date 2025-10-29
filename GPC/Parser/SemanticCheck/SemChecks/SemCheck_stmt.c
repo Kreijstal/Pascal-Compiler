@@ -28,12 +28,15 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_funccall(int *type_return, SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
+
+static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
 
 static int var_type_to_expr_type(enum VarType var_type)
 {
@@ -147,6 +150,19 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     }
 
     return return_val;
+}
+
+static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev)
+{
+    int result = 0;
+    ListNode_t *cursor = stmts;
+    while (cursor != NULL)
+    {
+        if (cursor->type == LIST_STMT && cursor->cur != NULL)
+            result += semcheck_stmt_main(symtab, (struct Statement *)cursor->cur, max_scope_lev);
+        cursor = cursor->next;
+    }
+    return result;
 }
 
 static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -327,6 +343,82 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             /* Check the else statement if present */
             if (stmt->stmt_data.case_data.else_stmt != NULL)
                 return_val += semcheck_stmt(symtab, stmt->stmt_data.case_data.else_stmt, max_scope_lev);
+            break;
+
+        case STMT_WITH:
+        {
+            if (stmt->stmt_data.with_data.context_expr != NULL)
+            {
+                int ctx_type = UNKNOWN_TYPE;
+                return_val += semcheck_expr_main(&ctx_type, symtab, stmt->stmt_data.with_data.context_expr, max_scope_lev, NO_MUTATE);
+            }
+            if (stmt->stmt_data.with_data.body_stmt != NULL)
+                return_val += semcheck_stmt_main(symtab, stmt->stmt_data.with_data.body_stmt, max_scope_lev);
+            break;
+        }
+
+        case STMT_TRY_FINALLY:
+            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_finally_data.try_statements, max_scope_lev);
+            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_finally_data.finally_statements, max_scope_lev);
+            break;
+
+        case STMT_TRY_EXCEPT:
+            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.try_statements, max_scope_lev);
+            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            break;
+
+        case STMT_RAISE:
+            if (stmt->stmt_data.raise_data.exception_expr != NULL)
+            {
+                int raise_type = UNKNOWN_TYPE;
+                return_val += semcheck_expr_main(&raise_type, symtab, stmt->stmt_data.raise_data.exception_expr, INT_MAX, NO_MUTATE);
+            }
+            break;
+
+        case STMT_INHERITED:
+            if (stmt->stmt_data.inherited_data.call_expr != NULL)
+            {
+                struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
+                HashNode_t *target_symbol = NULL;
+                const char *call_id = call_expr->expr_data.function_call_data.id;
+                if (call_id != NULL)
+                    FindIdent(&target_symbol, symtab, (char *)call_id);
+
+                int is_function_symbol = (target_symbol != NULL) &&
+                    (target_symbol->hash_type == HASHTYPE_FUNCTION ||
+                     target_symbol->hash_type == HASHTYPE_FUNCTION_RETURN);
+
+                if (call_expr->type == EXPR_FUNCTION_CALL && !is_function_symbol)
+                {
+                    struct Statement temp_call;
+                    memset(&temp_call, 0, sizeof(temp_call));
+                    temp_call.type = STMT_PROCEDURE_CALL;
+                    temp_call.line_num = stmt->line_num;
+                    temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                    temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
+                    temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                    temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
+
+                    return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
+
+                    if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
+                    {
+                        if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                        {
+                            free(call_expr->expr_data.function_call_data.mangled_id);
+                            call_expr->expr_data.function_call_data.mangled_id = NULL;
+                        }
+                        call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
+                        temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                    }
+                    call_expr->expr_data.function_call_data.resolved_func = temp_call.stmt_data.procedure_call_data.resolved_proc;
+                }
+                else
+                {
+                    int inherited_type = UNKNOWN_TYPE;
+                    return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                }
+            }
             break;
 
         default:

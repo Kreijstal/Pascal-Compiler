@@ -395,6 +395,97 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
             fprintf(f, "%s\n", stmt->stmt_data.asm_block_data.code);
             break;
 
+        case STMT_EXIT:
+            fprintf(f, "[EXIT]\n");
+            break;
+
+        case STMT_BREAK:
+            fprintf(f, "[BREAK]\n");
+            break;
+
+        case STMT_CASE:
+            fprintf(f, "[CASE]:\n");
+            ++num_indent;
+            print_indent(f, num_indent);
+            fprintf(f, "[SELECTOR]:\n");
+            expr_print(stmt->stmt_data.case_data.selector_expr, f, num_indent + 1);
+            print_indent(f, num_indent);
+            fprintf(f, "[BRANCHES]:\n");
+            {
+                ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
+                while (branch_node != NULL)
+                {
+                    struct CaseBranch *branch = (struct CaseBranch *)branch_node->cur;
+                    print_indent(f, num_indent + 1);
+                    fprintf(f, "[BRANCH]:\n");
+                    print_indent(f, num_indent + 2);
+                    fprintf(f, "[LABELS]:\n");
+                    list_print(branch->labels, f, num_indent + 3);
+                    if (branch->stmt != NULL)
+                    {
+                        print_indent(f, num_indent + 2);
+                        fprintf(f, "[STMT]:\n");
+                        stmt_print(branch->stmt, f, num_indent + 3);
+                    }
+                    branch_node = branch_node->next;
+                }
+            }
+            if (stmt->stmt_data.case_data.else_stmt != NULL)
+            {
+                print_indent(f, num_indent);
+                fprintf(f, "[ELSE]:\n");
+                stmt_print(stmt->stmt_data.case_data.else_stmt, f, num_indent + 1);
+            }
+            break;
+
+        case STMT_WITH:
+            fprintf(f, "[WITH]:\n");
+            ++num_indent;
+            print_indent(f, num_indent);
+            fprintf(f, "[CONTEXT]:\n");
+            expr_print(stmt->stmt_data.with_data.context_expr, f, num_indent + 1);
+            if (stmt->stmt_data.with_data.body_stmt != NULL)
+            {
+                print_indent(f, num_indent);
+                fprintf(f, "[BODY]:\n");
+                stmt_print(stmt->stmt_data.with_data.body_stmt, f, num_indent + 1);
+            }
+            break;
+
+        case STMT_TRY_FINALLY:
+            fprintf(f, "[TRY_FINALLY]:\n");
+            ++num_indent;
+            print_indent(f, num_indent);
+            fprintf(f, "[TRY]:\n");
+            list_print(stmt->stmt_data.try_finally_data.try_statements, f, num_indent + 1);
+            print_indent(f, num_indent);
+            fprintf(f, "[FINALLY]:\n");
+            list_print(stmt->stmt_data.try_finally_data.finally_statements, f, num_indent + 1);
+            break;
+
+        case STMT_TRY_EXCEPT:
+            fprintf(f, "[TRY_EXCEPT]:\n");
+            ++num_indent;
+            print_indent(f, num_indent);
+            fprintf(f, "[TRY]:\n");
+            list_print(stmt->stmt_data.try_except_data.try_statements, f, num_indent + 1);
+            print_indent(f, num_indent);
+            fprintf(f, "[EXCEPT]:\n");
+            list_print(stmt->stmt_data.try_except_data.except_statements, f, num_indent + 1);
+            break;
+
+        case STMT_RAISE:
+            fprintf(f, "[RAISE]:\n");
+            if (stmt->stmt_data.raise_data.exception_expr != NULL)
+                expr_print(stmt->stmt_data.raise_data.exception_expr, f, num_indent + 1);
+            break;
+
+        case STMT_INHERITED:
+            fprintf(f, "[INHERITED]:\n");
+            if (stmt->stmt_data.inherited_data.call_expr != NULL)
+                expr_print(stmt->stmt_data.inherited_data.call_expr, f, num_indent + 1);
+            break;
+
           default:
             fprintf(stderr, "BAD TYPE IN stmt_print!\n");
             exit(1);
@@ -486,6 +577,25 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
 
         case EXPR_BOOL:
           fprintf(f, "[BOOL:%s]\n", expr->expr_data.bool_value ? "TRUE" : "FALSE");
+          break;
+
+        case EXPR_TYPECAST:
+          fprintf(f, "[TYPECAST]\n");
+          ++num_indent;
+
+          print_indent(f, num_indent);
+          fprintf(f, "[TARGET_TYPE:%d]\n", expr->expr_data.typecast_data.target_type);
+
+          if (expr->expr_data.typecast_data.target_type_id != NULL)
+          {
+              print_indent(f, num_indent);
+              fprintf(f, "[TARGET_TYPE_ID:%s]\n", expr->expr_data.typecast_data.target_type_id);
+          }
+
+          print_indent(f, num_indent);
+          fprintf(f, "[EXPR]:\n");
+          expr_print(expr->expr_data.typecast_data.expr, f, num_indent+1);
+          --num_indent;
           break;
 
         default:
@@ -729,6 +839,31 @@ void destroy_stmt(struct Statement *stmt)
               destroy_stmt(stmt->stmt_data.case_data.else_stmt);
           break;
 
+        case STMT_WITH:
+          destroy_expr(stmt->stmt_data.with_data.context_expr);
+          destroy_stmt(stmt->stmt_data.with_data.body_stmt);
+          break;
+
+        case STMT_TRY_FINALLY:
+          destroy_list(stmt->stmt_data.try_finally_data.try_statements);
+          destroy_list(stmt->stmt_data.try_finally_data.finally_statements);
+          break;
+
+        case STMT_TRY_EXCEPT:
+          destroy_list(stmt->stmt_data.try_except_data.try_statements);
+          destroy_list(stmt->stmt_data.try_except_data.except_statements);
+          break;
+
+        case STMT_RAISE:
+          if (stmt->stmt_data.raise_data.exception_expr != NULL)
+              destroy_expr(stmt->stmt_data.raise_data.exception_expr);
+          break;
+
+        case STMT_INHERITED:
+          if (stmt->stmt_data.inherited_data.call_expr != NULL)
+              destroy_expr(stmt->stmt_data.inherited_data.call_expr);
+          break;
+
           default:
             fprintf(stderr, "BAD TYPE IN stmt_print!\n");
             exit(1);
@@ -795,6 +930,19 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_BOOL:
+          break;
+
+        case EXPR_TYPECAST:
+          if (expr->expr_data.typecast_data.target_type_id != NULL)
+          {
+              free(expr->expr_data.typecast_data.target_type_id);
+              expr->expr_data.typecast_data.target_type_id = NULL;
+          }
+          if (expr->expr_data.typecast_data.expr != NULL)
+          {
+              destroy_expr(expr->expr_data.typecast_data.expr);
+              expr->expr_data.typecast_data.expr = NULL;
+          }
           break;
 
         default:
@@ -1263,6 +1411,69 @@ struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t 
     return new_stmt;
 }
 
+struct Statement *mk_with(int line_num, struct Expression *context, struct Statement *body)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_WITH;
+    new_stmt->stmt_data.with_data.context_expr = context;
+    new_stmt->stmt_data.with_data.body_stmt = body;
+
+    return new_stmt;
+}
+
+struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_TRY_FINALLY;
+    new_stmt->stmt_data.try_finally_data.try_statements = try_stmts;
+    new_stmt->stmt_data.try_finally_data.finally_statements = finally_stmts;
+
+    return new_stmt;
+}
+
+struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_TRY_EXCEPT;
+    new_stmt->stmt_data.try_except_data.try_statements = try_stmts;
+    new_stmt->stmt_data.try_except_data.except_statements = except_stmts;
+
+    return new_stmt;
+}
+
+struct Statement *mk_raise(int line_num, struct Expression *expr)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_RAISE;
+    new_stmt->stmt_data.raise_data.exception_expr = expr;
+
+    return new_stmt;
+}
+
+struct Statement *mk_inherited(int line_num, struct Expression *expr)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_INHERITED;
+    new_stmt->stmt_data.inherited_data.call_expr = expr;
+
+    return new_stmt;
+}
+
 /*********** Expression routines ***************/
 static void init_expression(struct Expression *expr, int line_num, enum ExprType type)
 {
@@ -1415,6 +1626,20 @@ struct Expression *mk_bool(int line_num, int value)
 
     init_expression(new_expr, line_num, EXPR_BOOL);
     new_expr->expr_data.bool_value = (value != 0);
+
+    return new_expr;
+}
+
+struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
+    struct Expression *expr)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_TYPECAST);
+    new_expr->expr_data.typecast_data.target_type = target_type;
+    new_expr->expr_data.typecast_data.target_type_id = target_type_id;
+    new_expr->expr_data.typecast_data.expr = expr;
 
     return new_expr;
 }
