@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 // Shared parser instances to avoid expensive re-initialization
 // These are initialized lazily on first use
@@ -156,6 +158,82 @@ cleanup:
     return result;
 }
 
+static size_t encode_utf8(uint32_t codepoint, char* out) {
+    if (codepoint <= 0x7F) {
+        out[0] = (char)codepoint;
+        return 1;
+    } else if (codepoint <= 0x7FF) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        return 2;
+    } else if (codepoint <= 0xFFFF) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        return 3;
+    } else if (codepoint <= 0x10FFFF) {
+        out[0] = (char)(0xF0 | (codepoint >> 18));
+        out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (codepoint & 0x3F));
+        return 4;
+    }
+    out[0] = '?';
+    return 1;
+}
+
+static char* convert_utf16_to_utf8(const uint8_t* data, size_t byte_len, bool little_endian) {
+    if (data == NULL) {
+        return NULL;
+    }
+
+    size_t code_units = byte_len / 2;
+    char* out = (char*)malloc(code_units * 4 + 1);
+    if (!out) {
+        return NULL;
+    }
+
+    size_t out_pos = 0;
+    for (size_t i = 0; i < code_units; ++i) {
+        uint16_t w1;
+        if (little_endian) {
+            w1 = (uint16_t)(data[2 * i] | ((uint16_t)data[2 * i + 1] << 8));
+        } else {
+            w1 = (uint16_t)(((uint16_t)data[2 * i] << 8) | data[2 * i + 1]);
+        }
+
+        uint32_t codepoint;
+        if (w1 >= 0xD800 && w1 <= 0xDBFF) {
+            if (i + 1 < code_units) {
+                uint16_t w2;
+                if (little_endian) {
+                    w2 = (uint16_t)(data[2 * (i + 1)] | ((uint16_t)data[2 * (i + 1) + 1] << 8));
+                } else {
+                    w2 = (uint16_t)(((uint16_t)data[2 * (i + 1)] << 8) | data[2 * (i + 1) + 1]);
+                }
+
+                if (w2 >= 0xDC00 && w2 <= 0xDFFF) {
+                    codepoint = 0x10000 + ((((uint32_t)w1 - 0xD800) << 10) | ((uint32_t)w2 - 0xDC00));
+                    ++i; // Consume the low surrogate
+                } else {
+                    codepoint = 0xFFFD; // Replacement character
+                }
+            } else {
+                codepoint = 0xFFFD;
+            }
+        } else if (w1 >= 0xDC00 && w1 <= 0xDFFF) {
+            codepoint = 0xFFFD;
+        } else {
+            codepoint = w1;
+        }
+
+        out_pos += encode_utf8(codepoint, out + out_pos);
+    }
+
+    out[out_pos] = '\0';
+    return out;
+}
+
 static char* load_pascal_file(const char* filename) {
     FILE* file = NULL;
     char* path = NULL;
@@ -239,6 +317,22 @@ static char* load_pascal_file(const char* filename) {
     buffer[size] = '\0';
     result = buffer;
     buffer = NULL;  // Prevent cleanup from freeing it
+
+    if (result && size >= 2) {
+        unsigned char b0 = (unsigned char)result[0];
+        unsigned char b1 = (unsigned char)result[1];
+        if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) {
+            bool little_endian = (b0 == 0xFF);
+            char* converted = convert_utf16_to_utf8((const uint8_t*)(result + 2), (size_t)size - 2, little_endian);
+            if (!converted) {
+                free(result);
+                result = NULL;
+                goto cleanup;
+            }
+            free(result);
+            result = converted;
+        }
+    }
 
 cleanup:
     if (file) fclose(file);
