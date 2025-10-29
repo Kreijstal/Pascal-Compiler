@@ -2610,6 +2610,114 @@ void test_pascal_simple_const_declaration(void) {
     free(input);
 }
 
+void test_pascal_typed_constant_should_fail(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("typed_constant_unit.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(!res.is_success);
+    if (!res.is_success) {
+        free_error(res.value.error);
+    } else {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_constant_dependency_should_fail(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("constant_dependency_unit.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(!res.is_success);
+    if (!res.is_success) {
+        free_error(res.value.error);
+    } else {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_set_typed_constant_should_fail(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("set_of_enum_typed_constant.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(!res.is_success);
+    if (!res.is_success) {
+        free_error(res.value.error);
+    } else {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_record_typed_constant_should_fail(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("record_typed_constant_unit.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(!res.is_success);
+    if (!res.is_success) {
+        free_error(res.value.error);
+    } else {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_complex_if_directive_should_fail(void) {
+    char* program = load_pascal_snippet("complex_if_directive_unit.pas");
+    TEST_ASSERT(program == NULL);
+    free(program);
+}
+
+void test_pascal_macro_include_should_fail(void) {
+    char* program = load_pascal_snippet("macro_include_unit.pas");
+    TEST_ASSERT(program == NULL);
+    free(program);
+}
+
 void test_pascal_var_section(void) {
     combinator_t* p = get_program_parser();
     input_t* input = new_input();
@@ -3613,6 +3721,12 @@ TEST_LIST = {
     // New failing tests for missing features
     { "test_pascal_enumerated_type_declaration", test_pascal_enumerated_type_declaration },
     { "test_pascal_simple_const_declaration", test_pascal_simple_const_declaration },
+    { "test_pascal_typed_constant_should_fail", test_pascal_typed_constant_should_fail },
+    { "test_pascal_constant_dependency_should_fail", test_pascal_constant_dependency_should_fail },
+    { "test_pascal_set_typed_constant_should_fail", test_pascal_set_typed_constant_should_fail },
+    { "test_pascal_record_typed_constant_should_fail", test_pascal_record_typed_constant_should_fail },
+    { "test_pascal_complex_if_directive_should_fail", test_pascal_complex_if_directive_should_fail },
+    { "test_pascal_macro_include_should_fail", test_pascal_macro_include_should_fail },
     { "test_pascal_set_operations_program", test_pascal_set_operations_program },
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
