@@ -5,7 +5,10 @@
 #include "pascal_preprocessor.h"
 #include "pascal_keywords.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 // Shared parser instances to avoid expensive re-initialization
 // These are initialized lazily on first use
@@ -62,6 +65,330 @@ static ast_t* find_first_node_of_type(ast_t* node, tag_t target) {
     }
 
     return NULL;
+}
+
+static char* preprocess_pascal_source(const char* path,
+                                      const char* kind,
+                                      const char* name,
+                                      char* source);
+
+static char* load_pascal_snippet(const char* filename) {
+    FILE* file = NULL;
+    char* path = NULL;
+    char* buffer = NULL;
+    char* result = NULL;
+
+    const char* snippets_dir = "snippets/";
+
+#ifdef TEST_SRCDIR
+    const char* base_dir = TEST_SRCDIR;
+    size_t base_len = strlen(base_dir);
+#else
+    const char* current_file = __FILE__;
+    const char* last_slash = strrchr(current_file, '/');
+#ifdef _WIN32
+    const char* last_backslash = strrchr(current_file, '\\');
+    if (last_backslash && (!last_slash || last_backslash > last_slash)) {
+        last_slash = last_backslash;
+    }
+#endif
+    size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
+    const char* base_dir = current_file;
+#endif
+
+    size_t snippets_len = strlen(snippets_dir);
+    size_t filename_len = strlen(filename);
+
+#ifdef TEST_SRCDIR
+    // When using TEST_SRCDIR, we need an extra byte for the separator '/'
+    path = (char*)malloc(base_len + 1 + snippets_len + filename_len + 1);
+#else
+    path = (char*)malloc(base_len + snippets_len + filename_len + 1);
+#endif
+    if (!path) {
+        fprintf(stderr, "Out of memory while constructing snippet path for %s\n", filename);
+        goto cleanup;
+    }
+
+#ifdef TEST_SRCDIR
+    snprintf(path, base_len + 1 + snippets_len + filename_len + 1, "%s/%s%s", 
+             base_dir, snippets_dir, filename);
+#else
+    snprintf(path, base_len + snippets_len + filename_len + 1, "%.*s%s%s", 
+             (int)base_len, base_dir, snippets_dir, filename);
+#endif
+
+    file = fopen(path, "rb");
+    if (!file) {
+        fprintf(stderr, "Failed to open Pascal snippet '%s' at %s\n", filename, path);
+        goto cleanup;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Failed to seek to end of snippet '%s'\n", filename);
+        goto cleanup;
+    }
+
+    long size = ftell(file);
+    if (size < 0) {
+        fprintf(stderr, "Failed to determine size of snippet '%s'\n", filename);
+        goto cleanup;
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "Failed to rewind snippet '%s'\n", filename);
+        goto cleanup;
+    }
+
+    buffer = (char*)malloc((size_t)size + 1);
+    if (!buffer) {
+        fprintf(stderr, "Out of memory while reading snippet '%s'\n", filename);
+        goto cleanup;
+    }
+
+    size_t read = fread(buffer, 1, (size_t)size, file);
+    if (read != (size_t)size) {
+        fprintf(stderr, "Failed to read snippet '%s' (expected %ld bytes, got %zu)\n", filename, size, read);
+        goto cleanup;
+    }
+
+    buffer[size] = '\0';
+    result = buffer;
+    buffer = NULL;  // Prevent cleanup from freeing it
+
+    result = preprocess_pascal_source(path, "snippet", filename, result);
+    if (!result) {
+        goto cleanup;
+    }
+
+cleanup:
+    if (file) fclose(file);
+    free(path);
+    free(buffer);  // Only frees on error path
+    return result;
+}
+
+static char* preprocess_pascal_source(const char* path,
+                                      const char* kind,
+                                      const char* name,
+                                      char* source) {
+    if (!source) {
+        return NULL;
+    }
+
+    PascalPreprocessor* pp = pascal_preprocessor_create();
+    if (!pp) {
+        fprintf(stderr, "Failed to allocate Pascal preprocessor for %s '%s'\n", kind, name);
+        free(source);
+        return NULL;
+    }
+
+    char* preprocess_error = NULL;
+    char* preprocessed = pascal_preprocess_buffer(pp, path, source, strlen(source), NULL, &preprocess_error);
+    pascal_preprocessor_free(pp);
+
+    if (!preprocessed) {
+        fprintf(stderr, "Failed to preprocess Pascal %s '%s'%s%s\n",
+                kind,
+                name,
+                preprocess_error ? ": " : "",
+                preprocess_error ? preprocess_error : "");
+        free(preprocess_error);
+        free(source);
+        return NULL;
+    }
+
+    free(preprocess_error);
+    free(source);
+    return preprocessed;
+}
+
+static size_t encode_utf8(uint32_t codepoint, char* out) {
+    if (codepoint <= 0x7F) {
+        out[0] = (char)codepoint;
+        return 1;
+    } else if (codepoint <= 0x7FF) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        return 2;
+    } else if (codepoint <= 0xFFFF) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        return 3;
+    } else if (codepoint <= 0x10FFFF) {
+        out[0] = (char)(0xF0 | (codepoint >> 18));
+        out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (codepoint & 0x3F));
+        return 4;
+    }
+    out[0] = '?';
+    return 1;
+}
+
+static uint16_t read_utf16_code_unit(const uint8_t* data, size_t index, bool little_endian) {
+    const uint8_t* p = data + 2 * index;
+    if (little_endian) {
+        return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+    }
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+static char* convert_utf16_to_utf8(const uint8_t* data, size_t byte_len, bool little_endian) {
+    if (data == NULL) {
+        return NULL;
+    }
+
+    size_t code_units = byte_len / 2;
+    char* out = (char*)malloc(code_units * 4 + 1);
+    if (!out) {
+        return NULL;
+    }
+
+    size_t out_pos = 0;
+    for (size_t i = 0; i < code_units; ++i) {
+        uint16_t w1 = read_utf16_code_unit(data, i, little_endian);
+
+        uint32_t codepoint;
+        if (w1 >= 0xD800 && w1 <= 0xDBFF) {
+            if (i + 1 < code_units) {
+                uint16_t w2 = read_utf16_code_unit(data, i + 1, little_endian);
+
+                if (w2 >= 0xDC00 && w2 <= 0xDFFF) {
+                    codepoint = 0x10000 + ((((uint32_t)w1 - 0xD800) << 10) | ((uint32_t)w2 - 0xDC00));
+                    ++i; // Consume the low surrogate
+                } else {
+                    codepoint = 0xFFFD; // Replacement character
+                }
+            } else {
+                codepoint = 0xFFFD;
+            }
+        } else if (w1 >= 0xDC00 && w1 <= 0xDFFF) {
+            codepoint = 0xFFFD;
+        } else {
+            codepoint = w1;
+        }
+
+        out_pos += encode_utf8(codepoint, out + out_pos);
+    }
+
+    out[out_pos] = '\0';
+    return out;
+}
+
+static char* load_pascal_file(const char* filename) {
+    FILE* file = NULL;
+    char* path = NULL;
+    char* buffer = NULL;
+    char* result = NULL;
+
+    const char* pascal_dir = "pascal/";
+
+#ifdef TEST_SRCDIR
+    const char* base_dir = TEST_SRCDIR;
+    size_t base_len = strlen(base_dir);
+#else
+    const char* current_file = __FILE__;
+    const char* last_slash = strrchr(current_file, '/');
+#ifdef _WIN32
+    const char* last_backslash = strrchr(current_file, '\\');
+    if (last_backslash && (!last_slash || last_backslash > last_slash)) {
+        last_slash = last_backslash;
+    }
+#endif
+    size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
+    const char* base_dir = current_file;
+#endif
+
+    size_t pascal_len = strlen(pascal_dir);
+    size_t filename_len = strlen(filename);
+
+#ifdef TEST_SRCDIR
+    // When using TEST_SRCDIR, we need an extra byte for the separator '/'
+    path = (char*)malloc(base_len + 1 + pascal_len + filename_len + 1);
+#else
+    path = (char*)malloc(base_len + pascal_len + filename_len + 1);
+#endif
+    if (!path) {
+        fprintf(stderr, "Out of memory while constructing pascal file path for %s\n", filename);
+        goto cleanup;
+    }
+
+#ifdef TEST_SRCDIR
+    snprintf(path, base_len + 1 + pascal_len + filename_len + 1, "%s/%s%s", 
+             base_dir, pascal_dir, filename);
+#else
+    snprintf(path, base_len + pascal_len + filename_len + 1, "%.*s%s%s", 
+             (int)base_len, base_dir, pascal_dir, filename);
+#endif
+
+    file = fopen(path, "rb");
+    if (!file) {
+        fprintf(stderr, "Failed to open Pascal file '%s' at %s\n", filename, path);
+        goto cleanup;
+    }
+
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Failed to seek to end of Pascal file '%s'\n", filename);
+        goto cleanup;
+    }
+
+    long size = ftell(file);
+    if (size < 0) {
+        fprintf(stderr, "Failed to determine size of Pascal file '%s'\n", filename);
+        goto cleanup;
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "Failed to rewind Pascal file '%s'\n", filename);
+        goto cleanup;
+    }
+
+    buffer = (char*)malloc((size_t)size + 1);
+    if (!buffer) {
+        fprintf(stderr, "Out of memory while reading Pascal file '%s'\n", filename);
+        goto cleanup;
+    }
+
+    size_t read = fread(buffer, 1, (size_t)size, file);
+    if (read != (size_t)size) {
+        fprintf(stderr, "Failed to read Pascal file '%s' (expected %ld bytes, got %zu)\n", filename, size, read);
+        goto cleanup;
+    }
+
+    buffer[size] = '\0';
+    result = buffer;
+    buffer = NULL;  // Prevent cleanup from freeing it
+
+    if (result && size >= 2) {
+        unsigned char b0 = (unsigned char)result[0];
+        unsigned char b1 = (unsigned char)result[1];
+        if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) {
+            bool little_endian = (b0 == 0xFF);
+            char* converted = convert_utf16_to_utf8((const uint8_t*)(result + 2), (size_t)size - 2, little_endian);
+            if (!converted) {
+                free(result);
+                result = NULL;
+                goto cleanup;
+            }
+            free(result);
+            result = converted;
+        }
+    }
+
+    if (result) {
+        result = preprocess_pascal_source(path, "file", filename, result);
+        if (!result) {
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    if (file) fclose(file);
+    free(path);
+    free(buffer);  // Only frees on error path
+    return result;
 }
 
 void test_pascal_integer_parsing(void) {
@@ -1021,10 +1348,11 @@ void test_pascal_expression_statement(void) {
     TEST_CHECK(res.is_success);
     if (!res.is_success) {
         if (res.value.error) {
-            printf("Parse error: %s at line %d, col %d\n", 
+            printf("Parse error: %s at line %d, col %d\n",
                    res.value.error->message, res.value.error->line, res.value.error->col);
             free_error(res.value.error);
-        }        free(input->buffer);
+        }
+        free(input->buffer);
         free(input);
         return;
     }
@@ -1477,7 +1805,13 @@ void test_pascal_unit_declaration(void) {
     combinator_t* p = get_unit_parser();
 
     input_t* input = new_input();
-    input->buffer = strdup("unit MyUnit; interface implementation end.");
+    char* source = load_pascal_snippet("unit_declaration.pas");
+    TEST_ASSERT(source != NULL);
+    if (!source) {
+        free(input);
+        return;
+    }
+    input->buffer = source;
     input->length = strlen(input->buffer);
 
     ParseResult res = parse(input, p);
@@ -1512,12 +1846,13 @@ void test_pascal_pointer_type_declaration(void) {
     combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
-    char* program = "program Test;\n"
-                   "type\n"
-                   "  PMyRec = ^TMyRec;\n"
-                   "begin\n"
-                   "end.\n";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("pointer_type_declaration.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
 
     ParseResult res = parse(input, p);
@@ -1554,7 +1889,8 @@ void test_pascal_pointer_type_declaration(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -1562,17 +1898,13 @@ void test_pascal_method_implementation(void) {
     combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
-    char* program = "program Test;\n"
-                   "type\n"
-                   "  TMyObject = class\n"
-                   "    procedure MyMethod;\n"
-                   "  end;\n"
-                   "procedure TMyObject.MyMethod;\n"
-                   "begin\n"
-                   "end;\n"
-                   "begin\n"
-                   "end.\n";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("method_implementation.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
 
     ParseResult res = parse(input, p);
@@ -1614,7 +1946,8 @@ void test_pascal_method_implementation(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -1645,7 +1978,8 @@ void test_pascal_with_statement(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -1669,7 +2003,8 @@ void test_pascal_exit_statement(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -1677,11 +2012,13 @@ void test_pascal_include_directive(void) {
     combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
-    char* program = "program Test;\n"
-                   "begin\n"
-                   "  {$I test.inc}\n"
-                   "end.\n";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("include_directive_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
 
     ParseResult res = parse(input, p);
@@ -1708,7 +2045,8 @@ void test_pascal_include_directive(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -1716,17 +2054,13 @@ void test_pascal_forward_declared_function(void) {
     combinator_t* p = get_unit_parser();
 
     input_t* input = new_input();
-    char* unit_code = "unit MyUnit;\n"
-                      "interface\n"
-                      "  procedure DoSomething;\n"
-                      "implementation\n"
-                      "  procedure DoSomething;\n"
-                      "  begin\n"
-                      "  end;\n"
-                      "begin\n"
-                      "  DoSomething;\n"
-                      "end.\n";
-    input->buffer = strdup(unit_code);
+    char* unit_code = load_pascal_snippet("forward_declared_function_unit.pas");
+    TEST_ASSERT(unit_code != NULL);
+    if (!unit_code) {
+        free(input);
+        return;
+    }
+    input->buffer = unit_code;
     input->length = strlen(unit_code);
 
     ParseResult res = parse(input, p);
@@ -1739,7 +2073,8 @@ void test_pascal_forward_declared_function(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -1747,16 +2082,13 @@ void test_pascal_record_type(void) {
     combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
-    char* program = "program Test;\n"
-                   "type\n"
-                   "  TMyRecord = record\n"
-                   "    field1: integer;\n"
-                   "    field2: string;\n"
-                   "    field3: real;\n"
-                   "  end;\n"
-                   "begin\n"
-                   "end.\n";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("record_type_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
 
     ParseResult res = parse(input, p);
@@ -1803,7 +2135,8 @@ void test_pascal_record_type(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2113,7 +2446,8 @@ void test_pascal_case_invalid_expression_labels(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 
     // Test with variable assignment as case label (should be invalid)
@@ -2133,7 +2467,8 @@ void test_pascal_case_invalid_expression_labels(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2153,7 +2488,8 @@ void test_pascal_pointer_dereference(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2174,7 +2510,8 @@ void test_pascal_array_access_with_deref(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2190,7 +2527,8 @@ void test_pascal_paren_star_comment(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2206,7 +2544,8 @@ void test_pascal_hex_literal(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2222,15 +2561,21 @@ void test_pascal_case_range_label(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
 void test_pascal_enumerated_type_declaration(void) {
     combinator_t* p = get_program_parser();
     input_t* input = new_input();
-    char* program = "program Test; type TMyEnum = (Value1, Value2, Value3); begin end.";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("enumerated_type_declaration.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
     ParseResult res = parse(input, p);
     TEST_ASSERT(res.is_success);
@@ -2238,15 +2583,21 @@ void test_pascal_enumerated_type_declaration(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
 void test_pascal_simple_const_declaration(void) {
     combinator_t* p = get_program_parser();
     input_t* input = new_input();
-    char* program = "program Test; const MyConst = 10; begin end.";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("simple_const_declaration.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
     ParseResult res = parse(input, p);
     TEST_ASSERT(res.is_success);
@@ -2254,15 +2605,21 @@ void test_pascal_simple_const_declaration(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
 void test_pascal_var_section(void) {
     combinator_t* p = get_program_parser();
     input_t* input = new_input();
-    char* program = "program Test; var i: integer; begin end.";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("var_section.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
     ParseResult res = parse(input, p);
     TEST_ASSERT(res.is_success);
@@ -2270,7 +2627,8 @@ void test_pascal_var_section(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2289,7 +2647,8 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 
     p = new_combinator();
@@ -2308,7 +2667,8 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 
     // Parse membership expression to ensure "in" is recognised with set unions
@@ -2328,43 +2688,22 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 
     // Parse full program exercising set operations and subrange set types
     p = new_combinator();
     init_pascal_complete_program_parser(&p);
     input = new_input();
-    const char* program_source =
-        "program SetOperations;\n"
-        "var\n"
-        "  odds: set of 1..10;\n"
-        "  evens: set of 1..10;\n"
-        "  mix: set of 1..10;\n"
-        "  result: set of 1..10;\n"
-        "begin\n"
-        "  odds := [1, 3, 5, 7, 9];\n"
-        "  evens := [2, 4, 6, 8, 10];\n"
-        "  mix := [3, 4, 5];\n"
-        "\n"
-        "  result := odds + mix;\n"
-        "  if 4 in result then\n"
-        "    writeln('union-has-4')\n"
-        "  else\n"
-        "    writeln('union-missing-4');\n"
-        "\n"
-        "  result := mix * evens;\n"
-        "  if 4 in result then\n"
-        "    writeln('intersection-has-4')\n"
-        "  else\n"
-        "    writeln('intersection-missing-4');\n"
-        "\n"
-        "  if 2 in [1, 2, 3] then\n"
-        "    writeln('constructor-has-2')\n"
-        "  else\n"
-        "    writeln('constructor-missing-2');\n"
-        "end.";
-    input->buffer = strdup(program_source);
+    char* program_source = load_pascal_snippet("set_operations_program.pas");
+    TEST_ASSERT(program_source != NULL);
+    if (!program_source) {
+        free(input);
+        free_combinator(p);
+        return;
+    }
+    input->buffer = program_source;
     input->length = strlen(program_source);
 
     res = parse(input, p);
@@ -2373,7 +2712,8 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2392,7 +2732,8 @@ void test_pascal_pointer_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 
     p = new_combinator();
@@ -2409,7 +2750,8 @@ void test_pascal_pointer_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2433,7 +2775,8 @@ void test_pascal_record_member_access_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2442,23 +2785,14 @@ void test_pascal_record_member_access_complete_program(void) {
     init_pascal_complete_program_parser(&p);
 
     input_t* input = new_input();
-    const char* program =
-        "program RecordMemberAccess;\n"
-        "type\n"
-        "  Point = record\n"
-        "    x: Integer;\n"
-        "    y: Integer;\n"
-        "  end;\n"
-        "var\n"
-        "  p: Point;\n"
-        "begin\n"
-        "  p.x := 10;\n"
-        "  p.y := 32;\n"
-        "  writeln(p.x + p.y);\n"
-        "  p.x := p.y - 2;\n"
-        "  writeln(p.x);\n"
-        "end.\n";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("record_member_access_complete_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        free_combinator(p);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
 
     ParseResult res = parse(input, p);
@@ -2479,25 +2813,13 @@ void test_pascal_record_member_access_complete_program(void) {
 void test_fpc_style_unit_parsing(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
-    char* program = 
-        "Unit rax64int;\n"
-        "interface\n"
-        "uses aasmtai, rax86int;\n"
-        "type\n"
-        "  tx8664intreader = class(tx86intreader)\n"
-        "    actsehdirective: TAsmSehDirective;\n"
-        "    function is_targetdirective(const s:string):boolean;override;\n"
-        "  end;\n"
-        "implementation\n"
-        "uses globtype, cutils;\n"
-        "const\n"
-        "  maxoffset: array[boolean] of aint=(high(dword), 240);\n"
-        "function tx8664intreader.is_targetdirective(const s:string):boolean;\n"
-        "begin\n"
-        "  result:=false;\n"
-        "end;\n"
-        "end.";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("fpc_style_unit.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
     ParseResult res = parse(input, p);
     
@@ -2506,16 +2828,23 @@ void test_fpc_style_unit_parsing(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 }
 
 // --- Helpers for advanced feature regression tests ---
-static void assert_pascal_unit_parses(const char* source) {
+static void assert_pascal_unit_parses_snippet(const char* snippet_name) {
+    char* source = load_pascal_snippet(snippet_name);
+    TEST_ASSERT(source != NULL);
+    if (!source) {
+        return;
+    }
+
     combinator_t* parser = get_unit_parser();
 
     input_t* input = new_input();
-    input->buffer = strdup(source);
+    input->buffer = source;
     input->length = strlen(source);
 
     ParseResult result = parse(input, parser);
@@ -2534,7 +2863,8 @@ static void assert_pascal_unit_parses(const char* source) {
         free_ast(result.value.ast);
     } else if (result.value.error) {
         free_error(result.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
     free(input);
 
     TEST_ASSERT(success);
@@ -2542,217 +2872,63 @@ static void assert_pascal_unit_parses(const char* source) {
 
 // --- Regression tests for features seen in the FPC corpus ---
 void test_pascal_unit_with_dotted_name(void) {
-    const char* source =
-        "unit Generics.Collections;\n"
-        "interface\n"
-        "implementation\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("unit_with_dotted_name.pas");
 }
 
 void test_pascal_uses_with_dotted_unit(void) {
-    const char* source =
-        "unit UsesDotted;\n"
-        "interface\n"
-        "uses Generics.Collections;\n"
-        "implementation\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("uses_with_dotted_unit.pas");
 }
 
 void test_pascal_out_parameter_modifier(void) {
-    const char* source =
-        "unit OutModifierDemo;\n"
-        "interface\n"
-        "procedure Foo(out Value: Integer);\n"
-        "implementation\n"
-        "procedure Foo(out Value: Integer);\n"
-        "begin\n"
-        "end;\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("out_parameter_modifier.pas");
 }
 
 void test_pascal_resourcestring_section(void) {
-    const char* source =
-        "unit ResourceStringsDemo;\n"
-        "interface\n"
-        "resourcestring\n"
-        "  SMessage = 'Hello';\n"
-        "implementation\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("resourcestring_section.pas");
 }
 
 void test_pascal_threadvar_section(void) {
-    const char* source =
-        "unit ThreadVarDemo;\n"
-        "interface\n"
-        "threadvar\n"
-        "  ThreadID: Cardinal;\n"
-        "implementation\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("threadvar_section.pas");
 }
 
 void test_pascal_generic_type_declaration(void) {
-    const char* source =
-        "unit GenericDemo;\n"
-        "interface\n"
-        "type\n"
-        "  generic TBox<T> = class\n"
-        "  end;\n"
-        "implementation\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("generic_type_declaration.pas");
 }
 
 void test_pascal_specialize_alias(void) {
-    const char* source =
-        "unit SpecializeDemo;\n"
-        "interface\n"
-        "type\n"
-        "  TIntList = specialize TList<Integer>;\n"
-        "implementation\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("specialize_alias.pas");
 }
 
 void test_pascal_class_function_modifier(void) {
-    const char* source =
-        "unit ClassFunctionDemo;\n"
-        "interface\n"
-        "type\n"
-        "  TFoo = class\n"
-        "  public\n"
-        "    class function CreateDefault: TFoo;\n"
-        "  end;\n"
-        "implementation\n"
-        "class function TFoo.CreateDefault: TFoo;\n"
-        "begin\n"
-        "end;\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("class_function_modifier.pas");
 }
 
 void test_pascal_class_operator_overload(void) {
-    const char* source =
-        "unit ClassOperatorDemo;\n"
-        "interface\n"
-        "type\n"
-        "  TFoo = class\n"
-        "  public\n"
-        "    class operator Equal(const A, B: TFoo): Boolean;\n"
-        "  end;\n"
-        "implementation\n"
-        "class operator TFoo.Equal(const A, B: TFoo): Boolean;\n"
-        "begin\n"
-        "end;\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("class_operator_overload.pas");
 }
 
 void test_pascal_type_helper_for_string(void) {
-    const char* source =
-        "unit TypeHelperDemo;\n"
-        "interface\n"
-        "type\n"
-        "  TStringHelper = type helper for string\n"
-        "    function ToUpper: string;\n"
-        "  end;\n"
-        "implementation\n"
-        "function TStringHelper.ToUpper: string;\n"
-        "begin\n"
-        "end;\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("type_helper_for_string.pas");
 }
 
 void test_pascal_overload_directive(void) {
-    const char* source =
-        "unit OverloadDemo;\n"
-        "interface\n"
-        "procedure Foo; overload;\n"
-        "implementation\n"
-        "procedure Foo; overload;\n"
-        "begin\n"
-        "end;\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("overload_directive.pas");
 }
 
 void test_pascal_inline_directive(void) {
-    const char* source =
-        "unit InlineDemo;\n"
-        "interface\n"
-        "procedure Foo; inline;\n"
-        "implementation\n"
-        "procedure Foo; inline;\n"
-        "begin\n"
-        "end;\n"
-        "end.\n";
-    assert_pascal_unit_parses(source);
+    assert_pascal_unit_parses_snippet("inline_directive.pas");
 }
 
 void test_complex_fpc_rax64int_unit(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
-    char* program = 
-        "Unit rax64int;\n"
-        "\n"
-        "  interface\n"
-        "\n"
-        "    uses\n"
-        "      aasmtai,\n"
-        "      rax86int;\n"
-        "\n"
-        "    type\n"
-        "      tx8664intreader = class(tx86intreader)\n"
-        "        actsehdirective: TAsmSehDirective;\n"
-        "        function is_targetdirective(const s:string):boolean;override;\n"
-        "        procedure HandleTargetDirective;override;\n"
-        "      end;\n"
-        "\n"
-        "\n"
-        "  implementation\n"
-        "\n"
-        "    uses\n"
-        "      globtype,\n"
-        "      cutils,\n"
-        "      systems,\n"
-        "      verbose,\n"
-        "      cgbase,\n"
-        "      symconst,\n"
-        "      procinfo,\n"
-        "      rabase;\n"
-        "\n"
-        "    const\n"
-        "      { max offset and bitmask for .seh_savereg and .seh_setframe }\n"
-        "      maxoffset: array[boolean] of aint=(high(dword), 240);\n"
-        "      modulo: array[boolean] of integer=(7, 15);\n"
-        "\n"
-        "    function tx8664intreader.is_targetdirective(const s:string):boolean;\n"
-        "      var\n"
-        "        i: TAsmSehDirective;\n"
-        "      begin\n"
-        "        result:=false;\n"
-        "        if target_info.system<>system_x86_64_win64 then exit;\n"
-        "\n"
-        "        for i:=low(TAsmSehDirective) to high(TAsmSehDirective) do\n"
-        "          begin\n"
-        "            if not (i in recognized_directives) then\n"
-        "              continue;\n"
-        "            if s=sehdirectivestr[i] then\n"
-        "              begin\n"
-        "                actsehdirective:=i;\n"
-        "                result:=true;\n"
-        "                break;\n"
-        "              end;\n"
-        "          end;\n"
-        "      end;\n"
-        "\n"
-        "end.";
-    input->buffer = strdup(program);
+    char* program = load_pascal_snippet("complex_rax64int_unit.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
     input->length = strlen(program);
     ParseResult res = parse(input, p);
     
@@ -2761,7 +2937,603 @@ void test_complex_fpc_rax64int_unit(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }    free(input->buffer);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+// Tests for pascal directory snippets
+void test_aligned_records(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("alignedrecords.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_const_set(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("constset.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_deprecated_type(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("deprecatedtype.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_dotted_types(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("dottedtypes.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_end_token(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("endtoken.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_experimentals(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("experimentals.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_external_function(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("externalfunction.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_finalization_initialization_exports(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("finalizationinitializationexports.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_forward_overloaded(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("forwardoverloaded.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_forward_without_semicolon(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("forwardwithoutsemicolon.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_generic_constraints(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("genericconstraints.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_generic_interface_method_delegation(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("genericinterfacemethoddelegation.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_implements_generic_type(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("implementsgenerictype.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_include_file(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("includefile.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_managed_records(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("managedrecords.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_message_method(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("messagemethod.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_multiline(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("multiline.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_non_aligned_records(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("nonalignedrecords.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_numbers(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("numbers.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_pointer_chars(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("pointerchars.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_properties(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("properties.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_strict_visibility(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("strictvisibility.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_try_except(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("tryexcept.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_umlauts(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("umlauts.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_whitespace_around_ifdef_condition(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("whitespacearoundifdefcondition.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_deprecated_on_const(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("DeprecatedOnConst.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_variant_record_field_attributes(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("VariantRecordFieldAttributes.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
     free(input);
 }
 
@@ -2860,5 +3632,33 @@ TEST_LIST = {
     { "test_pascal_inline_directive", test_pascal_inline_directive },
     { "test_fpc_style_unit_parsing", test_fpc_style_unit_parsing },
     { "test_complex_fpc_rax64int_unit", test_complex_fpc_rax64int_unit },
+    // Pascal directory snippet tests
+    { "test_aligned_records", test_aligned_records },
+    { "test_const_set", test_const_set },
+    { "test_deprecated_type", test_deprecated_type },
+    { "test_dotted_types", test_dotted_types },
+    { "test_end_token", test_end_token },
+    { "test_experimentals", test_experimentals },
+    { "test_external_function", test_external_function },
+    { "test_finalization_initialization_exports", test_finalization_initialization_exports },
+    { "test_forward_overloaded", test_forward_overloaded },
+    { "test_forward_without_semicolon", test_forward_without_semicolon },
+    { "test_generic_constraints", test_generic_constraints },
+    { "test_generic_interface_method_delegation", test_generic_interface_method_delegation },
+    { "test_implements_generic_type", test_implements_generic_type },
+    { "test_include_file", test_include_file },
+    { "test_managed_records", test_managed_records },
+    { "test_message_method", test_message_method },
+    { "test_multiline", test_multiline },
+    { "test_non_aligned_records", test_non_aligned_records },
+    { "test_numbers", test_numbers },
+    { "test_pointer_chars", test_pointer_chars },
+    { "test_properties", test_properties },
+    { "test_strict_visibility", test_strict_visibility },
+    { "test_try_except", test_try_except },
+    { "test_umlauts", test_umlauts },
+    { "test_whitespace_around_ifdef_condition", test_whitespace_around_ifdef_condition },
+    { "test_deprecated_on_const", test_deprecated_on_const },
+    { "test_variant_record_field_attributes", test_variant_record_field_attributes },
     { NULL, NULL }
 };
