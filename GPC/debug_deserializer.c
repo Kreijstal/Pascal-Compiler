@@ -15,6 +15,9 @@ struct Expression *deserialize_expression(FILE *fp) {
     struct Expression *expr = (struct Expression *)malloc(sizeof(struct Expression));
     expr->type = type;
     expr->line_num = -1; // Not serialized
+    expr->field_width = NULL;
+    expr->field_precision = NULL;
+    expr->resolved_type = UNKNOWN_TYPE;
 
     switch (type) {
         case EXPR_VAR_ID: {
@@ -70,6 +73,28 @@ struct Expression *deserialize_expression(FILE *fp) {
             expr->expr_data.function_call_data.args_expr = NULL; // Not deserializing args
             expr->expr_data.function_call_data.resolved_func = NULL;
             expr->expr_data.function_call_data.mangled_id = NULL;
+            break;
+        }
+        case EXPR_TYPECAST: {
+            int target_type;
+            if (fscanf(fp, "%d", &target_type) != 1) {
+                free(expr);
+                return NULL;
+            }
+
+            char buffer[256];
+            if (fscanf(fp, "%255s", buffer) != 1) {
+                free(expr);
+                return NULL;
+            }
+
+            if (strcmp(buffer, "NULL") == 0)
+                expr->expr_data.typecast_data.target_type_id = NULL;
+            else
+                expr->expr_data.typecast_data.target_type_id = strdup(buffer);
+
+            expr->expr_data.typecast_data.target_type = target_type;
+            expr->expr_data.typecast_data.expr = deserialize_expression(fp);
             break;
         }
         default:

@@ -222,40 +222,45 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
+    // Shared helper: list of statements allowing optional semicolons between entries
+    combinator_t* try_statement_list = many(seq(new_combinator(), PASCAL_T_NONE,
+        lazy(stmt_parser),
+        optional(token(match(";"))),
+        NULL
+    ));
+
     // Try-finally block: try statements finally statements end
-    // Use more lenient statement parsing that doesn't require semicolons
+    // Wrap finally portion in a dedicated node so the converter can distinguish it.
     combinator_t* try_finally = seq(new_combinator(), PASCAL_T_TRY_BLOCK,
-        token(keyword_ci("try")),              // try keyword (case-insensitive)
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            lazy(stmt_parser),
-            optional(token(match(";"))),       // optional semicolon after each statement
+        token(keyword_ci("try")),
+        try_statement_list,
+        seq(new_combinator(), PASCAL_T_FINALLY_BLOCK,
+            token(keyword_ci("finally")),
+            many(seq(new_combinator(), PASCAL_T_NONE,
+                lazy(stmt_parser),
+                optional(token(match(";"))),
+                NULL
+            )),
             NULL
-        )),                                    // statements in try block
-        token(keyword_ci("finally")),          // finally keyword (case-insensitive)
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            lazy(stmt_parser),
-            optional(token(match(";"))),       // optional semicolon after each statement
-            NULL
-        )),                                    // statements in finally block
-        token(keyword_ci("end")),              // end keyword (case-insensitive)
+        ),
+        token(keyword_ci("end")),
         NULL
     );
 
     // Try-except block: try statements except statements end
     combinator_t* try_except = seq(new_combinator(), PASCAL_T_TRY_BLOCK,
-        token(keyword_ci("try")),              // try keyword (case-insensitive)
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            lazy(stmt_parser),
-            optional(token(match(";"))),       // optional semicolon after each statement
+        token(keyword_ci("try")),
+        try_statement_list,
+        seq(new_combinator(), PASCAL_T_EXCEPT_BLOCK,
+            token(keyword_ci("except")),
+            many(seq(new_combinator(), PASCAL_T_NONE,
+                lazy(stmt_parser),
+                optional(token(match(";"))),
+                NULL
+            )),
             NULL
-        )),                                    // statements in try block
-        token(keyword_ci("except")),           // except keyword (case-insensitive)
-        many(seq(new_combinator(), PASCAL_T_NONE,
-            lazy(stmt_parser),
-            optional(token(match(";"))),       // optional semicolon after each statement
-            NULL
-        )),                                    // statements in except block
-        token(keyword_ci("end")),              // end keyword (case-insensitive)
+        ),
+        token(keyword_ci("end")),
         NULL
     );
 
@@ -275,6 +280,9 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // Exit statement: exit
     combinator_t* exit_stmt = token(create_keyword_parser("exit", PASCAL_T_EXIT_STMT));
+
+    // Break statement: break
+    combinator_t* break_stmt = token(create_keyword_parser("break", PASCAL_T_BREAK_STMT));
 
     // Case statement: case expression of label1: stmt1; label2: stmt2; [else stmt;] end
     // Case labels should handle constant expressions, not just simple values
@@ -350,6 +358,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         raise_stmt,                           // raise statements
         inherited_stmt,                       // inherited statements
         exit_stmt,                            // exit statements
+        break_stmt,                           // break statements
         asm_stmt,                             // inline assembly blocks
         if_stmt,                              // if statements
         for_stmt,                             // for statements
