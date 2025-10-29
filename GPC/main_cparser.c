@@ -20,6 +20,7 @@
 #endif
 #include <ctype.h>
 #include <stdbool.h>
+#include <time.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -66,6 +67,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
     fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
     fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
+    fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
 }
 
 static int file_is_readable(const char *path)
@@ -191,6 +193,49 @@ static char *resolve_stdlib_path(const char *argv0)
     return NULL;
 }
 
+static double g_time_parse_stdlib = 0.0;
+static double g_time_parse_user = 0.0;
+static double g_time_parse_units = 0.0;
+static double g_time_semantic = 0.0;
+static double g_time_codegen = 0.0;
+static unsigned g_count_parse_stdlib = 0;
+static unsigned g_count_parse_user = 0;
+static unsigned g_count_parse_units = 0;
+
+static double current_time_seconds(void)
+{
+#ifdef _WIN32
+    LARGE_INTEGER freq;
+    LARGE_INTEGER counter;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return ts.tv_sec + ts.tv_nsec / 1e9;
+    return (double)clock() / CLOCKS_PER_SEC;
+#endif
+}
+
+static void emit_timing_summary(void)
+{
+    if (!time_passes_flag())
+        return;
+
+    fprintf(stderr, "[time] parse stdlib: %u run(s) in %.3fs\n",
+            g_count_parse_stdlib, g_time_parse_stdlib);
+    fprintf(stderr, "[time] parse user units: %u run(s) in %.3fs\n",
+            g_count_parse_units, g_time_parse_units);
+    fprintf(stderr, "[time] parse user program: %u run(s) in %.3fs\n",
+            g_count_parse_user, g_time_parse_user);
+    fprintf(stderr, "[time] semantic analysis: %.3fs\n", g_time_semantic);
+    fprintf(stderr, "[time] code generation: %.3fs\n", g_time_codegen);
+    fprintf(stderr, "[time] total (tracked stages): %.3fs\n",
+            g_time_parse_stdlib + g_time_parse_units + g_time_parse_user +
+            g_time_semantic + g_time_codegen);
+}
+
 static void set_flags(char **optional_args, int count)
 {
     int i = 0;
@@ -281,6 +326,11 @@ static void set_flags(char **optional_args, int count)
             const char *path = arg + 11;
             set_dump_ast_path(path);
             fprintf(stderr, "AST dump enabled: %s\n\n", path);
+        }
+        else if (strcmp(arg, "--time-passes") == 0)
+        {
+            fprintf(stderr, "Timing instrumentation enabled.\n\n");
+            set_time_passes_flag();
         }
         else
         {
@@ -535,7 +585,16 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         return;
 
     Tree_t *unit_tree = NULL;
+    double start_time = 0.0;
+    bool track_time = time_passes_flag();
+    if (track_time)
+        start_time = current_time_seconds();
     bool ok = parse_pascal_file(path, &unit_tree, true);
+    if (track_time)
+    {
+        g_time_parse_units += current_time_seconds() - start_time;
+        ++g_count_parse_units;
+    }
     free(path);
     if (!ok)
     {
@@ -592,6 +651,9 @@ int main(int argc, char **argv)
     if (optional_count > 0)
         set_flags(argv + 3, optional_count);
 
+    if (time_passes_flag())
+        atexit(emit_timing_summary);
+
     char *stdlib_path = resolve_stdlib_path(argv[0]);
     if (stdlib_path == NULL)
     {
@@ -604,7 +666,15 @@ int main(int argc, char **argv)
     bool convert_to_tree = !parse_only || dump_ast_path() != NULL;
 
     Tree_t *prelude_tree = NULL;
-    if (!parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree))
+    bool track_time = time_passes_flag();
+    double stdlib_start = track_time ? current_time_seconds() : 0.0;
+    bool parsed_stdlib = parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree);
+    if (track_time)
+    {
+        g_time_parse_stdlib += current_time_seconds() - stdlib_start;
+        ++g_count_parse_stdlib;
+    }
+    if (!parsed_stdlib)
     {
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
@@ -614,7 +684,14 @@ int main(int argc, char **argv)
     }
 
     Tree_t *user_tree = NULL;
-    if (!parse_pascal_file(input_file, &user_tree, convert_to_tree))
+    double user_start = track_time ? current_time_seconds() : 0.0;
+    bool parsed_user = parse_pascal_file(input_file, &user_tree, convert_to_tree);
+    if (track_time)
+    {
+        g_time_parse_user += current_time_seconds() - user_start;
+        ++g_count_parse_user;
+    }
+    if (!parsed_user)
     {
         if (prelude_tree != NULL)
             destroy_tree(prelude_tree);
@@ -705,7 +782,10 @@ int main(int argc, char **argv)
     unit_set_destroy(&visited_units);
 
     int sem_result = 0;
+    double sem_start = track_time ? current_time_seconds() : 0.0;
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+    if (track_time)
+        g_time_semantic += current_time_seconds() - sem_start;
     int exit_code = 0;
 
     if (sem_result <= 0)
@@ -733,7 +813,10 @@ int main(int argc, char **argv)
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
 
+        double codegen_start = track_time ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);
+        if (track_time)
+            g_time_codegen += current_time_seconds() - codegen_start;
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
         if (codegen_failed)

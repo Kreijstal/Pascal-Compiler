@@ -74,7 +74,8 @@ test('Compiler tests', python,
   depends: gpc_cparser_exe,
   env: [
     'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
-    'MESON_BUILD_ROOT=' + meson.build_root()
+    'MESON_BUILD_ROOT=' + meson.build_root(),
+    'RUN_VALGRIND_TESTS=' + get_option('run_valgrind_tests').to_string(),
     ],
   protocol: 'tap',
   timeout: 300,
