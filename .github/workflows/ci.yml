@@ -2,7 +2,7 @@ name: Pascal Compiler CI
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ "*" ]
 
 jobs:
   build-and-test:
