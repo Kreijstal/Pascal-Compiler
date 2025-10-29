@@ -32,6 +32,8 @@ int semcheck_arrayaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_typecast(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 #define SIZEOF_RECURSION_LIMIT 64
 #define POINTER_SIZE_BYTES 8
@@ -219,6 +221,8 @@ static long long sizeof_from_type_tag(int type_tag)
             return 8;
         case STRING_TYPE:
             return POINTER_SIZE_BYTES;
+        case CHAR_TYPE:
+            return 1;
         case BOOL:
             /*
              * Standalone booleans occupy 4 bytes to keep stack accesses aligned,
@@ -226,6 +230,13 @@ static long long sizeof_from_type_tag(int type_tag)
              * Document the distinction so sizeof(boolean) users are not surprised.
              */
             return 4;
+        case POINTER_TYPE:
+            return POINTER_SIZE_BYTES;
+        case SET_TYPE:
+        case ENUM_TYPE:
+            return 4;
+        case FILE_TYPE:
+            return POINTER_SIZE_BYTES;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
         default:
@@ -248,6 +259,16 @@ static long long sizeof_from_var_type(enum VarType var_type)
         case HASHVAR_BOOLEAN:
             return 4;
         case HASHVAR_PROCEDURE:
+            return POINTER_SIZE_BYTES;
+        case HASHVAR_CHAR:
+            return 1;
+        case HASHVAR_POINTER:
+            return POINTER_SIZE_BYTES;
+        case HASHVAR_SET:
+            return 4;
+        case HASHVAR_ENUM:
+            return 4;
+        case HASHVAR_FILE:
             return POINTER_SIZE_BYTES;
         default:
             return -1;
@@ -656,11 +677,98 @@ static int types_numeric_compatible(int lhs, int rhs)
         return 1;
     return 0;
 }
+
+static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
+    const char *type_id, int line_num)
+{
+    if (type_id == NULL)
+        return 0;
+
+    HashNode_t *type_node = NULL;
+    if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
+    {
+        fprintf(stderr, "Error on line %d, typecast references unknown type %s!\n\n",
+            line_num, type_id);
+        return 1;
+    }
+
+    if (type_node->hash_type != HASHTYPE_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, %s is not a type identifier.\n\n",
+            line_num, type_id);
+        return 1;
+    }
+
+    set_type_from_hashtype(out_type, type_node);
+
+    if (type_node->type_alias != NULL)
+    {
+        struct TypeAlias *alias = type_node->type_alias;
+        if (alias->base_type != UNKNOWN_TYPE)
+            *out_type = alias->base_type;
+
+        if (alias->target_type_id != NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
+                target_node != NULL)
+            {
+                set_type_from_hashtype(out_type, target_node);
+            }
+        }
+
+        if (alias->is_pointer)
+            *out_type = POINTER_TYPE;
+        else if (alias->is_set)
+            *out_type = SET_TYPE;
+        else if (alias->is_enum)
+            *out_type = ENUM_TYPE;
+        else if (alias->is_file)
+            *out_type = FILE_TYPE;
+    }
+
+    return 0;
+}
 /* Checks if a type is a relational AND or OR */
 int is_and_or(int *type)
 {
     assert(type != NULL);
     return (*type == AND || *type == OR);
+}
+
+static int semcheck_typecast(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_TYPECAST);
+
+    int error_count = 0;
+    int inner_type = UNKNOWN_TYPE;
+
+    if (expr->expr_data.typecast_data.expr != NULL)
+        error_count += semcheck_expr_main(&inner_type, symtab,
+            expr->expr_data.typecast_data.expr, max_scope_lev, NO_MUTATE);
+
+    int target_type = expr->expr_data.typecast_data.target_type;
+    error_count += resolve_type_identifier(&target_type, symtab,
+        expr->expr_data.typecast_data.target_type_id, expr->line_num);
+
+    if (target_type == UNKNOWN_TYPE &&
+        expr->expr_data.typecast_data.target_type_id == NULL)
+    {
+        fprintf(stderr, "Error on line %d, typecast requires a target type.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    *type_return = target_type;
+
+    (void)inner_type;
+    return error_count;
 }
 /* Sets a type based on a hash_type */
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)
@@ -687,6 +795,21 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
              break;
         case HASHVAR_BOOLEAN:
             *type = BOOL;
+            break;
+        case HASHVAR_CHAR:
+            *type = CHAR_TYPE;
+            break;
+        case HASHVAR_POINTER:
+            *type = POINTER_TYPE;
+            break;
+        case HASHVAR_SET:
+            *type = SET_TYPE;
+            break;
+        case HASHVAR_ENUM:
+            *type = ENUM_TYPE;
+            break;
+        case HASHVAR_FILE:
+            *type = FILE_TYPE;
             break;
         case HASHVAR_UNTYPED:
             *type = UNKNOWN_TYPE;
@@ -756,6 +879,9 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_FUNCTION_CALL:
             return_val += semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_TYPECAST:
+            return_val += semcheck_typecast(type_return, symtab, expr, max_scope_lev, mutating);
             break;
 
         /*** BASE CASES ***/

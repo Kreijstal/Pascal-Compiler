@@ -37,6 +37,8 @@ typedef enum {
     PASCAL_T_XOR,
     PASCAL_T_SHL,
     PASCAL_T_SHR,
+    PASCAL_T_ROL,
+    PASCAL_T_ROR,
     PASCAL_T_ADDR,
     PASCAL_T_DEREF,
     PASCAL_T_RANGE,
@@ -90,6 +92,7 @@ typedef enum {
     PASCAL_T_RAISE_STMT,
     PASCAL_T_INHERITED_STMT,
     PASCAL_T_EXIT_STMT,
+    PASCAL_T_BREAK_STMT,
     PASCAL_T_ON_CLAUSE,
     // Program structure types
     PASCAL_T_PROGRAM_DECL,

@@ -462,13 +462,13 @@ void test_pascal_boolean_operators(void) {
 // Test bitwise shift operators
 void test_pascal_bitwise_operators(void) {
     const char* expressions[] = {
-        "8 shl 2", "8 shr 1"
+        "8 shl 2", "8 shr 1", "8 rol 3", "8 ror 2"
     };
     pascal_tag_t expected_tags[] = {
-        PASCAL_T_SHL, PASCAL_T_SHR
+        PASCAL_T_SHL, PASCAL_T_SHR, PASCAL_T_ROL, PASCAL_T_ROR
     };
-    
-    for (int i = 0; i < 2; i++) {
+
+    for (int i = 0; i < 4; i++) {
         combinator_t* p = new_combinator();
         init_pascal_expression_parser(&p);
 

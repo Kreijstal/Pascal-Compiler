@@ -11,7 +11,8 @@
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR,
-    STMT_ASM_BLOCK};
+    STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CASE, STMT_WITH, STMT_TRY_FINALLY,
+    STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
 
@@ -25,6 +26,18 @@ struct TypeAlias
     int array_element_type;
     char *array_element_type_id;
     int is_open_array;
+    ListNode_t *array_dimensions;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
+    int is_set;
+    int set_element_type;
+    char *set_element_type_id;
+    int is_enum;
+    ListNode_t *enum_literals;
+    int is_file;
+    int file_type;
+    char *file_type_id;
 };
 
 struct RecordType;
@@ -40,6 +53,13 @@ struct RecordField
 struct RecordType
 {
     ListNode_t *fields;
+};
+
+/* Case branch structure */
+struct CaseBranch
+{
+    ListNode_t *labels;  /* List of integer expressions representing case labels */
+    struct Statement *stmt;
 };
 
 /* A statement subtree */
@@ -109,6 +129,47 @@ struct Statement
                 struct Expression *var; /* Grammar will validate the correctness */
             } for_assign_data;
         } for_data;
+
+        /* CASE */
+        struct Case
+        {
+            struct Expression *selector_expr;
+            ListNode_t *branches;  /* List of CaseBranch */
+            struct Statement *else_stmt;  /* Optional else branch */
+        } case_data;
+
+        /* WITH */
+        struct With
+        {
+            struct Expression *context_expr;
+            struct Statement *body_stmt;
+        } with_data;
+
+        /* TRY..FINALLY */
+        struct TryFinally
+        {
+            ListNode_t *try_statements;   /* List of Statement */
+            ListNode_t *finally_statements; /* List of Statement */
+        } try_finally_data;
+
+        /* TRY..EXCEPT */
+        struct TryExcept
+        {
+            ListNode_t *try_statements;   /* List of Statement */
+            ListNode_t *except_statements; /* List of Statement */
+        } try_except_data;
+
+        /* RAISE */
+        struct Raise
+        {
+            struct Expression *exception_expr; /* Optional */
+        } raise_data;
+
+        /* INHERITED */
+        struct Inherited
+        {
+            struct Expression *call_expr; /* Optional */
+        } inherited_data;
     } stmt_data;
 };
 
@@ -124,7 +185,8 @@ enum ExprType {
     EXPR_INUM,
     EXPR_RNUM,
     EXPR_STRING,
-    EXPR_BOOL
+    EXPR_BOOL,
+    EXPR_TYPECAST
 };
 
 /* An expression subtree */
@@ -195,6 +257,14 @@ struct Expression
 
         /* Boolean literal */
         int bool_value;
+
+        /* Type cast */
+        struct TypeCast
+        {
+            int target_type;
+            char *target_type_id;
+            struct Expression *expr;
+        } typecast_data;
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;
