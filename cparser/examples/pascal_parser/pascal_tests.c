@@ -227,6 +227,14 @@ static size_t encode_utf8(uint32_t codepoint, char* out) {
     return 1;
 }
 
+static uint16_t read_utf16_code_unit(const uint8_t* data, size_t index, bool little_endian) {
+    const uint8_t* p = data + 2 * index;
+    if (little_endian) {
+        return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+    }
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
 static char* convert_utf16_to_utf8(const uint8_t* data, size_t byte_len, bool little_endian) {
     if (data == NULL) {
         return NULL;
@@ -240,22 +248,12 @@ static char* convert_utf16_to_utf8(const uint8_t* data, size_t byte_len, bool li
 
     size_t out_pos = 0;
     for (size_t i = 0; i < code_units; ++i) {
-        uint16_t w1;
-        if (little_endian) {
-            w1 = (uint16_t)(data[2 * i] | ((uint16_t)data[2 * i + 1] << 8));
-        } else {
-            w1 = (uint16_t)(((uint16_t)data[2 * i] << 8) | data[2 * i + 1]);
-        }
+        uint16_t w1 = read_utf16_code_unit(data, i, little_endian);
 
         uint32_t codepoint;
         if (w1 >= 0xD800 && w1 <= 0xDBFF) {
             if (i + 1 < code_units) {
-                uint16_t w2;
-                if (little_endian) {
-                    w2 = (uint16_t)(data[2 * (i + 1)] | ((uint16_t)data[2 * (i + 1) + 1] << 8));
-                } else {
-                    w2 = (uint16_t)(((uint16_t)data[2 * (i + 1)] << 8) | data[2 * (i + 1) + 1]);
-                }
+                uint16_t w2 = read_utf16_code_unit(data, i + 1, little_endian);
 
                 if (w2 >= 0xDC00 && w2 <= 0xDFFF) {
                     codepoint = 0x10000 + ((((uint32_t)w1 - 0xD800) << 10) | ((uint32_t)w2 - 0xDC00));
