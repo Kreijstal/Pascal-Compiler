@@ -258,22 +258,13 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Const section: const name : type = value; ...
-    // For now, we'll create a simplified const parser that accepts basic values
-    // plus a fallback for complex expressions
-    combinator_t* simple_const_value = multi(new_combinator(), PASCAL_T_NONE,
-        token(integer(PASCAL_T_INTEGER)),
-        token(string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+    // Use the full expression parser so typed constants support the same
+    // constructs as regular expressions (arrays, arithmetic, sets, etc.).
+    combinator_t** const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *const_expr_parser = new_combinator();
+    init_pascal_expression_parser(const_expr_parser);
 
-    combinator_t* complex_const_value = until(match(";"), PASCAL_T_STRING);
-
-    combinator_t* const_value = multi(new_combinator(), PASCAL_T_NONE,
-        simple_const_value,
-        complex_const_value,  // fallback for complex literals
-        NULL
-    );
+    combinator_t* const_value = lazy(const_expr_parser);
 
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
@@ -293,6 +284,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         many(const_decl),                            // multiple const declarations
         NULL
     );
+    const_section->extra_to_free = const_expr_parser;
 
     combinator_t* resourcestring_value = multi(new_combinator(), PASCAL_T_NONE,
         token(pascal_string(PASCAL_T_STRING)),
@@ -914,23 +906,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Const section: const name : type = value; ...
-    // For now, we'll create a simplified const parser that accepts basic values
-    // plus a fallback for complex expressions
-    combinator_t* simple_const_value = multi(new_combinator(), PASCAL_T_NONE,
-        integer(PASCAL_T_INTEGER),
-        string(PASCAL_T_STRING),
-        cident(PASCAL_T_IDENTIFIER),
-        NULL
-    );
+    // Reuse the expression parser so program-level constants support the
+    // complete expression grammar instead of a limited subset.
+    combinator_t** program_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *program_const_expr_parser = new_combinator();
+    init_pascal_expression_parser(program_const_expr_parser);
 
-    // Fallback: consume everything until semicolon for complex array literals
-    combinator_t* complex_const_value = until(match(";"), PASCAL_T_STRING);
-
-    combinator_t* const_value = multi(new_combinator(), PASCAL_T_NONE,
-        simple_const_value,
-        complex_const_value,  // fallback for complex literals
-        NULL
-    );
+    combinator_t* const_value = lazy(program_const_expr_parser);
 
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
@@ -950,6 +932,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         many(const_decl),                            // multiple const declarations
         NULL
     );
+    const_section->extra_to_free = program_const_expr_parser;
 
     // Create procedure/function parsers for use in complete program
     // Need to create a modified procedure parser that supports var parameters

@@ -1254,30 +1254,35 @@ void test_pascal_as_operator_with_field_access(void) {
     combinator_t* p = new_combinator();
     init_pascal_expression_parser(&p);
 
-    // For now, just test the casting part - field access would require more complex parsing
     input_t* input = new_input();
-    input->buffer = strdup("SomeObject as TForm");
-    input->length = strlen("SomeObject as TForm");
+    input->buffer = strdup("Sender.Button as TForm");
+    input->length = strlen("Sender.Button as TForm");
 
     ParseResult res = parse(input, p);
 
     TEST_ASSERT(res.is_success);
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_AS);
     
-    // Check left operand
+    // Check left operand with record field access
     ast_t* left = res.value.ast->child;
-    TEST_ASSERT(left->typ == PASCAL_T_IDENTIFIER);
-    
-    // Handle both regular identifiers and built-in function structure
-    ast_t* actual_left_node = left;
-    if (left->child && left->child->typ == PASCAL_T_IDENTIFIER) {
-        // Use the child identifier for built-in functions
-        actual_left_node = left->child;
+    TEST_ASSERT(left->typ == PASCAL_T_MEMBER_ACCESS);
+
+    ast_t* base = left->child;
+    TEST_ASSERT(base != NULL);
+    if (base->child && base->child->typ == PASCAL_T_IDENTIFIER) {
+        base = base->child;
     }
-    
-    TEST_ASSERT(actual_left_node->sym && 
-               actual_left_node->sym->name && 
-               strcmp(actual_left_node->sym->name, "SomeObject") == 0);
+    TEST_ASSERT(base->sym && base->sym->name && strcmp(base->sym->name, "Sender") == 0);
+
+    ast_t* field = base->next;
+    while (field && field->typ == PASCAL_T_NONE) {
+        field = field->child;
+    }
+    TEST_ASSERT(field != NULL);
+    if (field->child && field->child->typ == PASCAL_T_IDENTIFIER) {
+        field = field->child;
+    }
+    TEST_ASSERT(field->sym && field->sym->name && strcmp(field->sym->name, "Button") == 0);
     
     // Check right operand
     ast_t* right = left->next;
@@ -2478,13 +2483,20 @@ void test_pascal_pointer_dereference(void) {
     init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
-    input->buffer = strdup("x");  // For now just test that identifiers work
-    input->length = strlen("x");
+    input->buffer = strdup("ptr^");
+    input->length = strlen("ptr^");
 
     ParseResult res = parse_pascal_expression(input, p);
 
     TEST_ASSERT(res.is_success);
     if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_DEREF);
+        ast_t* target = res.value.ast->child;
+        TEST_ASSERT(target != NULL);
+        if (target->child && target->child->typ == PASCAL_T_IDENTIFIER) {
+            target = target->child;
+        }
+        TEST_ASSERT(target->sym && target->sym->name && strcmp(target->sym->name, "ptr") == 0);
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
@@ -2499,14 +2511,22 @@ void test_pascal_array_access_with_deref(void) {
     init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
-    input->buffer = strdup("oper[i]");  // For now just test that array access works
-    input->length = strlen("oper[i]");
+    input->buffer = strdup("ptr^[i]");
+    input->length = strlen("ptr^[i]");
 
     ParseResult res = parse(input, p);
 
     TEST_ASSERT(res.is_success);
     if (res.is_success) {
         TEST_ASSERT(res.value.ast->typ == PASCAL_T_ARRAY_ACCESS);
+        ast_t* deref_node = res.value.ast->child;
+        TEST_ASSERT(deref_node != NULL);
+        TEST_ASSERT(deref_node->typ == PASCAL_T_DEREF);
+        ast_t* base = deref_node->child;
+        if (base->child && base->child->typ == PASCAL_T_IDENTIFIER) {
+            base = base->child;
+        }
+        TEST_ASSERT(base->sym && base->sym->name && strcmp(base->sym->name, "ptr") == 0);
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
@@ -2602,6 +2622,34 @@ void test_pascal_simple_const_declaration(void) {
     ParseResult res = parse(input, p);
     TEST_ASSERT(res.is_success);
     if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_complex_const_declaration(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("complex_const_declaration.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* mul_node = find_first_node_of_type(res.value.ast, PASCAL_T_MUL);
+        TEST_ASSERT(mul_node != NULL);
+        ast_t* tuple_node = find_first_node_of_type(res.value.ast, PASCAL_T_TUPLE);
+        TEST_ASSERT(tuple_node != NULL);
+        ast_t* sub_node = find_first_node_of_type(res.value.ast, PASCAL_T_SUB);
+        TEST_ASSERT(sub_node != NULL);
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
@@ -3613,6 +3661,7 @@ TEST_LIST = {
     // New failing tests for missing features
     { "test_pascal_enumerated_type_declaration", test_pascal_enumerated_type_declaration },
     { "test_pascal_simple_const_declaration", test_pascal_simple_const_declaration },
+    { "test_pascal_complex_const_declaration", test_pascal_complex_const_declaration },
     { "test_pascal_set_operations_program", test_pascal_set_operations_program },
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },

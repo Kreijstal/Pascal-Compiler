@@ -1343,22 +1343,23 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     char end_label[18], buffer[100];
     gen_label(end_label, 18, ctx);
     
-    /* Evaluate the selector expression once and store it */
+    /* Evaluate the selector expression once and keep the result in a register */
     struct Expression *selector = stmt->stmt_data.case_data.selector_expr;
-    inst_list = codegen_expr(selector, inst_list, ctx);
-    
-    /* The result is now in a register. For simple expressions, it's typically in %eax/%rax.
-     * For more complex ones, we'd need to manage registers better.
-     * For now, we'll use a simpler approach: just re-evaluate for each comparison.
-     */
-    
+    Register_t *selector_reg = NULL;
+    inst_list = codegen_expr_with_result(selector, inst_list, ctx, &selector_reg);
+    if (selector_reg == NULL)
+        return inst_list;
+
+    int selector_is_qword = codegen_type_uses_qword(selector->resolved_type);
+
     /* Generate code for each case branch */
     ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
     if (branch_node == NULL) {
         /* No branches - selector was already evaluated */
+        free_reg(get_reg_stack(), selector_reg);
         return inst_list;
     }
-    
+
     while (branch_node != NULL) {
         struct CaseBranch *branch = (struct CaseBranch *)branch_node->cur;
         if (branch != NULL && branch->labels != NULL) {
@@ -1370,29 +1371,34 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             ListNode_t *label_node = branch->labels;
             while (label_node != NULL) {
                 struct Expression *label_expr = (struct Expression *)label_node->cur;
-                
-                /* Re-evaluate selector */
-                inst_list = codegen_expr(selector, inst_list, ctx);
-                
-                /* Evaluate the label expression */
+
                 if (label_expr->type == EXPR_INUM) {
-                    /* Simple integer literal - direct comparison */
-                    /* Selector is in %eax after codegen_expr */
-                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %%eax\n", 
-                             label_expr->expr_data.i_num);
+                    if (selector_is_qword)
+                        snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
+                                 label_expr->expr_data.i_num, selector_reg->bit_64);
+                    else
+                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
+                                 label_expr->expr_data.i_num, selector_reg->bit_32);
                     inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
                     inst_list = add_inst(inst_list, buffer);
                 } else {
-                    /* Complex expression - evaluate and compare */
-                    inst_list = codegen_expr(label_expr, inst_list, ctx);
-                    /* Label value is now in %eax too, need to compare */
-                    /* This is tricky - we need both values. Let's use a different approach */
-                    /* For now, skip complex labels */
-                    snprintf(buffer, sizeof(buffer), "\t# Complex case label not yet supported\n");
-                    inst_list = add_inst(inst_list, buffer);
+                    Register_t *label_reg = NULL;
+                    inst_list = codegen_expr_with_result(label_expr, inst_list, ctx, &label_reg);
+                    if (label_reg != NULL) {
+                        if (selector_is_qword)
+                            snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
+                                     label_reg->bit_64, selector_reg->bit_64);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
+                                     label_reg->bit_32, selector_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), label_reg);
+                    }
                 }
-                
+
                 label_node = label_node->next;
             }
             
@@ -1423,10 +1429,11 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     /* End label */
     snprintf(buffer, sizeof(buffer), "%s:\n", end_label);
     inst_list = add_inst(inst_list, buffer);
-    
+
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    free_reg(get_reg_stack(), selector_reg);
     return inst_list;
 }
 
