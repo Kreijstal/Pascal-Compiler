@@ -77,6 +77,157 @@ static combinator_t* create_param_type_spec(void) {
     );
 }
 
+static ParseResult constant_value_fn(input_t* in, void* args, char* parser_name);
+static combinator_t* create_constant_value_parser(void);
+
+static ParseResult constant_value_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    if (!pargs) {
+        return make_failure_v2(in, parser_name, strdup("Invalid constant parser configuration"), NULL);
+    }
+
+    while (in->start < in->length) {
+        char c = in->buffer[in->start];
+        if (!isspace((unsigned char)c)) {
+            break;
+        }
+        read1(in);
+    }
+
+    int start_offset = in->start;
+    int paren_depth = 0;
+    int bracket_depth = 0;
+    bool in_string = false;
+    char string_delim = '\0';
+
+    while (in->start < in->length) {
+        char c = in->buffer[in->start];
+
+        if (in_string) {
+            read1(in);
+            if (c == string_delim) {
+                if (in->start < in->length && in->buffer[in->start] == string_delim) {
+                    read1(in);
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+
+        if (c == '\'' || c == '"') {
+            in_string = true;
+            string_delim = c;
+            read1(in);
+            continue;
+        }
+
+        if (c == '(' && in->start + 1 < in->length && in->buffer[in->start + 1] == '*') {
+            read1(in);
+            read1(in);
+            while (in->start < in->length) {
+                char d = in->buffer[in->start];
+                read1(in);
+                if (d == '*' && in->start < in->length && in->buffer[in->start] == ')') {
+                    read1(in);
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (c == '{') {
+            read1(in);
+            while (in->start < in->length) {
+                char d = in->buffer[in->start];
+                read1(in);
+                if (d == '}') {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (c == '/' && in->start + 1 < in->length && in->buffer[in->start + 1] == '/') {
+            read1(in);
+            read1(in);
+            while (in->start < in->length) {
+                char d = in->buffer[in->start];
+                read1(in);
+                if (d == '\n') {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        if (c == '(') {
+            ++paren_depth;
+            read1(in);
+            continue;
+        }
+        if (c == ')') {
+            if (paren_depth > 0) {
+                --paren_depth;
+            }
+            read1(in);
+            continue;
+        }
+        if (c == '[') {
+            ++bracket_depth;
+            read1(in);
+            continue;
+        }
+        if (c == ']') {
+            if (bracket_depth > 0) {
+                --bracket_depth;
+            }
+            read1(in);
+            continue;
+        }
+
+        if (c == ';' && paren_depth == 0 && bracket_depth == 0) {
+            break;
+        }
+
+        read1(in);
+    }
+
+    int end_offset = in->start;
+    while (end_offset > start_offset && isspace((unsigned char)in->buffer[end_offset - 1])) {
+        --end_offset;
+    }
+
+    if (end_offset <= start_offset) {
+        return make_failure_v2(in, parser_name, strdup("Expected constant value"), NULL);
+    }
+
+    size_t len = (size_t)(end_offset - start_offset);
+    char* text = (char*)safe_malloc(len + 1);
+    memcpy(text, in->buffer + start_offset, len);
+    text[len] = '\0';
+
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    free(text);
+    return make_success(ast);
+}
+
+static combinator_t* create_constant_value_parser(void) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = PASCAL_T_CONST_VALUE;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY;
+    comb->fn = constant_value_fn;
+    comb->args = args;
+    return comb;
+}
+
 static combinator_t* create_modifier_param(const char* keyword, ast_t* (*mapper)(ast_t*), const char* name) {
     map_func transform = mapper != NULL ? mapper : identity_map;
     combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
@@ -257,23 +408,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    // Const section: const name : type = value; ...
-    // For now, we'll create a simplified const parser that accepts basic values
-    // plus a fallback for complex expressions
-    combinator_t* simple_const_value = multi(new_combinator(), PASCAL_T_NONE,
-        token(integer(PASCAL_T_INTEGER)),
-        token(string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
-
-    combinator_t* complex_const_value = until(match(";"), PASCAL_T_STRING);
-
-    combinator_t* const_value = multi(new_combinator(), PASCAL_T_NONE,
-        simple_const_value,
-        complex_const_value,  // fallback for complex literals
-        NULL
-    );
+    // Const section: const name [: type] = value; ...
+    combinator_t* const_value = create_constant_value_parser();
 
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
@@ -283,7 +419,7 @@ void init_pascal_unit_parser(combinator_t** p) {
             NULL
         )),
         token(match("=")),                           // equals sign
-        const_value,                                 // constant value (simplified for now)
+        const_value,                                 // constant value (full structured constants supported)
         token(match(";")),                           // semicolon
         NULL
     );
@@ -913,24 +1049,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    // Const section: const name : type = value; ...
-    // For now, we'll create a simplified const parser that accepts basic values
-    // plus a fallback for complex expressions
-    combinator_t* simple_const_value = multi(new_combinator(), PASCAL_T_NONE,
-        integer(PASCAL_T_INTEGER),
-        string(PASCAL_T_STRING),
-        cident(PASCAL_T_IDENTIFIER),
-        NULL
-    );
-
-    // Fallback: consume everything until semicolon for complex array literals
-    combinator_t* complex_const_value = until(match(";"), PASCAL_T_STRING);
-
-    combinator_t* const_value = multi(new_combinator(), PASCAL_T_NONE,
-        simple_const_value,
-        complex_const_value,  // fallback for complex literals
-        NULL
-    );
+    // Const section: const name [: type] = value; ...
+    combinator_t* const_value = create_constant_value_parser();
 
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
@@ -940,7 +1060,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             NULL
         )),
         token(match("=")),                           // equals
-        const_value,                                 // constant value (simplified for now)
+        const_value,                                 // constant value (full structured constants supported)
         token(match(";")),                           // semicolon
         NULL
     );
