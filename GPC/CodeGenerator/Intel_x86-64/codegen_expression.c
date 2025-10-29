@@ -32,7 +32,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
-static ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
+ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg);
 
 
@@ -199,7 +199,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
     return inst_list;
 }
 
-static ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
+ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
     if (expr == NULL || ctx == NULL || out_reg == NULL)
@@ -254,13 +254,25 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     return inst_list;
 }
 
-static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list,
+static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *dest_reg, Register_t *value_reg)
 {
     if (dest_reg == NULL || value_reg == NULL)
         return inst_list;
 
     char buffer[128];
+    char skip_label[18];
+    gen_label(skip_label, sizeof(skip_label), ctx);
+
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", skip_label);
+    inst_list = add_inst(inst_list, buffer);
+
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", value_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", value_reg->bit_32);
@@ -268,6 +280,8 @@ static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list,
     snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", value_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
     inst_list = add_inst(inst_list, buffer);
     return inst_list;
 }
@@ -285,9 +299,13 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     char order_label[18];
     char loop_label[18];
     char done_label[18];
+    char start_floor_label[18];
+    char end_cap_label[18];
     gen_label(order_label, sizeof(order_label), ctx);
     gen_label(loop_label, sizeof(loop_label), ctx);
     gen_label(done_label, sizeof(done_label), ctx);
+    gen_label(start_floor_label, sizeof(start_floor_label), ctx);
+    gen_label(end_cap_label, sizeof(end_cap_label), ctx);
 
     char buffer[128];
     snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
@@ -303,7 +321,38 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     snprintf(buffer, sizeof(buffer), "%s:\n", order_label);
     inst_list = add_inst(inst_list, buffer);
 
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", end_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjge\t%s\n", start_floor_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$0, %s\n", start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "%s:\n", start_floor_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", end_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", end_cap_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$31, %s\n", end_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "%s:\n", end_cap_label);
+    inst_list = add_inst(inst_list, buffer);
+
     snprintf(buffer, sizeof(buffer), "%s:\n", loop_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", done_label);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", start_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
@@ -315,7 +364,7 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjge\t%s\n", done_label);
+    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", done_label);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tincl\t%s\n", start_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
@@ -402,7 +451,7 @@ static ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst
         }
 
         if (element->upper == NULL)
-            inst_list = codegen_set_emit_single(inst_list, dest_reg, lower_reg);
+            inst_list = codegen_set_emit_single(inst_list, ctx, dest_reg, lower_reg);
         else
             inst_list = codegen_set_emit_range(inst_list, ctx, dest_reg, lower_reg, upper_reg);
 

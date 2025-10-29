@@ -41,8 +41,6 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type);
-static ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t **out_reg);
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
@@ -92,33 +90,6 @@ static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *i
 
     if (relop_type != NULL)
         *relop_type = NE;
-    return inst_list;
-}
-
-static ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t **out_reg)
-{
-    if (expr == NULL || ctx == NULL || out_reg == NULL)
-        return inst_list;
-
-    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
-    if (record_expr == NULL)
-        return inst_list;
-
-    Register_t *addr_reg = NULL;
-    inst_list = codegen_address_for_expr(record_expr, inst_list, ctx, &addr_reg);
-    if (addr_reg == NULL)
-        return inst_list;
-
-    long long offset = expr->expr_data.record_access_data.field_offset;
-    if (offset != 0)
-    {
-        char buffer[64];
-        snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", offset, addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    *out_reg = addr_reg;
     return inst_list;
 }
 

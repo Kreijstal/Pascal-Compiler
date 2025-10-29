@@ -17,6 +17,7 @@ ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx)
 ListNode_t *codegen_array_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
 ListNode_t *codegen_array_element_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_record_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
+ListNode_t *codegen_record_field_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_address_for_expr(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 

@@ -1037,6 +1037,19 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
             return 1;
         return 0;
     }
+    case EXPR_MULOP: {
+        long long left_value = 0;
+        long long right_value = 0;
+        if (extract_constant_int(expr->expr_data.mulop_data.left_term, &left_value) != 0)
+            return 1;
+        if (extract_constant_int(expr->expr_data.mulop_data.right_factor, &right_value) != 0)
+            return 1;
+        if (expr->expr_data.mulop_data.mulop_type == STAR) {
+            *out_value = left_value * right_value;
+            return 0;
+        }
+        return 1;
+    }
     default:
         break;
     }
