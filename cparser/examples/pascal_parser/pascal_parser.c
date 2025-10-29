@@ -93,6 +93,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_REAL: return "REAL";
         case PASCAL_T_IDENTIFIER: return "IDENTIFIER";
         case PASCAL_T_STRING: return "STRING";
+        case PASCAL_T_NIL: return "NIL";
         case PASCAL_T_CHAR: return "CHAR";
         case PASCAL_T_BOOLEAN: return "BOOLEAN";
         case PASCAL_T_ADD: return "ADD";
