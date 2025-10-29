@@ -49,6 +49,37 @@ int codegen_had_error(const CodeGenContext *ctx)
     return (ctx != NULL) ? ctx->had_error : 0;
 }
 
+static void codegen_reset_finally_stack(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->finally_stack != NULL)
+    {
+        free(ctx->finally_stack);
+        ctx->finally_stack = NULL;
+    }
+    ctx->finally_depth = 0;
+    ctx->finally_capacity = 0;
+}
+
+static void codegen_reset_except_stack(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->except_labels != NULL)
+    {
+        for (int i = 0; i < ctx->except_depth; ++i)
+        {
+            free(ctx->except_labels[i]);
+            ctx->except_labels[i] = NULL;
+        }
+        free(ctx->except_labels);
+        ctx->except_labels = NULL;
+    }
+    ctx->except_depth = 0;
+    ctx->except_capacity = 0;
+}
+
 static void codegen_reset_loop_stack(CodeGenContext *ctx)
 {
     if (ctx == NULL)
@@ -251,6 +282,10 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     ctx->symtab = symtab;
 
+    codegen_reset_finally_stack(ctx);
+    codegen_reset_loop_stack(ctx);
+    codegen_reset_except_stack(ctx);
+
     CODEGEN_DEBUG("DEBUG: ENTERING codegen\n");
     init_stackmng();
 
@@ -264,6 +299,8 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
+    codegen_reset_finally_stack(ctx);
+    codegen_reset_except_stack(ctx);
 
     CODEGEN_DEBUG("DEBUG: LEAVING codegen\n");
     #ifdef DEBUG_CODEGEN

@@ -20,13 +20,24 @@
 static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label);
 static void codegen_pop_loop_exit(CodeGenContext *ctx);
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
+static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements);
+static void codegen_pop_finally(CodeGenContext *ctx);
+static int codegen_has_finally(const CodeGenContext *ctx);
+static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
+    SymTab_t *symtab, const char *entry_label, const char *target_label);
+static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
+    SymTab_t *symtab, const char *target_label);
+static int codegen_push_except(CodeGenContext *ctx, const char *label);
+static void codegen_pop_except(CodeGenContext *ctx);
+static const char *codegen_current_except_label(const CodeGenContext *ctx);
 static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
@@ -144,6 +155,150 @@ static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
     return ctx->loop_exit_labels[ctx->loop_depth - 1];
 }
 
+static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements)
+{
+    if (ctx == NULL)
+        return 0;
+    if (ctx->finally_capacity == ctx->finally_depth)
+    {
+        int new_capacity = (ctx->finally_capacity > 0) ? ctx->finally_capacity * 2 : 4;
+        CodeGenFinallyFrame *new_stack = (CodeGenFinallyFrame *)realloc(
+            ctx->finally_stack, sizeof(CodeGenFinallyFrame) * (size_t)new_capacity);
+        if (new_stack == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate finally stack.\n");
+            return 0;
+        }
+        memset(new_stack + ctx->finally_capacity, 0,
+            sizeof(CodeGenFinallyFrame) * (size_t)(new_capacity - ctx->finally_capacity));
+        ctx->finally_stack = new_stack;
+        ctx->finally_capacity = new_capacity;
+    }
+    ctx->finally_stack[ctx->finally_depth].statements = statements;
+    ctx->finally_depth += 1;
+    return 1;
+}
+
+static void codegen_pop_finally(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->finally_depth <= 0)
+        return;
+    ctx->finally_depth -= 1;
+    ctx->finally_stack[ctx->finally_depth].statements = NULL;
+}
+
+static int codegen_has_finally(const CodeGenContext *ctx)
+{
+    return (ctx != NULL && ctx->finally_depth > 0);
+}
+
+static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
+    SymTab_t *symtab, const char *entry_label, const char *target_label)
+{
+    if (!codegen_has_finally(ctx))
+        return inst_list;
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%s:\n", entry_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    int frame_index = ctx->finally_depth - 1;
+    CodeGenFinallyFrame frame = ctx->finally_stack[frame_index];
+
+    ctx->finally_depth -= 1;
+    if (frame.statements != NULL)
+        inst_list = codegen_statement_list(frame.statements, inst_list, ctx, symtab);
+    ctx->finally_stack[frame_index] = frame;
+    ctx->finally_depth += 1;
+
+    if (target_label != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", target_label);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    return inst_list;
+}
+
+static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
+    SymTab_t *symtab, const char *target_label)
+{
+    if (!codegen_has_finally(ctx))
+        return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
+
+    int depth = ctx->finally_depth;
+    if (depth <= 0)
+        return inst_list;
+
+    char (*entry_labels)[18] = (char (*)[18])malloc(sizeof(*entry_labels) * (size_t)depth);
+    if (entry_labels == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate finally labels.\n");
+        return inst_list;
+    }
+
+    for (int i = 0; i < depth; ++i)
+        gen_label(entry_labels[i], 18, ctx);
+
+    inst_list = gencode_jmp(NORMAL_JMP, 0, entry_labels[depth - 1], inst_list);
+
+    int original_depth = ctx->finally_depth;
+    for (int i = depth - 1; i >= 0; --i)
+    {
+        const char *target = (i == 0) ? target_label : entry_labels[i - 1];
+        ctx->finally_depth = i + 1;
+        inst_list = codegen_emit_finally_block(ctx, inst_list, symtab, entry_labels[i], target);
+    }
+    ctx->finally_depth = original_depth;
+
+    free(entry_labels);
+    return inst_list;
+}
+
+static int codegen_push_except(CodeGenContext *ctx, const char *label)
+{
+    if (ctx == NULL || label == NULL)
+        return 0;
+    if (ctx->except_capacity == ctx->except_depth)
+    {
+        int new_capacity = (ctx->except_capacity > 0) ? ctx->except_capacity * 2 : 4;
+        char **new_labels = (char **)realloc(ctx->except_labels, sizeof(char *) * (size_t)new_capacity);
+        if (new_labels == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate except stack.\n");
+            return 0;
+        }
+        for (int i = ctx->except_capacity; i < new_capacity; ++i)
+            new_labels[i] = NULL;
+        ctx->except_labels = new_labels;
+        ctx->except_capacity = new_capacity;
+    }
+    ctx->except_labels[ctx->except_depth] = strdup(label);
+    if (ctx->except_labels[ctx->except_depth] == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to duplicate except label.\n");
+        return 0;
+    }
+    ctx->except_depth += 1;
+    return 1;
+}
+
+static void codegen_pop_except(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->except_depth <= 0)
+        return;
+    ctx->except_depth -= 1;
+    free(ctx->except_labels[ctx->except_depth]);
+    ctx->except_labels[ctx->except_depth] = NULL;
+}
+
+static const char *codegen_current_except_label(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->except_depth <= 0)
+        return NULL;
+    return ctx->except_labels[ctx->except_depth - 1];
+}
+
 static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -192,16 +347,23 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
         case STMT_EXIT:
-            /* EXIT statement - generate a jump to the current procedure/function epilogue */
-            /* For now, we'll use a simple return instruction */
-            /* TODO: Track loop/procedure context for proper epilogue jumps */
+        {
             inst_list = add_inst(inst_list, "\t# EXIT statement\n");
-            /* In x86-64, we need to clean up and return - simplified version */
+            if (codegen_has_finally(ctx))
+            {
+                char exit_label[18];
+                gen_label(exit_label, sizeof(exit_label), ctx);
+                inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, exit_label);
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+                inst_list = add_inst(inst_list, buffer);
+            }
             inst_list = add_inst(inst_list, "\tleave\n");
             inst_list = add_inst(inst_list, "\tret\n");
             break;
+        }
         case STMT_BREAK:
-            inst_list = codegen_break_stmt(stmt, inst_list, ctx);
+            inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
             break;
         case STMT_CASE:
             inst_list = codegen_case(stmt, inst_list, ctx, symtab);
@@ -216,7 +378,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = codegen_try_except(stmt, inst_list, ctx, symtab);
             break;
         case STMT_RAISE:
-            inst_list = codegen_raise(stmt, inst_list, ctx);
+            inst_list = codegen_raise(stmt, inst_list, ctx, symtab);
             break;
         case STMT_INHERITED:
             inst_list = codegen_inherited(stmt, inst_list, ctx, symtab);
@@ -1000,7 +1162,8 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab)
 {
     const char *exit_label = codegen_current_loop_exit(ctx);
     if (exit_label == NULL)
@@ -1010,15 +1173,15 @@ static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_l
         return inst_list;
     }
 
-    char buffer[32];
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
-    return add_inst(inst_list, buffer);
+    return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label);
 }
 
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmt == NULL)
         return inst_list;
+    if (stmt->stmt_data.with_data.context_expr != NULL)
+        inst_list = codegen_expr(stmt->stmt_data.with_data.context_expr, inst_list, ctx);
     if (stmt->stmt_data.with_data.body_stmt != NULL)
         inst_list = codegen_stmt(stmt->stmt_data.with_data.body_stmt, inst_list, ctx, symtab);
     return inst_list;
@@ -1028,8 +1191,30 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
 {
     if (stmt == NULL)
         return inst_list;
-    inst_list = codegen_statement_list(stmt->stmt_data.try_finally_data.try_statements, inst_list, ctx, symtab);
-    inst_list = codegen_statement_list(stmt->stmt_data.try_finally_data.finally_statements, inst_list, ctx, symtab);
+    ListNode_t *try_stmts = stmt->stmt_data.try_finally_data.try_statements;
+    ListNode_t *finally_stmts = stmt->stmt_data.try_finally_data.finally_statements;
+
+    if (finally_stmts == NULL)
+        return codegen_statement_list(try_stmts, inst_list, ctx, symtab);
+
+    if (!codegen_push_finally(ctx, finally_stmts))
+        return inst_list;
+
+    inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
+
+    char final_entry[18];
+    char after_label[18];
+    gen_label(final_entry, sizeof(final_entry), ctx);
+    gen_label(after_label, sizeof(after_label), ctx);
+
+    inst_list = gencode_jmp(NORMAL_JMP, 0, final_entry, inst_list);
+    inst_list = codegen_emit_finally_block(ctx, inst_list, symtab, final_entry, after_label);
+    codegen_pop_finally(ctx);
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
+    inst_list = add_inst(inst_list, buffer);
+
     return inst_list;
 }
 
@@ -1037,16 +1222,73 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
 {
     if (stmt == NULL)
         return inst_list;
-    inst_list = codegen_statement_list(stmt->stmt_data.try_except_data.try_statements, inst_list, ctx, symtab);
-    if (stmt->stmt_data.try_except_data.except_statements != NULL)
-        inst_list = add_inst(inst_list, "\t# EXCEPT block ignored (no exception support)\n");
+    ListNode_t *try_stmts = stmt->stmt_data.try_except_data.try_statements;
+    ListNode_t *except_stmts = stmt->stmt_data.try_except_data.except_statements;
+
+    char except_label[18];
+    char after_label[18];
+    gen_label(except_label, sizeof(except_label), ctx);
+    gen_label(after_label, sizeof(after_label), ctx);
+
+    if (!codegen_push_except(ctx, except_label))
+        return inst_list;
+
+    inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
+    inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
+
+    codegen_pop_except(ctx);
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (except_stmts != NULL)
+        inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
+    else
+        inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
+    inst_list = add_inst(inst_list, buffer);
+
     return inst_list;
 }
 
-static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
-    (void)stmt;
-    inst_list = add_inst(inst_list, "\t# RAISE statement (not implemented)\n");
+    if (stmt == NULL)
+        return inst_list;
+
+    inst_list = add_inst(inst_list, "\t# RAISE statement\n");
+
+    struct Expression *exc_expr = stmt->stmt_data.raise_data.exception_expr;
+    const char *except_label = codegen_current_except_label(ctx);
+
+    if (except_label != NULL)
+    {
+        if (exc_expr != NULL)
+            inst_list = codegen_expr(exc_expr, inst_list, ctx);
+        inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label);
+        return inst_list;
+    }
+
+    if (codegen_has_finally(ctx))
+    {
+        char after_label[18];
+        gen_label(after_label, sizeof(after_label), ctx);
+        inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, after_label);
+
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    if (exc_expr != NULL)
+        inst_list = codegen_expr(exc_expr, inst_list, ctx);
+    else
+        inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+
+    inst_list = add_inst(inst_list, "\tcall\tgpc_raise\n");
+    inst_list = add_inst(inst_list, "\tud2\n");
     return inst_list;
 }
 
