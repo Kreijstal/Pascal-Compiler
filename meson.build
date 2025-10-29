@@ -88,7 +88,8 @@ if build_integration_tests
 
   pascal_tests = executable('pascal_tests',
     'cparser/examples/pascal_parser/pascal_tests.c',
-    dependencies: pascal_parser_dep
+    dependencies: pascal_parser_dep,
+    c_args: '-DTEST_SRCDIR="' + meson.project_source_root() / 'cparser/examples/pascal_parser' + '"'
   )
 
   test('pascal parser unit tests', pascal_tests, timeout: 180)
