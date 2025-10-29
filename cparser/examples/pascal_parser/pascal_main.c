@@ -2,29 +2,54 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pascal_parser.h"
+#include "pascal_preprocessor.h"
 
 // Forward declaration
 static void print_ast_indented(ast_t* ast, int depth);
 static void print_error_with_partial_ast(ParseError* error);
 
 // Helper function to print ParseError with partial AST
-static void print_error_with_partial_ast(ParseError* error) {
-    if (error == NULL) return;
+static void print_error_chain(ParseError* error, int depth) {
+    if (error == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < depth; i++) {
+        printf("  ");
+    }
 
     printf("Error at line %d, col %d: ", error->line, error->col);
     if (error->parser_name) {
         printf("In parser '%s': ", error->parser_name);
     }
-    printf("%s\n", error->message);
+    printf("%s\n", error->message ? error->message : "<no message>");
 
     if (error->unexpected) {
+        for (int i = 0; i < depth; i++) {
+            printf("  ");
+        }
         printf("Unexpected input: \"%s\"\n", error->unexpected);
     }
 
     if (error->partial_ast != NULL) {
+        for (int i = 0; i < depth; i++) {
+            printf("  ");
+        }
         printf("Partial AST:\n");
-        print_ast_indented(error->partial_ast, 1);
+        print_ast_indented(error->partial_ast, depth + 1);
     }
+
+    if (error->cause != NULL) {
+        for (int i = 0; i < depth; i++) {
+            printf("  ");
+        }
+        printf("Caused by:\n");
+        print_error_chain(error->cause, depth + 1);
+    }
+}
+
+static void print_error_with_partial_ast(ParseError* error) {
+    print_error_chain(error, 0);
 }
 
 // Helper function to print AST with indentation
@@ -100,17 +125,52 @@ int main(int argc, char *argv[]) {
     file_content[bytes_read] = '\0';
     fclose(file);
 
-    combinator_t *parser = new_combinator();
-    // Use unit parser instead of expression parser for full Pascal units
-    init_pascal_unit_parser(&parser);
-    
     printf("Parsing file: %s\n", filename);
     printf("File size: %zu bytes\n", bytes_read);
     printf("First 100 characters: '%.100s'\n", file_content);
 
+    PascalPreprocessor *preprocessor = pascal_preprocessor_create();
+    if (preprocessor == NULL) {
+        fprintf(stderr, "Error: failed to initialise preprocessor\n");
+        free(file_content);
+        return 1;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "FPC") ||
+        !pascal_preprocessor_define(preprocessor, "OBJFPC")) {
+        fprintf(stderr, "Error: failed to set default defines\n");
+        pascal_preprocessor_free(preprocessor);
+        free(file_content);
+        return 1;
+    }
+
+    char *preprocess_error = NULL;
+    size_t preprocessed_length = 0;
+    char *preprocessed_content = pascal_preprocess_buffer(
+        preprocessor,
+        filename,
+        file_content,
+        bytes_read,
+        &preprocessed_length,
+        &preprocess_error);
+    pascal_preprocessor_free(preprocessor);
+
+    if (preprocessed_content == NULL) {
+        fprintf(stderr, "Preprocessing failed: %s\n", preprocess_error ? preprocess_error : "unknown error");
+        free(preprocess_error);
+        free(file_content);
+        return 1;
+    }
+    free(preprocess_error);
+
+    printf("Preprocessed size: %zu bytes\n", preprocessed_length);
+
+    combinator_t *parser = new_combinator();
+    // Use unit parser instead of expression parser for full Pascal units
+    init_pascal_unit_parser(&parser);
+
     input_t *in = new_input();
-    in->buffer = file_content;
-    in->length = bytes_read;
+    in->buffer = preprocessed_content;
+    in->length = preprocessed_length;
     ast_nil = new_ast();
     ast_nil->typ = PASCAL_T_NONE;
 
@@ -128,6 +188,11 @@ int main(int argc, char *argv[]) {
         if (in->start < in->length) {
             fprintf(stderr, "Error: Parser did not consume entire input. Trailing characters: '%s'\n", in->buffer + in->start);
             free_ast(result.value.ast);
+            free(preprocessed_content);
+            free(file_content);
+            free_combinator(parser);
+            free(in);
+            free(ast_nil);
             return 1;
         }
         if (print_ast) {
@@ -137,13 +202,18 @@ int main(int argc, char *argv[]) {
     } else {
         print_error_with_partial_ast(result.value.error);
         free_error(result.value.error);
+        free(preprocessed_content);
         free(file_content);
+        free_combinator(parser);
+        free(in);
+        free(ast_nil);
         return 1;
     }
 
     free_combinator(parser);
     free(in);
     free(ast_nil);
+    free(preprocessed_content);
     free(file_content);
 
     return 0;

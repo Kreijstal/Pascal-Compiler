@@ -6,10 +6,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 #ifdef _WIN32
 #define strcasecmp _stricmp
 #define strncasecmp _strnicmp
 #endif
+
+static ast_t* wrap_pointer_suffix(ast_t* parsed);
+static ast_t* wrap_array_suffix(ast_t* parsed);
+static ast_t* build_array_or_pointer_chain(ast_t* parsed);
+static ast_t* wrap_nil_literal(ast_t* parsed);
+static combinator_t* create_suffix_choice(combinator_t** expr_parser_ref);
 
 // Pascal identifier parser that excludes reserved keywords
 static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_name) {
@@ -667,17 +674,20 @@ void init_pascal_expression_parser(combinator_t** p) {
         NULL
     );
 
-    // Array access parser: identifier[index1, index2, ...]
-    combinator_t* index_list = between(
-        token(match("[")),
-        token(match("]")),
-        sep_by(lazy(p), token(match(",")))
+    // Pointer/array suffix parsing for identifiers like ptr^[i] or table[i]
+    combinator_t* first_suffix = create_suffix_choice(p);
+    combinator_t* more_suffixes = many(create_suffix_choice(p));
+    combinator_t* suffixes = seq(new_combinator(), PASCAL_T_NONE,
+        first_suffix,
+        more_suffixes,
+        NULL
     );
 
-    combinator_t* array_access = seq(new_combinator(), PASCAL_T_ARRAY_ACCESS,
-        func_name,                        // array name (built-in or custom identifier)
-        index_list,
-        NULL
+    combinator_t* array_access = map(seq(new_combinator(), PASCAL_T_NONE,
+            func_name,
+            suffixes,
+            NULL),
+        build_array_or_pointer_chain
     );
 
     // Type cast parser: TypeName(expression) - only for built-in types
@@ -706,6 +716,8 @@ void init_pascal_expression_parser(combinator_t** p) {
     );
 
     // Use standard factor parser - defer complex pointer dereference for now
+    combinator_t* nil_literal = map(token(keyword_ci("nil")), wrap_nil_literal);
+
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(real_number(PASCAL_T_REAL)),        // Real numbers (3.14) - try first
         token(hex_integer(PASCAL_T_INTEGER)),     // Hex integers ($FF) - try before decimal
@@ -715,8 +727,9 @@ void init_pascal_expression_parser(combinator_t** p) {
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
+        nil_literal,                              // Nil literal
         typecast,                                 // Type casts Integer(x) - try before func_call
-        array_access,                             // Array access table[i,j] - try before func_call
+        array_access,                             // Array access (supports pointer dereference)
         func_call,                                // Function calls func(x)
         between(token(match("(")), token(match(")")), lazy(p)), // Parenthesized expressions - try before tuple
         tuple,                                    // Tuple constants (a,b,c) - try after parenthesized expressions
@@ -795,4 +808,113 @@ ParseResult parse_pascal_expression(input_t* input, combinator_t* parser) {
         post_process_set_operations(result.value.ast);
     }
     return result;
+}
+
+static combinator_t* create_suffix_choice(combinator_t** expr_parser_ref) {
+    combinator_t* pointer_suffix = map(token(match("^")), wrap_pointer_suffix);
+
+    combinator_t* index_list = between(
+        token(match("[")),
+        token(match("]")),
+        sep_by(lazy(expr_parser_ref), token(match(",")))
+    );
+    combinator_t* array_suffix = map(index_list, wrap_array_suffix);
+
+    combinator_t* choice = multi(new_combinator(), PASCAL_T_NONE,
+        array_suffix,
+        pointer_suffix,
+        NULL
+    );
+
+    return choice;
+}
+
+static ast_t* wrap_pointer_suffix(ast_t* parsed) {
+    if (parsed != NULL && parsed != ast_nil) {
+        free_ast(parsed);
+    }
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_DEREF;
+    node->child = NULL;
+    node->next = NULL;
+    return node;
+}
+
+static ast_t* wrap_array_suffix(ast_t* parsed) {
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_ARRAY_ACCESS;
+    node->child = (parsed == ast_nil) ? NULL : parsed;
+    node->next = NULL;
+    return node;
+}
+
+static ast_t* build_array_or_pointer_chain(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil) {
+        return parsed;
+    }
+
+    ast_t* base = parsed;
+    ast_t* suffix = base->next;
+    base->next = NULL;
+
+    if (suffix == ast_nil) {
+        suffix = NULL;
+    }
+
+    ast_t* current = base;
+    while (suffix != NULL) {
+        ast_t* next_suffix = suffix->next;
+        if (next_suffix == ast_nil) {
+            next_suffix = NULL;
+        }
+        suffix->next = NULL;
+
+        switch (suffix->typ) {
+            case PASCAL_T_DEREF: {
+                suffix->child = current;
+                current = suffix;
+                break;
+            }
+            case PASCAL_T_ARRAY_ACCESS: {
+                ast_t* indices = suffix->child;
+                suffix->child = current;
+
+                if (indices == ast_nil) {
+                    indices = NULL;
+                }
+
+                if (indices != NULL) {
+                    ast_t* tail = current;
+                    while (tail->next != NULL) {
+                        tail = tail->next;
+                    }
+                    tail->next = indices;
+                }
+
+                current = suffix;
+                break;
+            }
+            default: {
+                suffix->child = current;
+                current = suffix;
+                break;
+            }
+        }
+
+        suffix = next_suffix;
+    }
+
+    return current;
+}
+
+static ast_t* wrap_nil_literal(ast_t* parsed) {
+    if (parsed != NULL && parsed != ast_nil) {
+        free_ast(parsed);
+    }
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_NIL;
+    node->child = NULL;
+    node->next = NULL;
+    node->sym = sym_lookup("nil");
+    return node;
 }
