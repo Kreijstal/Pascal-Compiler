@@ -357,6 +357,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         case_stmt,                            // case statements (before other keyword statements)
         raise_stmt,                           // raise statements
         inherited_stmt,                       // inherited statements
+        break_stmt,                           // break statements
         exit_stmt,                            // exit statements
         break_stmt,                           // break statements
         asm_stmt,                             // inline assembly blocks
