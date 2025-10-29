@@ -39,6 +39,8 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, int *relop_type);
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
@@ -67,7 +69,31 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     return inst_list;
 }
 
-static ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
+static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, int *relop_type)
+{
+    if (expr == NULL)
+        return inst_list;
+
+    if (expr->type == EXPR_RELOP)
+        return codegen_simple_relop(expr, inst_list, ctx, relop_type);
+
+    Register_t *value_reg = NULL;
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
+    if (value_reg == NULL)
+        return inst_list;
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", value_reg->bit_32, value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), value_reg);
+
+    if (relop_type != NULL)
+        *relop_type = NE;
+    return inst_list;
+}
+
+ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
     if (expr == NULL || ctx == NULL || out_reg == NULL)
@@ -108,6 +134,10 @@ static ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t 
     else if (expr->type == EXPR_ARRAY_ACCESS)
     {
         return codegen_array_element_address(expr, inst_list, ctx, out_reg);
+    }
+    else if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        return codegen_record_field_address(expr, inst_list, ctx, out_reg);
     }
 
     return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
@@ -928,6 +958,56 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         free_reg(get_reg_stack(), addr_reload);
         return inst_list;
     }
+    else if (var_expr->type == EXPR_RECORD_ACCESS)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_record_field_address(var_expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
+
+        StackNode_t *addr_temp = add_l_t("record_addr");
+        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_temp->offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+
+        inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
+
+        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for record value.");
+
+        Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reload == NULL)
+        {
+            free_reg(get_reg_stack(), value_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for record store.");
+        }
+
+        snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
+        if (use_qword)
+        {
+            int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
+            if (!value_is_qword)
+                inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+            snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        }
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reload);
+        return inst_list;
+    }
     else if (var_expr->type == EXPR_POINTER_DEREF)
     {
         struct Expression *pointer_expr = var_expr->expr_data.pointer_deref_data.pointer_expr;
@@ -1052,7 +1132,7 @@ ListNode_t *codegen_if_then(struct Statement *stmt, ListNode_t *inst_list, CodeG
     char label1[18], label2[18], buffer[50];
 
     expr = stmt->stmt_data.if_then_data.relop_expr;
-    inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
+    inst_list = codegen_condition_expr(expr, inst_list, ctx, &relop_type);
 
     gen_label(label1, 18, ctx);
     gen_label(label2, 18, ctx);
@@ -1118,7 +1198,7 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
 
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
+    inst_list = codegen_condition_expr(expr, inst_list, ctx, &relop_type);
     inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
@@ -1159,7 +1239,7 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     }
     codegen_pop_loop_exit(ctx);
 
-    inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
+    inst_list = codegen_condition_expr(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
     inst_list = gencode_jmp(relop_type, 1, body_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
@@ -1232,7 +1312,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_simple_relop(comparison_expr, inst_list, ctx, &relop_type);
+    inst_list = codegen_condition_expr(comparison_expr, inst_list, ctx, &relop_type);
 
     inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
 

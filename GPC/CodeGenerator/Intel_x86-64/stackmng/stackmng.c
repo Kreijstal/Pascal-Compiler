@@ -96,7 +96,12 @@ void pop_stackscope()
 
 static inline int align_up(int value, int alignment)
 {
-    return (value + alignment - 1) & ~(alignment - 1);
+    if (alignment <= 0)
+        return value;
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+    return value + (alignment - remainder);
 }
 
 /* Adds temporary storage to t */
