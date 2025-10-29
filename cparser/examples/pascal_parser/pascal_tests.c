@@ -2,9 +2,28 @@
 #include "parser.h"
 #include "combinators.h"
 #include "pascal_parser.h"
+#include "pascal_preprocessor.h"
 #include "pascal_keywords.h"
 #include <stdio.h>
 #include <string.h>
+
+static ast_t* find_first_node_of_type(ast_t* node, tag_t target) {
+    if (node == NULL || node == ast_nil) {
+        return NULL;
+    }
+
+    for (ast_t* current = node; current != NULL && current != ast_nil; current = current->next) {
+        if (current->typ == target) {
+            return current;
+        }
+        ast_t* child_result = find_first_node_of_type(current->child, target);
+        if (child_result != NULL) {
+            return child_result;
+        }
+    }
+
+    return NULL;
+}
 
 void test_pascal_integer_parsing(void) {
     combinator_t* p = new_combinator();
@@ -14,7 +33,7 @@ void test_pascal_integer_parsing(void) {
     input->buffer = strdup("123");
     input->length = 3;
 
-    ParseResult res = parse(input, p);
+    ParseResult res = parse_pascal_expression(input, p);
 
     TEST_ASSERT(res.is_success);
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_INTEGER);
@@ -34,7 +53,7 @@ void test_pascal_invalid_input(void) {
     input->buffer = strdup("1 +");
     input->length = 3;
 
-    ParseResult res = parse(input, p);
+    ParseResult res = parse_pascal_expression(input, p);
 
     TEST_ASSERT(!res.is_success);
     TEST_ASSERT(res.value.error->partial_ast != NULL);
@@ -47,6 +66,53 @@ void test_pascal_invalid_input(void) {
     free_combinator(p);
     free(input->buffer);
     free(input);
+}
+
+void test_pascal_preprocessor_conditionals(void) {
+    PascalPreprocessor *pp = pascal_preprocessor_create();
+    TEST_ASSERT(pp != NULL);
+    if (!pp) {
+        return;
+    }
+
+    TEST_ASSERT(pascal_preprocessor_define(pp, "FOO"));
+
+    const char *source = "{$ifdef FOO}foo{$else}bar{$endif}";
+    size_t source_len = strlen(source);
+    char *error_message = NULL;
+    size_t output_len = 0;
+    char *result = pascal_preprocess_buffer(pp, "<memory>", source, source_len, &output_len, &error_message);
+
+    TEST_ASSERT(result != NULL);
+    TEST_ASSERT(error_message == NULL);
+    if (error_message) {
+        free(error_message);
+    }
+    if (result) {
+        TEST_CHECK(strstr(result, "foo") != NULL);
+        TEST_CHECK(strstr(result, "bar") == NULL);
+        free(result);
+    }
+
+    TEST_ASSERT(pascal_preprocessor_undefine(pp, "FOO"));
+
+    const char *source2 = "{$ifdef FOO}x{$else}y{$endif}";
+    char *error_message2 = NULL;
+    size_t output_len2 = 0;
+    char *result2 = pascal_preprocess_buffer(pp, "<memory>", source2, strlen(source2), &output_len2, &error_message2);
+
+    TEST_ASSERT(result2 != NULL);
+    TEST_ASSERT(error_message2 == NULL);
+    if (error_message2) {
+        free(error_message2);
+    }
+    if (result2) {
+        TEST_CHECK(strstr(result2, "y") != NULL);
+        TEST_CHECK(strstr(result2, "x") == NULL);
+        free(result2);
+    }
+
+    pascal_preprocessor_free(pp);
 }
 
 void test_pascal_function_call(void) {
@@ -2176,7 +2242,7 @@ void test_pascal_case_invalid_expression_labels(void) {
     input->buffer = strdup("case x of y := 5: writeln() end");
     input->length = strlen(input->buffer);
 
-    res = parse(input, p);
+    res = parse_pascal_expression(input, p);
     
     // This should fail because assignments are not valid case labels
     TEST_ASSERT(!res.is_success);
@@ -2201,7 +2267,7 @@ void test_pascal_pointer_dereference(void) {
     input->buffer = strdup("x");  // For now just test that identifiers work
     input->length = strlen("x");
 
-    ParseResult res = parse(input, p);
+    ParseResult res = parse_pascal_expression(input, p);
 
     TEST_ASSERT(res.is_success);
     if (res.is_success) {
@@ -2345,6 +2411,142 @@ void test_pascal_var_section(void) {
     } else {
         free_error(res.value.error);
     }
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_set_operations_program(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
+    input_t* input = new_input();
+    const char* union_expr = "[1, 3] + [5]";
+    input->buffer = strdup(union_expr);
+    input->length = strlen(union_expr);
+
+    ParseResult res = parse_pascal_expression(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_SET_UNION);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+
+    p = new_combinator();
+    init_pascal_expression_parser(&p);
+    input = new_input();
+    const char* intersect_expr = "[1, 3] * [3]";
+    input->buffer = strdup(intersect_expr);
+    input->length = strlen(intersect_expr);
+
+    res = parse_pascal_expression(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_MUL);
+        ast_t* set_literal = find_first_node_of_type(res.value.ast, PASCAL_T_SET);
+        TEST_ASSERT(set_literal != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+
+    // Parse membership expression to ensure "in" is recognised with set unions
+    p = new_combinator();
+    init_pascal_expression_parser(&p);
+    input = new_input();
+    const char* in_expr = "3 in ([1, 3] + [5])";
+    input->buffer = strdup(in_expr);
+    input->length = strlen(in_expr);
+
+    res = parse_pascal_expression(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_IN);
+        ast_t* union_node = find_first_node_of_type(res.value.ast, PASCAL_T_SET_UNION);
+        TEST_ASSERT(union_node != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_pointer_operations_program(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
+    input_t* input = new_input();
+    const char* addr_expr = "@value";
+    input->buffer = strdup(addr_expr);
+    input->length = strlen(addr_expr);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_ADDR);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+
+    p = new_combinator();
+    init_pascal_expression_parser(&p);
+    input = new_input();
+    const char* deref_expr = "ptr^";
+    input->buffer = strdup(deref_expr);
+    input->length = strlen(deref_expr);
+
+    res = parse_pascal_expression(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_DEREF);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_record_member_access_program(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
+    input_t* input = new_input();
+    const char* block =
+        "begin\n"
+        "  p.x := 1;\n"
+        "  total := p.x + p.y;\n"
+        "end";
+    input->buffer = strdup(block);
+    input->length = strlen(block);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* member_node = find_first_node_of_type(res.value.ast, PASCAL_T_MEMBER_ACCESS);
+        TEST_ASSERT(member_node != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
     free_combinator(p);
     free(input->buffer);
     free(input);
@@ -2652,6 +2854,7 @@ void test_complex_fpc_rax64int_unit(void) {
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
+    { "test_pascal_preprocessor_conditionals", test_pascal_preprocessor_conditionals },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_string_literal", test_pascal_string_literal },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },
@@ -2724,6 +2927,9 @@ TEST_LIST = {
     // New failing tests for missing features
     { "test_pascal_enumerated_type_declaration", test_pascal_enumerated_type_declaration },
     { "test_pascal_simple_const_declaration", test_pascal_simple_const_declaration },
+    { "test_pascal_set_operations_program", test_pascal_set_operations_program },
+    { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
+    { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
     { "test_pascal_var_section", test_pascal_var_section },
     { "test_pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
     { "test_pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },

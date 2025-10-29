@@ -278,8 +278,17 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // Exit statement: exit
-    combinator_t* exit_stmt = token(create_keyword_parser("exit", PASCAL_T_EXIT_STMT));
+    // Exit statement: exit; or exit(expression);
+    combinator_t* exit_stmt = seq(new_combinator(), PASCAL_T_EXIT_STMT,
+        token(keyword_ci("exit")),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match("(")),
+            lazy(expr_parser),
+            token(match(")")),
+            NULL
+        )),
+        NULL
+    );
 
     // Break statement: break
     combinator_t* break_stmt = token(create_keyword_parser("break", PASCAL_T_BREAK_STMT));
