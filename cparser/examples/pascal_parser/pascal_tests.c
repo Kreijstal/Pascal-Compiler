@@ -71,6 +71,10 @@ static char* load_pascal_snippet(const char* filename) {
     char* buffer = NULL;
     char* result = NULL;
 
+#ifdef TEST_SRCDIR
+    const char* base_dir = TEST_SRCDIR;
+    size_t base_len = strlen(base_dir);
+#else
     const char* current_file = __FILE__;
     const char* last_slash = strrchr(current_file, '/');
 #ifdef _WIN32
@@ -79,9 +83,11 @@ static char* load_pascal_snippet(const char* filename) {
         last_slash = last_backslash;
     }
 #endif
-
     size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
-    const char* snippets_dir = "snippets/";
+    const char* base_dir = current_file;
+#endif
+
+    const char* snippets_dir = "/snippets/";
     size_t snippets_len = strlen(snippets_dir);
     size_t filename_len = strlen(filename);
 
@@ -92,7 +98,7 @@ static char* load_pascal_snippet(const char* filename) {
     }
 
     snprintf(path, base_len + snippets_len + filename_len + 1, "%.*s%s%s", 
-             (int)base_len, current_file, snippets_dir, filename);
+             (int)base_len, base_dir, snippets_dir, filename);
 
     file = fopen(path, "rb");
     if (!file) {
@@ -145,6 +151,10 @@ static char* load_pascal_file(const char* filename) {
     char* buffer = NULL;
     char* result = NULL;
 
+#ifdef TEST_SRCDIR
+    const char* base_dir = TEST_SRCDIR;
+    size_t base_len = strlen(base_dir);
+#else
     const char* current_file = __FILE__;
     const char* last_slash = strrchr(current_file, '/');
 #ifdef _WIN32
@@ -153,9 +163,11 @@ static char* load_pascal_file(const char* filename) {
         last_slash = last_backslash;
     }
 #endif
-
     size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
-    const char* pascal_dir = "pascal/";
+    const char* base_dir = current_file;
+#endif
+
+    const char* pascal_dir = "/pascal/";
     size_t pascal_len = strlen(pascal_dir);
     size_t filename_len = strlen(filename);
 
@@ -166,7 +178,7 @@ static char* load_pascal_file(const char* filename) {
     }
 
     snprintf(path, base_len + pascal_len + filename_len + 1, "%.*s%s%s", 
-             (int)base_len, current_file, pascal_dir, filename);
+             (int)base_len, base_dir, pascal_dir, filename);
 
     file = fopen(path, "rb");
     if (!file) {
