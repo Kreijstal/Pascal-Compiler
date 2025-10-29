@@ -763,7 +763,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
                 while(arg_ids != NULL)
                 {
-                    int use_qword = (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE);
+                    int use_qword = (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE ||
+                        type == LONGINT_TYPE);
                     if (!use_qword && ctx->symtab != NULL && arg_decl->tree_data.var_decl_data.type_id != NULL)
                     {
                         HashNode_t *type_node = NULL;

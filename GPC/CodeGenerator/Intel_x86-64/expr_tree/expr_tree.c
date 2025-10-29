@@ -413,7 +413,9 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
-    snprintf(buffer, 50, "\tnegl\t%s\n", target_reg->bit_32);
+    int use_qword = expr_requires_qword(node->expr) || expr_requires_qword(node->left_expr->expr);
+    const char *dest_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
+    snprintf(buffer, 50, use_qword ? "\tnegq\t%s\n" : "\tnegl\t%s\n", dest_reg);
     inst_list = add_inst(inst_list, buffer);
 
     return inst_list;
@@ -443,7 +445,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             expr->expr_data.function_call_data.resolved_func, expr->expr_data.function_call_data.mangled_id);
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
-        if (expr->resolved_type == STRING_TYPE || expr->resolved_type == POINTER_TYPE)
+        if (expr_requires_qword(expr))
             snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", target_reg->bit_64);
         else
             snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
@@ -506,7 +508,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(right_expr != NULL);
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
-    const char *dest_reg = reg_name_for_type(target_reg, expr);
+    int use_qword = expr_requires_qword(expr) || expr_requires_qword(node->left_expr->expr);
+    const char *dest_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
     inst_list = gencode_op(expr, node->left_expr->expr, right_expr, dest_reg, name_buf, inst_list);
 
     return inst_list;
@@ -546,7 +549,8 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
+        int use_qword = expr_requires_qword(node->expr) || expr_requires_qword(node->left_expr->expr);
+        const char *dest_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
         inst_list = gencode_op(node->expr, node->left_expr->expr, node->right_expr->expr,
             dest_reg, spill_mem, inst_list);
     }
@@ -554,8 +558,9 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
-        const char *rhs_reg = reg_name_for_type(temp_reg, node->right_expr->expr);
+        int use_qword = expr_requires_qword(node->expr) || expr_requires_qword(node->left_expr->expr);
+        const char *dest_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
+        const char *rhs_reg = expr_requires_qword(node->right_expr->expr) ? temp_reg->bit_64 : temp_reg->bit_32;
         inst_list = gencode_op(node->expr, node->left_expr->expr, node->right_expr->expr,
             dest_reg, rhs_reg, inst_list);
         free_reg(get_reg_stack(), temp_reg);
@@ -597,15 +602,17 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
+        int use_qword = expr_requires_qword(node->expr) || expr_requires_qword(node->right_expr->expr);
+        const char *dest_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
         inst_list = gencode_op(node->expr, node->right_expr->expr, node->left_expr->expr,
             dest_reg, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
-        const char *rhs_reg = reg_name_for_type(temp_reg, node->right_expr->expr);
+        int use_qword = expr_requires_qword(node->expr) || expr_requires_qword(node->left_expr->expr);
+        const char *dest_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
+        const char *rhs_reg = expr_requires_qword(node->right_expr->expr) ? temp_reg->bit_64 : temp_reg->bit_32;
         inst_list = gencode_op(node->expr, node->left_expr->expr, node->right_expr->expr,
             dest_reg, rhs_reg, inst_list);
         free_reg(get_reg_stack(), temp_reg);

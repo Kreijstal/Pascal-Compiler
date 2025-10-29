@@ -399,10 +399,10 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         asm = read_file_content(asm_file)
 
-        self.assertIn("\tsall\t", asm)
-        self.assertIn("\tsarl\t", asm)
-        self.assertIn("\troll\t", asm)
-        self.assertIn("\trorl\t", asm)
+        self.assertTrue("\tsall\t" in asm or "\tsalq\t" in asm)
+        self.assertTrue("\tsarl\t" in asm or "\tsarq\t" in asm)
+        self.assertTrue("\troll\t" in asm or "\trolq\t" in asm)
+        self.assertTrue("\trorl\t" in asm or "\trorq\t" in asm)
 
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
