@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 // Shared parser instances to avoid expensive re-initialization
 // These are initialized lazily on first use
@@ -64,6 +66,11 @@ static ast_t* find_first_node_of_type(ast_t* node, tag_t target) {
 
     return NULL;
 }
+
+static char* preprocess_pascal_source(const char* path,
+                                      const char* kind,
+                                      const char* name,
+                                      char* source);
 
 static char* load_pascal_snippet(const char* filename) {
     FILE* file = NULL;
@@ -149,11 +156,125 @@ static char* load_pascal_snippet(const char* filename) {
     result = buffer;
     buffer = NULL;  // Prevent cleanup from freeing it
 
+    result = preprocess_pascal_source(path, "snippet", filename, result);
+    if (!result) {
+        goto cleanup;
+    }
+
 cleanup:
     if (file) fclose(file);
     free(path);
     free(buffer);  // Only frees on error path
     return result;
+}
+
+static char* preprocess_pascal_source(const char* path,
+                                      const char* kind,
+                                      const char* name,
+                                      char* source) {
+    if (!source) {
+        return NULL;
+    }
+
+    PascalPreprocessor* pp = pascal_preprocessor_create();
+    if (!pp) {
+        fprintf(stderr, "Failed to allocate Pascal preprocessor for %s '%s'\n", kind, name);
+        free(source);
+        return NULL;
+    }
+
+    char* preprocess_error = NULL;
+    char* preprocessed = pascal_preprocess_buffer(pp, path, source, strlen(source), NULL, &preprocess_error);
+    pascal_preprocessor_free(pp);
+
+    if (!preprocessed) {
+        fprintf(stderr, "Failed to preprocess Pascal %s '%s'%s%s\n",
+                kind,
+                name,
+                preprocess_error ? ": " : "",
+                preprocess_error ? preprocess_error : "");
+        free(preprocess_error);
+        free(source);
+        return NULL;
+    }
+
+    free(preprocess_error);
+    free(source);
+    return preprocessed;
+}
+
+static size_t encode_utf8(uint32_t codepoint, char* out) {
+    if (codepoint <= 0x7F) {
+        out[0] = (char)codepoint;
+        return 1;
+    } else if (codepoint <= 0x7FF) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        return 2;
+    } else if (codepoint <= 0xFFFF) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        return 3;
+    } else if (codepoint <= 0x10FFFF) {
+        out[0] = (char)(0xF0 | (codepoint >> 18));
+        out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (codepoint & 0x3F));
+        return 4;
+    }
+    out[0] = '?';
+    return 1;
+}
+
+static uint16_t read_utf16_code_unit(const uint8_t* data, size_t index, bool little_endian) {
+    const uint8_t* p = data + 2 * index;
+    if (little_endian) {
+        return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+    }
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+static char* convert_utf16_to_utf8(const uint8_t* data, size_t byte_len, bool little_endian) {
+    if (data == NULL) {
+        return NULL;
+    }
+
+    size_t code_units = byte_len / 2;
+    char* out = (char*)malloc(code_units * 4 + 1);
+    if (!out) {
+        return NULL;
+    }
+
+    size_t out_pos = 0;
+    for (size_t i = 0; i < code_units; ++i) {
+        uint16_t w1 = read_utf16_code_unit(data, i, little_endian);
+
+        uint32_t codepoint;
+        if (w1 >= 0xD800 && w1 <= 0xDBFF) {
+            if (i + 1 < code_units) {
+                uint16_t w2 = read_utf16_code_unit(data, i + 1, little_endian);
+
+                if (w2 >= 0xDC00 && w2 <= 0xDFFF) {
+                    codepoint = 0x10000 + ((((uint32_t)w1 - 0xD800) << 10) | ((uint32_t)w2 - 0xDC00));
+                    ++i; // Consume the low surrogate
+                } else {
+                    codepoint = 0xFFFD; // Replacement character
+                }
+            } else {
+                codepoint = 0xFFFD;
+            }
+        } else if (w1 >= 0xDC00 && w1 <= 0xDFFF) {
+            codepoint = 0xFFFD;
+        } else {
+            codepoint = w1;
+        }
+
+        out_pos += encode_utf8(codepoint, out + out_pos);
+    }
+
+    out[out_pos] = '\0';
+    return out;
 }
 
 static char* load_pascal_file(const char* filename) {
@@ -239,6 +360,29 @@ static char* load_pascal_file(const char* filename) {
     buffer[size] = '\0';
     result = buffer;
     buffer = NULL;  // Prevent cleanup from freeing it
+
+    if (result && size >= 2) {
+        unsigned char b0 = (unsigned char)result[0];
+        unsigned char b1 = (unsigned char)result[1];
+        if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) {
+            bool little_endian = (b0 == 0xFF);
+            char* converted = convert_utf16_to_utf8((const uint8_t*)(result + 2), (size_t)size - 2, little_endian);
+            if (!converted) {
+                free(result);
+                result = NULL;
+                goto cleanup;
+            }
+            free(result);
+            result = converted;
+        }
+    }
+
+    if (result) {
+        result = preprocess_pascal_source(path, "file", filename, result);
+        if (!result) {
+            goto cleanup;
+        }
+    }
 
 cleanup:
     if (file) fclose(file);
