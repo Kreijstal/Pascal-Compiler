@@ -1254,10 +1254,9 @@ void test_pascal_as_operator_with_field_access(void) {
     combinator_t* p = new_combinator();
     init_pascal_expression_parser(&p);
 
-    // For now, just test the casting part - field access would require more complex parsing
     input_t* input = new_input();
-    input->buffer = strdup("SomeObject as TForm");
-    input->length = strlen("SomeObject as TForm");
+    input->buffer = strdup("SomeObject.Field as TForm");
+    input->length = strlen("SomeObject.Field as TForm");
 
     ParseResult res = parse(input, p);
 
@@ -1266,18 +1265,25 @@ void test_pascal_as_operator_with_field_access(void) {
     
     // Check left operand
     ast_t* left = res.value.ast->child;
-    TEST_ASSERT(left->typ == PASCAL_T_IDENTIFIER);
-    
-    // Handle both regular identifiers and built-in function structure
-    ast_t* actual_left_node = left;
-    if (left->child && left->child->typ == PASCAL_T_IDENTIFIER) {
-        // Use the child identifier for built-in functions
-        actual_left_node = left->child;
+    TEST_ASSERT(left->typ == PASCAL_T_MEMBER_ACCESS);
+
+    ast_t* base = left->child;
+    TEST_ASSERT(base != NULL);
+    if (base->child && base->child->typ == PASCAL_T_IDENTIFIER) {
+        base = base->child;
     }
-    
-    TEST_ASSERT(actual_left_node->sym && 
-               actual_left_node->sym->name && 
-               strcmp(actual_left_node->sym->name, "SomeObject") == 0);
+
+    TEST_ASSERT(base->sym && base->sym->name &&
+               strcmp(base->sym->name, "SomeObject") == 0);
+
+    ast_t* member = base->next;
+    TEST_ASSERT(member != NULL);
+    if (member->child && member->child->typ == PASCAL_T_IDENTIFIER) {
+        member = member->child;
+    }
+
+    TEST_ASSERT(member->sym && member->sym->name &&
+               strcmp(member->sym->name, "Field") == 0);
     
     // Check right operand
     ast_t* right = left->next;
@@ -2478,13 +2484,22 @@ void test_pascal_pointer_dereference(void) {
     init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
-    input->buffer = strdup("x");  // For now just test that identifiers work
-    input->length = strlen("x");
+    input->buffer = strdup("ptr^");
+    input->length = strlen("ptr^");
 
     ParseResult res = parse_pascal_expression(input, p);
 
     TEST_ASSERT(res.is_success);
     if (res.is_success) {
+        TEST_ASSERT(res.value.ast->typ == PASCAL_T_DEREF);
+        ast_t* base = res.value.ast->child;
+        TEST_ASSERT(base != NULL);
+        if (base->child && base->child->typ == PASCAL_T_IDENTIFIER) {
+            base = base->child;
+        }
+        TEST_ASSERT(base->typ == PASCAL_T_IDENTIFIER);
+        TEST_ASSERT(base->sym && base->sym->name &&
+                   strcmp(base->sym->name, "ptr") == 0);
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
@@ -2493,20 +2508,40 @@ void test_pascal_pointer_dereference(void) {
     free(input);
 }
 
-// Test array access (basic support) 
+// Test array access (basic support)
 void test_pascal_array_access_with_deref(void) {
     combinator_t* p = new_combinator();
     init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
-    input->buffer = strdup("oper[i]");  // For now just test that array access works
-    input->length = strlen("oper[i]");
+    input->buffer = strdup("oper^[i]");
+    input->length = strlen("oper^[i]");
 
-    ParseResult res = parse(input, p);
+    ParseResult res = parse_pascal_expression(input, p);
 
     TEST_ASSERT(res.is_success);
     if (res.is_success) {
         TEST_ASSERT(res.value.ast->typ == PASCAL_T_ARRAY_ACCESS);
+        ast_t* deref = res.value.ast->child;
+        TEST_ASSERT(deref != NULL);
+        TEST_ASSERT(deref->typ == PASCAL_T_DEREF);
+
+        ast_t* base = deref->child;
+        TEST_ASSERT(base != NULL);
+        if (base->child && base->child->typ == PASCAL_T_IDENTIFIER) {
+            base = base->child;
+        }
+        TEST_ASSERT(base->sym && base->sym->name &&
+                   strcmp(base->sym->name, "oper") == 0);
+
+        ast_t* index = deref->next;
+        TEST_ASSERT(index != NULL);
+        if (index->child && index->child->typ == PASCAL_T_IDENTIFIER) {
+            index = index->child;
+        }
+        TEST_ASSERT(index->sym && index->sym->name &&
+                   strcmp(index->sym->name, "i") == 0);
+
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
