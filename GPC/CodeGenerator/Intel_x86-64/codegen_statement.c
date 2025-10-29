@@ -912,7 +912,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
+        if (use_qword)
+        {
+            // Sign-extend 32-bit values to 64-bit for longint arrays
+            if (var_expr->resolved_type == LONGINT_TYPE && assign_expr->resolved_type != LONGINT_TYPE)
+                inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+            snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+        }
+        else
+            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), value_reg);
