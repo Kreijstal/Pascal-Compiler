@@ -49,6 +49,16 @@ static int var_type_to_expr_type(enum VarType var_type)
             return STRING_TYPE;
         case HASHVAR_BOOLEAN:
             return BOOL;
+        case HASHVAR_CHAR:
+            return CHAR_TYPE;
+        case HASHVAR_POINTER:
+            return POINTER_TYPE;
+        case HASHVAR_SET:
+            return SET_TYPE;
+        case HASHVAR_ENUM:
+            return ENUM_TYPE;
+        case HASHVAR_FILE:
+            return FILE_TYPE;
         default:
             return UNKNOWN_TYPE;
     }
