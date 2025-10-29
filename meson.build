@@ -42,7 +42,8 @@ pascal_parser_dep = declare_dependency(
 build_integration_tests = get_option('build_integration_tests')
 
 cparser_tests = executable('cparser_tests', 'cparser/tests.c',
-  dependencies: cparser_dep
+  dependencies: [cparser_dep, pascal_parser_dep],
+  include_directories: [parser_inc, pascal_inc]
 )
 
 test('cparser unit tests', cparser_tests)

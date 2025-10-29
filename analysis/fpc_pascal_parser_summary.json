@@ -1,0 +1,87 @@
+{
+  "total": 2930,
+  "success": 0,
+  "failure": 2930,
+  "fail_reasons": [
+    [
+      "Error at line 1, col 1: Expected keyword 'implementation' (case-insensitive)",
+      1717
+    ],
+    [
+      "Error at line 1, col 1: Expected keyword 'end' (case-insensitive)",
+      518
+    ],
+    [
+      "Error at line 1, col 1: Expected keyword 'unit' (case-insensitive)",
+      328
+    ],
+    [
+      "Timeout",
+      320
+    ],
+    [
+      "Error at line 1, col 1: Expected keyword 'interface' (case-insensitive)",
+      13
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.generics....'",
+      10
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected '.' but found ';",
+      7
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found 'deprecated...'",
+      4
+    ],
+    [
+      "Parse completed. Success: YES",
+      2
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Strings;",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Helpers;",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.MemoryExp...'",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Rtti.Util...'",
+      1
+    ],
+    [
+      "Unknown error",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Rtti.Impl...'",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Hashes;",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.rtti;",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Collectio...'",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.rtti.invo...'",
+      1
+    ],
+    [
+      "Error at line 1, col 1: Parser 'match' Expected ';' but found '.Defaults;...'",
+      1
+    ]
+  ]
+}

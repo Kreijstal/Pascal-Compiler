@@ -1,6 +1,7 @@
 #include "acutest.h"
 #include "parser.h"
 #include "combinators.h"
+#include "pascal_parser.h"
 #include <stdio.h>
 
 // Declare wrap_failure_with_ast function
@@ -57,6 +58,36 @@ static void print_error_with_partial_ast(ParseError* error, int depth) {
         printf("Caused by:\n");
         print_error_with_partial_ast(error->cause, depth + 1);
     }
+}
+
+static bool pascal_unit_parses_successfully(const char* source) {
+    combinator_t* parser = new_combinator();
+    init_pascal_unit_parser(&parser);
+
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+
+    ast_t* previous_ast_nil = ast_nil;
+    ast_nil = new_ast();
+    ast_nil->typ = PASCAL_T_NONE;
+
+    ParseResult result = parse(input, parser);
+    bool success = result.is_success;
+
+    if (result.is_success) {
+        free_ast(result.value.ast);
+    } else if (result.value.error) {
+        free_error(result.value.error);
+    }
+
+    free_combinator(parser);
+    free(input->buffer);
+    free(input);
+    free(ast_nil);
+    ast_nil = previous_ast_nil;
+
+    return success;
 }
 
 
@@ -460,6 +491,65 @@ void test_expression_parser_behavior(void) {
     free(input);
 }
 
+void test_pascal_program_file(void) {
+    const char* source = "program Sample;\nbegin\n  writeln('hi');\nend.\n";
+    bool ok = pascal_unit_parses_successfully(source);
+    TEST_CHECK_(ok, "Pascal parser should accept simple program files");
+}
+
+void test_pascal_unit_with_resourcestring(void) {
+    const char* source =
+        "unit Resources;\n"
+        "interface\n"
+        "resourcestring\n"
+        "  SMessage = 'Hello';\n"
+        "implementation\n"
+        "end.\n";
+    bool ok = pascal_unit_parses_successfully(source);
+    TEST_CHECK_(ok, "Pascal parser should allow resourcestring sections in interfaces");
+}
+
+void test_pascal_unit_without_implementation(void) {
+    const char* source =
+        "unit IncludedOnly;\n"
+        "interface\n"
+        "{$i included_only.inc}\n"
+        "end.\n";
+    bool ok = pascal_unit_parses_successfully(source);
+    TEST_CHECK_(ok, "Pascal parser should allow units without an implementation section");
+}
+
+void test_pascal_unit_with_dotted_name(void) {
+    const char* source =
+        "unit Tests.Rtti;\n"
+        "interface\n"
+        "implementation\n"
+        "end.\n";
+    bool ok = pascal_unit_parses_successfully(source);
+    TEST_CHECK_(ok, "Pascal parser should support dotted unit identifiers");
+}
+
+void test_pascal_uses_with_dotted_unit(void) {
+    const char* source =
+        "unit UsesGenerics;\n"
+        "interface\n"
+        "uses Generics.Collections;\n"
+        "implementation\n"
+        "end.\n";
+    bool ok = pascal_unit_parses_successfully(source);
+    TEST_CHECK_(ok, "Pascal parser should allow uses clauses with dotted unit names");
+}
+
+void test_pascal_unit_with_deprecated_qualifier(void) {
+    const char* source =
+        "unit LegacyUnit deprecated 'use NewUnit instead';\n"
+        "interface\n"
+        "implementation\n"
+        "end.\n";
+    bool ok = pascal_unit_parses_successfully(source);
+    TEST_CHECK_(ok, "Pascal parser should accept deprecated unit qualifiers");
+}
+
 TEST_LIST = {
     { "pnot_combinator", test_pnot_combinator },
     { "peek_combinator", test_peek_combinator },
@@ -476,5 +566,11 @@ TEST_LIST = {
     { "expression_parser_partial_ast", test_expression_parser_partial_ast },
     { "expression_parser_invalid_input", test_expression_parser_invalid_input },
     { "expression_parser_behavior", test_expression_parser_behavior },
+    { "pascal_program_file", test_pascal_program_file },
+    { "pascal_unit_with_resourcestring", test_pascal_unit_with_resourcestring },
+    { "pascal_unit_without_implementation", test_pascal_unit_without_implementation },
+    { "pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
+    { "pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },
+    { "pascal_unit_with_deprecated_qualifier", test_pascal_unit_with_deprecated_qualifier },
     { NULL, NULL }
 };
