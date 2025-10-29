@@ -31,7 +31,7 @@ void install_stack_trace_handler(void)
 #  endif
 #endif
 
-#ifdef HAVE_LIBUNWIND
+#if HAVE_LIBUNWIND
 #include <libunwind.h>
 
 static void stack_trace_handler(int sig)

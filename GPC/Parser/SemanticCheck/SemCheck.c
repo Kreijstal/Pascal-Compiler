@@ -217,6 +217,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_PCHAR;
                     else if (element_type == BOOL)
                         var_type = HASHVAR_BOOLEAN;
+                    else if (element_type == CHAR_TYPE)
+                        var_type = HASHVAR_CHAR;
+                    else if (element_type == POINTER_TYPE)
+                        var_type = HASHVAR_POINTER;
+                    else if (element_type == SET_TYPE)
+                        var_type = HASHVAR_SET;
+                    else if (element_type == ENUM_TYPE)
+                        var_type = HASHVAR_ENUM;
+                    else if (element_type == FILE_TYPE)
+                        var_type = HASHVAR_FILE;
                     else
                         var_type = HASHVAR_INTEGER;
                 }
@@ -231,10 +241,29 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_PCHAR;
                     else if (base_type == BOOL)
                         var_type = HASHVAR_BOOLEAN;
+                    else if (base_type == CHAR_TYPE)
+                        var_type = HASHVAR_CHAR;
+                    else if (base_type == POINTER_TYPE)
+                        var_type = HASHVAR_POINTER;
+                    else if (base_type == SET_TYPE)
+                        var_type = HASHVAR_SET;
+                    else if (base_type == ENUM_TYPE)
+                        var_type = HASHVAR_ENUM;
+                    else if (base_type == FILE_TYPE)
+                        var_type = HASHVAR_FILE;
                     else if (base_type == INT_TYPE)
                         var_type = HASHVAR_INTEGER;
                     else
                         var_type = HASHVAR_UNTYPED;
+
+                    if (alias_info->is_pointer)
+                        var_type = HASHVAR_POINTER;
+                    else if (alias_info->is_set)
+                        var_type = HASHVAR_SET;
+                    else if (alias_info->is_enum)
+                        var_type = HASHVAR_ENUM;
+                    else if (alias_info->is_file)
+                        var_type = HASHVAR_FILE;
 
                     if (var_type == HASHVAR_UNTYPED && alias_info->target_type_id != NULL)
                     {
@@ -334,6 +363,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (boolean_name != NULL) {
         AddBuiltinType(symtab, boolean_name, HASHVAR_BOOLEAN);
         free(boolean_name);
+    }
+    char *char_name = strdup("char");
+    if (char_name != NULL) {
+        AddBuiltinType(symtab, char_name, HASHVAR_CHAR);
+        free(char_name);
+    }
+    char *file_name = strdup("file");
+    if (file_name != NULL) {
+        AddBuiltinType(symtab, file_name, HASHVAR_FILE);
+        free(file_name);
     }
 
     char *setlength_name = strdup("SetLength");

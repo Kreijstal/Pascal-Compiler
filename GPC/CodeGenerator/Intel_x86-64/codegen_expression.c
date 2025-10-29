@@ -171,6 +171,14 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_TYPECAST:
+            CODEGEN_DEBUG("DEBUG: Processing typecast expression\n");
+            if (expr->expr_data.typecast_data.expr != NULL)
+                inst_list = codegen_expr(expr->expr_data.typecast_data.expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         default:
             assert(0 && "Unsupported expression type");
             break;

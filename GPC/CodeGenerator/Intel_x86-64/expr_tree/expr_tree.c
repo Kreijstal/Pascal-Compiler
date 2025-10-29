@@ -46,6 +46,9 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 {
     assert(expr != NULL);
 
+    if (expr->type == EXPR_TYPECAST && expr->expr_data.typecast_data.expr != NULL)
+        return build_expr_tree(expr->expr_data.typecast_data.expr);
+
     expr_node_t *new_node;
 
     new_node = (expr_node_t *)malloc(sizeof(expr_node_t));
@@ -77,6 +80,11 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
         case EXPR_BOOL:
+            new_node->left_expr = NULL;
+            new_node->right_expr = NULL;
+            break;
+
+        case EXPR_TYPECAST:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -722,6 +730,39 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             else if(type == MOD)
             {
                 inst_list = gencode_modulus(left, right, inst_list);
+            }
+            else if(type == XOR)
+            {
+                snprintf(buffer, 50, "\txorl\t%s, %s\n", right, left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == SHL)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tsall\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == SHR)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\tsarl\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == ROL)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\troll\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == ROR)
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, 50, "\trorl\t%%cl, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
             }
             else
             {

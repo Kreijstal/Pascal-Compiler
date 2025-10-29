@@ -15,6 +15,11 @@
 #define LONGINT_TYPE        3
 #define STRING_TYPE         4
 #define BUILTIN_ANY_TYPE    5
+#define CHAR_TYPE           28
+#define POINTER_TYPE        29
+#define SET_TYPE            30
+#define ENUM_TYPE           31
+#define FILE_TYPE           32
 
 /* Legacy token constants reused by the semantic analyser and code generator */
 #define BOOL                6
@@ -37,5 +42,12 @@
 #define SLASH               20
 #define DIV                 21
 #define MOD                 22
+
+/* Bitwise operators */
+#define XOR                 23
+#define SHL                 24
+#define SHR                 25
+#define ROL                 26
+#define ROR                 27
 
 #endif /* TYPE_TAGS_H */

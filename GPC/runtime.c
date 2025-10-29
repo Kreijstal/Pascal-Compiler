@@ -178,6 +178,16 @@ void gpc_write_boolean(int width, int value)
         printf("%s", text);
 }
 
+void gpc_raise(int64_t value)
+{
+    if (value == 0)
+        fprintf(stderr, "Unhandled exception raised.\n");
+    else
+        fprintf(stderr, "Unhandled exception raised with code %lld.\n", (long long)value);
+    fflush(stderr);
+    exit(EXIT_FAILURE);
+}
+
 static char *gpc_alloc_empty_string(void)
 {
     char *empty = (char *)malloc(1);
