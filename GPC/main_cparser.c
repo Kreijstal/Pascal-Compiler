@@ -610,6 +610,7 @@ int main(int argc, char **argv)
             destroy_tree(prelude_tree);
         free(stdlib_path);
         clear_dump_ast_path();
+        pascal_frontend_cleanup();
         return 1;
     }
 
@@ -622,6 +623,7 @@ int main(int argc, char **argv)
             destroy_tree(user_tree);
         free(stdlib_path);
         clear_dump_ast_path();
+        pascal_frontend_cleanup();
         return 1;
     }
 
@@ -638,6 +640,7 @@ int main(int argc, char **argv)
             free(ast_nil);
             ast_nil = NULL;
         }
+        pascal_frontend_cleanup();
         return 1;
     }
 
@@ -653,6 +656,7 @@ int main(int argc, char **argv)
                 destroy_tree(user_tree);
             free(stdlib_path);
             clear_dump_ast_path();
+            pascal_frontend_cleanup();
             return 1;
         }
         fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
@@ -669,6 +673,7 @@ int main(int argc, char **argv)
             ast_nil = NULL;
         }
         clear_dump_ast_path();
+        pascal_frontend_cleanup();
         return 0;
     }
 
@@ -680,6 +685,7 @@ int main(int argc, char **argv)
             destroy_tree(user_tree);
         free(stdlib_path);
         clear_dump_ast_path();
+        pascal_frontend_cleanup();
         return 1;
     }
 
@@ -763,9 +769,11 @@ int main(int argc, char **argv)
     if (sem_result > 0)
     {
         clear_dump_ast_path();
+        pascal_frontend_cleanup();
         return exit_code > 0 ? exit_code : 1;
     }
 
     clear_dump_ast_path();
+    pascal_frontend_cleanup();
     return exit_code;
 }
