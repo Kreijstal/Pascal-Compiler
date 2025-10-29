@@ -742,6 +742,30 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
         self.assertEqual(process.stdout, "5\n6\n7\n8\n")
 
+    def test_set_operations_program(self):
+        """Exercises set arithmetic, membership, and boolean conditions."""
+        input_file = os.path.join(TEST_CASES_DIR, "set_operations.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "set_operations.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "set_operations")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        expected_output = read_file_content(
+            os.path.join(TEST_CASES_DIR, "set_operations.expected")
+        )
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, expected_output)
+        self.assertEqual(result.returncode, 0)
+
     def test_record_type_declaration(self):
         """Tests that a program declaring a record type compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
@@ -762,6 +786,28 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+    def test_record_member_access(self):
+        """Tests that record field loads and stores compile and execute."""
+        input_file = os.path.join(TEST_CASES_DIR, "record_member_access.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access")
+        expected_output_file = os.path.join(TEST_CASES_DIR, "record_member_access.expected")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        expected_output = read_file_content(expected_output_file)
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, expected_output)
+        self.assertEqual(result.returncode, 0)
 
     def test_fizzbuzz(self):
         """Tests the fizzbuzz program."""

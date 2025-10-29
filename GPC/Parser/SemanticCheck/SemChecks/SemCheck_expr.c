@@ -38,6 +38,8 @@ static void semcheck_clear_pointer_info(struct Expression *expr);
 static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_recordaccess(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_addressof(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
@@ -76,8 +78,55 @@ static void semcheck_set_pointer_info(struct Expression *expr, int subtype, cons
     {
         expr->pointer_subtype_id = strdup(type_id);
         if (expr->pointer_subtype_id == NULL)
-            fprintf(stderr, "Error: failed to allocate pointer type identifier.\\n");
+            fprintf(stderr, "Error: failed to allocate pointer type identifier.\n");
     }
+}
+
+static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int line_num)
+{
+    if (record == NULL || field_name == NULL)
+        return 1;
+
+    long long offset = 0;
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_RECORD_FIELD);
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (field != NULL && field->name != NULL &&
+            pascal_identifier_equals(field->name, field_name))
+        {
+            if (out_field != NULL)
+                *out_field = field;
+            if (offset_out != NULL)
+                *offset_out = offset;
+            return 0;
+        }
+
+        long long field_size = 0;
+        if (field != NULL)
+        {
+            if (field->nested_record != NULL)
+            {
+                if (sizeof_from_record(symtab, field->nested_record, &field_size, 0, line_num) != 0)
+                    return 1;
+            }
+            else
+            {
+                if (sizeof_from_type_ref(symtab, field->type, field->type_id,
+                        &field_size, 0, line_num) != 0)
+                    return 1;
+            }
+            offset += field_size;
+        }
+
+        cur = cur->next;
+    }
+
+    fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
+    return 1;
 }
 static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
@@ -995,6 +1044,134 @@ static int semcheck_pointer_deref(int *type_return,
     return error_count;
 }
 
+static int semcheck_recordaccess(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_RECORD_ACCESS);
+
+    expr->record_type = NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    const char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+    {
+        fprintf(stderr, "Error on line %d, malformed record field access.\n\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int error_count = 0;
+    int record_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&record_type, symtab, record_expr, max_scope_lev, mutating);
+
+    struct RecordType *record_info = NULL;
+    if (record_type == RECORD_TYPE)
+    {
+        record_info = record_expr->record_type;
+    }
+    else if (record_type == POINTER_TYPE)
+    {
+        record_info = record_expr->record_type;
+        if (record_info == NULL && record_expr->pointer_subtype_id != NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, symtab, record_expr->pointer_subtype_id) != -1 &&
+                target_node != NULL)
+            {
+                record_info = target_node->record_type;
+            }
+        }
+
+        if (record_info == NULL)
+        {
+            fprintf(stderr, "Error on line %d, pointer does not reference a record type.\n\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return error_count + 1;
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return error_count + 1;
+    }
+
+    if (record_info == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to resolve record type for field %s.\n\n",
+            expr->line_num, field_id);
+        *type_return = UNKNOWN_TYPE;
+        return error_count + 1;
+    }
+
+    struct RecordField *field_desc = NULL;
+    long long field_offset = 0;
+    if (resolve_record_field(symtab, record_info, field_id, &field_desc,
+            &field_offset, expr->line_num) != 0 || field_desc == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count + 1;
+    }
+
+    expr->expr_data.record_access_data.field_offset = field_offset;
+
+    int field_type = field_desc->type;
+    struct RecordType *field_record = field_desc->nested_record;
+    if (field_record != NULL)
+        field_type = RECORD_TYPE;
+
+    if (field_desc->type_id != NULL)
+    {
+        int resolved_type = field_type;
+        if (resolve_type_identifier(&resolved_type, symtab, field_desc->type_id, expr->line_num) != 0)
+            ++error_count;
+        field_type = resolved_type;
+
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 && type_node != NULL)
+        {
+            if (type_node->record_type != NULL)
+                field_record = type_node->record_type;
+            else if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
+                    target_node != NULL && target_node->record_type != NULL)
+                {
+                    field_record = target_node->record_type;
+                }
+            }
+        }
+
+        if (field_record != NULL && field_type == UNKNOWN_TYPE)
+            field_type = RECORD_TYPE;
+    }
+
+    if (field_type == UNKNOWN_TYPE && field_record == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n\n",
+            expr->line_num, field_id);
+        *type_return = UNKNOWN_TYPE;
+        return error_count + 1;
+    }
+
+    if (field_type == RECORD_TYPE && field_record == NULL)
+    {
+        fprintf(stderr, "Error on line %d, missing record definition for field %s.\n\n",
+            expr->line_num, field_id);
+        *type_return = UNKNOWN_TYPE;
+        return error_count + 1;
+    }
+
+    expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
+    *type_return = field_type;
+    return error_count;
+}
+
 static int semcheck_addressof(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -1079,7 +1256,7 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
             *type = UNKNOWN_TYPE;
             break;
         case HASHVAR_RECORD:
-            *type = UNKNOWN_TYPE;
+            *type = RECORD_TYPE;
             break;
         default:
             assert(0 && "Bad type in set_type_from_hashtype!");
@@ -1141,6 +1318,10 @@ int semcheck_expr_main(int *type_return,
             return_val += semcheck_arrayaccess(type_return, symtab, expr, max_scope_lev, mutating);
             break;
 
+        case EXPR_RECORD_ACCESS:
+            return_val += semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+
         case EXPR_FUNCTION_CALL:
             return_val += semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
             break;
@@ -1172,6 +1353,9 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_BOOL:
             *type_return = BOOL;
+            break;
+        case EXPR_SET:
+            *type_return = SET_TYPE;
             break;
 
         default:
@@ -1228,7 +1412,22 @@ int semcheck_relop(int *type_return,
         else
         {
             int relop_type = expr->expr_data.relop_data.type;
-            if (relop_type == EQ || relop_type == NE)
+            if (relop_type == IN)
+            {
+                if (type_second != SET_TYPE)
+                {
+                    fprintf(stderr, "Error on line %d, expected set operand on right side of IN expression!\n\n",
+                        expr->line_num);
+                    ++return_val;
+                }
+                if (type_first != INT_TYPE && type_first != LONGINT_TYPE)
+                {
+                    fprintf(stderr, "Error on line %d, expected integer operand on left side of IN expression!\n\n",
+                        expr->line_num);
+                    ++return_val;
+                }
+            }
+            else if (relop_type == EQ || relop_type == NE)
             {
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
@@ -1314,6 +1513,22 @@ int semcheck_addop(int *type_return,
         return return_val;
     }
 
+    if (type_first == SET_TYPE && type_second == SET_TYPE)
+    {
+        if (op_type == PLUS)
+        {
+            *type_return = SET_TYPE;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, unsupported set additive operator.\n\n",
+                expr->line_num);
+            ++return_val;
+            *type_return = SET_TYPE;
+        }
+        return return_val;
+    }
+
     if (op_type == PLUS && type_first == STRING_TYPE && type_second == STRING_TYPE)
     {
         *type_return = STRING_TYPE;
@@ -1371,6 +1586,22 @@ int semcheck_mulop(int *type_return,
             ++return_val;
         }
         *type_return = BOOL;
+        return return_val;
+    }
+
+    if (type_first == SET_TYPE && type_second == SET_TYPE)
+    {
+        if (op_type == STAR)
+        {
+            *type_return = SET_TYPE;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, unsupported set multiplicative operator.\n\n",
+                expr->line_num);
+            ++return_val;
+            *type_return = SET_TYPE;
+        }
         return return_val;
     }
 
@@ -1457,6 +1688,10 @@ int semcheck_varid(int *type_return,
             }
             semcheck_set_pointer_info(expr, subtype, type_id);
         }
+        if (*type_return == RECORD_TYPE)
+            expr->record_type = hash_return->record_type;
+        else
+            expr->record_type = NULL;
     }
 
     return return_val;

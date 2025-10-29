@@ -181,11 +181,13 @@ enum ExprType {
     EXPR_MULOP,
     EXPR_VAR_ID,
     EXPR_ARRAY_ACCESS,
+    EXPR_RECORD_ACCESS,
     EXPR_FUNCTION_CALL,
     EXPR_INUM,
     EXPR_RNUM,
     EXPR_STRING,
     EXPR_BOOL,
+    EXPR_SET,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
     EXPR_TYPECAST
@@ -239,6 +241,14 @@ struct Expression
             struct Expression *array_expr;
         } array_access_data;
 
+        /* Record field access */
+        struct RecordAccess
+        {
+            struct Expression *record_expr;
+            char *field_id;
+            long long field_offset;
+        } record_access_data;
+
         /* Function call */
         struct FunctionCall
         {
@@ -259,6 +269,14 @@ struct Expression
 
         /* Boolean literal */
         int bool_value;
+
+        /* Set literal represented as a bitmask */
+        struct SetLiteral
+        {
+            unsigned int bitmask;
+            ListNode_t *elements;
+            int is_constant;
+        } set_data;
 
         /* Pointer dereference */
         struct PointerDeref
@@ -285,6 +303,13 @@ struct Expression
     int resolved_type;
     int pointer_subtype;
     char *pointer_subtype_id;
+    struct RecordType *record_type;
+};
+
+struct SetElement
+{
+    struct Expression *lower;
+    struct Expression *upper;
 };
 
 

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -68,6 +69,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
         info->array_dimensions = NULL;
     }
 }
+
+static int extract_constant_int(struct Expression *expr, long long *out_value);
+static struct Expression *convert_set_literal(ast_t *set_node);
+static char *pop_last_identifier(ListNode_t **ids);
 
 static char *dup_symbol(ast_t *node) {
     while (node != NULL) {
@@ -176,6 +181,7 @@ static int map_type_name(const char *name, char **type_id_out) {
 
 static struct RecordType *convert_record_type(ast_t *record_node);
 static struct Expression *convert_expression(ast_t *expr_node);
+static struct Expression *convert_member_access(ast_t *node);
 static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
@@ -399,6 +405,25 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
         int field_type = UNKNOWN_TYPE;
         if (cursor != NULL)
             field_type = convert_type_spec(cursor, &field_type_id, &nested_record, NULL);
+        else if (names != NULL)
+        {
+            char *candidate = pop_last_identifier(&names);
+            if (candidate != NULL)
+            {
+                char *mapped_id = NULL;
+                int mapped_type = map_type_name(candidate, &mapped_id);
+                if (mapped_type != UNKNOWN_TYPE)
+                {
+                    field_type = mapped_type;
+                    field_type_id = mapped_id;
+                    free(candidate);
+                }
+                else
+                {
+                    field_type_id = candidate;
+                }
+            }
+        }
 
         ListNode_t *name_node = names;
         while (name_node != NULL) {
@@ -921,6 +946,7 @@ static int map_relop_tag(int tag) {
     case PASCAL_T_LE: return LE;
     case PASCAL_T_GT: return GT;
     case PASCAL_T_GE: return GE;
+    case PASCAL_T_IN: return IN;
     case PASCAL_T_AND: return AND;
     case PASCAL_T_OR:  return OR;
     default: return UNKNOWN_TYPE;
@@ -983,6 +1009,126 @@ static char *collect_asm_text(ast_t *block_node) {
     return buffer;
 }
 
+static int extract_constant_int(struct Expression *expr, long long *out_value) {
+    if (expr == NULL || out_value == NULL)
+        return 1;
+
+    switch (expr->type) {
+    case EXPR_INUM:
+        *out_value = expr->expr_data.i_num;
+        return 0;
+    case EXPR_SIGN_TERM:
+        if (extract_constant_int(expr->expr_data.sign_term, out_value) != 0)
+            return 1;
+        *out_value = -*out_value;
+        return 0;
+    case EXPR_ADDOP: {
+        long long left_value = 0;
+        long long right_value = 0;
+        if (extract_constant_int(expr->expr_data.addop_data.left_expr, &left_value) != 0)
+            return 1;
+        if (extract_constant_int(expr->expr_data.addop_data.right_term, &right_value) != 0)
+            return 1;
+        if (expr->expr_data.addop_data.addop_type == PLUS)
+            *out_value = left_value + right_value;
+        else if (expr->expr_data.addop_data.addop_type == MINUS)
+            *out_value = left_value - right_value;
+        else
+            return 1;
+        return 0;
+    }
+    case EXPR_MULOP: {
+        long long left_value = 0;
+        long long right_value = 0;
+        if (extract_constant_int(expr->expr_data.mulop_data.left_term, &left_value) != 0)
+            return 1;
+        if (extract_constant_int(expr->expr_data.mulop_data.right_factor, &right_value) != 0)
+            return 1;
+        if (expr->expr_data.mulop_data.mulop_type == STAR) {
+            *out_value = left_value * right_value;
+            return 0;
+        }
+        return 1;
+    }
+    default:
+        break;
+    }
+
+    return 1;
+}
+
+static ListNode_t *append_set_element(ListNode_t *elements, struct SetElement *element)
+{
+    if (element == NULL)
+        return elements;
+
+    ListNode_t *node = CreateListNode(element, LIST_SET_ELEMENT);
+    if (elements == NULL)
+        return node;
+    return PushListNodeBack(elements, node);
+}
+
+static struct Expression *convert_set_literal(ast_t *set_node) {
+    if (set_node == NULL)
+        return mk_set(0, 0, NULL, 1);
+
+    uint32_t mask = 0;
+    int all_constant = 1;
+    ListNode_t *elements = NULL;
+
+    for (ast_t *element = set_node->child; element != NULL && element != ast_nil; element = element->next) {
+        ast_t *unwrapped = unwrap_pascal_node(element);
+        if (unwrapped == NULL)
+            continue;
+
+        if (unwrapped->typ == PASCAL_T_RANGE) {
+            ast_t *start_node = unwrap_pascal_node(unwrapped->child);
+            ast_t *end_node = NULL;
+            if (start_node != NULL)
+                end_node = unwrap_pascal_node(start_node->next);
+
+            struct Expression *start_expr = convert_expression(start_node);
+            struct Expression *end_expr = convert_expression(end_node);
+            elements = append_set_element(elements, mk_set_element(start_expr, end_expr));
+
+            long long start_value = 0;
+            long long end_value = 0;
+            int have_start = (start_expr != NULL) && extract_constant_int(start_expr, &start_value) == 0;
+            int have_end = (end_expr != NULL) && extract_constant_int(end_expr, &end_value) == 0;
+
+            if (!have_start || !have_end)
+            {
+                all_constant = 0;
+                continue;
+            }
+
+            if (start_value > end_value) {
+                long long tmp = start_value;
+                start_value = end_value;
+                end_value = tmp;
+            }
+            for (long long value = start_value; value <= end_value; ++value) {
+                if (value >= 0 && value < 32)
+                    mask |= (uint32_t)1u << value;
+            }
+        } else {
+            struct Expression *value_expr = convert_expression(unwrapped);
+            elements = append_set_element(elements, mk_set_element(value_expr, NULL));
+
+            long long value = 0;
+            if (value_expr == NULL || extract_constant_int(value_expr, &value) != 0) {
+                all_constant = 0;
+                continue;
+            }
+
+            if (value >= 0 && value < 32)
+                mask |= (uint32_t)1u << value;
+        }
+    }
+
+    return mk_set(set_node->line, mask, elements, all_constant);
+}
+
 static struct Expression *convert_factor(ast_t *expr_node) {
     expr_node = unwrap_pascal_node(expr_node);
     if (expr_node == NULL) {
@@ -1004,6 +1150,8 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             return mk_bool(expr_node->line, bool_value);
         }
         return mk_bool(expr_node->line, 0);
+    case PASCAL_T_SET:
+        return convert_set_literal(expr_node);
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_FUNC_CALL: {
@@ -1059,6 +1207,7 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
     case PASCAL_T_LE:
     case PASCAL_T_GT:
     case PASCAL_T_GE:
+    case PASCAL_T_IN:
         return mk_relop(node->line, map_relop_tag(type), left, right);
     default:
         break;
@@ -1094,7 +1243,10 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
+    case PASCAL_T_SET:
         return convert_factor(expr_node);
+    case PASCAL_T_MEMBER_ACCESS:
+        return convert_member_access(expr_node);
     case PASCAL_T_ADD:
     case PASCAL_T_SUB:
     case PASCAL_T_MUL:
@@ -1107,6 +1259,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_LE:
     case PASCAL_T_GT:
     case PASCAL_T_GE:
+    case PASCAL_T_IN:
     case PASCAL_T_AND:
     case PASCAL_T_OR:
     case PASCAL_T_XOR:
@@ -1115,6 +1268,14 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_ROL:
     case PASCAL_T_ROR:
         return convert_binary_expr(expr_node, expr_node->typ);
+    case PASCAL_T_SET_UNION:
+        return convert_binary_expr(expr_node, PASCAL_T_ADD);
+    case PASCAL_T_SET_INTERSECT:
+        return convert_binary_expr(expr_node, PASCAL_T_MUL);
+    case PASCAL_T_SET_DIFF:
+        return convert_binary_expr(expr_node, PASCAL_T_SUB);
+    case PASCAL_T_SET_SYM_DIFF:
+        return convert_binary_expr(expr_node, PASCAL_T_XOR);
     case PASCAL_T_NEG:
     case PASCAL_T_POS:
         return convert_unary_expr(expr_node);
@@ -1227,6 +1388,31 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
     }
 
     return base_expr;
+}
+
+static struct Expression *convert_member_access(ast_t *node) {
+    if (node == NULL)
+        return NULL;
+
+    ast_t *base_node = node->child;
+    ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
+
+    struct Expression *record_expr = convert_expression(base_node);
+
+    char *field_id = NULL;
+    ast_t *unwrapped = unwrap_pascal_node(field_node);
+    if (unwrapped == NULL)
+        unwrapped = field_node;
+
+    if (unwrapped != NULL) {
+        if (unwrapped->typ == PASCAL_T_IDENTIFIER) {
+            field_id = dup_symbol(unwrapped);
+        } else if (unwrapped->child != NULL && unwrapped->child->typ == PASCAL_T_IDENTIFIER) {
+            field_id = dup_symbol(unwrapped->child);
+        }
+    }
+
+    return mk_recordaccess(node->line, record_expr, field_id);
 }
 
 static struct Statement *convert_assignment(ast_t *assign_node) {
