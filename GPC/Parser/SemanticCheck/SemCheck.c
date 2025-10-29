@@ -617,14 +617,27 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_LONGINT;
                 else if(tree->tree_data.var_decl_data.type == BOOL)
                     var_type = HASHVAR_BOOLEAN;
+                else if(tree->tree_data.var_decl_data.type == SET_TYPE)
+                    var_type = HASHVAR_SET;
+                else if(tree->tree_data.var_decl_data.type == ENUM_TYPE)
+                    var_type = HASHVAR_ENUM;
                 else
                     var_type = HASHVAR_REAL;
                 func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
-                if (func_return == 0 && resolved_type != NULL && resolved_type->type_alias != NULL)
+                if (func_return == 0 && resolved_type != NULL)
                 {
                     HashNode_t *var_node = NULL;
                     if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
-                        var_node->type_alias = resolved_type->type_alias;
+                    {
+                        if (resolved_type->type_alias != NULL)
+                            var_node->type_alias = resolved_type->type_alias;
+                        if (resolved_type->record_type != NULL)
+                        {
+                            if (var_node->record_type != NULL)
+                                destroy_record_type(var_node->record_type);
+                            var_node->record_type = clone_record_type(resolved_type->record_type);
+                        }
+                    }
                 }
             }
             /* Array declarations */
@@ -722,6 +735,10 @@ next_identifier:
                                 normalized_type = STRING_TYPE;
                                 if (tree->tree_data.var_decl_data.type_id == NULL)
                                     tree->tree_data.var_decl_data.type_id = strdup("string");
+                                break;
+                            case SET_TYPE:
+                                inferred_var_type = HASHVAR_SET;
+                                normalized_type = SET_TYPE;
                                 break;
                             default:
                                 fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",

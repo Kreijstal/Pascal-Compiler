@@ -235,6 +235,8 @@ struct Expression *mk_varid(int line_num, char *id);
 
 struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *index_expr);
 
+struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr, char *field_id);
+
 struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_expr);
 
 struct Expression *mk_addressof(int line_num, struct Expression *expr);
@@ -247,6 +249,10 @@ struct Expression *mk_rnum(int line_num, float r_num);
 struct Expression *mk_string(int line_num, char *string);
 
 struct Expression *mk_bool(int line_num, int value);
+
+struct SetElement *mk_set_element(struct Expression *lower, struct Expression *upper);
+void destroy_set_element(struct SetElement *element);
+struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elements, int is_constant);
 
 struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
     struct Expression *expr);
