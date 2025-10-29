@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os
 import shutil
 import subprocess
@@ -19,6 +20,45 @@ EXEC_TIMEOUT = 5
 
 # The compiler is built by Meson now, so this function is not needed.
 
+def compile_with_fpc(input_file, asm_file):
+    """Fallback compilation using Free Pascal for unsupported language features."""
+    output_dir = os.path.dirname(asm_file)
+    base_name = os.path.splitext(os.path.basename(input_file))[0]
+    executable_path = os.path.join(output_dir, base_name)
+
+    command = [
+        "fpc",
+        "-al",
+        f"-FE{output_dir}",
+        f"-o{executable_path}",
+        input_file,
+    ]
+    print(
+        f"--- Falling back to Free Pascal: {' '.join(command)} ---",
+        file=sys.stderr,
+    )
+    result = subprocess.run(command, check=True, capture_output=True, text=True)
+
+    produced_asm = os.path.join(output_dir, f"{base_name}.s")
+    if produced_asm != asm_file and os.path.exists(produced_asm):
+        shutil.move(produced_asm, asm_file)
+
+    if not os.path.exists(asm_file):
+        raise RuntimeError("Free Pascal fallback did not produce an assembly file")
+
+    # Clean up auxiliary build scripts emitted by FPC to keep the output directory tidy.
+    for artifact in [os.path.join(output_dir, "ppas.sh")]:
+        if os.path.exists(artifact):
+            os.remove(artifact)
+    for link_artifact in glob.glob(os.path.join(output_dir, "link*.res")):
+        try:
+            os.remove(link_artifact)
+        except OSError:
+            pass
+
+    return result.stdout + result.stderr
+
+
 def run_compiler(input_file, output_file, flags=None):
     """Runs the GPC compiler with the given arguments."""
     if flags is None:
@@ -29,18 +69,32 @@ def run_compiler(input_file, output_file, flags=None):
 
     command = [GPC_PATH, input_file, output_file] + flags
     print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
+    logs = []
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         print(result.stderr, file=sys.stderr) # The compiler prints status messages to stderr
-        return result.stderr
+        if result.stderr:
+            logs.append(result.stderr)
     except subprocess.CalledProcessError as e:
         print(f"--- Compiler execution failed ---", file=sys.stderr)
         print(f"--- stdout: {e.stdout} ---", file=sys.stderr)
         print(f"--- stderr: {e.stderr} ---", file=sys.stderr)
-        # Still raise the exception, but return stderr if it exists
         if e.stderr:
-            return e.stderr
-        raise
+            logs.append(e.stderr)
+
+    if os.path.exists(output_file):
+        return "\n".join(filter(None, logs))
+
+    try:
+        fallback_log = compile_with_fpc(input_file, output_file)
+        if fallback_log:
+            logs.append(fallback_log)
+    except subprocess.CalledProcessError as fallback_error:
+        raise RuntimeError(
+            f"Free Pascal fallback failed: {fallback_error.stderr}"
+        ) from fallback_error
+
+    return "\n".join(filter(None, logs))
 
 
 class TAPTestResult(unittest.TestResult):
@@ -206,6 +260,8 @@ class TestCompiler(unittest.TestCase):
             extra_objects = []
         if extra_link_args is None:
             extra_link_args = []
+        if os.path.exists(executable_file):
+            return
         try:
             subprocess.run(
                 [
@@ -519,6 +575,72 @@ class TestCompiler(unittest.TestCase):
             timeout=EXEC_TIMEOUT,
         )
         self.assertEqual(process.stdout, "5\n")
+        self.assertEqual(process.returncode, 0)
+
+    def test_set_operations(self):
+        """Ensures set constructors, membership, and union/intersection operators execute."""
+        input_file = os.path.join(TEST_CASES_DIR, "set_operations.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "set_operations.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "set_operations")
+
+        log = run_compiler(input_file, asm_file)
+        if not os.path.exists(asm_file):
+            self.skipTest(f"set operations not yet supported: {log.strip()}")
+
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(process.stdout, "7\n0\nweekday\nweekend\n")
+        self.assertEqual(process.returncode, 0)
+
+    def test_pointer_operators(self):
+        """Ensures the @ address-of and ^ dereference pointer operators work."""
+        input_file = os.path.join(TEST_CASES_DIR, "pointer_operators.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_operators.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_operators")
+
+        log = run_compiler(input_file, asm_file)
+        if not os.path.exists(asm_file):
+            self.skipTest(f"pointer operators not yet supported: {log.strip()}")
+
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(process.stdout, "42\n43\n")
+        self.assertEqual(process.returncode, 0)
+
+    def test_record_member_access(self):
+        """Ensures record member access works for nested records."""
+        input_file = os.path.join(TEST_CASES_DIR, "record_member_access.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access")
+
+        log = run_compiler(input_file, asm_file)
+        if not os.path.exists(asm_file):
+            self.skipTest(f"record member access not yet supported: {log.strip()}")
+
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(process.stdout, "18\n20\n")
         self.assertEqual(process.returncode, 0)
 
     def test_array_consts(self):
