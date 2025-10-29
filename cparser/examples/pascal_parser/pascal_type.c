@@ -9,6 +9,16 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+static void set_combinator_name(combinator_t* comb, const char* name) {
+    if (comb == NULL)
+        return;
+
+    if (comb->name != NULL) {
+        free(comb->name);
+    }
+    comb->name = strdup(name);
+}
+
 static inline void discard_failure(ParseResult result) {
     if (!result.is_success) {
         free_error(result.value.error);
@@ -201,61 +211,66 @@ combinator_t* class_type(tag_t tag) {
     );
 
     // Method declarations (simplified - just headers for now)
-    combinator_t* method_name = token(cident(PASCAL_T_IDENTIFIER));
-    
-    // Use the shared parameter parser
-    combinator_t* param_list = create_pascal_param_parser();
-
-    // Constructor declaration: constructor Name;
     combinator_t* constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
         token(keyword_ci("constructor")),
-        method_name,
-        param_list,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
         token(match(";")),
         NULL
     );
 
-    // Destructor declaration: destructor Name; override;
     combinator_t* destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
         token(keyword_ci("destructor")),
-        method_name,
-        param_list,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),       // override keyword
-            optional(token(match(";"))),         // optional semicolon after override
+            token(keyword_ci("override")),
+            optional(token(match(";"))),
             NULL
         )),
         NULL
     );
 
-    // Procedure declaration: procedure Name; [override];
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
-        method_name,
-        param_list,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),       // override keyword
-            optional(token(match(";"))),         // optional semicolon after override
+            token(keyword_ci("override")),
+            optional(token(match(";"))),
             NULL
         )),
         NULL
     );
 
-    // Function declaration: function Name: ReturnType; [override];
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
-        method_name,
-        param_list,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
         token(match(":")),
-        token(cident(PASCAL_T_IDENTIFIER)), // return type
+        token(cident(PASCAL_T_IDENTIFIER)),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),       // override keyword
-            optional(token(match(";"))),         // optional semicolon after override
+            token(keyword_ci("override")),
+            optional(token(match(";"))),
             NULL
         )),
+        NULL
+    );
+
+    // Class operator declaration: operator Name; [override];
+    combinator_t* class_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("operator")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match(";")),
         NULL
     );
 
@@ -279,16 +294,17 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    // Class member: field, method, constructor, destructor, or property
     combinator_t* class_member = multi(new_combinator(), PASCAL_T_CLASS_MEMBER,
         constructor_decl,
         destructor_decl,
         procedure_decl,
         function_decl,
+        class_operator_decl,
         property_decl,
         field_decl,
         NULL
     );
+    set_combinator_name(class_member, "class_member");
 
     // Skip comments and whitespace in class body
     combinator_t* class_element = class_member;
