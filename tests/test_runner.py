@@ -491,6 +491,16 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "42\n7\n1\n")
 
+    def test_type_alias_parameters_accept_new_categories(self):
+        """Type aliases used in parameter lists should accept char/pointer/set/enum/file arguments."""
+        input_file = os.path.join(TEST_CASES_DIR, "type_alias_parameter_calls.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "type_alias_parameter_calls.s")
+
+        run_compiler(input_file, asm_file)
+
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
         input_file = "GPC/TestPrograms/sign_test.p"
