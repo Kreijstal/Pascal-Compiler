@@ -417,9 +417,15 @@ combinator_t* record_type(tag_t tag) {
 
 // Pointer type parser: ^TypeName
 combinator_t* pointer_type(tag_t tag) {
+    combinator_t* pointed_type = multi(new_combinator(), PASCAL_T_NONE,
+        type_name(PASCAL_T_IDENTIFIER),             // built-in Pascal types (integer, string, ...)
+        token(pascal_identifier(PASCAL_T_IDENTIFIER)), // user-defined type identifiers
+        NULL
+    );
+
     return seq(new_combinator(), tag,
         token(match("^")),
-        pascal_identifier(PASCAL_T_IDENTIFIER),
+        pointed_type,
         NULL
     );
 }
