@@ -19,6 +19,59 @@ static void set_combinator_name(combinator_t* comb, const char* name) {
     comb->name = strdup(name);
 }
 
+// Custom non-greedy version of `many`
+static ParseResult non_greedy_many_fn(input_t* in, void* args, char* parser_name) {
+    many_args* margs = (many_args*)args;
+    combinator_t* p = margs->p;
+    ast_t* head = NULL;
+    ast_t* tail = NULL;
+
+    while (true) {
+        // Look ahead to see if the implementation keyword is next
+        InputState state;
+        save_input_state(in, &state);
+        combinator_t* implementation_keyword = token(keyword_ci("implementation"));
+        ParseResult res_peek = parse(in, implementation_keyword);
+        free_combinator(implementation_keyword);
+        restore_input_state(in, &state);
+
+        if (res_peek.is_success) {
+            free_ast(res_peek.value.ast);
+            break; // Stop parsing if implementation is next
+        }
+
+        save_input_state(in, &state);
+        ParseResult res = parse(in, p);
+
+        if (res.is_success) {
+            if (head == NULL) {
+                head = res.value.ast;
+                tail = head;
+            } else {
+                tail->next = res.value.ast;
+            }
+            while (tail->next != NULL) {
+                tail = tail->next;
+            }
+        } else {
+            free_error(res.value.error);
+            restore_input_state(in, &state);
+            break;
+        }
+    }
+
+    return make_success(head);
+}
+
+static combinator_t* non_greedy_many(combinator_t* p) {
+    combinator_t* comb = new_combinator();
+    comb->fn = non_greedy_many_fn;
+    many_args* args = (many_args*)safe_malloc(sizeof(many_args));
+    args->p = p;
+    comb->args = args;
+    return comb;
+}
+
 static ast_t* make_modifier_node(ast_t* original, const char* keyword) {
     if (original == NULL)
         return NULL;
@@ -552,7 +605,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
     
-    combinator_t* interface_declarations = many(interface_declaration);
+    combinator_t* interface_declarations = non_greedy_many(interface_declaration);
     
     // Implementation section can contain both simple implementations and method implementations
     // as well as uses, const, type, and var sections
