@@ -74,6 +74,7 @@ static char* load_pascal_snippet(const char* filename) {
 #ifdef TEST_SRCDIR
     const char* base_dir = TEST_SRCDIR;
     size_t base_len = strlen(base_dir);
+    const char* snippets_dir = "snippets/";
 #else
     const char* current_file = __FILE__;
     const char* last_slash = strrchr(current_file, '/');
@@ -85,20 +86,30 @@ static char* load_pascal_snippet(const char* filename) {
 #endif
     size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
     const char* base_dir = current_file;
+    const char* snippets_dir = "snippets/";
 #endif
 
-    const char* snippets_dir = "/snippets/";
     size_t snippets_len = strlen(snippets_dir);
     size_t filename_len = strlen(filename);
 
+#ifdef TEST_SRCDIR
+    // When using TEST_SRCDIR, we need an extra byte for the separator '/'
+    path = (char*)malloc(base_len + 1 + snippets_len + filename_len + 1);
+#else
     path = (char*)malloc(base_len + snippets_len + filename_len + 1);
+#endif
     if (!path) {
         fprintf(stderr, "Out of memory while constructing snippet path for %s\n", filename);
         goto cleanup;
     }
 
+#ifdef TEST_SRCDIR
+    snprintf(path, base_len + 1 + snippets_len + filename_len + 1, "%s/%s%s", 
+             base_dir, snippets_dir, filename);
+#else
     snprintf(path, base_len + snippets_len + filename_len + 1, "%.*s%s%s", 
              (int)base_len, base_dir, snippets_dir, filename);
+#endif
 
     file = fopen(path, "rb");
     if (!file) {
@@ -154,6 +165,7 @@ static char* load_pascal_file(const char* filename) {
 #ifdef TEST_SRCDIR
     const char* base_dir = TEST_SRCDIR;
     size_t base_len = strlen(base_dir);
+    const char* pascal_dir = "pascal/";
 #else
     const char* current_file = __FILE__;
     const char* last_slash = strrchr(current_file, '/');
@@ -165,20 +177,30 @@ static char* load_pascal_file(const char* filename) {
 #endif
     size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
     const char* base_dir = current_file;
+    const char* pascal_dir = "pascal/";
 #endif
 
-    const char* pascal_dir = "/pascal/";
     size_t pascal_len = strlen(pascal_dir);
     size_t filename_len = strlen(filename);
 
+#ifdef TEST_SRCDIR
+    // When using TEST_SRCDIR, we need an extra byte for the separator '/'
+    path = (char*)malloc(base_len + 1 + pascal_len + filename_len + 1);
+#else
     path = (char*)malloc(base_len + pascal_len + filename_len + 1);
+#endif
     if (!path) {
         fprintf(stderr, "Out of memory while constructing pascal file path for %s\n", filename);
         goto cleanup;
     }
 
+#ifdef TEST_SRCDIR
+    snprintf(path, base_len + 1 + pascal_len + filename_len + 1, "%s/%s%s", 
+             base_dir, pascal_dir, filename);
+#else
     snprintf(path, base_len + pascal_len + filename_len + 1, "%.*s%s%s", 
              (int)base_len, base_dir, pascal_dir, filename);
+#endif
 
     file = fopen(path, "rb");
     if (!file) {
