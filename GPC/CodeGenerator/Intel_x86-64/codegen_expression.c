@@ -26,6 +26,24 @@ int codegen_type_uses_qword(int type_tag)
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE);
 }
 
+static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
+static ListNode_t *codegen_set_membership(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx);
+static ListNode_t *codegen_call_set_clear(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg);
+static ListNode_t *codegen_call_set_include(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *set_reg, Register_t *value_reg);
+static ListNode_t *codegen_call_set_include_range(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *set_reg, Register_t *start_reg, Register_t *end_reg);
+static ListNode_t *codegen_call_set_binary(ListNode_t *inst_list, CodeGenContext *ctx,
+    const char *func_name, Register_t *dest_reg, Register_t *left_reg,
+    Register_t *right_reg);
+static ListNode_t *codegen_call_set_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg);
+static ListNode_t *codegen_call_set_membership_runtime(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *set_reg, Register_t *value_reg);
+
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -191,6 +209,20 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     assert(expr != NULL);
     assert(ctx != NULL);
     CODEGEN_DEBUG("DEBUG: Generating code for expression type %d\n", expr->type);
+
+    if (expr->type == EXPR_IN)
+        return codegen_set_membership(expr, inst_list, ctx);
+
+    if (expr->resolved_type == SET_TYPE || expr->type == EXPR_SET || expr->type == EXPR_SET_BINARY)
+    {
+        Register_t *set_reg = NULL;
+        inst_list = codegen_set_expr(expr, inst_list, ctx, &set_reg);
+        (void)set_reg;
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (set expression)\n", __func__);
+        #endif
+        return inst_list;
+    }
 
     switch(expr->type) {
         case EXPR_VAR_ID:
@@ -486,6 +518,362 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     return inst_list;
 }
 
+static ListNode_t *codegen_move_arg64_ctx(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *src_reg, int arg_index, const char *usage)
+{
+    const char *dest = get_arg_reg64_num(arg_index);
+    if (dest == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate argument register for %s.", usage);
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src_reg->bit_64, dest);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_move_arg32_ctx(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *src_reg, int arg_index, const char *usage)
+{
+    const char *dest = get_arg_reg32_num(arg_index);
+    if (dest == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate argument register for %s.", usage);
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", src_reg->bit_32, dest);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_call_set_clear(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg)
+{
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, dest_reg, 0, "set destination");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_set_clear\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_set_include(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *set_reg, Register_t *value_reg)
+{
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, set_reg, 0, "set include");
+    inst_list = codegen_move_arg32_ctx(inst_list, ctx, value_reg, 1, "set include value");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_set_include\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_set_include_range(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *set_reg, Register_t *start_reg, Register_t *end_reg)
+{
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, set_reg, 0, "set include range");
+    inst_list = codegen_move_arg32_ctx(inst_list, ctx, start_reg, 1, "set range start");
+    inst_list = codegen_move_arg32_ctx(inst_list, ctx, end_reg, 2, "set range end");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_set_include_range\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_set_binary(ListNode_t *inst_list, CodeGenContext *ctx,
+    const char *func_name, Register_t *dest_reg, Register_t *left_reg,
+    Register_t *right_reg)
+{
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, dest_reg, 0, func_name);
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, left_reg, 1, func_name);
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, right_reg, 2, func_name);
+    inst_list = codegen_vect_reg(inst_list, 0);
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", func_name);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_set_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg)
+{
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, dest_reg, 0, "set assign dest");
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, src_reg, 1, "set assign src");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_set_assign\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_set_membership_runtime(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *set_reg, Register_t *value_reg)
+{
+    inst_list = codegen_move_arg64_ctx(inst_list, ctx, set_reg, 0, "set membership");
+    inst_list = codegen_move_arg32_ctx(inst_list, ctx, value_reg, 1, "set membership value");
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_set_in\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_constructor(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    StackNode_t *temp = add_temp_bytes("set_literal", GPC_SET_BYTES);
+    if (temp == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate temporary storage for set literal.");
+        return inst_list;
+    }
+
+    Register_t *dest_reg = codegen_try_get_reg(&inst_list, ctx, "set literal");
+    if (dest_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", temp->offset, dest_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_call_set_clear(inst_list, ctx, dest_reg);
+
+    for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        if (element == NULL || element->start_expr == NULL)
+            continue;
+
+        if (element->end_expr == NULL)
+        {
+            inst_list = codegen_expr(element->start_expr, inst_list, ctx);
+            if (codegen_had_error(ctx))
+                break;
+
+            Register_t *value_reg = front_reg_stack(get_reg_stack());
+            if (value_reg == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to allocate register for set element.");
+                break;
+            }
+
+            inst_list = codegen_call_set_include(inst_list, ctx, dest_reg, value_reg);
+            free_reg(get_reg_stack(), value_reg);
+        }
+        else
+        {
+            inst_list = codegen_expr(element->start_expr, inst_list, ctx);
+            if (codegen_had_error(ctx))
+                break;
+
+            Register_t *start_reg = front_reg_stack(get_reg_stack());
+            if (start_reg == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to allocate register for set range start.");
+                break;
+            }
+
+            inst_list = codegen_expr(element->end_expr, inst_list, ctx);
+            if (codegen_had_error(ctx))
+            {
+                free_reg(get_reg_stack(), start_reg);
+                break;
+            }
+
+            Register_t *end_reg = front_reg_stack(get_reg_stack());
+            if (end_reg == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to allocate register for set range end.");
+                free_reg(get_reg_stack(), start_reg);
+                break;
+            }
+
+            inst_list = codegen_call_set_include_range(inst_list, ctx, dest_reg, start_reg, end_reg);
+            free_reg(get_reg_stack(), end_reg);
+            free_reg(get_reg_stack(), start_reg);
+        }
+    }
+
+    *out_reg = dest_reg;
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_binary_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    Register_t *left_reg = NULL;
+    Register_t *right_reg = NULL;
+
+    inst_list = codegen_set_expr(expr->expr_data.set_binary_data.left, inst_list, ctx, &left_reg);
+    if (codegen_had_error(ctx) || left_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_set_expr(expr->expr_data.set_binary_data.right, inst_list, ctx, &right_reg);
+    if (codegen_had_error(ctx) || right_reg == NULL)
+    {
+        if (left_reg != NULL)
+            free_reg(get_reg_stack(), left_reg);
+        return inst_list;
+    }
+
+    StackNode_t *temp = add_temp_bytes("set_temp", GPC_SET_BYTES);
+    if (temp == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate temporary storage for set operation.");
+        free_reg(get_reg_stack(), left_reg);
+        free_reg(get_reg_stack(), right_reg);
+        return inst_list;
+    }
+
+    Register_t *dest_reg = codegen_try_get_reg(&inst_list, ctx, "set operation");
+    if (dest_reg == NULL)
+    {
+        free_reg(get_reg_stack(), left_reg);
+        free_reg(get_reg_stack(), right_reg);
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", temp->offset, dest_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    const char *func_name = NULL;
+    switch (expr->expr_data.set_binary_data.op_type)
+    {
+        case SET_OP_UNION:
+            func_name = "gpc_set_union";
+            break;
+        case SET_OP_INTERSECT:
+            func_name = "gpc_set_intersect";
+            break;
+        case SET_OP_DIFF:
+            func_name = "gpc_set_diff";
+            break;
+        case SET_OP_SYMDIFF:
+            func_name = "gpc_set_symdiff";
+            break;
+        default:
+            codegen_report_error(ctx, "ERROR: Unsupported set operation type %d.",
+                expr->expr_data.set_binary_data.op_type);
+            break;
+    }
+
+    if (func_name != NULL)
+        inst_list = codegen_call_set_binary(inst_list, ctx, func_name, dest_reg, left_reg, right_reg);
+
+    free_reg(get_reg_stack(), left_reg);
+    free_reg(get_reg_stack(), right_reg);
+
+    *out_reg = dest_reg;
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (out_reg == NULL)
+        return inst_list;
+
+    *out_reg = NULL;
+    if (expr == NULL)
+        return inst_list;
+
+    switch (expr->type)
+    {
+        case EXPR_SET:
+            return codegen_set_constructor(expr, inst_list, ctx, out_reg);
+        case EXPR_SET_BINARY:
+            return codegen_set_binary_expr(expr, inst_list, ctx, out_reg);
+        case EXPR_VAR_ID:
+        {
+            Register_t *addr_reg = codegen_try_get_reg(&inst_list, ctx, "set variable address");
+            if (addr_reg == NULL)
+                return inst_list;
+
+            char buffer[128];
+            StackNode_t *var_node = find_label(expr->expr_data.id);
+            if (var_node != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                return inst_list;
+            }
+
+            if (nonlocal_flag() == 1)
+            {
+                int offset = 0;
+                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
+                    current_non_local_reg64(), addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                return inst_list;
+            }
+
+            free_reg(get_reg_stack(), addr_reg);
+            codegen_report_error(ctx, "ERROR: Unsupported set variable reference %s.",
+                expr->expr_data.id);
+            return inst_list;
+        }
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+                return codegen_set_expr(expr->expr_data.typecast_data.expr, inst_list, ctx, out_reg);
+            return inst_list;
+        default:
+            codegen_report_error(ctx, "ERROR: Unsupported set expression type %d.", expr->type);
+            return inst_list;
+    }
+}
+
+static ListNode_t *codegen_set_membership(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return inst_list;
+
+    Register_t *set_reg = NULL;
+    inst_list = codegen_set_expr(expr->expr_data.set_in_data.set_expr, inst_list, ctx, &set_reg);
+    if (codegen_had_error(ctx) || set_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_expr(expr->expr_data.set_in_data.element, inst_list, ctx);
+    if (codegen_had_error(ctx))
+    {
+        free_reg(get_reg_stack(), set_reg);
+        return inst_list;
+    }
+
+    Register_t *value_reg = front_reg_stack(get_reg_stack());
+    if (value_reg == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for set membership value.");
+        free_reg(get_reg_stack(), set_reg);
+        return inst_list;
+    }
+
+    inst_list = codegen_call_set_membership_runtime(inst_list, ctx, set_reg, value_reg);
+    free_reg(get_reg_stack(), set_reg);
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+}
+
+ListNode_t *codegen_eval_set_expression(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    return codegen_set_expr(expr, inst_list, ctx, out_reg);
+}
+
+ListNode_t *codegen_emit_set_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg)
+{
+    return codegen_call_set_assign(inst_list, ctx, dest_reg, src_reg);
+}
+
 
 /* Code generation for simple relops */
 ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
@@ -646,17 +1034,32 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         else
         {
             // Pass by value
-            expr_tree = build_expr_tree(arg_expr);
-            top_reg = get_free_reg(get_reg_stack(), &inst_list);
-            CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
-            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
-            free_expr_tree(expr_tree);
-
-            if (arg_infos != NULL)
+            if (arg_expr != NULL && (arg_expr->resolved_type == SET_TYPE ||
+                arg_expr->type == EXPR_SET || arg_expr->type == EXPR_SET_BINARY))
             {
-                arg_infos[arg_num].reg = top_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
+                Register_t *set_reg = NULL;
+                inst_list = codegen_eval_set_expression(arg_expr, inst_list, ctx, &set_reg);
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = set_reg;
+                    arg_infos[arg_num].spill = NULL;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+            }
+            else
+            {
+                expr_tree = build_expr_tree(arg_expr);
+                top_reg = get_free_reg(get_reg_stack(), &inst_list);
+                CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
+                inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
+                free_expr_tree(expr_tree);
+
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = top_reg;
+                    arg_infos[arg_num].spill = NULL;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
             }
         }
 

@@ -188,7 +188,16 @@ enum ExprType {
     EXPR_BOOL,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
-    EXPR_TYPECAST
+    EXPR_TYPECAST,
+    EXPR_SET,
+    EXPR_SET_BINARY,
+    EXPR_IN
+};
+
+struct SetElement
+{
+    struct Expression *start_expr;
+    struct Expression *end_expr; /* NULL when representing a single element */
 };
 
 /* An expression subtree */
@@ -279,6 +288,27 @@ struct Expression
             char *target_type_id;
             struct Expression *expr;
         } typecast_data;
+
+        /* Set constructor */
+        struct SetConstructor
+        {
+            ListNode_t *elements; /* List of SetElement */
+        } set_data;
+
+        /* Set binary operation */
+        struct SetBinary
+        {
+            int op_type;
+            struct Expression *left;
+            struct Expression *right;
+        } set_binary_data;
+
+        /* Set membership */
+        struct SetMembership
+        {
+            struct Expression *element;
+            struct Expression *set_expr;
+        } set_in_data;
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;

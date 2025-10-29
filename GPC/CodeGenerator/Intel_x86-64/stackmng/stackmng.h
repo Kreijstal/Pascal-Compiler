@@ -50,6 +50,7 @@ int get_needed_stack_space();
 void push_stackscope();
 void pop_stackscope();
 StackNode_t *add_l_t(char *);
+StackNode_t *add_temp_bytes(char *label, int size);
 StackNode_t *add_l_x(char *, int size);
 StackNode_t *add_l_z(char *);
 StackNode_t *add_q_z(char *);

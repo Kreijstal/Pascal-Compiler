@@ -110,6 +110,7 @@ extern int g_stack_home_space_bytes;
 #endif
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
+#define GPC_SET_BYTES 32
 
 static inline int codegen_target_is_windows(void)
 {

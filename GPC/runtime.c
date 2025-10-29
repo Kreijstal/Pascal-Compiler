@@ -13,6 +13,9 @@
 #include <unistd.h>
 #endif
 
+#define GPC_SET_BYTES 32
+#define GPC_SET_MAX_VALUE (GPC_SET_BYTES * 8 - 1)
+
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }
@@ -202,6 +205,122 @@ void gpc_move(void *dest, const void *src, size_t count)
         return;
 
     memmove(dest, src, count);
+}
+
+static inline void gpc_set_include_impl(unsigned char *set, int value)
+{
+    if (set == NULL)
+        return;
+    if (value < 0 || value > GPC_SET_MAX_VALUE)
+        return;
+
+    unsigned idx = (unsigned)value;
+    set[idx / 8] |= (unsigned char)(1u << (idx % 8));
+}
+
+void gpc_set_clear(void *dest)
+{
+    if (dest == NULL)
+        return;
+    memset(dest, 0, GPC_SET_BYTES);
+}
+
+void gpc_set_include(void *dest, int value)
+{
+    gpc_set_include_impl((unsigned char *)dest, value);
+}
+
+void gpc_set_include_range(void *dest, int start, int end)
+{
+    if (dest == NULL)
+        return;
+
+    if (start > end)
+    {
+        int tmp = start;
+        start = end;
+        end = tmp;
+    }
+
+    if (end < 0 || start > GPC_SET_MAX_VALUE)
+        return;
+
+    if (start < 0)
+        start = 0;
+    if (end > GPC_SET_MAX_VALUE)
+        end = GPC_SET_MAX_VALUE;
+
+    unsigned char *set = (unsigned char *)dest;
+    for (int value = start; value <= end; ++value)
+        gpc_set_include_impl(set, value);
+}
+
+void gpc_set_union(void *dest, const void *left, const void *right)
+{
+    if (dest == NULL || left == NULL || right == NULL)
+        return;
+
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *l = (const unsigned char *)left;
+    const unsigned char *r = (const unsigned char *)right;
+    for (size_t i = 0; i < GPC_SET_BYTES; ++i)
+        d[i] = (unsigned char)(l[i] | r[i]);
+}
+
+void gpc_set_intersect(void *dest, const void *left, const void *right)
+{
+    if (dest == NULL || left == NULL || right == NULL)
+        return;
+
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *l = (const unsigned char *)left;
+    const unsigned char *r = (const unsigned char *)right;
+    for (size_t i = 0; i < GPC_SET_BYTES; ++i)
+        d[i] = (unsigned char)(l[i] & r[i]);
+}
+
+void gpc_set_diff(void *dest, const void *left, const void *right)
+{
+    if (dest == NULL || left == NULL || right == NULL)
+        return;
+
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *l = (const unsigned char *)left;
+    const unsigned char *r = (const unsigned char *)right;
+    for (size_t i = 0; i < GPC_SET_BYTES; ++i)
+        d[i] = (unsigned char)(l[i] & (unsigned char)~r[i]);
+}
+
+void gpc_set_symdiff(void *dest, const void *left, const void *right)
+{
+    if (dest == NULL || left == NULL || right == NULL)
+        return;
+
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *l = (const unsigned char *)left;
+    const unsigned char *r = (const unsigned char *)right;
+    for (size_t i = 0; i < GPC_SET_BYTES; ++i)
+        d[i] = (unsigned char)(l[i] ^ r[i]);
+}
+
+void gpc_set_assign(void *dest, const void *src)
+{
+    if (dest == NULL || src == NULL)
+        return;
+
+    memcpy(dest, src, GPC_SET_BYTES);
+}
+
+int gpc_set_in(const void *set, int value)
+{
+    const unsigned char *bits = (const unsigned char *)set;
+    if (bits == NULL)
+        return 0;
+    if (value < 0 || value > GPC_SET_MAX_VALUE)
+        return 0;
+
+    unsigned idx = (unsigned)value;
+    return (bits[idx / 8] >> (idx % 8)) & 1U;
 }
 
 char *gpc_string_concat(const char *lhs, const char *rhs)

@@ -851,6 +851,51 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (var_expr->type == EXPR_VAR_ID)
     {
+        if (assign_expr != NULL &&
+            (assign_expr->resolved_type == SET_TYPE || assign_expr->type == EXPR_SET ||
+             assign_expr->type == EXPR_SET_BINARY))
+        {
+            var = find_label(var_expr->expr_data.id);
+            Register_t *src_reg = NULL;
+            inst_list = codegen_eval_set_expression(assign_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+                return inst_list;
+
+            Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (dest_reg == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to allocate register for set destination.");
+                free_reg(get_reg_stack(), src_reg);
+                return inst_list;
+            }
+
+            if (var != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var->offset, dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_emit_set_assign(inst_list, ctx, dest_reg, src_reg);
+            }
+            else if (nonlocal_flag() == 1)
+            {
+                int nonlocal_offset = 0;
+                inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &nonlocal_offset);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", nonlocal_offset,
+                    current_non_local_reg64(), dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_emit_set_assign(inst_list, ctx, dest_reg, src_reg);
+            }
+            else
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to locate destination for set assignment %s.",
+                    var_expr->expr_data.id);
+            }
+
+            free_reg(get_reg_stack(), dest_reg);
+            free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
         var = find_label(var_expr->expr_data.id);
         inst_list = codegen_expr(assign_expr, inst_list, ctx);
         if (codegen_had_error(ctx))

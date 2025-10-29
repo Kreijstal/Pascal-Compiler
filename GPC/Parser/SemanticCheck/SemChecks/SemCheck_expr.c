@@ -40,6 +40,13 @@ static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_addressof(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_set_constructor(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_set_binary(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_set_membership(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int merge_set_element_type(int *current_type, int new_type, int line_num);
 
 #define SIZEOF_RECURSION_LIMIT 64
 #define POINTER_SIZE_BYTES 8
@@ -833,6 +840,11 @@ static int types_numeric_compatible(int lhs, int rhs)
     return 0;
 }
 
+static int is_ordinal_type_tag(int type)
+{
+    return (type == INT_TYPE || type == LONGINT_TYPE || type == CHAR_TYPE || type == ENUM_TYPE);
+}
+
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     const char *type_id, int line_num)
 {
@@ -1034,6 +1046,145 @@ static int semcheck_addressof(int *type_return,
     *type_return = POINTER_TYPE;
     return error_count;
 }
+
+static int merge_set_element_type(int *current_type, int new_type, int line_num)
+{
+    assert(current_type != NULL);
+
+    if (!is_ordinal_type_tag(new_type))
+    {
+        fprintf(stderr, "Error on line %d, set elements must be ordinal values.\n\n", line_num);
+        return 1;
+    }
+
+    if (*current_type == UNKNOWN_TYPE)
+    {
+        *current_type = new_type;
+        return 0;
+    }
+
+    if (*current_type == new_type)
+        return 0;
+
+    if ((*current_type == INT_TYPE && new_type == LONGINT_TYPE) ||
+        (*current_type == LONGINT_TYPE && new_type == INT_TYPE))
+    {
+        *current_type = LONGINT_TYPE;
+        return 0;
+    }
+
+    fprintf(stderr, "Error on line %d, incompatible types in set constructor.\n\n", line_num);
+    return 1;
+}
+
+static int semcheck_set_constructor(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_SET);
+
+    int error_count = 0;
+    int element_type = UNKNOWN_TYPE;
+
+    ListNode_t *cur = expr->expr_data.set_data.elements;
+    while (cur != NULL)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        if (element != NULL)
+        {
+            if (element->start_expr != NULL)
+            {
+                int start_type = UNKNOWN_TYPE;
+                error_count += semcheck_expr_main(&start_type, symtab, element->start_expr,
+                    max_scope_lev, NO_MUTATE);
+                error_count += merge_set_element_type(&element_type, start_type, expr->line_num);
+            }
+
+            if (element->end_expr != NULL)
+            {
+                int end_type = UNKNOWN_TYPE;
+                error_count += semcheck_expr_main(&end_type, symtab, element->end_expr,
+                    max_scope_lev, NO_MUTATE);
+                error_count += merge_set_element_type(&element_type, end_type, expr->line_num);
+            }
+        }
+        cur = cur->next;
+    }
+
+    *type_return = SET_TYPE;
+    return error_count;
+}
+
+static int semcheck_set_binary(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_SET_BINARY);
+
+    int error_count = 0;
+    int left_type = UNKNOWN_TYPE;
+    int right_type = UNKNOWN_TYPE;
+
+    error_count += semcheck_expr_main(&left_type, symtab, expr->expr_data.set_binary_data.left,
+        max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&right_type, symtab, expr->expr_data.set_binary_data.right,
+        max_scope_lev, NO_MUTATE);
+
+    if (left_type != SET_TYPE || right_type != SET_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, set operations require set operands.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    *type_return = SET_TYPE;
+    return error_count;
+}
+
+static int semcheck_set_membership(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_IN);
+
+    int error_count = 0;
+    int element_type = UNKNOWN_TYPE;
+    int set_type = UNKNOWN_TYPE;
+
+    error_count += semcheck_expr_main(&element_type, symtab, expr->expr_data.set_in_data.element,
+        max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&set_type, symtab, expr->expr_data.set_in_data.set_expr,
+        max_scope_lev, NO_MUTATE);
+
+    if (set_type != SET_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, membership operator requires a set.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (!is_ordinal_type_tag(element_type) && element_type != UNKNOWN_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, membership operand must be ordinal.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    *type_return = BOOL;
+    return error_count;
+}
 /* Sets a type based on a hash_type */
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)
 {
@@ -1152,6 +1303,15 @@ int semcheck_expr_main(int *type_return,
             break;
         case EXPR_TYPECAST:
             return_val += semcheck_typecast(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_SET:
+            return_val += semcheck_set_constructor(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_SET_BINARY:
+            return_val += semcheck_set_binary(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_IN:
+            return_val += semcheck_set_membership(type_return, symtab, expr, max_scope_lev, mutating);
             break;
 
         /*** BASE CASES ***/

@@ -142,6 +142,38 @@ StackNode_t *add_l_t(char *label)
     return new_node;
 }
 
+StackNode_t *add_temp_bytes(char *label, int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    if (size <= 0)
+        size = (int)sizeof(void *);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    int alignment = (int)sizeof(void *);
+    if (alignment < DOUBLEWORD)
+        alignment = DOUBLEWORD;
+
+    cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
+    cur_scope->t_offset = align_up(cur_scope->t_offset, size);
+    cur_scope->t_offset += size;
+
+    int offset = current_stack_home_space() +
+        cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, size);
+
+    if (cur_scope->t == NULL)
+        cur_scope->t = CreateListNode(new_node, LIST_UNSPECIFIED);
+    else
+        cur_scope->t = PushListNodeBack(cur_scope->t,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+
+    return new_node;
+}
+
 /* Adds storage to x */
 StackNode_t *add_l_x(char *label, int size)
 {

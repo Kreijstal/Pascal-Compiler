@@ -251,5 +251,12 @@ struct Expression *mk_bool(int line_num, int value);
 struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
     struct Expression *expr);
 
+struct SetElement *mk_set_element(struct Expression *start, struct Expression *end);
+struct Expression *mk_set(int line_num, ListNode_t *elements);
+struct Expression *mk_set_binary(int line_num, int op_type, struct Expression *left,
+    struct Expression *right);
+struct Expression *mk_set_in(int line_num, struct Expression *element,
+    struct Expression *set_expr);
+
 
 #endif

@@ -50,4 +50,9 @@
 #define ROL                 26
 #define ROR                 27
 
+#define SET_OP_UNION        33
+#define SET_OP_INTERSECT    34
+#define SET_OP_DIFF         35
+#define SET_OP_SYMDIFF      36
+
 #endif /* TYPE_TAGS_H */

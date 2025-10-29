@@ -27,6 +27,11 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 
+ListNode_t *codegen_eval_set_expression(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
+ListNode_t *codegen_emit_set_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg);
+
 /* (DEPRECATED) */
 ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, CodeGenContext *ctx);

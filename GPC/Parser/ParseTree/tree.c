@@ -13,6 +13,9 @@
 
 static void print_record_field(struct RecordField *field, FILE *f, int num_indent);
 static void destroy_record_field(struct RecordField *field);
+static void print_set_element(struct SetElement *element, FILE *f, int num_indent);
+static void destroy_set_element(struct SetElement *element);
+static const char *describe_set_op(int op_type);
 
 /* NOTE: tree_print and destroy_tree implicitely call stmt and expr functions */
 /* Tree printing */
@@ -616,10 +619,92 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           --num_indent;
           break;
 
+        case EXPR_SET:
+          fprintf(f, "[SET]\n");
+          ++num_indent;
+          for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next)
+          {
+              print_indent(f, num_indent);
+              fprintf(f, "[ELEMENT]\n");
+              print_set_element((struct SetElement *)cur->cur, f, num_indent + 1);
+          }
+          --num_indent;
+          break;
+
+        case EXPR_SET_BINARY:
+          fprintf(f, "[SET_BINARY:%s]\n", describe_set_op(expr->expr_data.set_binary_data.op_type));
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[LEFT]:\n");
+          expr_print(expr->expr_data.set_binary_data.left, f, num_indent + 1);
+          print_indent(f, num_indent);
+          fprintf(f, "[RIGHT]:\n");
+          expr_print(expr->expr_data.set_binary_data.right, f, num_indent + 1);
+          --num_indent;
+          break;
+
+        case EXPR_IN:
+          fprintf(f, "[IN]\n");
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[ELEMENT]:\n");
+          expr_print(expr->expr_data.set_in_data.element, f, num_indent + 1);
+          print_indent(f, num_indent);
+          fprintf(f, "[SET]:\n");
+          expr_print(expr->expr_data.set_in_data.set_expr, f, num_indent + 1);
+          --num_indent;
+          break;
+
         default:
           fprintf(stderr, "BAD TYPE IN expr_print!\n");
           exit(1);
     }
+}
+
+static const char *describe_set_op(int op_type)
+{
+    switch (op_type)
+    {
+        case SET_OP_UNION:
+            return "UNION";
+        case SET_OP_INTERSECT:
+            return "INTERSECT";
+        case SET_OP_DIFF:
+            return "DIFF";
+        case SET_OP_SYMDIFF:
+            return "SYMDIFF";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static void print_set_element(struct SetElement *element, FILE *f, int num_indent)
+{
+    if (element == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[START]:\n");
+    expr_print(element->start_expr, f, num_indent + 1);
+
+    if (element->end_expr != NULL)
+    {
+        print_indent(f, num_indent);
+        fprintf(f, "[END]:\n");
+        expr_print(element->end_expr, f, num_indent + 1);
+    }
+}
+
+static void destroy_set_element(struct SetElement *element)
+{
+    if (element == NULL)
+        return;
+
+    if (element->start_expr != NULL)
+        destroy_expr(element->start_expr);
+    if (element->end_expr != NULL)
+        destroy_expr(element->end_expr);
+    free(element);
 }
 
 /* Tree freeing */
@@ -649,6 +734,9 @@ void destroy_list(ListNode_t *list)
                 break;
             case LIST_RECORD_FIELD:
                 destroy_record_field((struct RecordField *)cur->cur);
+                break;
+            case LIST_SET_ELEMENT:
+                destroy_set_element((struct SetElement *)cur->cur);
                 break;
             case LIST_CASE_BRANCH:
                 /* Case branches are handled specially in destroy_stmt for STMT_CASE */
@@ -977,6 +1065,20 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.typecast_data.expr);
               expr->expr_data.typecast_data.expr = NULL;
           }
+          break;
+
+        case EXPR_SET:
+          destroy_list(expr->expr_data.set_data.elements);
+          break;
+
+        case EXPR_SET_BINARY:
+          destroy_expr(expr->expr_data.set_binary_data.left);
+          destroy_expr(expr->expr_data.set_binary_data.right);
+          break;
+
+        case EXPR_IN:
+          destroy_expr(expr->expr_data.set_in_data.element);
+          destroy_expr(expr->expr_data.set_in_data.set_expr);
           break;
 
         default:
@@ -1524,6 +1626,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->resolved_type = UNKNOWN_TYPE;
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
+    memset(&expr->expr_data, 0, sizeof(expr->expr_data));
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -1706,5 +1809,50 @@ struct Expression *mk_typecast(int line_num, int target_type, char *target_type_
     new_expr->expr_data.typecast_data.target_type_id = target_type_id;
     new_expr->expr_data.typecast_data.expr = expr;
 
+    return new_expr;
+}
+
+struct SetElement *mk_set_element(struct Expression *start, struct Expression *end)
+{
+    struct SetElement *element = (struct SetElement *)malloc(sizeof(struct SetElement));
+    assert(element != NULL);
+
+    element->start_expr = start;
+    element->end_expr = end;
+    return element;
+}
+
+struct Expression *mk_set(int line_num, ListNode_t *elements)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_SET);
+    new_expr->expr_data.set_data.elements = elements;
+    return new_expr;
+}
+
+struct Expression *mk_set_binary(int line_num, int op_type, struct Expression *left,
+    struct Expression *right)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_SET_BINARY);
+    new_expr->expr_data.set_binary_data.op_type = op_type;
+    new_expr->expr_data.set_binary_data.left = left;
+    new_expr->expr_data.set_binary_data.right = right;
+    return new_expr;
+}
+
+struct Expression *mk_set_in(int line_num, struct Expression *element,
+    struct Expression *set_expr)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_IN);
+    new_expr->expr_data.set_in_data.element = element;
+    new_expr->expr_data.set_in_data.set_expr = set_expr;
     return new_expr;
 }

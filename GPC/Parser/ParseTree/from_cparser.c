@@ -952,6 +952,23 @@ static int map_mulop_tag(int tag) {
     }
 }
 
+static int map_set_op_tag(int tag)
+{
+    switch (tag)
+    {
+        case PASCAL_T_SET_UNION:
+            return SET_OP_UNION;
+        case PASCAL_T_SET_INTERSECT:
+            return SET_OP_INTERSECT;
+        case PASCAL_T_SET_DIFF:
+            return SET_OP_DIFF;
+        case PASCAL_T_SET_SYM_DIFF:
+            return SET_OP_SYMDIFF;
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
+
 static void append_asm_line(char **buffer, size_t *length, const char *line) {
     if (line == NULL)
         return;
@@ -1075,6 +1092,57 @@ static struct Expression *convert_unary_expr(ast_t *node) {
     return inner;
 }
 
+static struct Expression *convert_set_constructor(ast_t *node)
+{
+    ListNode_t *elements = NULL;
+    for (ast_t *child = node->child; child != NULL; child = child->next)
+    {
+        ast_t *elem = unwrap_pascal_node(child);
+        if (elem == NULL)
+            continue;
+
+        if (elem->typ == PASCAL_T_RANGE && elem->child != NULL)
+        {
+            ast_t *start_node = elem->child;
+            ast_t *end_node = start_node->next;
+            struct Expression *start_expr = convert_expression(start_node);
+            struct Expression *end_expr = convert_expression(end_node);
+            struct SetElement *set_elem = mk_set_element(start_expr, end_expr);
+            append_node(&elements, set_elem, LIST_SET_ELEMENT);
+        }
+        else
+        {
+            struct Expression *value_expr = convert_expression(elem);
+            struct SetElement *set_elem = mk_set_element(value_expr, NULL);
+            append_node(&elements, set_elem, LIST_SET_ELEMENT);
+        }
+    }
+
+    return mk_set(node->line, elements);
+}
+
+static struct Expression *convert_set_binary_expr(ast_t *node, int tag)
+{
+    int op_type = map_set_op_tag(tag);
+    if (op_type == UNKNOWN_TYPE)
+        return NULL;
+
+    ast_t *left_node = node->child;
+    ast_t *right_node = (left_node != NULL) ? left_node->next : NULL;
+    struct Expression *left = convert_expression(left_node);
+    struct Expression *right = convert_expression(right_node);
+    return mk_set_binary(node->line, op_type, left, right);
+}
+
+static struct Expression *convert_set_membership_expr(ast_t *node)
+{
+    ast_t *left_node = node->child;
+    ast_t *right_node = (left_node != NULL) ? left_node->next : NULL;
+    struct Expression *element = convert_expression(left_node);
+    struct Expression *set_expr = convert_expression(right_node);
+    return mk_set_in(node->line, element, set_expr);
+}
+
 static const char *tag_name(tag_t tag) {
     const char *name = pascal_tag_to_string(tag);
     return (name != NULL) ? name : "UNKNOWN";
@@ -1124,6 +1192,15 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_expression(expr_node->child);
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
+    case PASCAL_T_SET:
+        return convert_set_constructor(expr_node);
+    case PASCAL_T_SET_UNION:
+    case PASCAL_T_SET_INTERSECT:
+    case PASCAL_T_SET_DIFF:
+    case PASCAL_T_SET_SYM_DIFF:
+        return convert_set_binary_expr(expr_node, expr_node->typ);
+    case PASCAL_T_IN:
+        return convert_set_membership_expr(expr_node);
     case PASCAL_T_TYPECAST:
     {
         ast_t *type_node = expr_node->child;
