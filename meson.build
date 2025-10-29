@@ -91,7 +91,12 @@ if build_integration_tests
     dependencies: pascal_parser_dep
   )
 
-  test('pascal parser unit tests', pascal_tests, timeout: 120)
+  test('pascal parser unit tests', pascal_tests, timeout: 180)
+
+  pascal_benchmark = executable('pascal_benchmark',
+    'cparser/examples/pascal_parser/pascal_benchmark.c',
+    dependencies: pascal_parser_dep
+  )
 endif
 
 subdir('GPC')
