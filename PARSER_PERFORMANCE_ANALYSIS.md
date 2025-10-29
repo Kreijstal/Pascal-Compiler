@@ -43,27 +43,44 @@ All 16 tests taking ~7 seconds call `init_pascal_unit_parser()` or similar compl
 - Initialize very large parser combinator structures
 - Include complex grammar rules for units, classes, generics, etc.
 - Each test reinitializes the entire parser from scratch
+- **Specific metrics:**
+  - `pascal_declaration.c` allocates **96 combinators**
+  - `pascal_statement.c` allocates **43 combinators**  
+  - `pascal_type.c` allocates **28 combinators**
+  - `pascal_expression.c` allocates **20 combinators**
+  - Total: **~187+ combinator objects** created per unit parser initialization
+  - This happens in **every single test** that uses unit/program parsers
 
 ### The 4-Second Tests
 These 8 tests call `init_pascal_complete_program_parser()` which is slightly smaller but still substantial.
 
 ### Fast Tests (<1 second)
 The 64 fast tests use simpler parsers:
-- `init_pascal_expression_parser()` - for expressions
-- `init_pascal_statement_parser()` - for statements
-- Simple preprocessor tests
+- `init_pascal_expression_parser()` - for expressions (~20 combinators)
+- `init_pascal_statement_parser()` - for statements (~43 combinators)
+- Simple preprocessor tests (minimal combinators)
 
 ## Recommendations
 
 ### Immediate Actions (to fix timeout):
-1. **Share parser instances** - Initialize parsers once and reuse them across tests
-2. **Lazy initialization** - Only initialize the parser when first needed
-3. **Increase timeout** - Current 120s timeout in meson.build is insufficient for 156s of tests
+1. ✅ **Increase timeout** - Changed from 120s to 180s in meson.build (DONE)
+2. **Share parser instances** - Initialize parsers once and reuse them across tests
+   - Add test fixture setup/teardown to acutest framework
+   - Initialize `unit_parser`, `program_parser`, `expression_parser`, `statement_parser` once
+   - Reuse these instances across all tests
+   - Expected savings: ~140 seconds (reduce 156s to ~16s)
 
 ### Long-term Optimizations:
-1. **Optimize parser initialization** - Profile `init_pascal_unit_parser()` to find bottlenecks
-2. **Cache combinator structures** - Avoid rebuilding identical grammar rules
-3. **Split test suites** - Separate unit/program tests from expression/statement tests
+1. **Profile parser initialization** - Use valgrind/callgrind on `init_pascal_unit_parser()` to find hotspots
+2. **Optimize combinator allocation** - 187+ heap allocations per test is expensive
+   - Consider object pooling for combinator structures
+   - Pre-allocate common combinator patterns
+3. **Lazy initialization** - Don't build all grammar rules upfront
+   - Build rules on first use
+   - Cache frequently used rules
+4. **Split test suites** - Separate unit/program tests from expression/statement tests
+   - Fast tests: <1s each, run frequently during development
+   - Slow tests: ~7s each, run less frequently or in CI only
 
 ## Test Statistics
 
