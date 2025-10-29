@@ -7,58 +7,43 @@
 #include <stdio.h>
 #include <string.h>
 
-static combinator_t* get_pascal_expression_parser(void) {
-    static combinator_t* parser = NULL;
-    if (parser == NULL) {
-        parser = new_combinator();
-        init_pascal_expression_parser(&parser);
+// Shared parser instances to avoid expensive re-initialization
+// These are initialized lazily on first use
+static combinator_t* shared_expression_parser = NULL;
+static combinator_t* shared_statement_parser = NULL;
+static combinator_t* shared_unit_parser = NULL;
+static combinator_t* shared_program_parser = NULL;
+
+static combinator_t* get_expression_parser(void) {
+    if (shared_expression_parser == NULL) {
+        shared_expression_parser = new_combinator();
+        init_pascal_expression_parser(&shared_expression_parser);
     }
-    return parser;
+    return shared_expression_parser;
 }
 
-static combinator_t* get_pascal_statement_parser(void) {
-    static combinator_t* parser = NULL;
-    if (parser == NULL) {
-        parser = new_combinator();
-        init_pascal_statement_parser(&parser);
+static combinator_t* get_statement_parser(void) {
+    if (shared_statement_parser == NULL) {
+        shared_statement_parser = new_combinator();
+        init_pascal_statement_parser(&shared_statement_parser);
     }
-    return parser;
+    return shared_statement_parser;
 }
 
-static combinator_t* get_pascal_program_parser(void) {
-    static combinator_t* parser = NULL;
-    if (parser == NULL) {
-        parser = new_combinator();
-        init_pascal_program_parser(&parser);
+static combinator_t* get_unit_parser(void) {
+    if (shared_unit_parser == NULL) {
+        shared_unit_parser = new_combinator();
+        init_pascal_unit_parser(&shared_unit_parser);
     }
-    return parser;
+    return shared_unit_parser;
 }
 
-static combinator_t* get_pascal_unit_parser(void) {
-    static combinator_t* parser = NULL;
-    if (parser == NULL) {
-        parser = new_combinator();
-        init_pascal_unit_parser(&parser);
+static combinator_t* get_program_parser(void) {
+    if (shared_program_parser == NULL) {
+        shared_program_parser = new_combinator();
+        init_pascal_complete_program_parser(&shared_program_parser);
     }
-    return parser;
-}
-
-static combinator_t* get_pascal_procedure_parser(void) {
-    static combinator_t* parser = NULL;
-    if (parser == NULL) {
-        parser = new_combinator();
-        init_pascal_procedure_parser(&parser);
-    }
-    return parser;
-}
-
-static combinator_t* get_pascal_complete_program_parser(void) {
-    static combinator_t* parser = NULL;
-    if (parser == NULL) {
-        parser = new_combinator();
-        init_pascal_complete_program_parser(&parser);
-    }
-    return parser;
+    return shared_program_parser;
 }
 
 static ast_t* find_first_node_of_type(ast_t* node, tag_t target) {
@@ -80,7 +65,8 @@ static ast_t* find_first_node_of_type(ast_t* node, tag_t target) {
 }
 
 void test_pascal_integer_parsing(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("123");
@@ -92,13 +78,13 @@ void test_pascal_integer_parsing(void) {
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(res.value.ast->sym->name, "123") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_invalid_input(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("1 +");
@@ -113,8 +99,7 @@ void test_pascal_invalid_input(void) {
     TEST_ASSERT(lhs->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(lhs->sym->name, "1") == 0);
 
-    free_error(res.value.error);
-    free(input->buffer);
+    free_error(res.value.error);    free(input->buffer);
     free(input);
 }
 
@@ -166,7 +151,8 @@ void test_pascal_preprocessor_conditionals(void) {
 }
 
 void test_pascal_function_call(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("my_func");  // Just test identifier parsing
@@ -188,13 +174,13 @@ void test_pascal_function_call(void) {
                actual_name_node->sym->name && 
                strcmp(actual_name_node->sym->name, "my_func") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_string_literal(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("\"hello world\"");
@@ -206,13 +192,13 @@ void test_pascal_string_literal(void) {
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_STRING);
     TEST_ASSERT(strcmp(res.value.ast->sym->name, "hello world") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_function_call_no_args(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("func()");
@@ -238,13 +224,13 @@ void test_pascal_function_call_no_args(void) {
                actual_name_node->sym->name && 
                strcmp(actual_name_node->sym->name, "func") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_function_call_with_args(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("func(5, 10)");
@@ -279,13 +265,13 @@ void test_pascal_function_call_with_args(void) {
     TEST_ASSERT(arg2->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(arg2->sym->name, "10") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_mod_operator(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("7 mod 3");
@@ -305,13 +291,13 @@ void test_pascal_mod_operator(void) {
     TEST_ASSERT(right->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(right->sym->name, "3") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_mod_operator_percent(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("7 % 3");
@@ -331,13 +317,13 @@ void test_pascal_mod_operator_percent(void) {
     TEST_ASSERT(right->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(right->sym->name, "3") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_string_concatenation(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("\"hello\" + \"world\"");
@@ -357,13 +343,13 @@ void test_pascal_string_concatenation(void) {
     TEST_ASSERT(right->typ == PASCAL_T_STRING);
     TEST_ASSERT(strcmp(right->sym->name, "world") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_complex_expression(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("procedure((5*7)-5)+\"test\"");
@@ -402,13 +388,13 @@ void test_pascal_complex_expression(void) {
     TEST_ASSERT(right->typ == PASCAL_T_STRING);
     TEST_ASSERT(strcmp(right->sym->name, "test") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_div_operator(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("10 div 3");
@@ -428,14 +414,14 @@ void test_pascal_div_operator(void) {
     TEST_ASSERT(right->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(right->sym->name, "3") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test real number parsing
 void test_pascal_real_number(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("3.14");
@@ -447,14 +433,14 @@ void test_pascal_real_number(void) {
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_REAL);
     TEST_ASSERT(strcmp(res.value.ast->sym->name, "3.14") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test character literal parsing
 void test_pascal_char_literal(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("'A'");
@@ -466,14 +452,14 @@ void test_pascal_char_literal(void) {
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_CHAR);
     TEST_ASSERT(strcmp(res.value.ast->sym->name, "A") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test unary plus operator
 void test_pascal_unary_plus(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("+42");
@@ -489,8 +475,7 @@ void test_pascal_unary_plus(void) {
     TEST_ASSERT(operand->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(operand->sym->name, "42") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
@@ -504,7 +489,8 @@ void test_pascal_relational_operators(void) {
     };
     
     for (int i = 0; i < 6; i++) {
-        combinator_t* p = get_pascal_expression_parser();
+        combinator_t* p = new_combinator();
+        init_pascal_expression_parser(&p);
 
         input_t* input = new_input();
         input->buffer = strdup(expressions[i]);
@@ -515,8 +501,7 @@ void test_pascal_relational_operators(void) {
         TEST_ASSERT(res.is_success);
         TEST_ASSERT(res.value.ast->typ == expected_tags[i]);
 
-        free_ast(res.value.ast);
-        free(input->buffer);
+        free_ast(res.value.ast);        free(input->buffer);
         free(input);
     }
 }
@@ -531,7 +516,8 @@ void test_pascal_boolean_operators(void) {
     };
     
     for (int i = 0; i < 4; i++) {
-        combinator_t* p = get_pascal_expression_parser();
+        combinator_t* p = new_combinator();
+        init_pascal_expression_parser(&p);
 
         input_t* input = new_input();
         input->buffer = strdup(expressions[i]);
@@ -542,8 +528,7 @@ void test_pascal_boolean_operators(void) {
         TEST_ASSERT(res.is_success);
         TEST_ASSERT(res.value.ast->typ == expected_tags[i]);
 
-        free_ast(res.value.ast);
-        free(input->buffer);
+        free_ast(res.value.ast);        free(input->buffer);
         free(input);
     }
 }
@@ -558,7 +543,8 @@ void test_pascal_bitwise_operators(void) {
     };
 
     for (int i = 0; i < 4; i++) {
-        combinator_t* p = get_pascal_expression_parser();
+        combinator_t* p = new_combinator();
+        init_pascal_expression_parser(&p);
 
         input_t* input = new_input();
         input->buffer = strdup(expressions[i]);
@@ -569,15 +555,15 @@ void test_pascal_bitwise_operators(void) {
         TEST_ASSERT(res.is_success);
         TEST_ASSERT(res.value.ast->typ == expected_tags[i]);
 
-        free_ast(res.value.ast);
-        free(input->buffer);
+        free_ast(res.value.ast);        free(input->buffer);
         free(input);
     }
 }
 
 // Test address operator
 void test_pascal_address_operator(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("@myVar");
@@ -603,14 +589,14 @@ void test_pascal_address_operator(void) {
                actual_name_node->sym->name && 
                strcmp(actual_name_node->sym->name, "myVar") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test complex expression with new operators
 void test_pascal_comprehensive_expression(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("(x + y) * z div 4");
@@ -625,14 +611,14 @@ void test_pascal_comprehensive_expression(void) {
     ast_t* left = res.value.ast->child;
     TEST_ASSERT(left->typ == PASCAL_T_MUL);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test precedence: arithmetic vs comparison
 void test_pascal_precedence(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("a + b = c * d");
@@ -651,14 +637,14 @@ void test_pascal_precedence(void) {
     ast_t* right = left->next;
     TEST_ASSERT(right->typ == PASCAL_T_MUL);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test type casting
 void test_pascal_type_casting(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("Integer('A')");
@@ -679,14 +665,14 @@ void test_pascal_type_casting(void) {
     TEST_ASSERT(expr->typ == PASCAL_T_CHAR);
     TEST_ASSERT(strcmp(expr->sym->name, "A") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test set constructor parsing
 void test_pascal_set_constructor(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("[1, 2, 3]");
@@ -712,14 +698,14 @@ void test_pascal_set_constructor(void) {
     TEST_ASSERT(elem3->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(elem3->sym->name, "3") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test empty set constructor
 void test_pascal_empty_set(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("[]");
@@ -731,14 +717,14 @@ void test_pascal_empty_set(void) {
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_SET);
     TEST_ASSERT(res.value.ast->child == NULL); // Empty set
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test character set constructor
 void test_pascal_char_set(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("['a', 'b', 'c']");
@@ -754,14 +740,14 @@ void test_pascal_char_set(void) {
     TEST_ASSERT(elem1->typ == PASCAL_T_CHAR);
     TEST_ASSERT(strcmp(elem1->sym->name, "a") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test range expression
 void test_pascal_range_expression(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("1..10");
@@ -782,14 +768,14 @@ void test_pascal_range_expression(void) {
     TEST_ASSERT(right->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(right->sym->name, "10") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test character range expression
 void test_pascal_char_range(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("'a'..'z'");
@@ -810,14 +796,14 @@ void test_pascal_char_range(void) {
     TEST_ASSERT(right->typ == PASCAL_T_CHAR);
     TEST_ASSERT(strcmp(right->sym->name, "z") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test set union operation
 void test_pascal_set_union(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("[1, 2] + [3, 4]");
@@ -836,14 +822,14 @@ void test_pascal_set_union(void) {
     ast_t* right = left->next;
     TEST_ASSERT(right->typ == PASCAL_T_SET);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test class type checking with 'is' operator
 void test_pascal_is_operator(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("MyObject is TMyClass");
@@ -884,14 +870,14 @@ void test_pascal_is_operator(void) {
                actual_right_node->sym->name && 
                strcmp(actual_right_node->sym->name, "TMyClass") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test class type casting with 'as' operator
 void test_pascal_as_operator(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("Sender as TButton");
@@ -932,14 +918,14 @@ void test_pascal_as_operator(void) {
                actual_right_node->sym->name && 
                strcmp(actual_right_node->sym->name, "TButton") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test complex 'as' operator with field access (basic parsing)
 void test_pascal_as_operator_with_field_access(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     // For now, just test the casting part - field access would require more complex parsing
     input_t* input = new_input();
@@ -981,15 +967,15 @@ void test_pascal_as_operator_with_field_access(void) {
                actual_right_node->sym->name && 
                strcmp(actual_right_node->sym->name, "TForm") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // --- Pascal Statement Tests ---
 
 void test_pascal_assignment_statement(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("x := 42;");
@@ -1018,13 +1004,13 @@ void test_pascal_assignment_statement(void) {
     TEST_ASSERT(value->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(value->sym->name, "42") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_expression_statement(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("writeln(\"Hello\");");
@@ -1038,8 +1024,7 @@ void test_pascal_expression_statement(void) {
             printf("Parse error: %s at line %d, col %d\n", 
                    res.value.error->message, res.value.error->line, res.value.error->col);
             free_error(res.value.error);
-        }
-        free(input->buffer);
+        }        free(input->buffer);
         free(input);
         return;
     }
@@ -1052,8 +1037,7 @@ void test_pascal_expression_statement(void) {
     
     TEST_CHECK(stmt && stmt->typ == PASCAL_T_STATEMENT);
     if (!stmt || stmt->typ != PASCAL_T_STATEMENT) {
-        free_ast(res.value.ast);
-        free(input->buffer);
+        free_ast(res.value.ast);        free(input->buffer);
         free(input);
         return;
     }
@@ -1062,8 +1046,7 @@ void test_pascal_expression_statement(void) {
     ast_t* func_call = stmt->child;
     TEST_CHECK(func_call && func_call->typ == PASCAL_T_FUNC_CALL);
     if (!func_call || func_call->typ != PASCAL_T_FUNC_CALL) {
-        free_ast(res.value.ast);
-        free(input->buffer);
+        free_ast(res.value.ast);        free(input->buffer);
         free(input);
         return;
     }
@@ -1072,8 +1055,7 @@ void test_pascal_expression_statement(void) {
     ast_t* func_name = func_call->child;
     TEST_CHECK(func_name && func_name->typ == PASCAL_T_IDENTIFIER);
     if (!func_name || func_name->typ != PASCAL_T_IDENTIFIER) {
-        free_ast(res.value.ast);
-        free(input->buffer);
+        free_ast(res.value.ast);        free(input->buffer);
         free(input);
         return;
     }
@@ -1095,13 +1077,13 @@ void test_pascal_expression_statement(void) {
                actual_name_node->sym->name && 
                strcmp(actual_name_node->sym->name, "writeln") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_if_statement(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("if x > 0 then y := 1;");
@@ -1125,13 +1107,13 @@ void test_pascal_if_statement(void) {
     ast_t* then_stmt = condition->next;
     TEST_ASSERT(then_stmt->typ == PASCAL_T_ASSIGNMENT);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_if_else_statement(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("if x > 0 then y := 1 else y := -1;");
@@ -1163,13 +1145,13 @@ void test_pascal_if_else_statement(void) {
     ast_t* else_stmt = else_clause->child;
     TEST_ASSERT(else_stmt->typ == PASCAL_T_ASSIGNMENT);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_begin_end_block(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("begin x := 1; y := 2 end");
@@ -1184,13 +1166,13 @@ void test_pascal_begin_end_block(void) {
     ast_t* stmt_list = res.value.ast->child;
     TEST_ASSERT(stmt_list != NULL);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_for_statement(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("for i := 1 to 10 do x := x + i;");
@@ -1218,13 +1200,13 @@ void test_pascal_for_statement(void) {
     TEST_ASSERT(start_value->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(start_value->sym->name, "1") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_for_statement_without_assignment(void) {
-    combinator_t* p = get_pascal_program_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("for j to 3 do writeln(j);");
@@ -1244,13 +1226,13 @@ void test_pascal_for_statement_without_assignment(void) {
     TEST_ASSERT(initializer->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(initializer->sym->name, "j") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_while_statement(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("while x > 0 do x := x - 1;");
@@ -1270,13 +1252,13 @@ void test_pascal_while_statement(void) {
     ast_t* condition = stmt->child;
     TEST_ASSERT(condition->typ == PASCAL_T_GT);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_simple_asm_block(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("asm mov ax, 5 end;");
@@ -1297,13 +1279,13 @@ void test_pascal_simple_asm_block(void) {
     TEST_ASSERT(asm_body->typ == PASCAL_T_NONE);
     TEST_ASSERT(strcmp(asm_body->sym->name, "mov ax, 5 ") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_multiline_asm_block(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("asm\n  mov ax, bx\n  add ax, 10\n  int 21h\nend;");
@@ -1326,13 +1308,13 @@ void test_pascal_multiline_asm_block(void) {
     TEST_ASSERT(strstr(asm_body->sym->name, "add ax, 10") != NULL);
     TEST_ASSERT(strstr(asm_body->sym->name, "int 21h") != NULL);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_empty_asm_block(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("asm end;");
@@ -1353,13 +1335,13 @@ void test_pascal_empty_asm_block(void) {
     TEST_ASSERT(asm_body->typ == PASCAL_T_NONE);
     TEST_ASSERT(strcmp(asm_body->sym->name, "") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_unterminated_asm_block(void) {
-    combinator_t* p = get_pascal_program_parser();  // Use program parser for terminated statements
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
 
     input_t* input = new_input();
     input->buffer = strdup("asm mov ax, 5");  // Missing 'end'
@@ -1371,15 +1353,15 @@ void test_pascal_unterminated_asm_block(void) {
     // Could be "Expected ';'" from program parser or "Unterminated ASM block" from ASM parser
     TEST_ASSERT(res.value.error->message != NULL);
 
-    free_error(res.value.error);
-    free(input->buffer);
+    free_error(res.value.error);    free(input->buffer);
     free(input);
 }
 
 // === Procedure/Function Declaration Tests ===
 
 void test_pascal_simple_procedure(void) {
-    combinator_t* p = get_pascal_procedure_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("procedure MyProcedure; begin end");
@@ -1395,13 +1377,13 @@ void test_pascal_simple_procedure(void) {
     TEST_ASSERT(proc_name->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(proc_name->sym->name, "MyProcedure") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_procedure_with_params(void) {
-    combinator_t* p = get_pascal_procedure_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("procedure MyProcedure(x: integer; y: string); begin end");
@@ -1421,13 +1403,13 @@ void test_pascal_procedure_with_params(void) {
     ast_t* params = proc_name->next;
     TEST_ASSERT(params != NULL); // parameter list should exist
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_simple_function(void) {
-    combinator_t* p = get_pascal_procedure_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("function Square(x: integer): integer; begin end");
@@ -1443,13 +1425,13 @@ void test_pascal_simple_function(void) {
     TEST_ASSERT(func_name->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(func_name->sym->name, "Square") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_function_no_params(void) {
-    combinator_t* p = get_pascal_procedure_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("function GetValue: integer; begin end");
@@ -1465,13 +1447,13 @@ void test_pascal_function_no_params(void) {
     TEST_ASSERT(func_name->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(func_name->sym->name, "GetValue") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_function_multiple_params(void) {
-    combinator_t* p = get_pascal_procedure_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("function Calculate(a: real; b: real; c: integer): real; begin end");
@@ -1487,13 +1469,12 @@ void test_pascal_function_multiple_params(void) {
     TEST_ASSERT(func_name->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(func_name->sym->name, "Calculate") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 void test_pascal_unit_declaration(void) {
-    combinator_t* p = get_pascal_unit_parser();
+    combinator_t* p = get_unit_parser();
 
     input_t* input = new_input();
     input->buffer = strdup("unit MyUnit; interface implementation end.");
@@ -1521,13 +1502,14 @@ void test_pascal_unit_declaration(void) {
         // We must free the error object.
         free_error(res.value.error);
     }
+    
+    // Don't free the shared parser
     free(input->buffer);
     free(input);
 }
 
 void test_pascal_pointer_type_declaration(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
-    // The type section is part of the complete program parser
+    combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
     char* program = "program Test;\n"
@@ -1572,13 +1554,12 @@ void test_pascal_pointer_type_declaration(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_method_implementation(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
+    combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
     char* program = "program Test;\n"
@@ -1633,13 +1614,13 @@ void test_pascal_method_implementation(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_with_statement(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("with MyRecord do field := 1;");
@@ -1664,13 +1645,13 @@ void test_pascal_with_statement(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_exit_statement(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("exit;");
@@ -1688,13 +1669,12 @@ void test_pascal_exit_statement(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_include_directive(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
+    combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
     char* program = "program Test;\n"
@@ -1728,13 +1708,12 @@ void test_pascal_include_directive(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_forward_declared_function(void) {
-    combinator_t* p = get_pascal_unit_parser();
+    combinator_t* p = get_unit_parser();
 
     input_t* input = new_input();
     char* unit_code = "unit MyUnit;\n"
@@ -1760,13 +1739,12 @@ void test_pascal_forward_declared_function(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_record_type(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
+    combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
     char* program = "program Test;\n"
@@ -1825,14 +1803,14 @@ void test_pascal_record_type(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 // Test simple case statement
 void test_pascal_simple_case_statement(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("case x of 1: y := 2; 3: y := 4 end");  // Full case statement
@@ -1846,8 +1824,7 @@ void test_pascal_simple_case_statement(void) {
         if (res.value.error->partial_ast) {
             printf("Partial AST type: %d\n", res.value.error->partial_ast->typ);
         }
-        free_error(res.value.error);
-        free(input->buffer);
+        free_error(res.value.error);        free(input->buffer);
         free(input);
         return;
     }
@@ -1874,14 +1851,14 @@ void test_pascal_simple_case_statement(void) {
     TEST_ASSERT(first_label->child->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(first_label->child->sym->name, "1") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test case statement with ranges
 void test_pascal_case_statement_with_ranges(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("case x of 1..5: writeln(); 10..15: writeln() end");
@@ -1892,8 +1869,7 @@ void test_pascal_case_statement_with_ranges(void) {
     if (!res.is_success) {
         printf("Range test parse error: %s at line %d, col %d\n", 
                res.value.error->message, res.value.error->line, res.value.error->col);
-        free_error(res.value.error);
-        free(input->buffer);
+        free_error(res.value.error);        free(input->buffer);
         free(input);
         return;
     }
@@ -1920,14 +1896,14 @@ void test_pascal_case_statement_with_ranges(void) {
     ast_t* range = first_label->child;
     TEST_ASSERT(range->typ == PASCAL_T_RANGE);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test case statement with multiple labels
 void test_pascal_case_statement_multiple_labels(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("case n of 1, 3, 5: writeln(); 2, 4, 6: writeln() end");
@@ -1938,8 +1914,7 @@ void test_pascal_case_statement_multiple_labels(void) {
     if (!res.is_success) {
         printf("Multiple labels parse error: %s at line %d, col %d\n", 
                res.value.error->message, res.value.error->line, res.value.error->col);
-        free_error(res.value.error);
-        free(input->buffer);
+        free_error(res.value.error);        free(input->buffer);
         free(input);
         return;
     }
@@ -1975,14 +1950,14 @@ void test_pascal_case_statement_multiple_labels(void) {
     TEST_ASSERT(second_value->typ == PASCAL_T_INTEGER);
     TEST_ASSERT(strcmp(second_value->sym->name, "3") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test case statement with else clause
 void test_pascal_case_statement_with_else(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("case x of 1: y := 1; 2: y := 2 else y := 0 end");
@@ -1993,8 +1968,7 @@ void test_pascal_case_statement_with_else(void) {
     if (!res.is_success) {
         printf("Else clause parse error: %s at line %d, col %d\n", 
                res.value.error->message, res.value.error->line, res.value.error->col);
-        free_error(res.value.error);
-        free(input->buffer);
+        free_error(res.value.error);        free(input->buffer);
         free(input);
         return;
     }
@@ -2026,14 +2000,14 @@ void test_pascal_case_statement_with_else(void) {
     ast_t* else_stmt = else_clause->child;
     TEST_ASSERT(else_stmt->typ == PASCAL_T_ASSIGNMENT);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test case statement with expression labels (constants, negatives, etc.)
 void test_pascal_case_expression_labels(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("case x of -1: writeln(); +5: writeln(); (10): writeln() end");
@@ -2044,8 +2018,7 @@ void test_pascal_case_expression_labels(void) {
     if (!res.is_success) {
         printf("Expression labels parse error: %s at line %d, col %d\n", 
                res.value.error->message, res.value.error->line, res.value.error->col);
-        free_error(res.value.error);
-        free(input->buffer);
+        free_error(res.value.error);        free(input->buffer);
         free(input);
         return;
     }
@@ -2072,14 +2045,14 @@ void test_pascal_case_expression_labels(void) {
     ast_t* neg_expr = first_label->child;
     TEST_ASSERT(neg_expr->typ == PASCAL_T_NEG);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test case statement with character labels
 void test_pascal_case_statement_char_labels(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("case ch of 'A': writeln(); 'B': writeln() end");
@@ -2090,8 +2063,7 @@ void test_pascal_case_statement_char_labels(void) {
     if (!res.is_success) {
         printf("Char labels parse error: %s at line %d, col %d\n", 
                res.value.error->message, res.value.error->line, res.value.error->col);
-        free_error(res.value.error);
-        free(input->buffer);
+        free_error(res.value.error);        free(input->buffer);
         free(input);
         return;
     }
@@ -2118,14 +2090,14 @@ void test_pascal_case_statement_char_labels(void) {
     TEST_ASSERT(char_value->typ == PASCAL_T_CHAR);
     TEST_ASSERT(strcmp(char_value->sym->name, "A") == 0);
 
-    free_ast(res.value.ast);
-    free(input->buffer);
+    free_ast(res.value.ast);    free(input->buffer);
     free(input);
 }
 
 // Test case statement with invalid expressions as labels (should fail)
 void test_pascal_case_invalid_expression_labels(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
 
     // Test with function call as case label (should be invalid)
     input_t* input = new_input();
@@ -2141,12 +2113,12 @@ void test_pascal_case_invalid_expression_labels(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 
     // Test with variable assignment as case label (should be invalid)
-    p = get_pascal_statement_parser();
+    p = new_combinator();
+    init_pascal_statement_parser(&p);
     
     input = new_input();
     input->buffer = strdup("case x of y := 5: writeln() end");
@@ -2161,14 +2133,14 @@ void test_pascal_case_invalid_expression_labels(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 // Test pointer dereference operator (basic support)
 void test_pascal_pointer_dereference(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("x");  // For now just test that identifiers work
@@ -2181,14 +2153,14 @@ void test_pascal_pointer_dereference(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 // Test array access (basic support) 
 void test_pascal_array_access_with_deref(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
 
     input_t* input = new_input();
     input->buffer = strdup("oper[i]");  // For now just test that array access works
@@ -2202,13 +2174,13 @@ void test_pascal_array_access_with_deref(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_paren_star_comment(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
     input_t* input = new_input();
     input->buffer = strdup("(* this is a comment *) 42");
     input->length = strlen(input->buffer);
@@ -2218,13 +2190,13 @@ void test_pascal_paren_star_comment(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_hex_literal(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
     input_t* input = new_input();
     input->buffer = strdup("$FF");
     input->length = strlen(input->buffer);
@@ -2234,13 +2206,13 @@ void test_pascal_hex_literal(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_case_range_label(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
     input_t* input = new_input();
     input->buffer = strdup("case i of 'a'..'z': write(i) end");
     input->length = strlen(input->buffer);
@@ -2250,13 +2222,12 @@ void test_pascal_case_range_label(void) {
         free_error(res.value.error);
     } else {
         free_ast(res.value.ast);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_enumerated_type_declaration(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
+    combinator_t* p = get_program_parser();
     input_t* input = new_input();
     char* program = "program Test; type TMyEnum = (Value1, Value2, Value3); begin end.";
     input->buffer = strdup(program);
@@ -2267,13 +2238,12 @@ void test_pascal_enumerated_type_declaration(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_simple_const_declaration(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
+    combinator_t* p = get_program_parser();
     input_t* input = new_input();
     char* program = "program Test; const MyConst = 10; begin end.";
     input->buffer = strdup(program);
@@ -2284,13 +2254,12 @@ void test_pascal_simple_const_declaration(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_var_section(void) {
-    combinator_t* p = get_pascal_complete_program_parser();
+    combinator_t* p = get_program_parser();
     input_t* input = new_input();
     char* program = "program Test; var i: integer; begin end.";
     input->buffer = strdup(program);
@@ -2301,13 +2270,13 @@ void test_pascal_var_section(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_set_operations_program(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
     input_t* input = new_input();
     const char* union_expr = "[1, 3] + [5]";
     input->buffer = strdup(union_expr);
@@ -2320,11 +2289,11 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 
-    p = get_pascal_expression_parser();
+    p = new_combinator();
+    init_pascal_expression_parser(&p);
     input = new_input();
     const char* intersect_expr = "[1, 3] * [3]";
     input->buffer = strdup(intersect_expr);
@@ -2339,12 +2308,12 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 
     // Parse membership expression to ensure "in" is recognised with set unions
-    p = get_pascal_expression_parser();
+    p = new_combinator();
+    init_pascal_expression_parser(&p);
     input = new_input();
     const char* in_expr = "3 in ([1, 3] + [5])";
     input->buffer = strdup(in_expr);
@@ -2359,13 +2328,58 @@ void test_pascal_set_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
+    free(input);
+
+    // Parse full program exercising set operations and subrange set types
+    p = new_combinator();
+    init_pascal_complete_program_parser(&p);
+    input = new_input();
+    const char* program_source =
+        "program SetOperations;\n"
+        "var\n"
+        "  odds: set of 1..10;\n"
+        "  evens: set of 1..10;\n"
+        "  mix: set of 1..10;\n"
+        "  result: set of 1..10;\n"
+        "begin\n"
+        "  odds := [1, 3, 5, 7, 9];\n"
+        "  evens := [2, 4, 6, 8, 10];\n"
+        "  mix := [3, 4, 5];\n"
+        "\n"
+        "  result := odds + mix;\n"
+        "  if 4 in result then\n"
+        "    writeln('union-has-4')\n"
+        "  else\n"
+        "    writeln('union-missing-4');\n"
+        "\n"
+        "  result := mix * evens;\n"
+        "  if 4 in result then\n"
+        "    writeln('intersection-has-4')\n"
+        "  else\n"
+        "    writeln('intersection-missing-4');\n"
+        "\n"
+        "  if 2 in [1, 2, 3] then\n"
+        "    writeln('constructor-has-2')\n"
+        "  else\n"
+        "    writeln('constructor-missing-2');\n"
+        "end.";
+    input->buffer = strdup(program_source);
+    input->length = strlen(program_source);
+
+    res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_pointer_operations_program(void) {
-    combinator_t* p = get_pascal_expression_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
     input_t* input = new_input();
     const char* addr_expr = "@value";
     input->buffer = strdup(addr_expr);
@@ -2378,11 +2392,11 @@ void test_pascal_pointer_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 
-    p = get_pascal_expression_parser();
+    p = new_combinator();
+    init_pascal_expression_parser(&p);
     input = new_input();
     const char* deref_expr = "ptr^";
     input->buffer = strdup(deref_expr);
@@ -2395,13 +2409,13 @@ void test_pascal_pointer_operations_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 void test_pascal_record_member_access_program(void) {
-    combinator_t* p = get_pascal_statement_parser();
+    combinator_t* p = new_combinator();
+    init_pascal_statement_parser(&p);
     input_t* input = new_input();
     const char* block =
         "begin\n"
@@ -2419,13 +2433,51 @@ void test_pascal_record_member_access_program(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
+    }    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_record_member_access_complete_program(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_complete_program_parser(&p);
+
+    input_t* input = new_input();
+    const char* program =
+        "program RecordMemberAccess;\n"
+        "type\n"
+        "  Point = record\n"
+        "    x: Integer;\n"
+        "    y: Integer;\n"
+        "  end;\n"
+        "var\n"
+        "  p: Point;\n"
+        "begin\n"
+        "  p.x := 10;\n"
+        "  p.y := 32;\n"
+        "  writeln(p.x + p.y);\n"
+        "  p.x := p.y - 2;\n"
+        "  writeln(p.x);\n"
+        "end.\n";
+    input->buffer = strdup(program);
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* member_node = find_first_node_of_type(res.value.ast, PASCAL_T_MEMBER_ACCESS);
+        TEST_ASSERT(member_node != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
     }
+
+    free_combinator(p);
     free(input->buffer);
     free(input);
 }
 
 void test_fpc_style_unit_parsing(void) {
-    combinator_t* p = get_pascal_unit_parser();
+    combinator_t* p = get_unit_parser();
     input_t* input = new_input();
     char* program = 
         "Unit rax64int;\n"
@@ -2454,14 +2506,13 @@ void test_fpc_style_unit_parsing(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
 // --- Helpers for advanced feature regression tests ---
 static void assert_pascal_unit_parses(const char* source) {
-    combinator_t* parser = get_pascal_unit_parser();
+    combinator_t* parser = get_unit_parser();
 
     input_t* input = new_input();
     input->buffer = strdup(source);
@@ -2483,8 +2534,7 @@ static void assert_pascal_unit_parses(const char* source) {
         free_ast(result.value.ast);
     } else if (result.value.error) {
         free_error(result.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 
     TEST_ASSERT(success);
@@ -2645,7 +2695,7 @@ void test_pascal_inline_directive(void) {
 }
 
 void test_complex_fpc_rax64int_unit(void) {
-    combinator_t* p = get_pascal_unit_parser();
+    combinator_t* p = get_unit_parser();
     input_t* input = new_input();
     char* program = 
         "Unit rax64int;\n"
@@ -2711,8 +2761,7 @@ void test_complex_fpc_rax64int_unit(void) {
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
-    }
-    free(input->buffer);
+    }    free(input->buffer);
     free(input);
 }
 
@@ -2795,6 +2844,7 @@ TEST_LIST = {
     { "test_pascal_set_operations_program", test_pascal_set_operations_program },
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
+    { "test_pascal_record_member_access_complete_program", test_pascal_record_member_access_complete_program },
     { "test_pascal_var_section", test_pascal_var_section },
     { "test_pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
     { "test_pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },
