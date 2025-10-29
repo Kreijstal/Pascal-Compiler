@@ -71,10 +71,11 @@ static char* load_pascal_snippet(const char* filename) {
     char* buffer = NULL;
     char* result = NULL;
 
+    const char* snippets_dir = "snippets/";
+
 #ifdef TEST_SRCDIR
     const char* base_dir = TEST_SRCDIR;
     size_t base_len = strlen(base_dir);
-    const char* snippets_dir = "snippets/";
 #else
     const char* current_file = __FILE__;
     const char* last_slash = strrchr(current_file, '/');
@@ -86,7 +87,6 @@ static char* load_pascal_snippet(const char* filename) {
 #endif
     size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
     const char* base_dir = current_file;
-    const char* snippets_dir = "snippets/";
 #endif
 
     size_t snippets_len = strlen(snippets_dir);
@@ -162,10 +162,11 @@ static char* load_pascal_file(const char* filename) {
     char* buffer = NULL;
     char* result = NULL;
 
+    const char* pascal_dir = "pascal/";
+
 #ifdef TEST_SRCDIR
     const char* base_dir = TEST_SRCDIR;
     size_t base_len = strlen(base_dir);
-    const char* pascal_dir = "pascal/";
 #else
     const char* current_file = __FILE__;
     const char* last_slash = strrchr(current_file, '/');
@@ -177,7 +178,6 @@ static char* load_pascal_file(const char* filename) {
 #endif
     size_t base_len = last_slash ? (size_t)(last_slash - current_file + 1) : 0;
     const char* base_dir = current_file;
-    const char* pascal_dir = "pascal/";
 #endif
 
     size_t pascal_len = strlen(pascal_dir);
