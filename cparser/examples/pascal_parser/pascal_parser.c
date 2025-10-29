@@ -84,6 +84,67 @@ combinator_t* token(combinator_t* p) {
     return pascal_token(p);
 }
 
+static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    int start_pos = in->start;
+    char c = read1(in);
+
+    if (c != '_' && !isalpha(c)) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+    }
+
+    while (true) {
+        while (isalnum(c) || c == '_') {
+            c = read1(in);
+        }
+
+        if (c == '.') {
+            char next = read1(in);
+            if (next == EOF || (next != '_' && !isalpha(next))) {
+                restore_input_state(in, &state);
+                return make_failure_v2(in, parser_name, strdup("Expected identifier segment after '.'"), NULL);
+            }
+            c = next;
+            continue;
+        }
+
+        break;
+    }
+
+    if (c != EOF) {
+        in->start--;
+    }
+
+    int len = in->start - start_pos;
+    char* text = (char*)safe_malloc(len + 1);
+    strncpy(text, in->buffer + start_pos, len);
+    text[len] = '\0';
+
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    free(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    return make_success(ast);
+}
+
+combinator_t* pascal_qualified_identifier(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_CIDENT;
+    comb->fn = pascal_qualified_identifier_fn;
+    comb->args = args;
+    return comb;
+}
+
 
 
 const char* pascal_tag_to_string(tag_t tag) {

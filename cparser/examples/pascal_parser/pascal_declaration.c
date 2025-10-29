@@ -28,6 +28,10 @@ static ast_t* map_var_modifier(ast_t* ast) {
     return make_modifier_node(ast, "var");
 }
 
+static ast_t* map_out_modifier(ast_t* ast) {
+    return make_modifier_node(ast, "out");
+}
+
 static combinator_t* create_param_name_list(void) {
     return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
 }
@@ -67,6 +71,13 @@ combinator_t* create_pascal_param_parser(void) {
         NULL
     );
 
+    combinator_t* out_param = seq(new_combinator(), PASCAL_T_PARAM,
+        map(token(match("out")), map_out_modifier),
+        create_param_name_list(),
+        create_param_type_spec(),
+        NULL
+    );
+
     combinator_t* value_param = seq(new_combinator(), PASCAL_T_PARAM,
         create_param_name_list(),
         create_param_type_spec(),
@@ -76,6 +87,7 @@ combinator_t* create_pascal_param_parser(void) {
     combinator_t* param = multi(new_combinator(), PASCAL_T_NONE,
         var_param,
         const_param,
+        out_param,
         value_param,
         NULL
     );
@@ -154,7 +166,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     init_pascal_statement_parser(stmt_parser);
 
     // Uses section: uses unit1, unit2, unit3;
-    combinator_t* uses_unit = token(cident(PASCAL_T_USES_UNIT));
+    combinator_t* uses_unit = token(pascal_qualified_identifier(PASCAL_T_USES_UNIT));
     combinator_t* uses_section = seq(new_combinator(), PASCAL_T_USES_SECTION,
         token(keyword_ci("uses")),                      // uses keyword (with word boundary check)
         sep_by(uses_unit, token(match(","))),        // unit names separated by commas
@@ -163,7 +175,58 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Type section: type name = TypeDefinition; ...
+    combinator_t* specialize_args = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    );
+
+    combinator_t* specialize_type = seq(new_combinator(), PASCAL_T_TYPE_SPEC,
+        token(keyword_ci("specialize")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        optional(specialize_args),
+        NULL
+    );
+
+    combinator_t* helper_param_list = create_pascal_param_parser();
+
+    combinator_t* helper_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        token(keyword_ci("procedure")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        helper_param_list,
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* helper_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        token(keyword_ci("function")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        helper_param_list,
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* helper_member = many(multi(new_combinator(), PASCAL_T_NONE,
+        helper_procedure_decl,
+        helper_function_decl,
+        NULL
+    ));
+
+    combinator_t* type_helper_type = seq(new_combinator(), PASCAL_T_CLASS_TYPE,
+        token(keyword_ci("type")),
+        token(keyword_ci("helper")),
+        token(keyword_ci("for")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        helper_member,
+        token(keyword_ci("end")),
+        NULL
+    );
+
     combinator_t* type_definition = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        type_helper_type,
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end (try first)
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
@@ -171,7 +234,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
         range_type(PASCAL_T_RANGE_TYPE),                // range types like 1..100
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^integer
-        token(cident(PASCAL_T_IDENTIFIER)),             // simple aliases like Foo = integer
+        specialize_type,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),             // simple aliases like Foo = integer
         NULL
     );
 
@@ -211,11 +275,40 @@ void init_pascal_unit_parser(combinator_t** p) {
         many(const_decl),                            // multiple const declarations
         NULL
     );
+
+    combinator_t* resourcestring_value = multi(new_combinator(), PASCAL_T_NONE,
+        token(pascal_string(PASCAL_T_STRING)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* resourcestring_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("=")),
+        resourcestring_value,
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* resourcestring_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
+        token(keyword_ci("resourcestring")),
+        many(resourcestring_decl),
+        NULL
+    );
     
+    combinator_t* type_param_list = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+
     combinator_t* type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),          // type name (can use cident since type names are not keywords)
+        optional(token(keyword_ci("generic"))),      // optional generic keyword
+        token(cident(PASCAL_T_IDENTIFIER)),           // type name
+        type_param_list,                              // optional type parameters
         token(match("=")),                           // equals sign
-        type_definition,                             // type definition
+        type_definition,                              // type definition
         optional(token(match(";"))),                 // semicolon (optional for last decl)
         NULL
     );
@@ -261,6 +354,12 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
     var_section->extra_to_free = var_expr_parser;
+
+    combinator_t* threadvar_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
+        token(keyword_ci("threadvar")),
+        many(typed_var_decl),
+        NULL
+    );
 
     // Function/procedure body that can contain local declarations
     combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
@@ -311,14 +410,26 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* routine_directives = many(routine_directive);
 
     combinator_t* procedure_header = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)), param_list, token(match(";")), NULL);
+        token(keyword_ci("procedure")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        param_list,
+        token(match(";")),
+        routine_directives,
+        NULL);
 
     combinator_t* function_header = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
-        token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)), param_list, 
-        token(match(":")), token(cident(PASCAL_T_RETURN_TYPE)), token(match(";")), NULL);
+        token(keyword_ci("function")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        param_list,
+        token(match(":")),
+        token(cident(PASCAL_T_RETURN_TYPE)),
+        token(match(";")),
+        routine_directives,
+        NULL);
 
     // Simple procedure implementation for unit
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list), token(match(";")),
         routine_directives,
         function_body, optional(token(match(";"))), NULL);
@@ -367,6 +478,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Method procedure implementation: procedure ClassName.MethodName[(params)]; body
     combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("procedure")),              // procedure keyword
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
@@ -380,6 +492,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Method function implementation: function ClassName.MethodName[(params)]: ReturnType; body
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("function")),               // function keyword
         method_name_with_class,                      // ClassName.MethodName
         optional(param_list),                        // optional parameter list
@@ -394,17 +507,34 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Simple function implementation for unit
     combinator_t* function_impl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list),
         return_type, token(match(";")),
         routine_directives,
         function_body, optional(token(match(";"))), NULL);
     function_impl->name = strdup("function_impl");
 
+    combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("operator")),
+        method_name_with_class,
+        optional(param_list),
+        return_type,
+        token(match(";")),
+        routine_directives,
+        function_body,
+        optional(token(match(";"))),
+        NULL
+    );
+    class_operator_impl->name = strdup("class_operator_impl");
+
     // Interface section declarations: uses, const, type, procedure/function headers
     combinator_t* interface_declaration = multi(new_combinator(), PASCAL_T_NONE,
         uses_section,
         const_section,
+        resourcestring_section,
         type_section,
+        threadvar_section,
         var_section,
         procedure_header,
         function_header,
@@ -418,11 +548,14 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* implementation_definition = multi(new_combinator(), PASCAL_T_NONE,
         uses_section,                                // uses clauses in implementation
         const_section,                               // const declarations in implementation
+        resourcestring_section,
         type_section,                                // type declarations in implementation
+        threadvar_section,
         var_section,                                 // var declarations in implementation
         constructor_impl,                            // constructor Class.Method implementations
         destructor_impl,                             // destructor Class.Method implementations
         method_procedure_impl,                       // procedure Class.Method implementations
+        class_operator_impl,                         // class operator implementations
         method_function_impl,                        // function Class.Method implementations
         procedure_impl,                              // simple procedure implementations
         function_impl,                               // simple function implementations
@@ -446,7 +579,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     seq(*p, PASCAL_T_UNIT_DECL,
         token(keyword_ci("unit")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         token(match(";")),
         interface_section,
         implementation_section,
@@ -684,7 +817,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Uses section: uses unit1, unit2, unit3;
-    combinator_t* uses_unit = token(cident(PASCAL_T_USES_UNIT));
+    combinator_t* uses_unit = token(pascal_qualified_identifier(PASCAL_T_USES_UNIT));
     combinator_t* uses_section = seq(new_combinator(), PASCAL_T_USES_SECTION,
         token(keyword_ci("uses")),                      // uses keyword (with word boundary check)
         sep_by(uses_unit, token(match(","))),        // unit names separated by commas

@@ -231,6 +231,7 @@ combinator_t* class_type(tag_t tag) {
 
     // Procedure declaration: procedure Name; [override];
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         method_name,
         param_list,
@@ -245,6 +246,7 @@ combinator_t* class_type(tag_t tag) {
 
     // Function declaration: function Name: ReturnType; [override];
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         method_name,
         param_list,
@@ -280,11 +282,23 @@ combinator_t* class_type(tag_t tag) {
     );
 
     // Class member: field, method, constructor, destructor, or property
+    combinator_t* class_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("operator")),
+        method_name,
+        param_list,
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match(";")),
+        NULL
+    );
+
     combinator_t* class_member = multi(new_combinator(), PASCAL_T_CLASS_MEMBER,
         constructor_decl,
         destructor_decl,
         procedure_decl,
         function_decl,
+        class_operator_decl,
         property_decl,
         field_decl,
         NULL

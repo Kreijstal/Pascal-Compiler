@@ -69,6 +69,7 @@ if(BUILD_INTEGRATION_TESTS)
         examples/pascal_parser/pascal_parser.c
         examples/pascal_parser/pascal_parser.h
         examples/pascal_parser/pascal_keywords.c
+        examples/pascal_parser/pascal_preprocessor.c
         examples/pascal_parser/pascal_type.c
         examples/pascal_parser/pascal_expression.c
         examples/pascal_parser/pascal_statement.c
