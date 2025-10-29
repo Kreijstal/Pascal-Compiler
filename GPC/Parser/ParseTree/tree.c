@@ -393,19 +393,15 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           fprintf(f, "[BREAK]\n");
           break;
 
-          case STMT_ASM_BLOCK:
-            fprintf(f, "[ASM_BLOCK]:\n");
-            print_indent(f, num_indent+1);
-            fprintf(f, "%s\n", stmt->stmt_data.asm_block_data.code);
-            break;
+        case STMT_ASM_BLOCK:
+          fprintf(f, "[ASM_BLOCK]:\n");
+          print_indent(f, num_indent+1);
+          fprintf(f, "%s\n", stmt->stmt_data.asm_block_data.code);
+          break;
 
         case STMT_EXIT:
-            fprintf(f, "[EXIT]\n");
-            break;
-
-        case STMT_BREAK:
-            fprintf(f, "[BREAK]\n");
-            break;
+          fprintf(f, "[EXIT]\n");
+          break;
 
         case STMT_CASE:
             fprintf(f, "[CASE]:\n");
@@ -812,9 +808,6 @@ void destroy_stmt(struct Statement *stmt)
 
           destroy_expr(stmt->stmt_data.for_data.to);
           destroy_stmt(stmt->stmt_data.for_data.do_for);
-          break;
-
-        case STMT_BREAK:
           break;
 
         case STMT_ASM_BLOCK:
@@ -1266,6 +1259,18 @@ struct Statement *mk_break(int line_num)
     return new_stmt;
 }
 
+struct Statement *mk_exit(int line_num)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_EXIT;
+    memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
+
+    return new_stmt;
+}
+
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args)
 {
     struct Statement *new_stmt;
@@ -1387,30 +1392,6 @@ struct Statement *mk_asmblock(int line_num, char *code)
     new_stmt->line_num = line_num;
     new_stmt->type = STMT_ASM_BLOCK;
     new_stmt->stmt_data.asm_block_data.code = code;
-
-    return new_stmt;
-}
-
-struct Statement *mk_exit(int line_num)
-{
-    struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
-    assert(new_stmt != NULL);
-
-    new_stmt->line_num = line_num;
-    new_stmt->type = STMT_EXIT;
-
-    return new_stmt;
-}
-
-struct Statement *mk_break(int line_num)
-{
-    struct Statement *new_stmt;
-    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
-    assert(new_stmt != NULL);
-
-    new_stmt->line_num = line_num;
-    new_stmt->type = STMT_BREAK;
 
     return new_stmt;
 }

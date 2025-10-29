@@ -24,6 +24,8 @@
 #include "../../ParseTree/type_tags.h"
 #include "../../../identifier_utils.h"
 
+static int semcheck_loop_depth = 0;
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
@@ -359,7 +361,6 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_EXIT:
-        case STMT_BREAK:
             /* No semantic checking needed for simple control flow statements */
             break;
 

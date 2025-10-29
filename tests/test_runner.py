@@ -147,20 +147,28 @@ class TestCompiler(unittest.TestCase):
 
         build_root = build_dir
         build_ninja = os.path.join(build_root, "build.ninja")
-        # Configure the build directory if it has not been set up yet.
-        if not os.path.exists(build_ninja):
-            try:
-                subprocess.run(
-                    [meson, "setup", build_root],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(
-                    "Meson setup failed:\n"
-                    f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
-                )
+
+        setup_command = [meson, "setup", build_root, "-Dbuild_integration_tests=true"]
+        setup_mode = "setup"
+
+        # If the build directory already exists, reconfigure it so integration tests
+        # stay enabled even if a previous configuration disabled them.
+        if os.path.exists(build_ninja):
+            setup_command.insert(2, "--reconfigure")
+            setup_mode = "reconfigure"
+
+        try:
+            subprocess.run(
+                setup_command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Meson {setup_mode} failed:\n"
+                f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+            )
 
         try:
             subprocess.run(
