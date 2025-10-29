@@ -252,9 +252,9 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
-        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL)
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE)
         {
-            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, boolean, or string.\n",
+            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, boolean, string, or pointer.\n",
                     stmt->line_num, arg_index);
             ++return_val;
         }

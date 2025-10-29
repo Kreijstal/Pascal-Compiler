@@ -27,11 +27,11 @@ begin
         testl %eax, %eax
         je .Lread_li_sysv
         movq %rcx, %rdx
-        leaq .format_str_d(%rip), %rcx
+        leaq .format_str_lld(%rip), %rcx
         jmp .Lread_li_args_done
 .Lread_li_sysv:
         movq %rdi, %rsi
-        leaq .format_str_d(%rip), %rdi
+        leaq .format_str_lld(%rip), %rdi
 .Lread_li_args_done:
         xorl %eax, %eax
         call gpc_scanf
@@ -59,11 +59,4 @@ end;
 
 
 begin
-    assembler;
-    asm
-        .section .rodata
-    .format_str_d:
-        .string "%d"
-        .text
-    end
 end.

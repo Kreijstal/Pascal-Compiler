@@ -185,7 +185,6 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
     combinator_t* pointer_deref_lval = new_combinator();
     pointer_deref_lval->fn = pointer_deref_lvalue_fn;
-    combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
     combinator_t* pointer_suffix = map(token(match("^")), wrap_pointer_lvalue_suffix);
     combinator_t* pointer_suffixes = many(pointer_suffix);
     combinator_t* base_lvalue = multi(new_combinator(), PASCAL_T_NONE,

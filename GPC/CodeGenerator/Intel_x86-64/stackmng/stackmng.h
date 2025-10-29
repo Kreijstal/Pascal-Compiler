@@ -52,6 +52,7 @@ void pop_stackscope();
 StackNode_t *add_l_t(char *);
 StackNode_t *add_l_x(char *, int size);
 StackNode_t *add_l_z(char *);
+StackNode_t *add_q_z(char *);
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
 StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound);
 StackNode_t *find_in_temp(char *);
