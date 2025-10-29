@@ -1082,7 +1082,7 @@ static const char *tag_name(tag_t tag) {
 
 static struct Expression *convert_expression(ast_t *expr_node) {
     expr_node = unwrap_pascal_node(expr_node);
-    if (expr_node == NULL)
+    if (expr_node == NULL || expr_node == ast_nil)
         return NULL;
 
     switch (expr_node->typ) {
@@ -1124,6 +1124,39 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return convert_expression(expr_node->child);
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
+    case PASCAL_T_TYPECAST:
+    {
+        ast_t *type_node = expr_node->child;
+        ast_t *value_node = (type_node != NULL) ? type_node->next : NULL;
+
+        int target_type = UNKNOWN_TYPE;
+        char *target_type_id = NULL;
+        struct RecordType *record_type = NULL;
+        TypeInfo type_info;
+        memset(&type_info, 0, sizeof(TypeInfo));
+
+        ast_t *unwrapped_type = unwrap_pascal_node(type_node);
+        if (unwrapped_type != NULL)
+        {
+            target_type = convert_type_spec(unwrapped_type, &target_type_id,
+                &record_type, &type_info);
+            destroy_type_info_contents(&type_info);
+            if (record_type != NULL)
+            {
+                destroy_record_type(record_type);
+                record_type = NULL;
+            }
+
+            if (target_type == UNKNOWN_TYPE && target_type_id == NULL &&
+                unwrapped_type->typ == PASCAL_T_IDENTIFIER)
+            {
+                target_type_id = dup_symbol(unwrapped_type);
+            }
+        }
+
+        struct Expression *inner_expr = convert_expression(value_node);
+        return mk_typecast(expr_node->line, target_type, target_type_id, inner_expr);
+    }
     default: {
         const char *name = tag_name(expr_node->typ);
         fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
@@ -1313,10 +1346,56 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
+    case PASCAL_T_BREAK_STMT:
+        return mk_break(stmt_node->line);
+    case PASCAL_T_WITH_STMT: {
+        ast_t *expr_node = stmt_node->child;
+        ast_t *body_node = unwrap_pascal_node(expr_node != NULL ? expr_node->next : NULL);
+
+        struct Expression *context_expr = convert_expression(expr_node);
+        struct Statement *body_stmt = convert_statement(body_node);
+        return mk_with(stmt_node->line, context_expr, body_stmt);
+    }
+    case PASCAL_T_TRY_BLOCK: {
+        ListNode_t *try_stmts = NULL;
+        ListNode_t *finally_stmts = NULL;
+        ListNode_t *except_stmts = NULL;
+
+        ast_t *cur = stmt_node->child;
+        while (cur != NULL) {
+            if (cur->typ == PASCAL_T_FINALLY_BLOCK || cur->typ == PASCAL_T_EXCEPT_BLOCK) {
+                ListNode_t **target = (cur->typ == PASCAL_T_FINALLY_BLOCK) ? &finally_stmts : &except_stmts;
+                ast_t *inner = cur->child;
+                while (inner != NULL) {
+                    struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(inner));
+                    if (inner_stmt != NULL)
+                        append_node(target, inner_stmt, LIST_STMT);
+                    inner = inner->next;
+                }
+            } else {
+                struct Statement *try_stmt = convert_statement(unwrap_pascal_node(cur));
+                if (try_stmt != NULL)
+                    append_node(&try_stmts, try_stmt, LIST_STMT);
+            }
+            cur = cur->next;
+        }
+
+        if (finally_stmts != NULL)
+            return mk_tryfinally(stmt_node->line, try_stmts, finally_stmts);
+        return mk_tryexcept(stmt_node->line, try_stmts, except_stmts);
+    }
+    case PASCAL_T_RAISE_STMT: {
+        struct Expression *exc_expr = convert_expression(unwrap_pascal_node(stmt_node->child));
+        return mk_raise(stmt_node->line, exc_expr);
+    }
+    case PASCAL_T_INHERITED_STMT: {
+        struct Expression *call_expr = convert_expression(unwrap_pascal_node(stmt_node->child));
+        return mk_inherited(stmt_node->line, call_expr);
+    }
     case PASCAL_T_CASE_STMT: {
         ast_t *selector = stmt_node->child;
         ast_t *branches_start = selector != NULL ? selector->next : NULL;
-        
+
         struct Expression *selector_expr = convert_expression(selector);
         ListNode_t *branches = NULL;
         struct Statement *else_stmt = NULL;
@@ -1407,6 +1486,16 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 
     while (cur != NULL && cur != ast_nil) {
         ast_t *unwrapped = unwrap_pascal_node(cur);
+        if (unwrapped == NULL) {
+            cur = cur->next;
+            continue;
+        }
+
+        if (unwrapped->typ == PASCAL_T_NONE && unwrapped->child == NULL) {
+            cur = cur->next;
+            continue;
+        }
+
         struct Statement *stmt = convert_statement(unwrapped);
         if (stmt != NULL)
             append_node(&stmts, stmt, LIST_STMT);

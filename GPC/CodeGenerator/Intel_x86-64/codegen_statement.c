@@ -17,6 +17,18 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label);
+static void codegen_pop_loop_exit(CodeGenContext *ctx);
+static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
+static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
 {
@@ -90,6 +102,60 @@ static ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t 
     return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
 }
 
+static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label)
+{
+    if (ctx == NULL || label == NULL)
+        return 0;
+    if (ctx->loop_depth == ctx->loop_capacity)
+    {
+        int new_capacity = (ctx->loop_capacity == 0) ? 4 : ctx->loop_capacity * 2;
+        char **new_labels = realloc(ctx->loop_exit_labels, sizeof(char *) * new_capacity);
+        if (new_labels == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate loop label stack.\n");
+            return 0;
+        }
+        ctx->loop_exit_labels = new_labels;
+        ctx->loop_capacity = new_capacity;
+    }
+    ctx->loop_exit_labels[ctx->loop_depth] = strdup(label);
+    if (ctx->loop_exit_labels[ctx->loop_depth] == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate loop exit label.\n");
+        return 0;
+    }
+    ctx->loop_depth += 1;
+    return 1;
+}
+
+static void codegen_pop_loop_exit(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return;
+    ctx->loop_depth -= 1;
+    free(ctx->loop_exit_labels[ctx->loop_depth]);
+    ctx->loop_exit_labels[ctx->loop_depth] = NULL;
+}
+
+static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return NULL;
+    return ctx->loop_exit_labels[ctx->loop_depth - 1];
+}
+
+static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab)
+{
+    while (stmts != NULL)
+    {
+        if (stmts->cur != NULL)
+            inst_list = codegen_stmt((struct Statement *)stmts->cur, inst_list, ctx, symtab);
+        stmts = stmts->next;
+    }
+    return inst_list;
+}
+
 /* Codegen for a statement */
 ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -135,12 +201,25 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, "\tret\n");
             break;
         case STMT_BREAK:
-            /* BREAK statement - exit from current loop */
-            /* TODO: Track loop context and generate proper jump to loop end */
-            inst_list = add_inst(inst_list, "\t# BREAK statement (not fully implemented)\n");
+            inst_list = codegen_break_stmt(stmt, inst_list, ctx);
             break;
         case STMT_CASE:
             inst_list = codegen_case(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_WITH:
+            inst_list = codegen_with(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_TRY_FINALLY:
+            inst_list = codegen_try_finally(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_TRY_EXCEPT:
+            inst_list = codegen_try_except(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_RAISE:
+            inst_list = codegen_raise(stmt, inst_list, ctx);
+            break;
+        case STMT_INHERITED:
+            inst_list = codegen_inherited(stmt, inst_list, ctx, symtab);
             break;
         default:
             assert(0 && "Unrecognized statement type in codegen");
@@ -669,29 +748,34 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    int relop_type, inverse;
+    int relop_type;
     struct Expression *expr;
     struct Statement *while_stmt;
-    char label1[18], label2[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], buffer[50];
 
-    gen_label(label1, 18, ctx);
-    gen_label(label2, 18, ctx);
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     while_stmt = stmt->stmt_data.while_data.while_stmt;
     expr = stmt->stmt_data.while_data.relop_expr;
 
-    inverse = 0;
-    inst_list = gencode_jmp(NORMAL_JMP, inverse, label1, inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label2);
+    snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
+    if (!codegen_push_loop_exit(ctx, exit_label))
+        return inst_list;
     inst_list = codegen_stmt(while_stmt, inst_list, ctx, symtab);
+    codegen_pop_loop_exit(ctx);
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label1);
+    snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
+    inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
 
-    inverse = 0;
-    inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+    snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -709,24 +793,30 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    char body_label[18], buffer[50];
-    int relop_type, inverse;
+    char body_label[18], exit_label[18], buffer[50];
+    int relop_type;
     ListNode_t *body_list = stmt->stmt_data.repeat_data.body_list;
 
     gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
 
+    if (!codegen_push_loop_exit(ctx, exit_label))
+        return inst_list;
     while (body_list != NULL)
     {
         struct Statement *body_stmt = (struct Statement *)body_list->cur;
         inst_list = codegen_stmt(body_stmt, inst_list, ctx, symtab);
         body_list = body_list->next;
     }
+    codegen_pop_loop_exit(ctx);
 
     inst_list = codegen_simple_relop(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
-    inverse = 1;
-    inst_list = gencode_jmp(relop_type, inverse, body_label, inst_list);
+    inst_list = gencode_jmp(relop_type, 1, body_label, inst_list);
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -745,13 +835,14 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    int relop_type, inverse;
+    int relop_type;
     struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
     struct Statement *for_body, *for_assign, *update_stmt;
-    char label1[18], label2[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], buffer[50];
 
-    gen_label(label1, 18, ctx);
-    gen_label(label2, 18, ctx);
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
     for_body = stmt->stmt_data.for_data.do_for;
     expr = stmt->stmt_data.for_data.to;
 
@@ -772,21 +863,31 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
-    inverse = 0;
-    inst_list = gencode_jmp(NORMAL_JMP, inverse, label1, inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
-    snprintf(buffer, 50, "%s:\n", label2);
+    snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
+    if (!codegen_push_loop_exit(ctx, exit_label))
+    {
+        free(comparison_expr);
+        free(one_expr);
+        free(update_expr);
+        free(update_stmt);
+        return inst_list;
+    }
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
+    codegen_pop_loop_exit(ctx);
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
 
-    snprintf(buffer, 50, "%s:\n", label1);
+    snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_simple_relop(comparison_expr, inst_list, ctx, &relop_type);
 
-    inverse = 0;
-    inst_list = gencode_jmp(relop_type, inverse, label2, inst_list);
+    inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
 
     free(comparison_expr);
     free(one_expr);
@@ -896,5 +997,76 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    return inst_list;
+}
+
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    const char *exit_label = codegen_current_loop_exit(ctx);
+    if (exit_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: BREAK statement outside of a loop at line %d.\n",
+            stmt != NULL ? stmt->line_num : -1);
+        return inst_list;
+    }
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (stmt == NULL)
+        return inst_list;
+    if (stmt->stmt_data.with_data.body_stmt != NULL)
+        inst_list = codegen_stmt(stmt->stmt_data.with_data.body_stmt, inst_list, ctx, symtab);
+    return inst_list;
+}
+
+static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (stmt == NULL)
+        return inst_list;
+    inst_list = codegen_statement_list(stmt->stmt_data.try_finally_data.try_statements, inst_list, ctx, symtab);
+    inst_list = codegen_statement_list(stmt->stmt_data.try_finally_data.finally_statements, inst_list, ctx, symtab);
+    return inst_list;
+}
+
+static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (stmt == NULL)
+        return inst_list;
+    inst_list = codegen_statement_list(stmt->stmt_data.try_except_data.try_statements, inst_list, ctx, symtab);
+    if (stmt->stmt_data.try_except_data.except_statements != NULL)
+        inst_list = add_inst(inst_list, "\t# EXCEPT block ignored (no exception support)\n");
+    return inst_list;
+}
+
+static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    (void)stmt;
+    inst_list = add_inst(inst_list, "\t# RAISE statement (not implemented)\n");
+    return inst_list;
+}
+
+static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    (void)symtab;
+
+    if (stmt == NULL)
+        return inst_list;
+
+    struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
+    if (call_expr != NULL)
+    {
+        inst_list = codegen_expr(call_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
+    }
+    else
+    {
+        inst_list = add_inst(inst_list, "\t# INHERITED statement without parent call\n");
+    }
     return inst_list;
 }
