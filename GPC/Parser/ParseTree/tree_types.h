@@ -25,6 +25,18 @@ struct TypeAlias
     int array_element_type;
     char *array_element_type_id;
     int is_open_array;
+    ListNode_t *array_dimensions;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
+    int is_set;
+    int set_element_type;
+    char *set_element_type_id;
+    int is_enum;
+    ListNode_t *enum_literals;
+    int is_file;
+    int file_type;
+    char *file_type_id;
 };
 
 struct RecordType;

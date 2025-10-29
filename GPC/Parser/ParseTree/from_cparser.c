@@ -24,7 +24,20 @@ typedef struct {
     int end;
     int element_type;
     char *element_type_id;
-} ArrayTypeInfo;
+    int is_open_array;
+    ListNode_t *array_dimensions;
+    int is_pointer;
+    int pointer_type;
+    char *pointer_type_id;
+    int is_set;
+    int set_element_type;
+    char *set_element_type_id;
+    int is_enum;
+    ListNode_t *enum_literals;
+    int is_file;
+    int file_type;
+    char *file_type_id;
+} TypeInfo;
 
 static char *dup_symbol(ast_t *node) {
     while (node != NULL) {
@@ -105,6 +118,16 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("string");
         return STRING_TYPE;
     }
+    if (strcasecmp(name, "char") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("char");
+        return CHAR_TYPE;
+    }
+    if (strcasecmp(name, "file") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("file");
+        return FILE_TYPE;
+    }
     if (strcasecmp(name, "single") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("single");
@@ -127,17 +150,31 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 
-static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out, ArrayTypeInfo *array_info) {
+static int convert_type_spec(ast_t *type_spec, char **type_id_out,
+                             struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
         *type_id_out = NULL;
     if (record_out != NULL)
         *record_out = NULL;
-    if (array_info != NULL) {
-        array_info->is_array = 0;
-        array_info->start = 0;
-        array_info->end = 0;
-        array_info->element_type = UNKNOWN_TYPE;
-        array_info->element_type_id = NULL;
+    if (type_info != NULL) {
+        type_info->is_array = 0;
+        type_info->start = 0;
+        type_info->end = 0;
+        type_info->element_type = UNKNOWN_TYPE;
+        type_info->element_type_id = NULL;
+        type_info->is_open_array = 0;
+        type_info->array_dimensions = NULL;
+        type_info->is_pointer = 0;
+        type_info->pointer_type = UNKNOWN_TYPE;
+        type_info->pointer_type_id = NULL;
+        type_info->is_set = 0;
+        type_info->set_element_type = UNKNOWN_TYPE;
+        type_info->set_element_type_id = NULL;
+        type_info->is_enum = 0;
+        type_info->enum_literals = NULL;
+        type_info->is_file = 0;
+        type_info->file_type = UNKNOWN_TYPE;
+        type_info->file_type_id = NULL;
     }
 
     if (type_spec == NULL)
@@ -153,6 +190,12 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct Record
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
         int result = map_type_name(dup, type_id_out);
+        if (type_info != NULL && result == FILE_TYPE) {
+            type_info->is_file = 1;
+            type_info->file_type = FILE_TYPE;
+            if (type_id_out != NULL && *type_id_out != NULL)
+                type_info->file_type_id = strdup(*type_id_out);
+        }
         if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
             *type_id_out = dup;
         } else {
@@ -161,56 +204,128 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct Record
         return result;
     }
     if (spec_node->typ == PASCAL_T_ARRAY_TYPE) {
-        if (array_info != NULL) {
-            array_info->is_array = 1;
-            ast_t *range_node = spec_node->child;
-            if (range_node != NULL && range_node->typ == PASCAL_T_RANGE_TYPE) {
-                ast_t *lower = range_node->child;
-                ast_t *upper = (lower != NULL) ? lower->next : NULL;
-                if (lower != NULL && upper != NULL &&
-                    lower->typ == PASCAL_T_INTEGER && upper->typ == PASCAL_T_INTEGER &&
-                    lower->sym != NULL && upper->sym != NULL) {
-                    array_info->start = atoi(lower->sym->name);
-                    array_info->end = atoi(upper->sym->name);
-                }
-                ast_t *element_node = range_node;
-                while (element_node != NULL && element_node->next != NULL)
-                    element_node = element_node->next;
-                if (element_node != NULL && element_node->typ == PASCAL_T_IDENTIFIER) {
-                    char *dup = dup_symbol(element_node);
-                    int mapped = map_type_name(dup, &array_info->element_type_id);
-                    array_info->element_type = mapped;
-                    if (mapped != UNKNOWN_TYPE && array_info->element_type_id != NULL) {
-                        free(array_info->element_type_id);
-                        array_info->element_type_id = NULL;
+        if (type_info != NULL) {
+            type_info->is_array = 1;
+            type_info->start = 0;
+            type_info->end = -1;
+            ast_t *child = spec_node->child;
+            ast_t *element_node = child;
+            while (element_node != NULL && element_node->next != NULL)
+                element_node = element_node->next;
+
+            for (ast_t *dim = child; dim != NULL && dim != element_node; dim = dim->next) {
+                if (dim->typ == PASCAL_T_RANGE_TYPE) {
+                    ast_t *lower = dim->child;
+                    ast_t *upper = (lower != NULL) ? lower->next : NULL;
+                    if (lower != NULL && upper != NULL && lower->sym != NULL && upper->sym != NULL) {
+                        if (type_info->array_dimensions == NULL) {
+                            type_info->start = atoi(lower->sym->name);
+                            type_info->end = atoi(upper->sym->name);
+                        }
+                        char buffer[128];
+                        snprintf(buffer, sizeof(buffer), "%s..%s", lower->sym->name, upper->sym->name);
+                        append_node(&type_info->array_dimensions, strdup(buffer), LIST_STRING);
+                    } else {
+                        type_info->is_open_array = 1;
                     }
-                    if (mapped == UNKNOWN_TYPE && array_info->element_type_id == NULL)
-                        array_info->element_type_id = dup;
+                } else if (dim->typ == PASCAL_T_IDENTIFIER) {
+                    type_info->is_open_array = 1;
+                    append_node(&type_info->array_dimensions, dup_symbol(dim), LIST_STRING);
+                } else {
+                    type_info->is_open_array = 1;
+                }
+            }
+
+            if (element_node != NULL) {
+                if (element_node->typ == PASCAL_T_IDENTIFIER) {
+                    char *dup = dup_symbol(element_node);
+                    int mapped = map_type_name(dup, &type_info->element_type_id);
+                    type_info->element_type = mapped;
+                    if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
+                        type_info->element_type_id = dup;
                     else if (mapped != UNKNOWN_TYPE)
                         free(dup);
+                } else if (element_node->typ == PASCAL_T_TYPE_SPEC) {
+                    char *nested_id = NULL;
+                    struct RecordType *nested_record = NULL;
+                    TypeInfo nested_info = {0};
+                    int mapped = convert_type_spec(element_node, &nested_id, &nested_record, &nested_info);
+                    type_info->element_type = mapped;
+                    if (type_info->element_type_id == NULL)
+                        type_info->element_type_id = nested_id;
+                    else if (nested_id != NULL)
+                        free(nested_id);
+                    if (nested_record != NULL)
+                        destroy_record_type(nested_record);
+                    if (nested_info.array_dimensions != NULL)
+                        destroy_list(nested_info.array_dimensions);
+                    if (nested_info.pointer_type_id != NULL)
+                        free(nested_info.pointer_type_id);
+                    if (nested_info.set_element_type_id != NULL)
+                        free(nested_info.set_element_type_id);
+                    if (nested_info.enum_literals != NULL)
+                        destroy_list(nested_info.enum_literals);
+                    if (nested_info.file_type_id != NULL)
+                        free(nested_info.file_type_id);
                 }
-            } else {
-                array_info->start = 0;
-                array_info->end = -1;
-                ast_t *element_node = range_node;
-                while (element_node != NULL && element_node->next != NULL)
-                    element_node = element_node->next;
-                if (element_node != NULL && element_node->typ == PASCAL_T_IDENTIFIER) {
-                    char *dup = dup_symbol(element_node);
-                    int mapped = map_type_name(dup, &array_info->element_type_id);
-                    array_info->element_type = mapped;
-                    if (mapped != UNKNOWN_TYPE && array_info->element_type_id != NULL) {
-                        free(array_info->element_type_id);
-                        array_info->element_type_id = NULL;
-                    }
-                    if (mapped == UNKNOWN_TYPE && array_info->element_type_id == NULL)
-                        array_info->element_type_id = dup;
+            }
+        }
+        return UNKNOWN_TYPE;
+    }
+
+    if (spec_node->typ == PASCAL_T_POINTER_TYPE) {
+        if (type_info != NULL) {
+            type_info->is_pointer = 1;
+            ast_t *target = spec_node->child;
+            while (target != NULL && target->typ != PASCAL_T_IDENTIFIER)
+                target = target->next;
+            if (target != NULL) {
+                char *dup = dup_symbol(target);
+                int mapped = map_type_name(dup, &type_info->pointer_type_id);
+                type_info->pointer_type = mapped;
+                if (mapped == UNKNOWN_TYPE && type_info->pointer_type_id == NULL)
+                    type_info->pointer_type_id = dup;
+                else if (mapped != UNKNOWN_TYPE)
+                    free(dup);
+                if (type_id_out != NULL && *type_id_out == NULL && type_info->pointer_type_id != NULL)
+                    *type_id_out = strdup(type_info->pointer_type_id);
+            }
+        }
+        return POINTER_TYPE;
+    }
+
+    if (spec_node->typ == PASCAL_T_SET) {
+        if (type_info != NULL) {
+            type_info->is_set = 1;
+            ast_t *elem = spec_node->child;
+            while (elem != NULL && elem->typ == PASCAL_T_NONE)
+                elem = elem->child;
+            if (elem != NULL) {
+                if (elem->typ == PASCAL_T_IDENTIFIER) {
+                    char *dup = dup_symbol(elem);
+                    int mapped = map_type_name(dup, &type_info->set_element_type_id);
+                    type_info->set_element_type = mapped;
+                    if (mapped == UNKNOWN_TYPE && type_info->set_element_type_id == NULL)
+                        type_info->set_element_type_id = dup;
                     else if (mapped != UNKNOWN_TYPE)
                         free(dup);
                 }
             }
         }
-        return UNKNOWN_TYPE;
+        return SET_TYPE;
+    }
+
+    if (spec_node->typ == PASCAL_T_ENUMERATED_TYPE) {
+        if (type_info != NULL) {
+            type_info->is_enum = 1;
+            ast_t *value = spec_node->child;
+            while (value != NULL) {
+                if (value->typ == PASCAL_T_IDENTIFIER)
+                    append_node(&type_info->enum_literals, dup_symbol(value), LIST_STRING);
+                value = value->next;
+            }
+        }
+        return ENUM_TYPE;
     }
 
     if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
@@ -418,10 +533,10 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     }
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
-    ArrayTypeInfo array_info = {0};
+    TypeInfo type_info = {0};
     ast_t *type_node = first_non_identifier;
     if (type_node != NULL && type_node->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(type_node, &type_id, NULL, &array_info);
+        var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
         cur = type_node->next;
     } else if (type_node != NULL && type_node->typ == PASCAL_T_IDENTIFIER && type_node->next == NULL) {
         char *type_name = dup_symbol(type_node);
@@ -442,7 +557,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         while (search != NULL && search->typ == PASCAL_T_IDENTIFIER)
             search = search->next;
         if (search != NULL && search->typ == PASCAL_T_TYPE_SPEC) {
-            var_type = convert_type_spec(search, &type_id, NULL, &array_info);
+            var_type = convert_type_spec(search, &type_id, NULL, &type_info);
         } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
             char *type_name = dup_symbol(search);
             if (type_name != NULL) {
@@ -456,12 +571,26 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         }
     }
 
-    if (array_info.is_array) {
-        int element_type = array_info.element_type;
-        char *element_type_id = array_info.element_type_id;
+    if (type_info.is_array) {
+        int element_type = type_info.element_type;
+        char *element_type_id = type_info.element_type_id;
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
-                                    array_info.start, array_info.end);
+                                    type_info.start, type_info.end);
         return decl;
+    }
+
+    if (type_info.is_pointer) {
+        if (type_info.pointer_type_id != NULL && type_id == NULL)
+            type_id = strdup(type_info.pointer_type_id);
+        var_type = POINTER_TYPE;
+    } else if (type_info.is_set) {
+        if (type_info.set_element_type_id != NULL && type_id == NULL)
+            type_id = strdup(type_info.set_element_type_id);
+        var_type = SET_TYPE;
+    } else if (type_info.is_enum) {
+        var_type = ENUM_TYPE;
+    } else if (type_info.is_file) {
+        var_type = FILE_TYPE;
     }
 
     int inferred = 0;
@@ -504,6 +633,18 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     }
 
     Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt);
+
+    if (type_info.pointer_type_id != NULL)
+        free(type_info.pointer_type_id);
+    if (type_info.set_element_type_id != NULL)
+        free(type_info.set_element_type_id);
+    if (type_info.file_type_id != NULL)
+        free(type_info.file_type_id);
+    if (type_info.enum_literals != NULL)
+        destroy_list(type_info.enum_literals);
+    if (type_info.array_dimensions != NULL)
+        destroy_list(type_info.array_dimensions);
+
     return decl;
 }
 
@@ -535,21 +676,23 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node) {
 
     cur = cur->next;
     char *type_id = NULL;
-    ArrayTypeInfo array_info = {0};
+    TypeInfo type_info = {0};
 
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
-        convert_type_spec(cur, &type_id, NULL, &array_info);
+        convert_type_spec(cur, &type_id, NULL, &type_info);
         cur = cur->next;
     }
 
     ast_t *value_node = unwrap_pascal_node(cur);
-    if (value_node == NULL || array_info.is_array) {
+    if (value_node == NULL || type_info.is_array) {
         fprintf(stderr, "ERROR: Unsupported const declaration for %s.\n", id);
         if (type_id != NULL)
             free(type_id);
         free(id);
-        if (array_info.element_type_id != NULL)
-            free(array_info.element_type_id);
+        if (type_info.element_type_id != NULL)
+            free(type_info.element_type_id);
+        if (type_info.pointer_type_id != NULL)
+            free(type_info.pointer_type_id);
         return NULL;
     }
 
@@ -563,6 +706,18 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node) {
     }
 
     Tree_t *decl = mk_constdecl(const_decl_node->line, id, type_id, value_expr);
+
+    if (type_info.element_type_id != NULL)
+        free(type_info.element_type_id);
+    if (type_info.pointer_type_id != NULL)
+        free(type_info.pointer_type_id);
+    if (type_info.file_type_id != NULL)
+        free(type_info.file_type_id);
+    if (type_info.enum_literals != NULL)
+        destroy_list(type_info.enum_literals);
+    if (type_info.array_dimensions != NULL)
+        destroy_list(type_info.array_dimensions);
+
     return decl;
 }
 
@@ -601,18 +756,18 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
 
     char *type_id = NULL;
     struct RecordType *record_type = NULL;
-    ArrayTypeInfo array_info = {0};
+    TypeInfo type_info = {0};
     int mapped_type = UNKNOWN_TYPE;
     if (spec_node != NULL)
-        mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &array_info);
+        mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
 
     Tree_t *decl = NULL;
     if (record_type != NULL) {
         decl = mk_record_type(type_decl_node->line, id, record_type);
-    } else if (array_info.is_array) {
-        decl = mk_typealiasdecl(type_decl_node->line, id, 1, array_info.element_type,
-                                 array_info.element_type_id, array_info.start, array_info.end);
-        array_info.element_type_id = NULL;
+    } else if (type_info.is_array) {
+        decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
+                                 type_info.element_type_id, type_info.start, type_info.end);
+        type_info.element_type_id = NULL;
     } else if (mapped_type != UNKNOWN_TYPE || type_id != NULL) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 0, mapped_type, type_id, 0, 0);
         type_id = NULL;
@@ -620,10 +775,50 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
     }
 
+    if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+        decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+        struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+        if (type_info.array_dimensions != NULL) {
+            alias->array_dimensions = type_info.array_dimensions;
+            type_info.array_dimensions = NULL;
+        }
+        alias->is_pointer = type_info.is_pointer;
+        alias->pointer_type = type_info.pointer_type;
+        if (type_info.pointer_type_id != NULL) {
+            alias->pointer_type_id = type_info.pointer_type_id;
+            type_info.pointer_type_id = NULL;
+        }
+        alias->is_set = type_info.is_set;
+        alias->set_element_type = type_info.set_element_type;
+        if (type_info.set_element_type_id != NULL) {
+            alias->set_element_type_id = type_info.set_element_type_id;
+            type_info.set_element_type_id = NULL;
+        }
+        alias->is_enum = type_info.is_enum;
+        if (type_info.enum_literals != NULL) {
+            alias->enum_literals = type_info.enum_literals;
+            type_info.enum_literals = NULL;
+        }
+        alias->is_file = type_info.is_file;
+        alias->file_type = type_info.file_type;
+        if (type_info.file_type_id != NULL) {
+            alias->file_type_id = type_info.file_type_id;
+            type_info.file_type_id = NULL;
+        }
+    }
+
     if (type_id != NULL)
         free(type_id);
-    if (array_info.element_type_id != NULL)
-        free(array_info.element_type_id);
+    if (type_info.element_type_id != NULL)
+        free(type_info.element_type_id);
+    if (type_info.pointer_type_id != NULL)
+        free(type_info.pointer_type_id);
+    if (type_info.set_element_type_id != NULL)
+        free(type_info.set_element_type_id);
+    if (type_info.enum_literals != NULL)
+        destroy_list(type_info.enum_literals);
+    if (type_info.array_dimensions != NULL)
+        destroy_list(type_info.array_dimensions);
 
     if (decl == NULL) {
         free(id);

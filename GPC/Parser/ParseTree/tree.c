@@ -614,10 +614,21 @@ void destroy_tree(Tree_t *tree)
                 destroy_record_type(tree->tree_data.type_decl_data.info.record);
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
             {
-                if (tree->tree_data.type_decl_data.info.alias.target_type_id != NULL)
-                    free(tree->tree_data.type_decl_data.info.alias.target_type_id);
-                if (tree->tree_data.type_decl_data.info.alias.array_element_type_id != NULL)
-                    free(tree->tree_data.type_decl_data.info.alias.array_element_type_id);
+                struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                if (alias->target_type_id != NULL)
+                    free(alias->target_type_id);
+                if (alias->array_element_type_id != NULL)
+                    free(alias->array_element_type_id);
+                if (alias->array_dimensions != NULL)
+                    destroy_list(alias->array_dimensions);
+                if (alias->pointer_type_id != NULL)
+                    free(alias->pointer_type_id);
+                if (alias->set_element_type_id != NULL)
+                    free(alias->set_element_type_id);
+                if (alias->enum_literals != NULL)
+                    destroy_list(alias->enum_literals);
+                if (alias->file_type_id != NULL)
+                    free(alias->file_type_id);
             }
             break;
 
@@ -1006,6 +1017,18 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->array_element_type = UNKNOWN_TYPE;
     alias->array_element_type_id = NULL;
     alias->is_open_array = (alias->is_array && end < start);
+    alias->array_dimensions = NULL;
+    alias->is_pointer = 0;
+    alias->pointer_type = UNKNOWN_TYPE;
+    alias->pointer_type_id = NULL;
+    alias->is_set = 0;
+    alias->set_element_type = UNKNOWN_TYPE;
+    alias->set_element_type_id = NULL;
+    alias->is_enum = 0;
+    alias->enum_literals = NULL;
+    alias->is_file = 0;
+    alias->file_type = UNKNOWN_TYPE;
+    alias->file_type_id = NULL;
 
     if (alias->is_array)
     {

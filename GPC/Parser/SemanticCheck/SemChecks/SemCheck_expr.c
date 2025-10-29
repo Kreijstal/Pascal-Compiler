@@ -219,6 +219,8 @@ static long long sizeof_from_type_tag(int type_tag)
             return 8;
         case STRING_TYPE:
             return POINTER_SIZE_BYTES;
+        case CHAR_TYPE:
+            return 1;
         case BOOL:
             /*
              * Standalone booleans occupy 4 bytes to keep stack accesses aligned,
@@ -226,6 +228,13 @@ static long long sizeof_from_type_tag(int type_tag)
              * Document the distinction so sizeof(boolean) users are not surprised.
              */
             return 4;
+        case POINTER_TYPE:
+            return POINTER_SIZE_BYTES;
+        case SET_TYPE:
+        case ENUM_TYPE:
+            return 4;
+        case FILE_TYPE:
+            return POINTER_SIZE_BYTES;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
         default:
@@ -248,6 +257,16 @@ static long long sizeof_from_var_type(enum VarType var_type)
         case HASHVAR_BOOLEAN:
             return 4;
         case HASHVAR_PROCEDURE:
+            return POINTER_SIZE_BYTES;
+        case HASHVAR_CHAR:
+            return 1;
+        case HASHVAR_POINTER:
+            return POINTER_SIZE_BYTES;
+        case HASHVAR_SET:
+            return 4;
+        case HASHVAR_ENUM:
+            return 4;
+        case HASHVAR_FILE:
             return POINTER_SIZE_BYTES;
         default:
             return -1;
@@ -687,6 +706,21 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
              break;
         case HASHVAR_BOOLEAN:
             *type = BOOL;
+            break;
+        case HASHVAR_CHAR:
+            *type = CHAR_TYPE;
+            break;
+        case HASHVAR_POINTER:
+            *type = POINTER_TYPE;
+            break;
+        case HASHVAR_SET:
+            *type = SET_TYPE;
+            break;
+        case HASHVAR_ENUM:
+            *type = ENUM_TYPE;
+            break;
+        case HASHVAR_FILE:
+            *type = FILE_TYPE;
             break;
         case HASHVAR_UNTYPED:
             *type = UNKNOWN_TYPE;
