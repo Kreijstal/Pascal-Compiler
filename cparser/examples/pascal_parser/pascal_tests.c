@@ -1763,6 +1763,244 @@ void test_pascal_forward_declared_function(void) {
     free(input);
 }
 
+void test_pascal_program_module_header(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* program_code = "program HelloWorld;\n"
+                         "begin\n"
+                         "  writeln('hi');\n"
+                         "end.\n";
+    input->buffer = strdup(program_code);
+    input->length = strlen(program_code);
+
+    ParseResult res = parse(input, p);
+
+    // This should eventually succeed once the parser supports program modules.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_dotted_unit_name(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit Generics.Collections;\n"
+                      "interface\n"
+                      "implementation\n"
+                      "end.\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // Dotted unit identifiers should be accepted in the future.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_include_replaces_interface(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit IncludeDriven;\n"
+                      "{$i include_interface.inc}\n"
+                      "implementation\n"
+                      "{$i include_impl.inc}\n"
+                      "end.\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // Units that outsource their sections to include files should parse.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_calling_convention_type(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit Callbacks;\n"
+                      "interface\n"
+                      "type\n"
+                      "  TCallback = function(A: Integer): Integer; cdecl;\n"
+                      "implementation\n"
+                      "end.\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // Calling conventions following procedural types should be supported.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_method_type_of_object(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit Events;\n"
+                      "interface\n"
+                      "type\n"
+                      "  TNotifyEvent = procedure(Sender: TObject) of object;\n"
+                      "implementation\n"
+                      "end.\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // Method pointers with `of object` should be recognised.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_unit_without_terminal_dot(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit TrailingSemicolon;\n"
+                      "interface\n"
+                      "implementation\n"
+                      "end;\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // Some units legitimately end with `end;` and should parse.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_deprecated_procedure_modifier(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit DeprecatedApi;\n"
+                      "interface\n"
+                      "  procedure OldProc; deprecated 'use NewProc';\n"
+                      "implementation\n"
+                      "  procedure OldProc;\n"
+                      "  begin\n"
+                      "  end;\n"
+                      "end.\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // The parser should tolerate trailing modifiers like `deprecated`.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_conditional_directives_in_interface(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_unit_parser(&p);
+
+    input_t* input = new_input();
+    char* unit_code = "unit ConditionalUnit;\n"
+                      "interface\n"
+                      "{$ifdef DEBUG}\n"
+                      "  procedure DebugOnly;\n"
+                      "{$else}\n"
+                      "  procedure ReleaseOnly;\n"
+                      "{$endif}\n"
+                      "implementation\n"
+                      "end.\n";
+    input->buffer = strdup(unit_code);
+    input->length = strlen(unit_code);
+
+    ParseResult res = parse(input, p);
+
+    // Conditional compilation should not confuse the parser.
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
 void test_pascal_record_type(void) {
     combinator_t* p = new_combinator();
     init_pascal_complete_program_parser(&p);
@@ -2519,6 +2757,14 @@ TEST_LIST = {
     { "test_pascal_exit_statement", test_pascal_exit_statement },
     { "test_pascal_include_directive", test_pascal_include_directive },
     { "test_pascal_forward_declared_function", test_pascal_forward_declared_function },
+    { "test_pascal_program_module_header", test_pascal_program_module_header },
+    { "test_pascal_dotted_unit_name", test_pascal_dotted_unit_name },
+    { "test_pascal_include_replaces_interface", test_pascal_include_replaces_interface },
+    { "test_pascal_calling_convention_type", test_pascal_calling_convention_type },
+    { "test_pascal_method_type_of_object", test_pascal_method_type_of_object },
+    { "test_pascal_unit_without_terminal_dot", test_pascal_unit_without_terminal_dot },
+    { "test_pascal_deprecated_procedure_modifier", test_pascal_deprecated_procedure_modifier },
+    { "test_pascal_conditional_directives_in_interface", test_pascal_conditional_directives_in_interface },
     // Case statement tests
     { "test_pascal_simple_case_statement", test_pascal_simple_case_statement },
     { "test_pascal_case_statement_with_ranges", test_pascal_case_statement_with_ranges },
