@@ -1,12 +1,96 @@
+#include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
+#endif
 #include "pascal_parser.h"
 #include "pascal_preprocessor.h"
 
 // Forward declaration
 static void print_ast_indented(ast_t* ast, int depth);
 static void print_error_with_partial_ast(ParseError* error);
+
+static const char* skip_utf8_bom(const char* cursor, const char* end) {
+    if ((size_t)(end - cursor) >= 3 &&
+        (unsigned char)cursor[0] == 0xEF &&
+        (unsigned char)cursor[1] == 0xBB &&
+        (unsigned char)cursor[2] == 0xBF) {
+        return cursor + 3;
+    }
+    return cursor;
+}
+
+static const char* skip_whitespace_and_comments(const char* cursor, const char* end) {
+    while (cursor < end) {
+        unsigned char ch = (unsigned char)*cursor;
+
+        if (isspace(ch)) {
+            ++cursor;
+            continue;
+        }
+
+        if (ch == '{') {
+            ++cursor;
+            while (cursor < end && *cursor != '}') {
+                ++cursor;
+            }
+            if (cursor < end)
+                ++cursor;
+            continue;
+        }
+
+        if (ch == '(' && (cursor + 1) < end && cursor[1] == '*') {
+            cursor += 2;
+            while ((cursor + 1) < end && !(cursor[0] == '*' && cursor[1] == ')')) {
+                ++cursor;
+            }
+            if ((cursor + 1) < end)
+                cursor += 2;
+            else
+                cursor = end;
+            continue;
+        }
+
+        if (ch == '/' && (cursor + 1) < end && cursor[1] == '/') {
+            cursor += 2;
+            while (cursor < end && *cursor != '\n') {
+                ++cursor;
+            }
+            continue;
+        }
+
+        break;
+    }
+
+    return cursor;
+}
+
+static bool buffer_starts_with_keyword(const char* buffer, size_t length, const char* keyword) {
+    const char* cursor = buffer;
+    const char* end = buffer + length;
+    cursor = skip_utf8_bom(cursor, end);
+    cursor = skip_whitespace_and_comments(cursor, end);
+
+    size_t keyword_len = strlen(keyword);
+    if ((size_t)(end - cursor) < keyword_len)
+        return false;
+
+    if (strncasecmp(cursor, keyword, keyword_len) != 0)
+        return false;
+
+    const char* after = cursor + keyword_len;
+    if (after < end && (isalnum((unsigned char)*after) || *after == '_'))
+        return false;
+
+    return true;
+}
 
 // Helper function to print ParseError with partial AST
 static void print_error_chain(ParseError* error, int depth) {
@@ -164,9 +248,15 @@ int main(int argc, char *argv[]) {
 
     printf("Preprocessed size: %zu bytes\n", preprocessed_length);
 
+    bool parse_as_unit = buffer_starts_with_keyword(preprocessed_content, preprocessed_length, "unit");
+    printf("Detected top-level form: %s\n", parse_as_unit ? "unit" : "program");
+
     combinator_t *parser = new_combinator();
-    // Use unit parser instead of expression parser for full Pascal units
-    init_pascal_unit_parser(&parser);
+    if (parse_as_unit) {
+        init_pascal_unit_parser(&parser);
+    } else {
+        init_pascal_complete_program_parser(&parser);
+    }
 
     input_t *in = new_input();
     in->buffer = preprocessed_content;
