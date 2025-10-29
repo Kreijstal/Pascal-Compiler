@@ -31,10 +31,31 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
-ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
+ListNode_t *gencode_op(struct Expression *expr, struct Expression *left_expr,
+    struct Expression *right_expr, const char *left, const char *right,
     ListNode_t *inst_list);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
     char *buffer, int buf_len);
+
+static const char *reg_name_for_type(Register_t *reg, struct Expression *expr)
+{
+    if (reg == NULL)
+        return NULL;
+
+    int type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
+    if (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE)
+        return reg->bit_64;
+    return reg->bit_32;
+}
+
+static int expr_requires_qword(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    int type = expr->resolved_type;
+    return (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE);
+}
 
 ListNode_t *gencode_divide_const_no_optimize(char *left, char *right, ListNode_t *inst_list);
 ListNode_t *gencode_divide_no_const(char *left, char *right, ListNode_t *inst_list);
@@ -271,7 +292,7 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 /* Gencode for modulus */
 // left is right operand (B), right is left operand (A)
 // calculates A mod B, stores result in A's location (right)
-ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
+ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *inst_list, int use_qword)
 {
     StackNode_t *temp;
     char buffer[50];
@@ -279,34 +300,49 @@ ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
     assert(left != NULL);
     assert(right != NULL);
     assert(inst_list != NULL);
+    assert(left[0] != '$');
 
-    // Move dividend (A, right) to eax
-    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
+    /* Move dividend (left operand) into %rax/%eax. */
+    if (left[0] == '%')
+    {
+        snprintf(buffer, sizeof(buffer), use_qword ? "\tmovq\t%s, %%rax\n" : "\tmovl\t%s, %%eax\n", left);
+    }
+    else if (left[0] == '$')
+    {
+        if (use_qword)
+            snprintf(buffer, sizeof(buffer), "\tmovabsq\t%s, %%rax\n", left);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", left);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), use_qword ? "\tmovq\t%s, %%rax\n" : "\tmovl\t%s, %%eax\n", left);
+    }
     inst_list = add_inst(inst_list, buffer);
 
     // Sign extend eax to edx
-    snprintf(buffer, 50, "\tcltd\n");
+    snprintf(buffer, 50, use_qword ? "\tcqo\n" : "\tcdq\n");
     inst_list = add_inst(inst_list, buffer);
 
-    // If divisor (B, left) is a constant, move it to memory
-    if(left[0] == '$')
+    // If divisor (right operand) is a constant, move it to memory
+    if(right[0] == '$')
     {
         temp = find_in_temp("TEMP_MOD");
         if(temp == NULL)
             temp = add_l_t("TEMP_MOD");
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
+        snprintf(buffer, 50, use_qword ? "\tmovq\t%s, -%d(%%rbp)\n" : "\tmovl\t%s, -%d(%%rbp)\n", right, temp->offset);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 50, "\tidivl\t-%d(%%rbp)\n", temp->offset);
+        snprintf(buffer, 50, use_qword ? "\tidivq\t-%d(%%rbp)\n" : "\tidivl\t-%d(%%rbp)\n", temp->offset);
         inst_list = add_inst(inst_list, buffer);
     }
     else // Divisor is a register
     {
-        snprintf(buffer, 50, "\tidivl\t%s\n", left);
+        snprintf(buffer, 50, use_qword ? "\tidivq\t%s\n" : "\tidivl\t%s\n", right);
         inst_list = add_inst(inst_list, buffer);
     }
 
-    // Move remainder from edx to the target register (A's location, right)
-    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", right);
+    // Move remainder from edx to the target register (A's location, left)
+    snprintf(buffer, 50, use_qword ? "\tmovq\t%%rdx, %s\n" : "\tmovl\t%%edx, %s\n", left);
     inst_list = add_inst(inst_list, buffer);
 
     return inst_list;
@@ -403,10 +439,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx, expr->expr_data.function_call_data.resolved_func);
+        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+            expr->expr_data.function_call_data.resolved_func, expr->expr_data.function_call_data.mangled_id);
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
-        if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE)
+        if (expr->resolved_type == STRING_TYPE || expr->resolved_type == POINTER_TYPE)
             snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", target_reg->bit_64);
         else
             snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
@@ -431,7 +468,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
 
-    int use_qword = (expr->resolved_type == LONGINT_TYPE || expr->resolved_type == REAL_TYPE);
+    int use_qword = expr_requires_qword(expr);
 
 #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf,
@@ -469,7 +506,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(right_expr != NULL);
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
-    inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
+    const char *dest_reg = reg_name_for_type(target_reg, expr);
+    inst_list = gencode_op(expr, node->left_expr->expr, right_expr, dest_reg, name_buf, inst_list);
 
     return inst_list;
 }
@@ -495,20 +533,31 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         StackNode_t *spill_loc = add_l_t("spill");
         char buffer[50];
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", target_reg->bit_32, spill_loc->offset);
+        const char *stored_reg = reg_name_for_type(target_reg, node->right_expr->expr);
+        if (stored_reg == NULL)
+            stored_reg = target_reg->bit_32;
+        if (expr_requires_qword(node->right_expr->expr))
+            snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", stored_reg, spill_loc->offset);
+        else
+            snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", stored_reg, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, spill_mem, inst_list);
+        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
+        inst_list = gencode_op(node->expr, node->left_expr->expr, node->right_expr->expr,
+            dest_reg, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, temp_reg->bit_32, inst_list);
+        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
+        const char *rhs_reg = reg_name_for_type(temp_reg, node->right_expr->expr);
+        inst_list = gencode_op(node->expr, node->left_expr->expr, node->right_expr->expr,
+            dest_reg, rhs_reg, inst_list);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -535,19 +584,30 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     {
         StackNode_t *spill_loc = add_l_t("spill");
         char buffer[50];
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", target_reg->bit_32, spill_loc->offset);
+        const char *stored_reg = reg_name_for_type(target_reg, node->left_expr->expr);
+        if (stored_reg == NULL)
+            stored_reg = target_reg->bit_32;
+        if (expr_requires_qword(node->left_expr->expr))
+            snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", stored_reg, spill_loc->offset);
+        else
+            snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", stored_reg, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, spill_mem, inst_list);
+        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
+        inst_list = gencode_op(node->expr, node->right_expr->expr, node->left_expr->expr,
+            dest_reg, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, temp_reg->bit_32, inst_list);
+        const char *dest_reg = reg_name_for_type(target_reg, node->expr);
+        const char *rhs_reg = reg_name_for_type(temp_reg, node->right_expr->expr);
+        inst_list = gencode_op(node->expr, node->left_expr->expr, node->right_expr->expr,
+            dest_reg, rhs_reg, inst_list);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -630,153 +690,209 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 }
 
 /* TODO: Assumes eax and edx registers are free for division */
-ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
+ListNode_t *gencode_op(struct Expression *expr, struct Expression *left_expr,
+    struct Expression *right_expr, const char *left, const char *right,
     ListNode_t *inst_list)
 {
     assert(expr != NULL);
     assert(left != NULL);
     assert(right != NULL);
 
-    int type;
-    char buffer[50];
+    char buffer[64];
+
+    int result_is_real = (expr->resolved_type == REAL_TYPE);
+    if (result_is_real)
+    {
+        char scratch_reg[8];
+        snprintf(scratch_reg, sizeof(scratch_reg), "%%r11");
+
+        /* Load left operand into %%xmm0. */
+        if (left[0] == '%')
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", left);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (left[0] == '$')
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovabsq\t%s, %s\n", left, scratch_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", scratch_reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, %%xmm0\n", left);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        /* Load right operand into %%xmm1. */
+        if (right[0] == '%')
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", right);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (right[0] == '$')
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovabsq\t%s, %s\n", right, scratch_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", scratch_reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, %%xmm1\n", right);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        if (expr->type == EXPR_ADDOP)
+        {
+            int type = expr->expr_data.addop_data.addop_type;
+            if (type == PLUS)
+                inst_list = add_inst(inst_list, "\taddsd\t%xmm1, %xmm0\n");
+            else if (type == MINUS)
+                inst_list = add_inst(inst_list, "\tsubsd\t%xmm1, %xmm0\n");
+            else
+                assert(0 && "Unsupported addop for real numbers");
+        }
+        else if (expr->type == EXPR_MULOP)
+        {
+            int type = expr->expr_data.mulop_data.mulop_type;
+            if (type == STAR)
+                inst_list = add_inst(inst_list, "\tmulsd\t%xmm1, %xmm0\n");
+            else if (type == SLASH)
+                inst_list = add_inst(inst_list, "\tdivsd\t%xmm1, %xmm0\n");
+            else
+                assert(0 && "Unsupported mulop for real numbers");
+        }
+        else
+        {
+            assert(0 && "Unsupported real operation in gencode_op");
+        }
+
+        if (left[0] == '%')
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", left);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovsd\t%%xmm0, %s\n", left);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        return inst_list;
+    }
+
+    int use_qword = expr_requires_qword(expr) || expr_requires_qword(left_expr);
 
     switch(expr->type)
     {
         case EXPR_ADDOP:
-            type = expr->expr_data.addop_data.addop_type;
-            switch(type)
+        {
+            int type = expr->expr_data.addop_data.addop_type;
+            if (type == PLUS)
             {
-                case PLUS:
+                if (!use_qword && strcmp(right, "$1") == 0)
                 {
-                    /*
-                     * The expression tree emits the literal 1 as the string "$1". Detecting that
-                     * special case lets us use INC instead of ADD to save an instruction byte.
-                     */
-                    if(strcmp(right, "$1") == 0)
-                        snprintf(buffer, 50, "\tincl\t%s\n", left);
-                    else
-                        snprintf(buffer, 50, "\taddl\t%s, %s\n", right, left);
-                    inst_list = add_inst(inst_list, buffer);
-                    break;
+                    snprintf(buffer, sizeof(buffer), "\tincl\t%s\n", left);
                 }
-                case MINUS:
-                    snprintf(buffer, 50, "\tsubl\t%s, %s\n", right, left);
-                    inst_list = add_inst(inst_list, buffer);
-                    break;
-                default:
-                    assert(0 && "Bad addop type!");
-                    break;
-            }
-
-            break;
-
-        case EXPR_MULOP:
-            type = expr->expr_data.mulop_data.mulop_type;
-            if(type == STAR)
-            {
-                snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);
+                else if (use_qword && strcmp(right, "$1") == 0)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tincq\t%s\n", left);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), use_qword ? "\taddq\t%s, %s\n" : "\taddl\t%s, %s\n", right, left);
+                }
                 inst_list = add_inst(inst_list, buffer);
             }
-            else if(type == MOD)
+            else if (type == MINUS)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
-
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
-
-                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            /* NOTE: Division and modulus is a more special case */
-            else if(type == SLASH || type == DIV)
-            {
-                #ifdef DEBUG_CODEGEN
-                CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
-                #endif
-                // left is the dividend, right is the divisor
-                snprintf(buffer, 50, "\tpushq\t%%rax\n");
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tpushq\t%%rdx\n");
-                inst_list = add_inst(inst_list, buffer);
-
-
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
-
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
-
-                snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
-
-                snprintf(buffer, 50, "\tpopq\t%%rdx\n");
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tpopq\t%%rax\n");
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == MOD)
-            {
-                inst_list = gencode_modulus(left, right, inst_list);
-            }
-            else if(type == XOR)
-            {
-                snprintf(buffer, 50, "\txorl\t%s, %s\n", right, left);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == SHL)
-            {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tsall\t%%cl, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == SHR)
-            {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tsarl\t%%cl, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == ROL)
-            {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\troll\t%%cl, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if(type == ROR)
-            {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\trorl\t%%cl, %s\n", left);
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tsubq\t%s, %s\n" : "\tsubl\t%s, %s\n", right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
             {
-                assert(0 && "Bad mulop type!");
-                break;
+                assert(0 && "Bad addop type!");
             }
+            return inst_list;
+        }
 
+        case EXPR_MULOP:
+        {
+            int type = expr->expr_data.mulop_data.mulop_type;
+            if (type == STAR)
+            {
+                snprintf(buffer, sizeof(buffer), use_qword ? "\timulq\t%s, %s\n" : "\timull\t%s, %s\n", right, left);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+            else if (type == MOD)
+            {
+                return gencode_modulus(left, right, inst_list, use_qword);
+            }
+            else if (type == SLASH || type == DIV)
+            {
+                snprintf(buffer, sizeof(buffer), "\tpushq\t%%rax\n");
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tpushq\t%%rdx\n");
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tmovq\t%s, %%rax\n" : "\tmovl\t%s, %%eax\n", left);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tcqo\n" : "\tcdq\n");
+                inst_list = add_inst(inst_list, buffer);
+
+                const char *div_reg = use_qword ? "%r10" : "%r10d";
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tmovq\t%s, %s\n" : "\tmovl\t%s, %s\n", right, div_reg);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tidivq\t%s\n" : "\tidivl\t%s\n", div_reg);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tmovq\t%%rax, %s\n" : "\tmovl\t%%eax, %s\n", left);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), "\tpopq\t%%rdx\n");
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tpopq\t%%rax\n");
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+            else if (type == XOR)
+            {
+                snprintf(buffer, sizeof(buffer), use_qword ? "\txorq\t%s, %s\n" : "\txorl\t%s, %s\n", right, left);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+            else if (type == SHL || type == SHR || type == ROL || type == ROR)
+            {
+                snprintf(buffer, sizeof(buffer), use_qword ? "\tmovq\t%s, %%rcx\n" : "\tmovl\t%s, %%ecx\n", right);
+                inst_list = add_inst(inst_list, buffer);
+                const char *op = NULL;
+                switch (type)
+                {
+                    case SHL: op = use_qword ? "\tsalq\t%%cl, %s\n" : "\tsall\t%%cl, %s\n"; break;
+                    case SHR: op = use_qword ? "\tsarq\t%%cl, %s\n" : "\tsarl\t%%cl, %s\n"; break;
+                    case ROL: op = use_qword ? "\trolq\t%%cl, %s\n" : "\troll\t%%cl, %s\n"; break;
+                    case ROR: op = use_qword ? "\trorq\t%%cl, %s\n" : "\trorl\t%%cl, %s\n"; break;
+                }
+                snprintf(buffer, sizeof(buffer), op, left);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+            else
+            {
+                assert(0 && "Bad mulop type!");
+            }
             break;
+        }
 
         case EXPR_RELOP:
-            snprintf(buffer, 50, "\tcmpl\t%s, %s\n", left, right);
+        {
+            snprintf(buffer, sizeof(buffer), use_qword ? "\tcmpq\t%s, %s\n" : "\tcmpl\t%s, %s\n", left, right);
             inst_list = add_inst(inst_list, buffer);
-
-            break;
+            return inst_list;
+        }
 
         default:
             assert(0 && "Unsupported expr type in gencode!");

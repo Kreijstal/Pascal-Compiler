@@ -133,6 +133,16 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
     descriptor->length = new_length;
 }
 
+int64_t gpc_dynarray_length(const void *descriptor_ptr)
+{
+    if (descriptor_ptr == NULL)
+        return 0;
+
+    const gpc_dynarray_descriptor_t *descriptor =
+        (const gpc_dynarray_descriptor_t *)descriptor_ptr;
+    return descriptor->length;
+}
+
 void gpc_write_integer(int width, int64_t value)
 {
     if (width > 1024 || width < -1024)

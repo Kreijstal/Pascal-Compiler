@@ -227,16 +227,71 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
     const char *mangled_name = NULL;
+    long long static_length = -1;
+
     if (error_count == 0 && arg_type == STRING_TYPE)
+    {
         mangled_name = "gpc_string_length";
+    }
+    else if (error_count == 0 && arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, arg_expr->expr_data.id) < 0 || node == NULL)
+        {
+            fprintf(stderr, "Error on line %d, Length argument references undeclared identifier %s.\n",
+                expr->line_num, arg_expr->expr_data.id);
+            error_count++;
+        }
+        else if (!node->is_array)
+        {
+            fprintf(stderr, "Error on line %d, Length expects a string or array argument.\n",
+                expr->line_num);
+            error_count++;
+        }
+        else if (node->is_dynamic_array)
+        {
+            mangled_name = "gpc_dynarray_length";
+        }
+        else
+        {
+            long long count = (long long)node->array_end - (long long)node->array_start + 1;
+            if (count < 0)
+                count = 0;
+            static_length = count;
+        }
+    }
     else if (error_count == 0)
     {
-        fprintf(stderr, "Error on line %d, Length currently supports only string arguments.\n", expr->line_num);
+        fprintf(stderr, "Error on line %d, Length expects a string or array argument.\n",
+            expr->line_num);
         error_count++;
     }
 
     if (error_count == 0)
     {
+        if (static_length >= 0)
+        {
+            destroy_expr(arg_expr);
+            destroy_list(expr->expr_data.function_call_data.args_expr);
+            expr->expr_data.function_call_data.args_expr = NULL;
+            if (expr->expr_data.function_call_data.id != NULL)
+            {
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = NULL;
+            }
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                free(expr->expr_data.function_call_data.mangled_id);
+                expr->expr_data.function_call_data.mangled_id = NULL;
+            }
+            expr->expr_data.function_call_data.resolved_func = NULL;
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = static_length;
+            expr->resolved_type = LONGINT_TYPE;
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
         if (expr->expr_data.function_call_data.mangled_id != NULL)
         {
             free(expr->expr_data.function_call_data.mangled_id);
@@ -315,6 +370,154 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Copy.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        expr->resolved_type = STRING_TYPE;
+        *type_return = STRING_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_inttostr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, IntToStr expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int value_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&value_type, symtab,
+        (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && value_type != INT_TYPE && value_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, IntToStr expects an integer argument.\n",
+            expr->line_num);
+        error_count++;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_int_to_str");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for IntToStr.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        expr->resolved_type = STRING_TYPE;
+        *type_return = STRING_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_now(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    (void)symtab;
+    (void)max_scope_lev;
+    assert(type_return != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    if (expr->expr_data.function_call_data.args_expr != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Now expects no arguments.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_now");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for Now.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    expr->resolved_type = LONGINT_TYPE;
+    *type_return = LONGINT_TYPE;
+    return 0;
+}
+
+static int semcheck_builtin_formatdatetime(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, FormatDateTime expects exactly two arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int error_count = 0;
+    int format_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&format_type, symtab,
+        (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && format_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, FormatDateTime format argument must be a string.\n",
+            expr->line_num);
+        error_count++;
+    }
+
+    int datetime_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&datetime_type, symtab,
+        (struct Expression *)args->next->cur, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && datetime_type != LONGINT_TYPE && datetime_type != INT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, FormatDateTime datetime argument must be an integer timestamp.\n",
+            expr->line_num);
+        error_count++;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_format_datetime");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for FormatDateTime.\n");
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
@@ -1393,6 +1596,15 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "Copy"))
         return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "IntToStr"))
+        return semcheck_builtin_inttostr(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Now"))
+        return semcheck_builtin_now(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "FormatDateTime"))
+        return semcheck_builtin_formatdatetime(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 

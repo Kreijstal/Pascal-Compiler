@@ -356,13 +356,34 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     if (codegen_had_error(ctx) || addr_reg == NULL)
         return inst_list;
 
-    char buffer[100];
-    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
+    StackNode_t *array_node = find_label(expr->expr_data.array_access_data.id);
+    int element_size = 4;
+    if (array_node != NULL && array_node->element_size > 0)
+        element_size = array_node->element_size;
 
-    if (expr->resolved_type == LONGINT_TYPE)
+    char buffer[100];
+    int use_qword = (expr->resolved_type == REAL_TYPE || expr->resolved_type == STRING_TYPE ||
+        expr->resolved_type == POINTER_TYPE || element_size >= 8);
+
+    if (use_qword)
     {
-        inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (element_size == 1)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (element_size == 2)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     free_reg(get_reg_stack(), addr_reg);
@@ -436,7 +457,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 }
 
 /* Code generation for passing arguments */
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
+ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx,
+    HashNode_t *proc_node, const char *mangled_name)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -485,6 +507,52 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
             formal_arg_decl = (Tree_t *)formal_args->cur;
+
+        if (mangled_name != NULL && strcmp(mangled_name, "gpc_dynarray_length") == 0 &&
+            (formal_arg_decl == NULL || !formal_arg_decl->tree_data.var_decl_data.is_var_param))
+        {
+            if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+            {
+                StackNode_t *array_node = find_label(arg_expr->expr_data.id);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    fprintf(stderr, "ERROR: Unable to allocate register for Length descriptor.\n");
+                    exit(1);
+                }
+
+                if (array_node != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else if (nonlocal_flag() == 1)
+                {
+                    int offset = 0;
+                    inst_list = codegen_get_nonlocal(inst_list, arg_expr->expr_data.id, &offset);
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset, current_non_local_reg64(), addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    fprintf(stderr, "ERROR: Unable to locate dynamic array %s for Length.\n", arg_expr->expr_data.id);
+                    exit(1);
+                }
+
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = addr_reg;
+                    arg_infos[arg_num].spill = NULL;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+
+                args = args->next;
+                if (formal_args != NULL)
+                    formal_args = formal_args->next;
+                ++arg_num;
+                continue;
+            }
+        }
 
         if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {

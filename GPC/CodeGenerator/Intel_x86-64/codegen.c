@@ -763,14 +763,33 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
                 while(arg_ids != NULL)
                 {
-                    arg_reg = get_arg_reg32_num(arg_num);
+                    int use_qword = (type == REAL_TYPE || type == STRING_TYPE || type == POINTER_TYPE);
+                    if (!use_qword && ctx->symtab != NULL && arg_decl->tree_data.var_decl_data.type_id != NULL)
+                    {
+                        HashNode_t *type_node = NULL;
+                        if (FindIdent(&type_node, ctx->symtab, arg_decl->tree_data.var_decl_data.type_id) >= 0 &&
+                            type_node != NULL && type_node->type_alias != NULL)
+                        {
+                            struct TypeAlias *alias = type_node->type_alias;
+                            if (alias->base_type == STRING_TYPE || alias->is_pointer ||
+                                alias->pointer_type == STRING_TYPE || alias->pointer_type == POINTER_TYPE)
+                            {
+                                use_qword = 1;
+                            }
+                        }
+                    }
+                    arg_reg = use_qword ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
                     if(arg_reg == NULL)
                     {
                         fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
                         exit(1);
                     }
-                    arg_stack = add_l_z((char *)arg_ids->cur);
-                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    if (use_qword)
+                        arg_stack = add_l_x((char *)arg_ids->cur, sizeof(void *));
+                    else
+                        arg_stack = add_l_z((char *)arg_ids->cur);
+                    snprintf(buffer, 50, use_qword ? "\tmovq\t%s, -%d(%%rbp)\n" : "\tmovl\t%s, -%d(%%rbp)\n",
+                        arg_reg, arg_stack->offset);
                     inst_list = add_inst(inst_list, buffer);
                     arg_ids = arg_ids->next;
                     ++arg_num;

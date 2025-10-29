@@ -676,11 +676,6 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
-        else if (expr_type == LONGINT_TYPE)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
-            inst_list = add_inst(inst_list, buffer);
-        }
         else
         {
             inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
@@ -787,7 +782,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
+            stmt->stmt_data.procedure_call_data.mangled_id);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -956,7 +952,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
     else
     {
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node,
+            stmt->stmt_data.procedure_call_data.mangled_id);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);

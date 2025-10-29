@@ -29,6 +29,18 @@
 
 #define DEAD_VAR_ID_BUCKETS 64
 
+static void destroy_expr_list(ListNode_t *list)
+{
+    while (list != NULL)
+    {
+        ListNode_t *next = list->next;
+        if (list->cur != NULL)
+            destroy_expr((struct Expression *)list->cur);
+        free(list);
+        list = next;
+    }
+}
+
 typedef struct IdSetEntry
 {
     char *id;
@@ -506,14 +518,8 @@ void simplify_stmt_expr(struct Statement *stmt)
 
 /* Simplifies expressions by combining operations on constant numbers */
 /* Returns 1 if expression given is a constant */
-/* TODO: Support floats */
-/* TODO: Support modulus */
 int simplify_expr(struct Expression **expr)
 {
-    struct Expression *new_expr;
-    int return_val, return_val2;
-    long long new_val;
-
     assert(expr != NULL);
     assert(*expr != NULL);
 
@@ -521,91 +527,323 @@ int simplify_expr(struct Expression **expr)
     {
         case EXPR_INUM:
         case EXPR_RNUM:
+        case EXPR_BOOL:
             return 1;
 
         case EXPR_SIGN_TERM:
-            return_val = simplify_expr(&(*expr)->expr_data.sign_term);
-            assert((*expr)->expr_data.sign_term != NULL);
-            if(return_val == 1)
+        {
+            int child_const = simplify_expr(&(*expr)->expr_data.sign_term);
+            struct Expression *child = (*expr)->expr_data.sign_term;
+            if (child_const == 1 && child != NULL)
             {
                 #ifdef DEBUG_OPTIMIZER
                     fprintf(stderr, "OPTIMIZER: Simplying SIGN expression on line %d\n",
                         (*expr)->line_num);
                 #endif
 
-                new_val = -(*expr)->expr_data.sign_term->expr_data.i_num;
-
-                new_expr = mk_inum((*expr)->line_num, new_val);
+                struct Expression *new_expr;
+                if (child->type == EXPR_RNUM || child->resolved_type == REAL_TYPE)
+                {
+                    double value = (child->type == EXPR_RNUM) ? child->expr_data.r_num :
+                        (double)child->expr_data.i_num;
+                    new_expr = mk_rnum((*expr)->line_num, (float)(-value));
+                    new_expr->resolved_type = REAL_TYPE;
+                }
+                else
+                {
+                    long long value = child->expr_data.i_num;
+                    new_expr = mk_inum((*expr)->line_num, -value);
+                    if (child->resolved_type == LONGINT_TYPE)
+                        new_expr->resolved_type = LONGINT_TYPE;
+                    else
+                        new_expr->resolved_type = child->resolved_type;
+                }
 
                 destroy_expr(*expr);
                 *expr = new_expr;
-
                 return 1;
             }
-
             return 0;
+        }
 
         case EXPR_ADDOP:
-            return_val = simplify_expr(&(*expr)->expr_data.addop_data.left_expr);
-            return_val2 = simplify_expr(&(*expr)->expr_data.addop_data.right_term);
-            if(return_val == 1 && return_val2 == 1)
+        {
+            int left_const = simplify_expr(&(*expr)->expr_data.addop_data.left_expr);
+            int right_const = simplify_expr(&(*expr)->expr_data.addop_data.right_term);
+            if (left_const == 1 && right_const == 1)
             {
-                #ifdef DEBUG_OPTIMIZER
-                    fprintf(stderr, "OPTIMIZER: Simplying ADDOP expression on line %d\n",
-                        (*expr)->line_num);
-                #endif
+                struct Expression *left = (*expr)->expr_data.addop_data.left_expr;
+                struct Expression *right = (*expr)->expr_data.addop_data.right_term;
+                int result_is_real = ((*expr)->resolved_type == REAL_TYPE) ||
+                    (left != NULL && (left->type == EXPR_RNUM || left->resolved_type == REAL_TYPE)) ||
+                    (right != NULL && (right->type == EXPR_RNUM || right->resolved_type == REAL_TYPE));
 
-                if((*expr)->expr_data.addop_data.addop_type == PLUS)
+                struct Expression *new_expr;
+                if (result_is_real)
                 {
-                    new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num +
-                                (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
+                    double left_val = (left != NULL && left->type == EXPR_RNUM) ?
+                        left->expr_data.r_num : (double)(left != NULL ? left->expr_data.i_num : 0);
+                    double right_val = (right != NULL && right->type == EXPR_RNUM) ?
+                        right->expr_data.r_num : (double)(right != NULL ? right->expr_data.i_num : 0);
+                    double result = ((*expr)->expr_data.addop_data.addop_type == PLUS) ?
+                        left_val + right_val : left_val - right_val;
+                    new_expr = mk_rnum((*expr)->line_num, (float)result);
+                    new_expr->resolved_type = REAL_TYPE;
                 }
                 else
                 {
-                    new_val = (*expr)->expr_data.addop_data.left_expr->expr_data.i_num -
-                                (*expr)->expr_data.addop_data.right_term->expr_data.i_num;
-                }
+                    long long left_val = (left != NULL) ? left->expr_data.i_num : 0;
+                    long long right_val = (right != NULL) ? right->expr_data.i_num : 0;
+                    long long result = ((*expr)->expr_data.addop_data.addop_type == PLUS) ?
+                        left_val + right_val : left_val - right_val;
+                    new_expr = mk_inum((*expr)->line_num, result);
 
-                new_expr = mk_inum((*expr)->line_num, new_val);
+                    int result_type = (*expr)->resolved_type;
+                    if (result_type == UNKNOWN_TYPE)
+                    {
+                        if ((left != NULL && left->resolved_type == LONGINT_TYPE) ||
+                            (right != NULL && right->resolved_type == LONGINT_TYPE))
+                            result_type = LONGINT_TYPE;
+                        else if (left != NULL && left->resolved_type != UNKNOWN_TYPE)
+                            result_type = left->resolved_type;
+                        else
+                            result_type = INT_TYPE;
+                    }
+                    new_expr->resolved_type = result_type;
+                }
 
                 destroy_expr(*expr);
                 *expr = new_expr;
-
                 return 1;
             }
-
             return 0;
+        }
 
         case EXPR_MULOP:
-            return_val = simplify_expr(&(*expr)->expr_data.mulop_data.left_term);
-            return_val2 = simplify_expr(&(*expr)->expr_data.mulop_data.right_factor);
-            if(return_val == 1 && return_val2 == 1)
+        {
+            int left_const = simplify_expr(&(*expr)->expr_data.mulop_data.left_term);
+            int right_const = simplify_expr(&(*expr)->expr_data.mulop_data.right_factor);
+            if (left_const == 1 && right_const == 1)
             {
-                #ifdef DEBUG_OPTIMIZER
-                    fprintf(stderr, "OPTIMIZER: Simplying MULOP expression on line %d\n",
-                        (*expr)->line_num);
-                #endif
+                struct Expression *left = (*expr)->expr_data.mulop_data.left_term;
+                struct Expression *right = (*expr)->expr_data.mulop_data.right_factor;
+                int op_type = (*expr)->expr_data.mulop_data.mulop_type;
+                int result_is_real = ((*expr)->resolved_type == REAL_TYPE) || op_type == SLASH ||
+                    (left != NULL && (left->type == EXPR_RNUM || left->resolved_type == REAL_TYPE)) ||
+                    (right != NULL && (right->type == EXPR_RNUM || right->resolved_type == REAL_TYPE));
 
-                if((*expr)->expr_data.mulop_data.mulop_type == STAR)
+                struct Expression *new_expr;
+                if (result_is_real)
                 {
-                    new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num *
-                                (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
+                    double left_val = (left != NULL && left->type == EXPR_RNUM) ?
+                        left->expr_data.r_num : (double)(left != NULL ? left->expr_data.i_num : 0);
+                    double right_val = (right != NULL && right->type == EXPR_RNUM) ?
+                        right->expr_data.r_num : (double)(right != NULL ? right->expr_data.i_num : 0);
+
+                    double result;
+                    if (op_type == STAR)
+                        result = left_val * right_val;
+                    else if (op_type == SLASH)
+                    {
+                        if (right_val == 0.0)
+                            return 0;
+                        result = left_val / right_val;
+                    }
+                    else
+                    {
+                        if (op_type == DIV || op_type == MOD)
+                            return 0;
+                        return 0;
+                    }
+
+                    new_expr = mk_rnum((*expr)->line_num, (float)result);
+                    new_expr->resolved_type = REAL_TYPE;
                 }
                 else
                 {
-                    new_val = (*expr)->expr_data.mulop_data.left_term->expr_data.i_num /
-                                (*expr)->expr_data.mulop_data.right_factor->expr_data.i_num;
-                }
+                    long long left_val = (left != NULL) ? left->expr_data.i_num : 0;
+                    long long right_val = (right != NULL) ? right->expr_data.i_num : 0;
 
-                new_expr = mk_inum((*expr)->line_num, new_val);
+                    long long result;
+                    if (op_type == STAR)
+                    {
+                        result = left_val * right_val;
+                    }
+                    else if (op_type == DIV)
+                    {
+                        if (right_val == 0)
+                            return 0;
+                        result = left_val / right_val;
+                    }
+                    else if (op_type == MOD)
+                    {
+                        if (right_val == 0)
+                            return 0;
+                        result = left_val % right_val;
+                    }
+                    else
+                    {
+                        return 0;
+                    }
+
+                    new_expr = mk_inum((*expr)->line_num, result);
+
+                    int result_type = (*expr)->resolved_type;
+                    if (result_type == UNKNOWN_TYPE)
+                    {
+                        if ((left != NULL && left->resolved_type == LONGINT_TYPE) ||
+                            (right != NULL && right->resolved_type == LONGINT_TYPE))
+                            result_type = LONGINT_TYPE;
+                        else if (left != NULL && left->resolved_type != UNKNOWN_TYPE)
+                            result_type = left->resolved_type;
+                        else
+                            result_type = INT_TYPE;
+                    }
+                    new_expr->resolved_type = result_type;
+                }
 
                 destroy_expr(*expr);
                 *expr = new_expr;
-
                 return 1;
+            }
+            return 0;
+        }
+
+        case EXPR_FUNCTION_CALL:
+        {
+            char *id = (*expr)->expr_data.function_call_data.id;
+            if (id == NULL)
+                return 0;
+
+            if (pascal_identifier_equals(id, "Length"))
+            {
+                ListNode_t *args = (*expr)->expr_data.function_call_data.args_expr;
+                if (args != NULL && args->next == NULL)
+                {
+                    simplify_expr((struct Expression **)&args->cur);
+                    struct Expression *arg_expr = (struct Expression *)args->cur;
+                    if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
+                    {
+                        size_t len = 0;
+                        if (arg_expr->expr_data.string != NULL)
+                            len = strlen(arg_expr->expr_data.string);
+
+                        destroy_expr_list(args);
+                        (*expr)->expr_data.function_call_data.args_expr = NULL;
+                        if ((*expr)->expr_data.function_call_data.mangled_id != NULL)
+                        {
+                            free((*expr)->expr_data.function_call_data.mangled_id);
+                            (*expr)->expr_data.function_call_data.mangled_id = NULL;
+                        }
+
+                        struct Expression *new_expr = mk_inum((*expr)->line_num, (long long)len);
+                        new_expr->resolved_type = LONGINT_TYPE;
+                        destroy_expr(*expr);
+                        *expr = new_expr;
+                        return 1;
+                    }
+                }
+                return 0;
+            }
+
+            if (pascal_identifier_equals(id, "Copy"))
+            {
+                ListNode_t *args = (*expr)->expr_data.function_call_data.args_expr;
+                if (args != NULL && args->next != NULL && args->next->next != NULL &&
+                    args->next->next->next == NULL)
+                {
+                    simplify_expr((struct Expression **)&args->cur);
+                    simplify_expr((struct Expression **)&args->next->cur);
+                    simplify_expr((struct Expression **)&args->next->next->cur);
+
+                    struct Expression *source_expr = (struct Expression *)args->cur;
+                    struct Expression *index_expr = (struct Expression *)args->next->cur;
+                    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+
+                    if (source_expr != NULL && source_expr->type == EXPR_STRING &&
+                        index_expr != NULL && index_expr->type == EXPR_INUM &&
+                        count_expr != NULL && count_expr->type == EXPR_INUM)
+                    {
+                        const char *source = source_expr->expr_data.string != NULL ?
+                            source_expr->expr_data.string : "";
+                        long long index_val = index_expr->expr_data.i_num;
+                        long long count_val = count_expr->expr_data.i_num;
+
+                        size_t len = strlen(source);
+                        if (index_val < 1)
+                            index_val = 1;
+                        size_t start = (size_t)((index_val > 0) ? index_val - 1 : 0);
+                        if (start >= len)
+                            start = len;
+                        if (count_val < 0)
+                            count_val = 0;
+                        size_t available = len - start;
+                        size_t to_copy = (size_t)count_val;
+                        if (to_copy > available)
+                            to_copy = available;
+
+                        char *result = (char *)malloc(to_copy + 1);
+                        if (result == NULL)
+                            return 0;
+                        if (to_copy > 0)
+                            memcpy(result, source + start, to_copy);
+                        result[to_copy] = '\0';
+
+                        destroy_expr_list(args);
+                        (*expr)->expr_data.function_call_data.args_expr = NULL;
+                        if ((*expr)->expr_data.function_call_data.mangled_id != NULL)
+                        {
+                            free((*expr)->expr_data.function_call_data.mangled_id);
+                            (*expr)->expr_data.function_call_data.mangled_id = NULL;
+                        }
+
+                        struct Expression *new_expr = mk_string((*expr)->line_num, result);
+                        new_expr->resolved_type = STRING_TYPE;
+                        destroy_expr(*expr);
+                        *expr = new_expr;
+                        return 1;
+                    }
+                }
+                return 0;
+            }
+
+            if (pascal_identifier_equals(id, "IntToStr"))
+            {
+                ListNode_t *args = (*expr)->expr_data.function_call_data.args_expr;
+                if (args != NULL && args->next == NULL)
+                {
+                    simplify_expr((struct Expression **)&args->cur);
+                    struct Expression *value_expr = (struct Expression *)args->cur;
+                    if (value_expr != NULL && value_expr->type == EXPR_INUM)
+                    {
+                        char buffer[32];
+                        snprintf(buffer, sizeof(buffer), "%lld", value_expr->expr_data.i_num);
+                        size_t len = strlen(buffer);
+                        char *result = (char *)malloc(len + 1);
+                        if (result == NULL)
+                            return 0;
+                        memcpy(result, buffer, len + 1);
+
+                        destroy_expr_list(args);
+                        (*expr)->expr_data.function_call_data.args_expr = NULL;
+                        if ((*expr)->expr_data.function_call_data.mangled_id != NULL)
+                        {
+                            free((*expr)->expr_data.function_call_data.mangled_id);
+                            (*expr)->expr_data.function_call_data.mangled_id = NULL;
+                        }
+
+                        struct Expression *new_expr = mk_string((*expr)->line_num, result);
+                        new_expr->resolved_type = STRING_TYPE;
+                        destroy_expr(*expr);
+                        *expr = new_expr;
+                        return 1;
+                    }
+                }
+                return 0;
             }
 
             return 0;
+        }
 
         default:
             return 0;
