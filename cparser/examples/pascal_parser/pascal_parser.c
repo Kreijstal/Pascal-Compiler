@@ -92,7 +92,7 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
     int start_pos = in->start;
     char c = read1(in);
 
-    if (c != '_' && !isalpha(c)) {
+    if (!(c == '_' || isalpha((unsigned char)c))) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
@@ -104,7 +104,7 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
 
         if (c == '.') {
             char next = read1(in);
-            if (next == EOF || (next != '_' && !isalpha(next))) {
+            if (!(next == '_' || isalpha((unsigned char)next))) {
                 restore_input_state(in, &state);
                 return make_failure_v2(in, parser_name, strdup("Expected identifier segment after '.'"), NULL);
             }
@@ -121,8 +121,7 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
 
     int len = in->start - start_pos;
     char* text = (char*)safe_malloc(len + 1);
-    strncpy(text, in->buffer + start_pos, len);
-    text[len] = '\0';
+    snprintf(text, len + 1, "%.*s", len, in->buffer + start_pos);
 
     ast_t* ast = new_ast();
     ast->typ = pargs->tag;
