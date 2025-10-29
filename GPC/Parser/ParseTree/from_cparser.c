@@ -1348,8 +1348,6 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
-    case PASCAL_T_BREAK_STMT:
-        return mk_break(stmt_node->line);
     case PASCAL_T_WITH_STMT: {
         ast_t *expr_node = stmt_node->child;
         ast_t *body_node = unwrap_pascal_node(expr_node != NULL ? expr_node->next : NULL);
