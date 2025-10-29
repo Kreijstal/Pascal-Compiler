@@ -30,6 +30,10 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
+ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
+static ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 
 
 /* Code generation for expressions */
@@ -71,20 +75,32 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
     return reg;
 }
 
-static ListNode_t *codegen_expr_via_tree(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
+static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
 {
     expr_node_t *expr_tree = build_expr_tree(expr);
     Register_t *target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
     if (target_reg == NULL)
     {
         free_expr_tree(expr_tree);
+        if (out_reg != NULL)
+            *out_reg = NULL;
         return inst_list;
     }
 
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
-    free_reg(get_reg_stack(), target_reg);
     free_expr_tree(expr_tree);
+
+    if (out_reg != NULL)
+        *out_reg = target_reg;
+    else
+        free_reg(get_reg_stack(), target_reg);
     return inst_list;
+}
+
+static ListNode_t *codegen_expr_via_tree(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    return codegen_expr_tree_value(expr, inst_list, ctx, NULL);
 }
 
 ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64)
@@ -183,6 +199,252 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
     return inst_list;
 }
 
+static ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        return inst_list;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    if (record_expr == NULL)
+        return inst_list;
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(record_expr, inst_list, ctx, &addr_reg);
+    if (addr_reg == NULL)
+        return inst_list;
+
+    long long offset = expr->expr_data.record_access_data.field_offset;
+    if (offset != 0)
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    *out_reg = addr_reg;
+    return inst_list;
+}
+
+ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (expr == NULL || ctx == NULL || target_reg == NULL)
+        return inst_list;
+
+    if (expr->resolved_type == RECORD_TYPE)
+    {
+        codegen_report_error(ctx, "ERROR: Record-valued expressions are unsupported in this context.");
+        return inst_list;
+    }
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_record_field_address(expr, inst_list, ctx, &addr_reg);
+    if (addr_reg == NULL)
+        return inst_list;
+
+    char buffer[64];
+    if (codegen_type_uses_qword(expr->resolved_type))
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list,
+    Register_t *dest_reg, Register_t *value_reg)
+{
+    if (dest_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *start_reg, Register_t *end_reg)
+{
+    if (dest_reg == NULL || start_reg == NULL || end_reg == NULL)
+        return inst_list;
+
+    Register_t *temp_reg = codegen_try_get_reg(&inst_list, ctx, "set range temp");
+    if (temp_reg == NULL)
+        return inst_list;
+
+    char order_label[18];
+    char loop_label[18];
+    char done_label[18];
+    gen_label(order_label, sizeof(order_label), ctx);
+    gen_label(loop_label, sizeof(loop_label), ctx);
+    gen_label(done_label, sizeof(done_label), ctx);
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", order_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", start_reg->bit_32, temp_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", temp_reg->bit_32, end_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "%s:\n", order_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "%s:\n", loop_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", temp_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", temp_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", temp_reg->bit_32, dest_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n", end_reg->bit_32, start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjge\t%s\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tincl\t%s\n", start_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", loop_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "%s:\n", done_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), temp_reg);
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL)
+        return inst_list;
+
+    if (expr->expr_data.set_data.is_constant)
+    {
+        Register_t *dest_reg = codegen_try_get_reg(&inst_list, ctx, "set literal");
+        if (dest_reg == NULL)
+        {
+            if (out_reg != NULL)
+                *out_reg = NULL;
+            return inst_list;
+        }
+
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%u, %s\n", expr->expr_data.set_data.bitmask,
+            dest_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        if (out_reg != NULL)
+            *out_reg = dest_reg;
+        else
+            free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    Register_t *dest_reg = codegen_try_get_reg(&inst_list, ctx, "set literal");
+    if (dest_reg == NULL)
+    {
+        if (out_reg != NULL)
+            *out_reg = NULL;
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$0, %s\n", dest_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        if (element == NULL)
+            continue;
+
+        Register_t *lower_reg = NULL;
+        inst_list = codegen_expr_tree_value(element->lower, inst_list, ctx, &lower_reg);
+        if (codegen_had_error(ctx) || lower_reg == NULL)
+        {
+            if (lower_reg != NULL)
+                free_reg(get_reg_stack(), lower_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            if (out_reg != NULL)
+                *out_reg = NULL;
+            return inst_list;
+        }
+
+        Register_t *upper_reg = NULL;
+        if (element->upper != NULL)
+        {
+            inst_list = codegen_expr_tree_value(element->upper, inst_list, ctx, &upper_reg);
+            if (codegen_had_error(ctx) || upper_reg == NULL)
+            {
+                if (upper_reg != NULL)
+                    free_reg(get_reg_stack(), upper_reg);
+                free_reg(get_reg_stack(), lower_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                if (out_reg != NULL)
+                    *out_reg = NULL;
+                return inst_list;
+            }
+        }
+
+        if (element->upper == NULL)
+            inst_list = codegen_set_emit_single(inst_list, dest_reg, lower_reg);
+        else
+            inst_list = codegen_set_emit_range(inst_list, ctx, dest_reg, lower_reg, upper_reg);
+
+        if (codegen_had_error(ctx))
+        {
+            if (upper_reg != NULL)
+                free_reg(get_reg_stack(), upper_reg);
+            free_reg(get_reg_stack(), lower_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            if (out_reg != NULL)
+                *out_reg = NULL;
+            return inst_list;
+        }
+
+        if (upper_reg != NULL)
+            free_reg(get_reg_stack(), upper_reg);
+        free_reg(get_reg_stack(), lower_reg);
+    }
+
+    if (out_reg != NULL)
+        *out_reg = dest_reg;
+    else
+        free_reg(get_reg_stack(), dest_reg);
+    return inst_list;
+}
+
+static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL)
+    {
+        if (out_reg != NULL)
+            *out_reg = NULL;
+        return inst_list;
+    }
+
+    if (expr->type == EXPR_SET)
+        return codegen_set_literal(expr, inst_list, ctx, out_reg);
+
+    return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
+}
+
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -192,9 +454,27 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     assert(ctx != NULL);
     CODEGEN_DEBUG("DEBUG: Generating code for expression type %d\n", expr->type);
 
+    if (expr->resolved_type == SET_TYPE)
+    {
+        Register_t *set_reg = NULL;
+        inst_list = codegen_set_expr(expr, inst_list, ctx, &set_reg);
+        if (codegen_had_error(ctx))
+            return inst_list;
+        if (set_reg != NULL)
+            free_reg(get_reg_stack(), set_reg);
+        return inst_list;
+    }
+
     switch(expr->type) {
         case EXPR_VAR_ID:
             CODEGEN_DEBUG("DEBUG: Processing variable ID expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_RECORD_ACCESS:
+            CODEGEN_DEBUG("DEBUG: Processing record access expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -230,6 +510,13 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             return inst_list;
         case EXPR_BOOL:
             CODEGEN_DEBUG("DEBUG: Processing boolean constant expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_SET:
+            CODEGEN_DEBUG("DEBUG: Processing set literal expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -508,6 +795,45 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
     inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
     Register_t *right_reg = front_reg_stack(get_reg_stack());
+
+    int relop_kind = expr->expr_data.relop_data.type;
+    if (relop_kind == IN)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+        else
+            expr->expr_data.relop_data.type = NE;
+
+        if (left_reg == NULL || right_reg == NULL)
+            return inst_list;
+
+        char buffer[100];
+        StackNode_t *set_spill = add_l_t("set_relop");
+        if (set_spill != NULL)
+        {
+            snprintf(buffer, 100, "\tmovl\t%s, -%d(%%rbp)\n", right_reg->bit_32, set_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        snprintf(buffer, 100, "\tmovl\t%s, %%ecx\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 100, "\tmovl\t$1, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, 100, "\tshll\t%%cl, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        if (set_spill != NULL)
+        {
+            snprintf(buffer, 100, "\tmovl\t-%d(%%rbp), %s\n", set_spill->offset, right_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        snprintf(buffer, 100, "\ttestl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), left_reg);
+        return inst_list;
+    }
 
     char buffer[100];
     snprintf(buffer, 100, "\tcmpl\t%s, %s\n", right_reg->bit_32, left_reg->bit_32);

@@ -75,11 +75,13 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 
         case EXPR_VAR_ID:
         case EXPR_ARRAY_ACCESS:
+        case EXPR_RECORD_ACCESS:
         case EXPR_INUM:
         case EXPR_RNUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
         case EXPR_BOOL:
+        case EXPR_SET:
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
             new_node->left_expr = NULL;
@@ -137,6 +139,24 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     }
 
     return new_node;
+}
+
+static int leaf_expr_is_simple(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+        case EXPR_INUM:
+        case EXPR_RNUM:
+        case EXPR_BOOL:
+        case EXPR_SET:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 /* The famous gencode algorithm */
@@ -419,6 +439,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     {
         return codegen_array_access(expr, inst_list, ctx, target_reg);
     }
+    else if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        return codegen_record_access(expr, inst_list, ctx, target_reg);
+    }
     else if (expr->type == EXPR_POINTER_DEREF)
     {
         return codegen_pointer_deref_leaf(expr, inst_list, ctx, target_reg);
@@ -469,14 +493,41 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
+    char buffer[50];
     char name_buf[30];
     struct Expression *expr, *right_expr;
-
-    inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
     expr = node->expr;
     right_expr = node->right_expr->expr;
     assert(right_expr != NULL);
+    if (!leaf_expr_is_simple(right_expr))
+    {
+        Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (rhs_reg == NULL)
+        {
+            StackNode_t *spill_loc = add_l_t("rhs");
+            inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
+            snprintf(name_buf, sizeof(name_buf), "-%d(%%rbp)", spill_loc->offset);
+            if (codegen_type_uses_qword(right_expr->resolved_type))
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", target_reg->bit_64, name_buf);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", target_reg->bit_32, name_buf);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
+        }
+        else
+        {
+            inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
+            inst_list = gencode_op(expr, target_reg->bit_32, rhs_reg->bit_32, inst_list);
+            free_reg(get_reg_stack(), rhs_reg);
+        }
+        return inst_list;
+    }
+
+    inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
     inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
@@ -631,6 +682,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, buf_len, "$%d", expr->expr_data.bool_value ? 1 : 0);
             break;
 
+        case EXPR_SET:
+            snprintf(buffer, buf_len, "$%u", expr->expr_data.set_data.bitmask);
+            break;
+
         default:
             assert(0 && "Unsupported expr type in gencode!");
             break;
@@ -654,6 +709,20 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
     {
         case EXPR_ADDOP:
             type = expr->expr_data.addop_data.addop_type;
+            if (expr->resolved_type == SET_TYPE)
+            {
+                switch(type)
+                {
+                    case PLUS:
+                        snprintf(buffer, 50, "\torl\t%s, %s\n", right, left);
+                        inst_list = add_inst(inst_list, buffer);
+                        break;
+                    default:
+                        assert(0 && "Unsupported set addop type!");
+                        break;
+                }
+                break;
+            }
             switch(type)
             {
                 case PLUS:
@@ -682,6 +751,20 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
 
         case EXPR_MULOP:
             type = expr->expr_data.mulop_data.mulop_type;
+            if (expr->resolved_type == SET_TYPE)
+            {
+                switch(type)
+                {
+                    case STAR:
+                        snprintf(buffer, 50, "\tandl\t%s, %s\n", right, left);
+                        inst_list = add_inst(inst_list, buffer);
+                        break;
+                    default:
+                        assert(0 && "Unsupported set mulop type!");
+                        break;
+                }
+                break;
+            }
             if(type == STAR)
             {
                 snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);

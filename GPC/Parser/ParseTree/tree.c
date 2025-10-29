@@ -554,6 +554,17 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           expr_print(expr->expr_data.array_access_data.array_expr, f, num_indent+1);
           break;
 
+        case EXPR_RECORD_ACCESS:
+          fprintf(f, "[RECORD_ACC:%s]\n",
+              expr->expr_data.record_access_data.field_id != NULL ?
+              expr->expr_data.record_access_data.field_id : "<unknown>");
+          ++num_indent;
+
+          print_indent(f, num_indent);
+          fprintf(f, "[RECORD]:\n");
+          expr_print(expr->expr_data.record_access_data.record_expr, f, num_indent+1);
+          break;
+
         case EXPR_FUNCTION_CALL:
           fprintf(f, "[FUNC_CALL:%s]:\n", expr->expr_data.function_call_data.id);
           ++num_indent;
@@ -577,6 +588,9 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
 
         case EXPR_BOOL:
           fprintf(f, "[BOOL:%s]\n", expr->expr_data.bool_value ? "TRUE" : "FALSE");
+          break;
+        case EXPR_SET:
+          fprintf(f, "[SET:0x%X]\n", expr->expr_data.set_data.bitmask);
           break;
 
         case EXPR_POINTER_DEREF:
@@ -649,6 +663,9 @@ void destroy_list(ListNode_t *list)
                 break;
             case LIST_RECORD_FIELD:
                 destroy_record_field((struct RecordField *)cur->cur);
+                break;
+            case LIST_SET_ELEMENT:
+                destroy_set_element((struct SetElement *)cur->cur);
                 break;
             case LIST_CASE_BRANCH:
                 /* Case branches are handled specially in destroy_stmt for STMT_CASE */
@@ -932,6 +949,12 @@ void destroy_expr(struct Expression *expr)
           destroy_expr(expr->expr_data.array_access_data.array_expr);
           break;
 
+        case EXPR_RECORD_ACCESS:
+          if (expr->expr_data.record_access_data.record_expr != NULL)
+              destroy_expr(expr->expr_data.record_access_data.record_expr);
+          free(expr->expr_data.record_access_data.field_id);
+          break;
+
         case EXPR_FUNCTION_CALL:
           free(expr->expr_data.function_call_data.id);
           destroy_list(expr->expr_data.function_call_data.args_expr);
@@ -948,6 +971,11 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_BOOL:
+          break;
+
+        case EXPR_SET:
+          destroy_list(expr->expr_data.set_data.elements);
+          expr->expr_data.set_data.elements = NULL;
           break;
 
         case EXPR_POINTER_DEREF:
@@ -1524,6 +1552,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->resolved_type = UNKNOWN_TYPE;
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
+    expr->record_type = NULL;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -1604,6 +1633,19 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
     new_expr->expr_data.array_access_data.id = id;
     new_expr->expr_data.array_access_data.array_expr = index_expr;
+
+    return new_expr;
+}
+
+struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr, char *field_id)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_RECORD_ACCESS);
+    new_expr->expr_data.record_access_data.record_expr = record_expr;
+    new_expr->expr_data.record_access_data.field_id = field_id;
+    new_expr->expr_data.record_access_data.field_offset = 0;
 
     return new_expr;
 }
@@ -1691,6 +1733,41 @@ struct Expression *mk_bool(int line_num, int value)
 
     init_expression(new_expr, line_num, EXPR_BOOL);
     new_expr->expr_data.bool_value = (value != 0);
+
+    return new_expr;
+}
+
+struct SetElement *mk_set_element(struct Expression *lower, struct Expression *upper)
+{
+    struct SetElement *element = (struct SetElement *)malloc(sizeof(struct SetElement));
+    assert(element != NULL);
+
+    element->lower = lower;
+    element->upper = upper;
+    return element;
+}
+
+void destroy_set_element(struct SetElement *element)
+{
+    if (element == NULL)
+        return;
+
+    if (element->lower != NULL)
+        destroy_expr(element->lower);
+    if (element->upper != NULL)
+        destroy_expr(element->upper);
+    free(element);
+}
+
+struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elements, int is_constant)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_SET);
+    new_expr->expr_data.set_data.bitmask = bitmask;
+    new_expr->expr_data.set_data.elements = elements;
+    new_expr->expr_data.set_data.is_constant = is_constant;
 
     return new_expr;
 }

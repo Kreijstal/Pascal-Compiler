@@ -15,6 +15,7 @@
 #define LONGINT_TYPE        3
 #define STRING_TYPE         4
 #define BUILTIN_ANY_TYPE    5
+#define RECORD_TYPE         34
 #define CHAR_TYPE           28
 #define POINTER_TYPE        29
 #define SET_TYPE            30
@@ -49,5 +50,8 @@
 #define SHR                 25
 #define ROL                 26
 #define ROR                 27
+
+/* Set membership */
+#define IN                  33
 
 #endif /* TYPE_TAGS_H */

@@ -502,6 +502,10 @@ static const char *type_tag_to_name(int type_tag)
             return "boolean";
         case PROCEDURE:
             return "procedure";
+        case SET_TYPE:
+            return "set";
+        case RECORD_TYPE:
+            return "record";
         case UNKNOWN_TYPE:
             return "unknown";
         default:
