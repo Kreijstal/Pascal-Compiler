@@ -203,8 +203,9 @@ combinator_t* class_type(tag_t tag) {
     // Method declarations (simplified - just headers for now)
     combinator_t* method_name = token(cident(PASCAL_T_IDENTIFIER));
     
-    // Use the shared parameter parser
-    combinator_t* param_list = create_pascal_param_parser();
+    // Use the shared parameter parser (methods in types use simple type references for now)
+    combinator_t* method_type_ref = token(cident(PASCAL_T_IDENTIFIER));
+    combinator_t* param_list = create_pascal_param_parser(method_type_ref);
 
     // Constructor declaration: constructor Name;
     combinator_t* constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,

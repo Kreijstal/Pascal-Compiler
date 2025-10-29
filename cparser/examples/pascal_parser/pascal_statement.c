@@ -273,8 +273,17 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // Exit statement: exit
-    combinator_t* exit_stmt = token(create_keyword_parser("exit", PASCAL_T_EXIT_STMT));
+    // Exit statement: exit or exit(expression)
+    combinator_t* exit_argument = optional(between(
+        token(match("(")),
+        token(match(")")),
+        lazy(expr_parser)
+    ));
+    combinator_t* exit_stmt = seq(new_combinator(), PASCAL_T_EXIT_STMT,
+        token(keyword_ci("exit")),
+        exit_argument,
+        NULL
+    );
 
     // Case statement: case expression of label1: stmt1; label2: stmt2; [else stmt;] end
     // Case labels should handle constant expressions, not just simple values

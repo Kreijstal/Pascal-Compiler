@@ -646,11 +646,94 @@ static void post_process_set_operations(ast_t* ast) {
     }
 }
 
+typedef struct {
+    combinator_t* identifier;
+    combinator_t* arg_list;
+    combinator_t* index_list;
+    combinator_t* deref;
+} identifier_postfix_args;
+
+static ParseResult identifier_postfix_fn(input_t* in, void* args, char* parser_name) {
+    identifier_postfix_args* ip_args = (identifier_postfix_args*)args;
+    ParseResult name_res = parse(in, ip_args->identifier);
+    if (!name_res.is_success) {
+        return name_res;
+    }
+
+    ast_t* current_ast = name_res.value.ast;
+
+    while (1) {
+        InputState state;
+        save_input_state(in, &state);
+
+        // Attempt to parse a function call
+        ParseResult call_res = parse(in, ip_args->arg_list);
+        if (call_res.is_success) {
+            ast_t* args_ast = call_res.value.ast;
+            ast_t* call_node = new_ast();
+            call_node->typ = PASCAL_T_FUNC_CALL;
+            call_node->child = current_ast;
+            call_node->next = NULL;
+
+            if (args_ast != ast_nil) {
+                current_ast->next = args_ast;
+            } else {
+                current_ast->next = NULL;
+            }
+
+            set_ast_position(call_node, in);
+            current_ast = call_node;
+            continue;
+        }
+        free_error(call_res.value.error);
+        restore_input_state(in, &state);
+
+        // Attempt to parse a pointer dereference
+        ParseResult deref_res = parse(in, ip_args->deref);
+        if (deref_res.is_success) {
+            ast_t* deref_node = new_ast();
+            deref_node->typ = PASCAL_T_DEREF;
+            deref_node->child = current_ast;
+            deref_node->next = NULL;
+            free_ast(deref_res.value.ast);
+            set_ast_position(deref_node, in);
+            current_ast = deref_node;
+            continue;
+        }
+        free_error(deref_res.value.error);
+        restore_input_state(in, &state);
+
+        // Attempt to parse an array access
+        ParseResult index_res = parse(in, ip_args->index_list);
+        if (index_res.is_success) {
+            ast_t* indexes_ast = index_res.value.ast;
+            ast_t* array_node = new_ast();
+            array_node->typ = PASCAL_T_ARRAY_ACCESS;
+            array_node->child = current_ast;
+            array_node->next = NULL;
+
+            if (indexes_ast != ast_nil) {
+                current_ast->next = indexes_ast;
+            } else {
+                current_ast->next = NULL;
+            }
+
+            set_ast_position(array_node, in);
+            current_ast = array_node;
+            continue;
+        }
+        free_error(index_res.value.error);
+        restore_input_state(in, &state);
+
+        break;
+    }
+
+    return make_success(current_ast);
+}
+
 // --- Parser Definition ---
 void init_pascal_expression_parser(combinator_t** p) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
-    combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
-
     // Function name: use expression identifier parser that allows certain keywords as function names
     combinator_t* func_name = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
 
@@ -661,12 +744,6 @@ void init_pascal_expression_parser(combinator_t** p) {
         optional(sep_by(lazy(p), token(match(","))))
     );
 
-    combinator_t* func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        func_name,                        // function name (built-in or custom)
-        arg_list,
-        NULL
-    );
-
     // Array access parser: identifier[index1, index2, ...]
     combinator_t* index_list = between(
         token(match("[")),
@@ -674,11 +751,16 @@ void init_pascal_expression_parser(combinator_t** p) {
         sep_by(lazy(p), token(match(",")))
     );
 
-    combinator_t* array_access = seq(new_combinator(), PASCAL_T_ARRAY_ACCESS,
-        func_name,                        // array name (built-in or custom identifier)
-        index_list,
-        NULL
-    );
+    identifier_postfix_args* postfix_args = safe_malloc(sizeof(identifier_postfix_args));
+    postfix_args->identifier = func_name;
+    postfix_args->arg_list = arg_list;
+    postfix_args->index_list = index_list;
+    postfix_args->deref = token(match("^"));
+
+    combinator_t* identifier_postfix = new_combinator();
+    identifier_postfix->type = COMB_PASCAL_IDENTIFIER_POSTFIX;
+    identifier_postfix->fn = identifier_postfix_fn;
+    identifier_postfix->args = postfix_args;
 
     // Type cast parser: TypeName(expression) - only for built-in types
     combinator_t* typecast = seq(new_combinator(), PASCAL_T_TYPECAST,
@@ -694,6 +776,12 @@ void init_pascal_expression_parser(combinator_t** p) {
     );
     combinator_t* boolean_false = seq(new_combinator(), PASCAL_T_BOOLEAN,
         match_ci("false"),
+        NULL
+    );
+
+    // Nil literal parser
+    combinator_t* nil_literal = seq(new_combinator(), PASCAL_T_NIL,
+        match_ci("nil"),
         NULL
     );
 
@@ -715,12 +803,11 @@ void init_pascal_expression_parser(combinator_t** p) {
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
+        token(nil_literal),                       // nil literal
         typecast,                                 // Type casts Integer(x) - try before func_call
-        array_access,                             // Array access table[i,j] - try before func_call
-        func_call,                                // Function calls func(x)
+        identifier_postfix,
         between(token(match("(")), token(match(")")), lazy(p)), // Parenthesized expressions - try before tuple
         tuple,                                    // Tuple constants (a,b,c) - try after parenthesized expressions
-        identifier,                               // Identifiers (variables, built-ins)
         NULL
     );
 
@@ -782,8 +869,7 @@ void init_pascal_expression_parser(combinator_t** p) {
     );
     expr_insert(*p, 8, PASCAL_T_MEMBER_ACCESS, EXPR_INFIX, ASSOC_LEFT, token(member_access_op));
     
-    // Precedence 9: Pointer dereference operator (postfix): expression^ (higher than member access)
-    expr_insert(*p, 9, PASCAL_T_DEREF, EXPR_POSTFIX, ASSOC_LEFT, token(match("^")));
+    // Precedence 9 previously reserved for pointer dereference, now handled in identifier_postfix
 }
 
 // --- Utility Functions ---

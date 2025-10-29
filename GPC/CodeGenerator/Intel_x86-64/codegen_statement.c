@@ -296,25 +296,13 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             free_expr_tree(width_tree);
         }
 
-        char buffer[128];
-        if (width_reg != NULL)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", width_reg->bit_32, width_dest32);
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), width_reg);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", width_dest32);
-            inst_list = add_inst(inst_list, buffer);
-        }
-
         int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
         expr_node_t *expr_tree = build_expr_tree(expr);
         Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
         inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
         free_expr_tree(expr_tree);
 
+        char buffer[128];
         if (expr_type == STRING_TYPE)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
@@ -331,6 +319,18 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
 
         free_reg(get_reg_stack(), value_reg);
+
+        if (width_reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", width_reg->bit_32, width_dest32);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), width_reg);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", width_dest32);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         inst_list = codegen_vect_reg(inst_list, 0);
 

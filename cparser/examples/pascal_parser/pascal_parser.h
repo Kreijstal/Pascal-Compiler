@@ -17,6 +17,7 @@ typedef enum {
     PASCAL_T_STRING,
     PASCAL_T_CHAR,
     PASCAL_T_BOOLEAN,
+    PASCAL_T_NIL,
     PASCAL_T_ADD,
     PASCAL_T_SUB,
     PASCAL_T_MUL,

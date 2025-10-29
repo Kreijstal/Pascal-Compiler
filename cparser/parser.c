@@ -89,7 +89,7 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     if (original_result.is_success) {
         return original_result;
     }
-    
+
     // Validate input parameters
     if (original_result.value.error == NULL) {
         return make_failure(in, "Cannot wrap NULL error");
@@ -98,15 +98,20 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     if (message == NULL) {
         return make_failure(in, "Cannot wrap with NULL message");
     }
-    
+
     ParseError* original_error = original_result.value.error;
     ParseError* new_err = (ParseError*)safe_malloc(sizeof(ParseError));
     if (new_err == NULL) {
         return make_failure(in, "Memory allocation failed for error wrapper");
     }
-    
-    new_err->line = in->line;
-    new_err->col = in->col;
+
+    if (original_error != NULL) {
+        new_err->line = original_error->line;
+        new_err->col = original_error->col;
+    } else {
+        new_err->line = in->line;
+        new_err->col = in->col;
+    }
     new_err->message = strdup(message);
     if (new_err->message == NULL) {
         free(new_err);
@@ -115,20 +120,33 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     new_err->cause = original_error;
     new_err->partial_ast = partial_ast;
     new_err->parser_name = NULL;
-    new_err->unexpected = NULL;
-    
+    if (original_error && original_error->unexpected) {
+        new_err->unexpected = strdup(original_error->unexpected);
+    } else {
+        new_err->unexpected = NULL;
+    }
+
     return (ParseResult){ .is_success = false, .value.error = new_err };
 }
 
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    if (cause.value.error != NULL) {
+        err->line = cause.value.error->line;
+        err->col = cause.value.error->col;
+    } else {
+        err->line = in->line;
+        err->col = in->col;
+    }
     err->message = message;
     err->cause = cause.value.error;
     err->partial_ast = NULL;
     err->parser_name = parser_name ? strdup(parser_name) : NULL;
-    err->unexpected = NULL; // The unexpected token is now part of the message in expect_fn
+    if (cause.value.error && cause.value.error->unexpected) {
+        err->unexpected = strdup(cause.value.error->unexpected);
+    } else {
+        err->unexpected = NULL;
+    } // The unexpected token is now part of the message in expect_fn
     return (ParseResult){ .is_success = false, .value.error = err };
 }
 
@@ -345,46 +363,84 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
 }
 
 static ParseResult string_fn(input_t * in, void * args, char* parser_name) {
-   prim_args* pargs = (prim_args*)args;
-   InputState state; save_input_state(in, &state);
-   if (read1(in) != '"') {
-       restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected '\"'."), unexpected);
-   }
-   int capacity = 64;
-   char * str_val = (char *) safe_malloc(capacity);
-   int len = 0; char c;
-   while ((c = read1(in)) != '"') {
-      if (c == EOF) {
-          free(str_val);
-          return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
-      }
-      if (c == '\\') {
-         c = read1(in);
-         if (c == EOF) {
-             free(str_val);
-             return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
-         }
-         switch (c) {
-            case 'n': c = '\n'; break; case 't': c = '\t'; break;
-            case '"': c = '"'; break; case '\\': c = '\\'; break;
-         }
-      }
-      if (len + 1 >= capacity) {
-         capacity *= 2;
-         char* new_str_val = realloc(str_val, capacity);
-         if (!new_str_val) { free(str_val); exception("realloc failed"); }
-         str_val = new_str_val;
-      }
-      str_val[len++] = c;
-   }
-   str_val[len] = '\0';
-   ast_t * ast = new_ast();
-   ast->typ = pargs->tag; ast->sym = sym_lookup(str_val); free(str_val);
-   ast->child = NULL; ast->next = NULL;
-   set_ast_position(ast, in);
-   return make_success(ast);
+    prim_args* pargs = (prim_args*)args;
+    InputState state; save_input_state(in, &state);
+
+    char delimiter = read1(in);
+    if (delimiter != '\'' && delimiter != '"') {
+        restore_input_state(in, &state);
+        char* unexpected = strndup(in->buffer + state.start, 10);
+        char* message;
+        if (asprintf(&message, "Expected string starting with either '\'' or \"\", but found '%.10s'", unexpected ? unexpected : "") < 0) {
+            message = strdup("Expected string literal");
+        }
+        return make_failure_v2(in, parser_name, message, unexpected);
+    }
+
+    bool is_pascal_string = delimiter == '\'';
+    int capacity = 64;
+    char* str_val = (char*)safe_malloc(capacity);
+    int len = 0;
+
+    while (1) {
+        char c = read1(in);
+        if (c == EOF) {
+            free(str_val);
+            return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+        }
+
+        if (is_pascal_string) {
+            if (c == '\'') {
+                // Pascal doubles single quotes to escape them.
+                if (in->start < in->length && in->buffer[in->start] == '\'') {
+                    // Consume the escaped quote and append a single quote to the buffer.
+                    read1(in);
+                    c = '\'';
+                } else {
+                    break; // closing delimiter
+                }
+            }
+        } else {
+            if (c == '\"') {
+                break; // closing double quote
+            }
+            if (c == '\\') {
+                char next = read1(in);
+                if (next == EOF) {
+                    free(str_val);
+                    return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+                }
+                switch (next) {
+                    case 'n': c = '\n'; break;
+                    case 't': c = '\t'; break;
+                    case '\\': c = '\\'; break;
+                    case '\"': c = '\"'; break;
+                    default: c = next; break;
+                }
+            }
+        }
+
+        if (len + 1 >= capacity) {
+            capacity *= 2;
+            char* new_str_val = realloc(str_val, capacity);
+            if (!new_str_val) {
+                free(str_val);
+                exception("realloc failed");
+            }
+            str_val = new_str_val;
+        }
+        str_val[len++] = c;
+    }
+
+    str_val[len] = '\0';
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(str_val);
+    free(str_val);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+    return make_success(ast);
 }
 
 static ParseResult any_char_fn(input_t * in, void * args, char* parser_name) {
@@ -746,6 +802,14 @@ typedef struct extra_node {
     struct extra_node* next;
 } extra_node;
 
+// Forward declaration for Pascal-specific identifier postfix combinator cleanup.
+typedef struct identifier_postfix_args {
+    combinator_t* identifier;
+    combinator_t* arg_list;
+    combinator_t* index_list;
+    combinator_t* deref;
+} identifier_postfix_args;
+
 void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra_node** extras);
 
 bool is_visited(const void* ptr, visited_node* list) {
@@ -948,6 +1012,17 @@ void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra
             }
             case COMB_MANY: {
                 free_combinator_recursive((combinator_t*)comb->args, visited, extras);
+                break;
+            }
+            case COMB_PASCAL_IDENTIFIER_POSTFIX: {
+                identifier_postfix_args* args = (identifier_postfix_args*)comb->args;
+                if (args != NULL) {
+                    free_combinator_recursive(args->identifier, visited, extras);
+                    free_combinator_recursive(args->arg_list, visited, extras);
+                    free_combinator_recursive(args->index_list, visited, extras);
+                    free_combinator_recursive(args->deref, visited, extras);
+                    free(args);
+                }
                 break;
             }
             case P_INTEGER:

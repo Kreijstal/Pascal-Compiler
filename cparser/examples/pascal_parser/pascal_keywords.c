@@ -44,11 +44,14 @@ static ParseResult keyword_ci_fn(input_t* in, void* args, char* parser_name) {
     // Match the keyword case-insensitively
     for (int i = 0; i < len; i++) {
         char c = read1(in);
-        if (tolower(c) != tolower(str[i])) {
+        if (tolower((unsigned char)c) != tolower((unsigned char)str[i])) {
             restore_input_state(in, &state);
+            char* unexpected = strndup(in->buffer + state.start, 16);
             char* err_msg;
-            asprintf(&err_msg, "Expected keyword '%s' (case-insensitive)", str);
-            return make_failure_v2(in, parser_name, err_msg, NULL);
+            if (asprintf(&err_msg, "Expected keyword '%s' (case-insensitive)", str) < 0) {
+                err_msg = strdup("Expected keyword");
+            }
+            return make_failure_v2(in, parser_name, err_msg, unexpected);
         }
     }
 
@@ -57,9 +60,12 @@ static ParseResult keyword_ci_fn(input_t* in, void* args, char* parser_name) {
         char next_char = in->buffer[in->start];
         if (isalnum((unsigned char)next_char) || next_char == '_') {
             restore_input_state(in, &state);
+            char* unexpected = strndup(in->buffer + state.start, 16);
             char* err_msg;
-            asprintf(&err_msg, "Expected keyword '%s', not part of identifier", str);
-            return make_failure_v2(in, parser_name, err_msg, NULL);
+            if (asprintf(&err_msg, "Expected keyword '%s', not part of identifier", str) < 0) {
+                err_msg = strdup("Expected keyword");
+            }
+            return make_failure_v2(in, parser_name, err_msg, unexpected);
         }
     }
 

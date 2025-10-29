@@ -6,6 +6,31 @@
 // Forward declaration
 static void print_ast_indented(ast_t* ast, int depth);
 static void print_error_with_partial_ast(ParseError* error);
+static void print_error_chain(ParseError* error, int depth);
+
+static void print_error_chain(ParseError* error, int depth) {
+    if (error == NULL) {
+        return;
+    }
+    for (int i = 0; i < depth; i++) {
+        printf("  ");
+    }
+    printf("Caused by parser '%s' at line %d, col %d: %s\n",
+        error->parser_name ? error->parser_name : "<root>",
+        error->line,
+        error->col,
+        error->message ? error->message : "(no message)"
+    );
+    if (error->unexpected) {
+        for (int i = 0; i < depth + 1; i++) {
+            printf("  ");
+        }
+        printf("Unexpected input: \"%s\"\n", error->unexpected);
+    }
+    if (error->cause) {
+        print_error_chain(error->cause, depth + 1);
+    }
+}
 
 // Helper function to print ParseError with partial AST
 static void print_error_with_partial_ast(ParseError* error) {
@@ -24,6 +49,11 @@ static void print_error_with_partial_ast(ParseError* error) {
     if (error->partial_ast != NULL) {
         printf("Partial AST:\n");
         print_ast_indented(error->partial_ast, 1);
+    }
+
+    if (error->cause) {
+        printf("Error trace:\n");
+        print_error_chain(error->cause, 1);
     }
 }
 
