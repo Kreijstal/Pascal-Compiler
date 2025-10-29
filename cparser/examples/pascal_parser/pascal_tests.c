@@ -4,6 +4,7 @@
 #include "pascal_parser.h"
 #include "pascal_keywords.h"
 #include <stdio.h>
+#include <string.h>
 
 void test_pascal_integer_parsing(void) {
     combinator_t* p = new_combinator();
@@ -2386,6 +2387,194 @@ void test_fpc_style_unit_parsing(void) {
     free(input);
 }
 
+// --- Helpers for advanced feature regression tests ---
+static void assert_pascal_unit_parses(const char* source) {
+    combinator_t* parser = new_combinator();
+    init_pascal_unit_parser(&parser);
+
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+
+    ParseResult result = parse(input, parser);
+    bool success = result.is_success;
+
+    if (result.is_success && input->start < input->length) {
+        TEST_MSG("Parser left trailing input: '%.*s'", 40, input->buffer + input->start);
+        success = false;
+    }
+
+    if (!result.is_success && result.value.error && result.value.error->message) {
+        TEST_MSG("Unexpected parse failure: %s", result.value.error->message);
+    }
+
+    if (result.is_success) {
+        free_ast(result.value.ast);
+    } else if (result.value.error) {
+        free_error(result.value.error);
+    }
+
+    free_combinator(parser);
+    free(input->buffer);
+    free(input);
+
+    TEST_ASSERT(success);
+}
+
+// --- Regression tests for features seen in the FPC corpus ---
+void test_pascal_unit_with_dotted_name(void) {
+    const char* source =
+        "unit Generics.Collections;\n"
+        "interface\n"
+        "implementation\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_uses_with_dotted_unit(void) {
+    const char* source =
+        "unit UsesDotted;\n"
+        "interface\n"
+        "uses Generics.Collections;\n"
+        "implementation\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_out_parameter_modifier(void) {
+    const char* source =
+        "unit OutModifierDemo;\n"
+        "interface\n"
+        "procedure Foo(out Value: Integer);\n"
+        "implementation\n"
+        "procedure Foo(out Value: Integer);\n"
+        "begin\n"
+        "end;\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_resourcestring_section(void) {
+    const char* source =
+        "unit ResourceStringsDemo;\n"
+        "interface\n"
+        "resourcestring\n"
+        "  SMessage = 'Hello';\n"
+        "implementation\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_threadvar_section(void) {
+    const char* source =
+        "unit ThreadVarDemo;\n"
+        "interface\n"
+        "threadvar\n"
+        "  ThreadID: Cardinal;\n"
+        "implementation\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_generic_type_declaration(void) {
+    const char* source =
+        "unit GenericDemo;\n"
+        "interface\n"
+        "type\n"
+        "  generic TBox<T> = class\n"
+        "  end;\n"
+        "implementation\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_specialize_alias(void) {
+    const char* source =
+        "unit SpecializeDemo;\n"
+        "interface\n"
+        "type\n"
+        "  TIntList = specialize TList<Integer>;\n"
+        "implementation\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_class_function_modifier(void) {
+    const char* source =
+        "unit ClassFunctionDemo;\n"
+        "interface\n"
+        "type\n"
+        "  TFoo = class\n"
+        "  public\n"
+        "    class function CreateDefault: TFoo;\n"
+        "  end;\n"
+        "implementation\n"
+        "class function TFoo.CreateDefault: TFoo;\n"
+        "begin\n"
+        "end;\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_class_operator_overload(void) {
+    const char* source =
+        "unit ClassOperatorDemo;\n"
+        "interface\n"
+        "type\n"
+        "  TFoo = class\n"
+        "  public\n"
+        "    class operator Equal(const A, B: TFoo): Boolean;\n"
+        "  end;\n"
+        "implementation\n"
+        "class operator TFoo.Equal(const A, B: TFoo): Boolean;\n"
+        "begin\n"
+        "end;\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_type_helper_for_string(void) {
+    const char* source =
+        "unit TypeHelperDemo;\n"
+        "interface\n"
+        "type\n"
+        "  TStringHelper = type helper for string\n"
+        "    function ToUpper: string;\n"
+        "  end;\n"
+        "implementation\n"
+        "function TStringHelper.ToUpper: string;\n"
+        "begin\n"
+        "end;\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_overload_directive(void) {
+    const char* source =
+        "unit OverloadDemo;\n"
+        "interface\n"
+        "procedure Foo; overload;\n"
+        "implementation\n"
+        "procedure Foo; overload;\n"
+        "begin\n"
+        "end;\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
+void test_pascal_inline_directive(void) {
+    const char* source =
+        "unit InlineDemo;\n"
+        "interface\n"
+        "procedure Foo; inline;\n"
+        "implementation\n"
+        "procedure Foo; inline;\n"
+        "begin\n"
+        "end;\n"
+        "end.\n";
+    assert_pascal_unit_parses(source);
+}
+
 void test_complex_fpc_rax64int_unit(void) {
     combinator_t* p = new_combinator();
     init_pascal_unit_parser(&p);
@@ -2536,6 +2725,18 @@ TEST_LIST = {
     { "test_pascal_enumerated_type_declaration", test_pascal_enumerated_type_declaration },
     { "test_pascal_simple_const_declaration", test_pascal_simple_const_declaration },
     { "test_pascal_var_section", test_pascal_var_section },
+    { "test_pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
+    { "test_pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },
+    { "test_pascal_out_parameter_modifier", test_pascal_out_parameter_modifier },
+    { "test_pascal_resourcestring_section", test_pascal_resourcestring_section },
+    { "test_pascal_threadvar_section", test_pascal_threadvar_section },
+    { "test_pascal_generic_type_declaration", test_pascal_generic_type_declaration },
+    { "test_pascal_specialize_alias", test_pascal_specialize_alias },
+    { "test_pascal_class_function_modifier", test_pascal_class_function_modifier },
+    { "test_pascal_class_operator_overload", test_pascal_class_operator_overload },
+    { "test_pascal_type_helper_for_string", test_pascal_type_helper_for_string },
+    { "test_pascal_overload_directive", test_pascal_overload_directive },
+    { "test_pascal_inline_directive", test_pascal_inline_directive },
     { "test_fpc_style_unit_parsing", test_fpc_style_unit_parsing },
     { "test_complex_fpc_rax64int_unit", test_complex_fpc_rax64int_unit },
     { NULL, NULL }
