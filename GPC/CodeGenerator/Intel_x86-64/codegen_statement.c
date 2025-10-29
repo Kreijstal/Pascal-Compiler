@@ -113,6 +113,29 @@ static ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t 
     return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
 }
 
+static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
+    struct Expression *array_expr)
+{
+    if (array_node != NULL && array_node->element_size > 0)
+        return array_node->element_size;
+
+    const char *array_name = NULL;
+    if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
+        array_name = array_expr->expr_data.id;
+
+    if (ctx != NULL)
+    {
+        if (array_name != NULL)
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine element size for dynamic array %s.", array_name);
+        else
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine element size for dynamic array.");
+    }
+
+    return DOUBLEWORD;
+}
+
 static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label)
 {
     if (ctx == NULL || label == NULL)
@@ -344,7 +367,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
             break;
         case STMT_BREAK:
-            inst_list = codegen_break_stmt(stmt, inst_list, ctx);
+            inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
             break;
         case STMT_ASM_BLOCK:
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
@@ -365,9 +388,6 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             inst_list = add_inst(inst_list, "\tret\n");
             break;
         }
-        case STMT_BREAK:
-            inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
-            break;
         case STMT_CASE:
             inst_list = codegen_case(stmt, inst_list, ctx, symtab);
             break;
@@ -618,24 +638,6 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
 
     free_reg(get_reg_stack(), increment_reg);
     return inst_list;
-}
-
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    (void)stmt;
-    if (ctx == NULL)
-        return inst_list;
-
-    const char *target = codegen_current_break_target(ctx);
-    if (target == NULL)
-    {
-        codegen_report_error(ctx, "ERROR: BREAK statement used outside of a loop.");
-        return inst_list;
-    }
-
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", target);
-    return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t *inst_list,
