@@ -9,6 +9,16 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+static void set_combinator_name(combinator_t* comb, const char* name) {
+    if (comb == NULL)
+        return;
+
+    if (comb->name != NULL) {
+        free(comb->name);
+    }
+    comb->name = strdup(name);
+}
+
 static inline void discard_failure(ParseResult result) {
     if (!result.is_success) {
         free_error(result.value.error);
@@ -294,7 +304,7 @@ combinator_t* class_type(tag_t tag) {
         field_decl,
         NULL
     );
-    class_member->name = strdup("class_member");
+    set_combinator_name(class_member, "class_member");
 
     // Skip comments and whitespace in class body
     combinator_t* class_element = class_member;

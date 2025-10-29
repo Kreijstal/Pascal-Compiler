@@ -9,6 +9,16 @@
 #include <ctype.h>
 
 // Helper to create simple keyword AST nodes for modifiers
+static void set_combinator_name(combinator_t* comb, const char* name) {
+    if (comb == NULL)
+        return;
+
+    if (comb->name != NULL) {
+        free(comb->name);
+    }
+    comb->name = strdup(name);
+}
+
 static ast_t* make_modifier_node(ast_t* original, const char* keyword) {
     if (original == NULL)
         return NULL;
@@ -68,7 +78,7 @@ static combinator_t* create_modifier_param(const char* keyword, ast_t* (*mapper)
         create_param_type_spec(),
         NULL
     );
-    param->name = strdup(name);
+    set_combinator_name(param, name);
     return param;
 }
 
@@ -78,7 +88,7 @@ static combinator_t* create_value_param(void) {
         create_param_type_spec(),
         NULL
     );
-    param->name = strdup("value_param");
+    set_combinator_name(param, "value_param");
     return param;
 }
 
@@ -91,7 +101,7 @@ combinator_t* create_pascal_param_parser(void) {
         create_value_param(),
         NULL
     );
-    param->name = strdup("param");
+    set_combinator_name(param, "param");
 
     return optional(between(
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
@@ -373,7 +383,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         lazy(stmt_parser),                         // main statement block
         NULL
     );
-    function_body->name = strdup("function_body");
+    set_combinator_name(function_body, "function_body");
 
     // Routine directives like inline; overload; etc.
     combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
@@ -434,7 +444,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list), token(match(";")),
         routine_directives,
         function_body, optional(token(match(";"))), NULL);
-    procedure_impl->name = strdup("procedure_impl");
+    set_combinator_name(procedure_impl, "procedure_impl");
 
     // Method implementations with qualified names (Class.Method)
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
@@ -462,7 +472,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
-    constructor_impl->name = strdup("constructor_impl");
+    set_combinator_name(constructor_impl, "constructor_impl");
 
     // Destructor implementation: destructor ClassName.MethodName[(params)]; body
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
@@ -475,7 +485,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
-    destructor_impl->name = strdup("destructor_impl");
+    set_combinator_name(destructor_impl, "destructor_impl");
 
     // Method procedure implementation: procedure ClassName.MethodName[(params)]; body
     combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
@@ -489,7 +499,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
-    method_procedure_impl->name = strdup("method_procedure_impl");
+    set_combinator_name(method_procedure_impl, "method_procedure_impl");
 
     // Method function implementation: function ClassName.MethodName[(params)]: ReturnType; body
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
@@ -504,7 +514,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
-    method_function_impl->name = strdup("method_function_impl");
+    set_combinator_name(method_function_impl, "method_function_impl");
 
     // Simple function implementation for unit
     combinator_t* function_impl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
@@ -513,7 +523,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         return_type, token(match(";")),
         routine_directives,
         function_body, optional(token(match(";"))), NULL);
-    function_impl->name = strdup("function_impl");
+    set_combinator_name(function_impl, "function_impl");
 
     combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(keyword_ci("class"))),
@@ -527,7 +537,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),
         NULL
     );
-    class_operator_impl->name = strdup("class_operator_impl");
+    set_combinator_name(class_operator_impl, "class_operator_impl");
 
     // Interface section declarations: uses, const, type, procedure/function headers
     combinator_t* interface_declaration = multi(new_combinator(), PASCAL_T_NONE,
@@ -562,18 +572,18 @@ void init_pascal_unit_parser(combinator_t** p) {
         function_impl,                               // simple function implementations
         NULL
     );
-    implementation_definition->name = strdup("implementation_definition");
+    set_combinator_name(implementation_definition, "implementation_definition");
 
     combinator_t* implementation_definitions = many(implementation_definition);
-    implementation_definitions->name = strdup("implementation_definitions");
+    set_combinator_name(implementation_definitions, "implementation_definitions");
 
     combinator_t* interface_section = seq(new_combinator(), PASCAL_T_INTERFACE_SECTION,
         token(keyword_ci("interface")), interface_declarations, NULL);
-    interface_section->name = strdup("interface_section");
+    set_combinator_name(interface_section, "interface_section");
 
     combinator_t* implementation_section = seq(new_combinator(), PASCAL_T_IMPLEMENTATION_SECTION,
         token(keyword_ci("implementation")), implementation_definitions, NULL);
-    implementation_section->name = strdup("implementation_section");
+    set_combinator_name(implementation_section, "implementation_section");
 
     combinator_t* stmt_list_for_init = sep_end_by(lazy(stmt_parser), token(match(";")));
     combinator_t* initialization_block = right(token(keyword_ci("begin")), stmt_list_for_init);
