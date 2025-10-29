@@ -196,7 +196,7 @@ class TestCompiler(unittest.TestCase):
                 [
                     "gcc",
                     "-c",
-                    "-O0",
+                    "-O2",
                     "-pipe",
                     "-o",
                     cls.runtime_object,
@@ -218,6 +218,7 @@ class TestCompiler(unittest.TestCase):
             subprocess.run(
                 [
                     "gcc",
+                    "-O2",
                     "-no-pie",
                     "-o",
                     executable_file,
@@ -248,7 +249,7 @@ class TestCompiler(unittest.TestCase):
             command = [
                 "gcc",
                 "-shared",
-                "-O0",
+                "-O2",
             ]
             command.extend(shared_flags)
             command.extend(

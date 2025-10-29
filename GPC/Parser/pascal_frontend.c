@@ -150,6 +150,44 @@ static bool buffer_starts_with_unit(const char *buffer, size_t length)
     return true;
 }
 
+// Cache for initialized parsers to avoid expensive re-initialization
+static combinator_t *cached_unit_parser = NULL;
+static combinator_t *cached_program_parser = NULL;
+
+static combinator_t *get_or_create_unit_parser(void)
+{
+    if (cached_unit_parser == NULL)
+    {
+        cached_unit_parser = new_combinator();
+        init_pascal_unit_parser(&cached_unit_parser);
+    }
+    return cached_unit_parser;
+}
+
+static combinator_t *get_or_create_program_parser(void)
+{
+    if (cached_program_parser == NULL)
+    {
+        cached_program_parser = new_combinator();
+        init_pascal_complete_program_parser(&cached_program_parser);
+    }
+    return cached_program_parser;
+}
+
+void pascal_frontend_cleanup(void)
+{
+    if (cached_unit_parser != NULL)
+    {
+        free_combinator(cached_unit_parser);
+        cached_unit_parser = NULL;
+    }
+    if (cached_program_parser != NULL)
+    {
+        free_combinator(cached_program_parser);
+        cached_program_parser = NULL;
+    }
+}
+
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
 {
     if (error_out != NULL)
@@ -160,12 +198,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (buffer == NULL)
         return false;
 
-    combinator_t *parser = new_combinator();
     bool is_unit = buffer_starts_with_unit(buffer, length);
-    if (is_unit)
-        init_pascal_unit_parser(&parser);
-    else
-        init_pascal_complete_program_parser(&parser);
+    combinator_t *parser = is_unit ? get_or_create_unit_parser() : get_or_create_program_parser();
 
     input_t *input = new_input();
     input->buffer = buffer;
@@ -221,7 +255,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     free(input);
     file_to_parse = NULL;
-    free_combinator(parser);
+    // Don't free parser - it's cached for reuse
 
     if (!success && tree != NULL)
     {
