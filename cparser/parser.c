@@ -32,7 +32,12 @@ static char* strndup(const char* s, size_t n)
 // --- Argument Structs ---
 typedef struct { char * str; } match_args;
 typedef struct { combinator_t* delimiter; tag_t tag; } until_args;
-typedef struct op_t { tag_t tag; combinator_t * comb; struct op_t * next; } op_t;
+typedef struct op_t {
+    tag_t tag;
+    combinator_t * comb;
+    struct op_t * next;
+    expr_postfix_builder postfix_builder;
+} op_t;
 typedef struct expr_list { op_t * op; expr_fix fix; expr_assoc assoc; combinator_t * comb; struct expr_list * next; } expr_list;
 
 // --- Static Function Forward Declarations ---
@@ -507,9 +512,12 @@ static ParseResult expr_fn(input_t * in, void * args, char* parser_name) {
            while (op) {
                ParseResult op_res = parse(in, op->comb);
                if (op_res.is_success) {
-                   tag_t op_tag = op->tag;
-                   free_ast(op_res.value.ast);
-                   lhs = ast1(op_tag, lhs);
+                   if (op->postfix_builder != NULL) {
+                       lhs = op->postfix_builder(op->tag, lhs, op_res.value.ast);
+                   } else {
+                       free_ast(op_res.value.ast);
+                       lhs = ast1(op->tag, lhs);
+                   }
                    found_op = true;
                    break;
                }
@@ -633,16 +641,27 @@ combinator_t * expr(combinator_t * exp, combinator_t * base) {
    exp->type = COMB_EXPR; exp->fn = expr_fn; exp->args = args; return exp;
 }
 void expr_insert(combinator_t * exp, int prec, tag_t tag, expr_fix fix, expr_assoc assoc, combinator_t * comb) {
+    expr_insert_with_builder(exp, prec, tag, fix, assoc, comb, NULL);
+}
+
+void expr_insert_with_builder(combinator_t * exp, int prec, tag_t tag, expr_fix fix, expr_assoc assoc, combinator_t * comb, expr_postfix_builder builder) {
     expr_list *node = (expr_list*)safe_malloc(sizeof(expr_list));
     op_t *op = (op_t*)safe_malloc(sizeof(op_t));
-    op->tag = tag; op->comb = comb; op->next = NULL;
-    node->op = op; node->fix = fix; node->assoc = assoc; node->comb = NULL;
+    op->tag = tag;
+    op->comb = comb;
+    op->next = NULL;
+    op->postfix_builder = builder;
+    node->op = op;
+    node->fix = fix;
+    node->assoc = assoc;
+    node->comb = NULL;
     expr_list **p_list = (expr_list**)&exp->args;
     for (int i = 0; i < prec; i++) {
         if (*p_list == NULL || (*p_list)->fix == EXPR_BASE) exception("Invalid precedence for expression");
         p_list = &(*p_list)->next;
     }
-    node->next = *p_list; *p_list = node;
+    node->next = *p_list;
+    *p_list = node;
 }
 void expr_altern(combinator_t * exp, int prec, tag_t tag, combinator_t * comb) {
     expr_list* list = (expr_list*)exp->args;

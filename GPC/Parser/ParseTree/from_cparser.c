@@ -17,6 +17,7 @@
 #include "tree_types.h"
 #include "type_tags.h"
 #include "pascal_parser.h"
+#include "../ErrVars.h"
 
 typedef struct {
     int is_array;
@@ -126,6 +127,44 @@ static struct Expression *convert_expression(ast_t *expr_node);
 static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
+
+static void report_pascal_conversion_error(const char *kind, ast_t *node, const char *detail)
+{
+    if (node == NULL)
+        return;
+
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : "<input>";
+    const char *tag_name = pascal_tag_to_string(node->typ);
+    const char *symbol_name = (node->sym != NULL && node->sym->name != NULL) ? node->sym->name : NULL;
+
+    char location[32];
+    if (node->line > 0)
+    {
+        if (node->col > 0)
+            snprintf(location, sizeof(location), "%d:%d", node->line, node->col);
+        else
+            snprintf(location, sizeof(location), "%d", node->line);
+    }
+    else
+    {
+        strcpy(location, "??");
+    }
+
+    fprintf(stderr,
+            "ERROR: Unable to convert %s '%s' at %s:%s",
+            kind,
+            tag_name,
+            file_path,
+            location);
+
+    if (symbol_name != NULL)
+        fprintf(stderr, " (symbol: %s)", symbol_name);
+
+    if (detail != NULL && *detail != '\0')
+        fprintf(stderr, ": %s", detail);
+
+    fputc('\n', stderr);
+}
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out, struct RecordType **record_out, ArrayTypeInfo *array_info) {
     if (type_id_out != NULL)
@@ -917,11 +956,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
     default:
-        fprintf(stderr, "ERROR: unsupported expression tag %d at line %d.",
-                expr_node->typ, expr_node->line);
-        if (expr_node->sym != NULL && expr_node->sym->name != NULL)
-            fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
-        fprintf(stderr, "\n");
+        report_pascal_conversion_error("expression", expr_node, "feature not yet supported in legacy frontend");
         break;
     }
 

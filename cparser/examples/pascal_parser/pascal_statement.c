@@ -273,8 +273,20 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // Exit statement: exit
-    combinator_t* exit_stmt = token(create_keyword_parser("exit", PASCAL_T_EXIT_STMT));
+    // Exit statement: exit or exit(expression)
+    combinator_t* exit_argument = between(
+        token(match("(")),
+        token(match(")")),
+        lazy(expr_parser)
+    );
+    combinator_t* exit_stmt = seq(new_combinator(), PASCAL_T_EXIT_STMT,
+        token(keyword_ci("exit")),
+        optional(exit_argument),
+        NULL
+    );
+
+    combinator_t* break_stmt = token(create_keyword_parser("break", PASCAL_T_BREAK_STMT));
+    combinator_t* continue_stmt = token(create_keyword_parser("continue", PASCAL_T_CONTINUE_STMT));
 
     // Case statement: case expression of label1: stmt1; label2: stmt2; [else stmt;] end
     // Case labels should handle constant expressions, not just simple values
@@ -350,6 +362,8 @@ void init_pascal_statement_parser(combinator_t** p) {
         raise_stmt,                           // raise statements
         inherited_stmt,                       // inherited statements
         exit_stmt,                            // exit statements
+        break_stmt,                           // break statements
+        continue_stmt,                        // continue statements
         asm_stmt,                             // inline assembly blocks
         if_stmt,                              // if statements
         for_stmt,                             // for statements

@@ -139,7 +139,10 @@ typedef enum { EXPR_BASE, EXPR_INFIX, EXPR_PREFIX, EXPR_POSTFIX } expr_fix;
 typedef enum { ASSOC_LEFT, ASSOC_RIGHT, ASSOC_NONE } expr_assoc;
 
 combinator_t * expr(combinator_t * exp, combinator_t * base);
+typedef ast_t* (*expr_postfix_builder)(tag_t tag, ast_t* lhs, ast_t* op_ast);
+
 void expr_insert(combinator_t * exp, int prec, tag_t tag, expr_fix fix, expr_assoc assoc, combinator_t * comb);
+void expr_insert_with_builder(combinator_t * exp, int prec, tag_t tag, expr_fix fix, expr_assoc assoc, combinator_t * comb, expr_postfix_builder builder);
 void expr_altern(combinator_t * exp, int prec, tag_t tag, combinator_t * comb);
 
 // --- Input Stream Helpers ---

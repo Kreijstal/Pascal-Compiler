@@ -124,6 +124,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_SET_INTERSECT: return "SET_INTERSECT";
         case PASCAL_T_SET_DIFF: return "SET_DIFF";
         case PASCAL_T_SET_SYM_DIFF: return "SET_SYM_DIFF";
+        case PASCAL_T_NIL: return "NIL";
         case PASCAL_T_IS: return "IS";
         case PASCAL_T_AS: return "AS";
         case PASCAL_T_TYPECAST: return "TYPECAST";
@@ -165,6 +166,8 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_RAISE_STMT: return "RAISE_STMT";
         case PASCAL_T_INHERITED_STMT: return "INHERITED_STMT";
         case PASCAL_T_EXIT_STMT: return "EXIT_STMT";
+        case PASCAL_T_BREAK_STMT: return "BREAK_STMT";
+        case PASCAL_T_CONTINUE_STMT: return "CONTINUE_STMT";
         case PASCAL_T_ON_CLAUSE: return "ON_CLAUSE";
         case PASCAL_T_PROGRAM_DECL: return "PROGRAM_DECL";
         case PASCAL_T_PROGRAM_HEADER: return "PROGRAM_HEADER";

@@ -11,6 +11,50 @@
 #define strncasecmp _strnicmp
 #endif
 
+extern ast_t* ast_nil;
+
+static ast_t* build_postfix_func_call(tag_t tag, ast_t* callee, ast_t* op_ast) {
+    ast_t* args_ast = NULL;
+    if (op_ast != NULL && op_ast != ast_nil) {
+        args_ast = op_ast;
+    } else if (op_ast != NULL) {
+        free_ast(op_ast);
+    }
+
+    callee->next = args_ast;
+
+    ast_t* call_node = new_ast();
+    call_node->typ = tag;
+    call_node->sym = NULL;
+    call_node->child = callee;
+    call_node->next = NULL;
+    call_node->line = callee->line;
+    call_node->col = callee->col;
+
+    return call_node;
+}
+
+static ast_t* build_postfix_array_access(tag_t tag, ast_t* target, ast_t* op_ast) {
+    ast_t* indexes_ast = NULL;
+    if (op_ast != NULL && op_ast != ast_nil) {
+        indexes_ast = op_ast;
+    } else if (op_ast != NULL) {
+        free_ast(op_ast);
+    }
+
+    target->next = indexes_ast;
+
+    ast_t* array_node = new_ast();
+    array_node->typ = tag;
+    array_node->sym = NULL;
+    array_node->child = target;
+    array_node->next = NULL;
+    array_node->line = target->line;
+    array_node->col = target->col;
+
+    return array_node;
+}
+
 // Pascal identifier parser that excludes reserved keywords
 static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -651,33 +695,18 @@ void init_pascal_expression_parser(combinator_t** p) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
 
-    // Function name: use expression identifier parser that allows certain keywords as function names
-    combinator_t* func_name = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
-
-    // Function call parser: function name followed by optional argument list
-    combinator_t* arg_list = between(
+    // Shared argument list parser for function calls (reused as postfix operator)
+    combinator_t* call_arguments = between(
         token(match("(")),
         token(match(")")),
         optional(sep_by(lazy(p), token(match(","))))
     );
 
-    combinator_t* func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        func_name,                        // function name (built-in or custom)
-        arg_list,
-        NULL
-    );
-
-    // Array access parser: identifier[index1, index2, ...]
+    // Array index list parser reused for postfix array access
     combinator_t* index_list = between(
         token(match("[")),
         token(match("]")),
         sep_by(lazy(p), token(match(",")))
-    );
-
-    combinator_t* array_access = seq(new_combinator(), PASCAL_T_ARRAY_ACCESS,
-        func_name,                        // array name (built-in or custom identifier)
-        index_list,
-        NULL
     );
 
     // Type cast parser: TypeName(expression) - only for built-in types
@@ -697,6 +726,8 @@ void init_pascal_expression_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* nil_literal = token(create_keyword_parser("nil", PASCAL_T_NIL));
+
     // Tuple constructor: (expr, expr, ...) - for nested array constants like ((1,2),(3,4))
     combinator_t* tuple = seq(new_combinator(), PASCAL_T_TUPLE,
         token(match("(")),
@@ -715,9 +746,8 @@ void init_pascal_expression_parser(combinator_t** p) {
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
+        nil_literal,                              // nil literal
         typecast,                                 // Type casts Integer(x) - try before func_call
-        array_access,                             // Array access table[i,j] - try before func_call
-        func_call,                                // Function calls func(x)
         between(token(match("(")), token(match(")")), lazy(p)), // Parenthesized expressions - try before tuple
         tuple,                                    // Tuple constants (a,b,c) - try after parenthesized expressions
         identifier,                               // Identifiers (variables, built-ins)
@@ -781,9 +811,15 @@ void init_pascal_expression_parser(combinator_t** p) {
         NULL
     );
     expr_insert(*p, 8, PASCAL_T_MEMBER_ACCESS, EXPR_INFIX, ASSOC_LEFT, token(member_access_op));
-    
-    // Precedence 9: Pointer dereference operator (postfix): expression^ (higher than member access)
-    expr_insert(*p, 9, PASCAL_T_DEREF, EXPR_POSTFIX, ASSOC_LEFT, token(match("^")));
+
+    // Precedence 9: Postfix array access applied to any expression
+    expr_insert_with_builder(*p, 9, PASCAL_T_ARRAY_ACCESS, EXPR_POSTFIX, ASSOC_LEFT, index_list, build_postfix_array_access);
+
+    // Precedence 10: Function calls applied to any expression
+    expr_insert_with_builder(*p, 10, PASCAL_T_FUNC_CALL, EXPR_POSTFIX, ASSOC_LEFT, call_arguments, build_postfix_func_call);
+
+    // Precedence 11: Pointer dereference operator (postfix): expression^ (highest precedence)
+    expr_insert(*p, 11, PASCAL_T_DEREF, EXPR_POSTFIX, ASSOC_LEFT, token(match("^")));
 }
 
 // --- Utility Functions ---
