@@ -34,6 +34,12 @@ int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static void semcheck_clear_pointer_info(struct Expression *expr);
+static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id);
+static int semcheck_pointer_deref(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_addressof(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 #define SIZEOF_RECURSION_LIMIT 64
 #define POINTER_SIZE_BYTES 8
@@ -46,6 +52,33 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     long long *size_out, int depth, int line_num);
 static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num);
+static void semcheck_clear_pointer_info(struct Expression *expr)
+{
+    if (expr == NULL)
+        return;
+
+    expr->pointer_subtype = UNKNOWN_TYPE;
+    if (expr->pointer_subtype_id != NULL)
+    {
+        free(expr->pointer_subtype_id);
+        expr->pointer_subtype_id = NULL;
+    }
+}
+
+static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id)
+{
+    if (expr == NULL)
+        return;
+
+    semcheck_clear_pointer_info(expr);
+    expr->pointer_subtype = subtype;
+    if (type_id != NULL)
+    {
+        expr->pointer_subtype_id = strdup(type_id);
+        if (expr->pointer_subtype_id == NULL)
+            fprintf(stderr, "Error: failed to allocate pointer type identifier.\\n");
+    }
+}
 static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {
@@ -892,6 +925,115 @@ static int semcheck_typecast(int *type_return,
     (void)inner_type;
     return error_count;
 }
+
+static int semcheck_pointer_deref(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_POINTER_DEREF);
+
+    semcheck_clear_pointer_info(expr);
+
+    struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+    if (pointer_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, dereference operator requires an operand.\\n\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int error_count = 0;
+    int pointer_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&pointer_type, symtab, pointer_expr,
+        max_scope_lev, NO_MUTATE);
+
+    if (pointer_type != POINTER_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, dereference operator requires a pointer expression.\\n\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return ++error_count;
+    }
+
+    int target_type = pointer_expr->pointer_subtype;
+    if (target_type == UNKNOWN_TYPE && pointer_expr->pointer_subtype_id != NULL)
+    {
+        HashNode_t *target_node = NULL;
+        if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 &&
+            target_node != NULL)
+        {
+            set_type_from_hashtype(&target_type, target_node);
+            if (target_node->type_alias != NULL)
+            {
+                struct TypeAlias *alias = target_node->type_alias;
+                if (alias->base_type != UNKNOWN_TYPE)
+                    target_type = alias->base_type;
+                else if (alias->is_pointer)
+                    target_type = POINTER_TYPE;
+                else if (alias->is_set)
+                    target_type = SET_TYPE;
+                else if (alias->is_enum)
+                    target_type = ENUM_TYPE;
+                else if (alias->is_file)
+                    target_type = FILE_TYPE;
+            }
+        }
+    }
+
+    if (target_type == UNKNOWN_TYPE)
+        target_type = LONGINT_TYPE;
+
+    if (target_type == POINTER_TYPE)
+        semcheck_set_pointer_info(expr, POINTER_TYPE, pointer_expr->pointer_subtype_id);
+
+    *type_return = target_type;
+    return error_count;
+}
+
+static int semcheck_addressof(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_ADDR);
+
+    semcheck_clear_pointer_info(expr);
+
+    struct Expression *inner = expr->expr_data.addr_data.expr;
+    if (inner == NULL)
+    {
+        fprintf(stderr, "Error on line %d, address-of operator requires an operand.\\n\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int error_count = 0;
+    int inner_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
+
+    if (inner_type == UNKNOWN_TYPE)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    const char *type_id = NULL;
+    if (inner_type == POINTER_TYPE && inner->pointer_subtype_id != NULL)
+        type_id = inner->pointer_subtype_id;
+
+    semcheck_set_pointer_info(expr, inner_type, type_id);
+    *type_return = POINTER_TYPE;
+    return error_count;
+}
 /* Sets a type based on a hash_type */
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)
 {
@@ -1001,6 +1143,12 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_FUNCTION_CALL:
             return_val += semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_POINTER_DEREF:
+            return_val += semcheck_pointer_deref(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_ADDR:
+            return_val += semcheck_addressof(type_return, symtab, expr, max_scope_lev, mutating);
             break;
         case EXPR_TYPECAST:
             return_val += semcheck_typecast(type_return, symtab, expr, max_scope_lev, mutating);
@@ -1262,6 +1410,7 @@ int semcheck_varid(int *type_return,
 
     return_val = 0;
     id = expr->expr_data.id;
+    semcheck_clear_pointer_info(expr);
 
     scope_return = FindIdent(&hash_return, symtab, id);
     if(scope_return == -1)
@@ -1296,6 +1445,18 @@ int semcheck_varid(int *type_return,
             }
         }
         set_type_from_hashtype(type_return, hash_return);
+        if (*type_return == POINTER_TYPE)
+        {
+            int subtype = UNKNOWN_TYPE;
+            const char *type_id = NULL;
+            if (hash_return->type_alias != NULL)
+            {
+                struct TypeAlias *alias = hash_return->type_alias;
+                subtype = alias->pointer_type;
+                type_id = alias->pointer_type_id;
+            }
+            semcheck_set_pointer_info(expr, subtype, type_id);
+        }
     }
 
     return return_val;
