@@ -15,7 +15,7 @@ const char* pascal_reserved_keywords[] = {
     "and", "or", "not", "xor", "div", "mod", "in", "nil", "true", "false",
     "array", "record", "set", "packed",
     // Exception handling keywords
-    "try", "finally", "except", "raise", "on",
+    "try", "finally", "except", "raise", "on", "break",
     // Class and object-oriented keywords
     "class", "object", "private", "public", "protected", "published",
     "property", "inherited", "self", "constructor", "destructor",

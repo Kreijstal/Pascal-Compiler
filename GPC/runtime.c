@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -134,8 +135,13 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
 
 void gpc_write_integer(int width, int64_t value)
 {
+    if (width > 1024 || width < -1024)
+        width = 0;
+
     if (width > 0)
         printf("%*lld", width, (long long)value);
+    else if (width < 0)
+        printf("%-*lld", -width, (long long)value);
     else
         printf("%lld", (long long)value);
 }
@@ -144,8 +150,12 @@ void gpc_write_string(int width, const char *value)
 {
     if (value == NULL)
         value = "";
+    if (width > 1024 || width < -1024)
+        width = 0;
     if (width > 0)
         printf("%*s", width, value);
+    else if (width < 0)
+        printf("%-*s", -width, value);
     else
         printf("%s", value);
 }
@@ -158,8 +168,12 @@ void gpc_write_newline(void)
 void gpc_write_boolean(int width, int value)
 {
     const char *text = value ? "TRUE" : "FALSE";
+    if (width > 1024 || width < -1024)
+        width = 0;
     if (width > 0)
         printf("%*s", width, text);
+    else if (width < 0)
+        printf("%-*s", -width, text);
     else
         printf("%s", text);
 }
@@ -213,6 +227,43 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     return result;
 }
 
+int64_t gpc_string_length(const char *value)
+{
+    if (value == NULL)
+        return 0;
+
+    size_t len = strlen(value);
+    return (int64_t)len;
+}
+
+char *gpc_string_copy(const char *value, int64_t index, int64_t count)
+{
+    if (value == NULL)
+        value = "";
+
+    size_t len = strlen(value);
+    if (index < 1 || index > (int64_t)len)
+        return gpc_alloc_empty_string();
+
+    if (count < 0)
+        count = 0;
+
+    size_t start = (size_t)(index - 1);
+    size_t available = len - start;
+    size_t to_copy = (size_t)count;
+    if (to_copy > available)
+        to_copy = available;
+
+    char *result = (char *)malloc(to_copy + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+
+    if (to_copy > 0)
+        memcpy(result, value + start, to_copy);
+    result[to_copy] = '\0';
+    return result;
+}
+
 char *gpc_chr(int64_t value)
 {
     if (value < 0)
@@ -240,4 +291,244 @@ int64_t gpc_ord_string(const char *value)
 int64_t gpc_ord_longint(int64_t value)
 {
     return value;
+}
+
+char *gpc_int_to_str(int64_t value)
+{
+    char buffer[32];
+    int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    if (written < 0)
+        return gpc_alloc_empty_string();
+
+    char *result = (char *)malloc((size_t)written + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)written + 1);
+    return result;
+}
+
+int64_t gpc_now(void)
+{
+#ifdef _WIN32
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+    GetSystemTimeAsFileTime(&ft);
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
+    uint64_t ticks = uli.QuadPart - 116444736000000000ULL;
+    return (int64_t)(ticks / 10000ULL);
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
+        return 0;
+    return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+#endif
+}
+
+static int append_char(char **buffer, size_t *length, size_t *capacity, char ch)
+{
+    if (*length + 1 >= *capacity)
+    {
+        size_t new_capacity = (*capacity == 0) ? 32 : (*capacity * 2);
+        char *new_buf = (char *)realloc(*buffer, new_capacity);
+        if (new_buf == NULL)
+            return 0;
+        *buffer = new_buf;
+        *capacity = new_capacity;
+    }
+    (*buffer)[(*length)++] = ch;
+    (*buffer)[*length] = '\0';
+    return 1;
+}
+
+static int append_text(char **buffer, size_t *length, size_t *capacity, const char *text)
+{
+    while (text != NULL && *text != '\0')
+    {
+        if (!append_char(buffer, length, capacity, *text++))
+            return 0;
+    }
+    return 1;
+}
+
+static int match_token_ci(const char *cursor, const char *token)
+{
+    size_t len = strlen(token);
+    for (size_t i = 0; i < len; ++i)
+    {
+        if (cursor[i] == '\0' || tolower((unsigned char)cursor[i]) != tolower((unsigned char)token[i]))
+            return 0;
+    }
+    return 1;
+}
+
+char *gpc_format_datetime(const char *format, int64_t datetime_ms)
+{
+    if (format == NULL)
+        format = "";
+
+    time_t seconds = (time_t)(datetime_ms / 1000);
+    int millis = (int)(datetime_ms % 1000);
+    if (millis < 0)
+    {
+        millis += 1000;
+        seconds -= 1;
+    }
+
+    struct tm tm_value;
+#ifdef _WIN32
+    errno_t err = localtime_s(&tm_value, &seconds);
+    if (err != 0)
+        return gpc_alloc_empty_string();
+#else
+    if (localtime_r(&seconds, &tm_value) == NULL)
+        return gpc_alloc_empty_string();
+#endif
+
+    size_t capacity = 64;
+    size_t length = 0;
+    char *result = (char *)malloc(capacity);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+    result[0] = '\0';
+
+    const char *cursor = format;
+    while (*cursor != '\0')
+    {
+        if (*cursor == '\'')
+        {
+            ++cursor;
+            while (*cursor != '\0')
+            {
+                if (*cursor == '\'' && *(cursor + 1) == '\'')
+                {
+                    if (!append_char(&result, &length, &capacity, '\''))
+                    {
+                        free(result);
+                        return gpc_alloc_empty_string();
+                    }
+                    cursor += 2;
+                    continue;
+                }
+                if (*cursor == '\'')
+                {
+                    ++cursor;
+                    break;
+                }
+                if (!append_char(&result, &length, &capacity, *cursor++))
+                {
+                    free(result);
+                    return gpc_alloc_empty_string();
+                }
+            }
+            continue;
+        }
+
+        if (match_token_ci(cursor, "yyyy"))
+        {
+            char buffer[8];
+            snprintf(buffer, sizeof(buffer), "%04d", tm_value.tm_year + 1900);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 4;
+            continue;
+        }
+        if (match_token_ci(cursor, "yy"))
+        {
+            char buffer[4];
+            snprintf(buffer, sizeof(buffer), "%02d", (tm_value.tm_year + 1900) % 100);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 2;
+            continue;
+        }
+        if (match_token_ci(cursor, "mm"))
+        {
+            char buffer[4];
+            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mon + 1);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 2;
+            continue;
+        }
+        if (match_token_ci(cursor, "dd"))
+        {
+            char buffer[4];
+            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mday);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 2;
+            continue;
+        }
+        if (match_token_ci(cursor, "hh"))
+        {
+            char buffer[4];
+            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_hour);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 2;
+            continue;
+        }
+        if (match_token_ci(cursor, "nn"))
+        {
+            char buffer[4];
+            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_min);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 2;
+            continue;
+        }
+        if (match_token_ci(cursor, "ss"))
+        {
+            char buffer[4];
+            snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_sec);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 2;
+            continue;
+        }
+        if (match_token_ci(cursor, "zzz"))
+        {
+            char buffer[5];
+            snprintf(buffer, sizeof(buffer), "%03d", millis);
+            if (!append_text(&result, &length, &capacity, buffer))
+            {
+                free(result);
+                return gpc_alloc_empty_string();
+            }
+            cursor += 3;
+            continue;
+        }
+
+        if (!append_char(&result, &length, &capacity, *cursor++))
+        {
+            free(result);
+            return gpc_alloc_empty_string();
+        }
+    }
+
+    return result;
 }

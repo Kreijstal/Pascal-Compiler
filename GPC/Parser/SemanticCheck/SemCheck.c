@@ -399,6 +399,24 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(move_name);
     }
 
+    char *inc_name = strdup("Inc");
+    if (inc_name != NULL) {
+        AddBuiltinProc(symtab, inc_name, NULL);
+        free(inc_name);
+    }
+
+    char *length_name = strdup("Length");
+    if (length_name != NULL) {
+        AddBuiltinFunction(symtab, length_name, HASHVAR_LONGINT);
+        free(length_name);
+    }
+
+    char *copy_name = strdup("Copy");
+    if (copy_name != NULL) {
+        AddBuiltinFunction(symtab, copy_name, HASHVAR_PCHAR);
+        free(copy_name);
+    }
+
     char *sizeof_name = strdup("SizeOf");
     if (sizeof_name != NULL) {
         AddBuiltinFunction(symtab, sizeof_name, HASHVAR_LONGINT);
