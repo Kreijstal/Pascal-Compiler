@@ -14,6 +14,8 @@ const char* pascal_reserved_keywords[] = {
     "repeat", "until", "case", "of", "var", "const", "type",
     "and", "or", "not", "xor", "div", "mod", "in", "nil", "true", "false",
     "array", "record", "set", "packed",
+    // Built-in type keywords
+    "integer", "real", "boolean", "char", "string", "byte", "word", "longint",
     // Exception handling keywords
     "try", "finally", "except", "raise", "on", "break",
     // Class and object-oriented keywords
