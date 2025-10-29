@@ -2,8 +2,10 @@
 #include "parser.h"
 #include "combinators.h"
 #include "pascal_parser.h"
+#include "pascal_preprocessor.h"
 #include "pascal_keywords.h"
 #include <stdio.h>
+#include <string.h>
 
 void test_pascal_integer_parsing(void) {
     combinator_t* p = new_combinator();
@@ -46,6 +48,53 @@ void test_pascal_invalid_input(void) {
     free_combinator(p);
     free(input->buffer);
     free(input);
+}
+
+void test_pascal_preprocessor_conditionals(void) {
+    PascalPreprocessor *pp = pascal_preprocessor_create();
+    TEST_ASSERT(pp != NULL);
+    if (!pp) {
+        return;
+    }
+
+    TEST_ASSERT(pascal_preprocessor_define(pp, "FOO"));
+
+    const char *source = "{$ifdef FOO}foo{$else}bar{$endif}";
+    size_t source_len = strlen(source);
+    char *error_message = NULL;
+    size_t output_len = 0;
+    char *result = pascal_preprocess_buffer(pp, "<memory>", source, source_len, &output_len, &error_message);
+
+    TEST_ASSERT(result != NULL);
+    TEST_ASSERT(error_message == NULL);
+    if (error_message) {
+        free(error_message);
+    }
+    if (result) {
+        TEST_CHECK(strstr(result, "foo") != NULL);
+        TEST_CHECK(strstr(result, "bar") == NULL);
+        free(result);
+    }
+
+    TEST_ASSERT(pascal_preprocessor_undefine(pp, "FOO"));
+
+    const char *source2 = "{$ifdef FOO}x{$else}y{$endif}";
+    char *error_message2 = NULL;
+    size_t output_len2 = 0;
+    char *result2 = pascal_preprocess_buffer(pp, "<memory>", source2, strlen(source2), &output_len2, &error_message2);
+
+    TEST_ASSERT(result2 != NULL);
+    TEST_ASSERT(error_message2 == NULL);
+    if (error_message2) {
+        free(error_message2);
+    }
+    if (result2) {
+        TEST_CHECK(strstr(result2, "y") != NULL);
+        TEST_CHECK(strstr(result2, "x") == NULL);
+        free(result2);
+    }
+
+    pascal_preprocessor_free(pp);
 }
 
 void test_pascal_function_call(void) {
@@ -2463,6 +2512,7 @@ void test_complex_fpc_rax64int_unit(void) {
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
+    { "test_pascal_preprocessor_conditionals", test_pascal_preprocessor_conditionals },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_string_literal", test_pascal_string_literal },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },
