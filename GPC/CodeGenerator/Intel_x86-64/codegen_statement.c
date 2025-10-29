@@ -706,6 +706,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             call_target = "gpc_write_string";
         else if (expr_type == BOOL)
             call_target = "gpc_write_boolean";
+        else if (expr_type == POINTER_TYPE)
+            call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
@@ -910,7 +912,16 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+        int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
+        if (use_qword)
+        {
+            int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
+            if (!value_is_qword)
+                inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+            snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+        }
+        else
+            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), value_reg);
