@@ -2437,6 +2437,45 @@ void test_pascal_record_member_access_program(void) {
     free(input);
 }
 
+void test_pascal_record_member_access_complete_program(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_complete_program_parser(&p);
+
+    input_t* input = new_input();
+    const char* program =
+        "program RecordMemberAccess;\n"
+        "type\n"
+        "  Point = record\n"
+        "    x: Integer;\n"
+        "    y: Integer;\n"
+        "  end;\n"
+        "var\n"
+        "  p: Point;\n"
+        "begin\n"
+        "  p.x := 10;\n"
+        "  p.y := 32;\n"
+        "  writeln(p.x + p.y);\n"
+        "  p.x := p.y - 2;\n"
+        "  writeln(p.x);\n"
+        "end.\n";
+    input->buffer = strdup(program);
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* member_node = find_first_node_of_type(res.value.ast, PASCAL_T_MEMBER_ACCESS);
+        TEST_ASSERT(member_node != NULL);
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free_combinator(p);
+    free(input->buffer);
+    free(input);
+}
+
 void test_fpc_style_unit_parsing(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
@@ -2805,6 +2844,7 @@ TEST_LIST = {
     { "test_pascal_set_operations_program", test_pascal_set_operations_program },
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
+    { "test_pascal_record_member_access_complete_program", test_pascal_record_member_access_complete_program },
     { "test_pascal_var_section", test_pascal_var_section },
     { "test_pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
     { "test_pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },
