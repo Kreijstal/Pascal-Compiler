@@ -300,6 +300,43 @@ StackNode_t *add_l_z(char *label)
     return new_node;
 }
 
+/* Adds quadword (8 bytes) to z */
+StackNode_t *add_q_z(char *label)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope;
+    StackNode_t *new_node;
+    int offset;
+
+    cur_scope = global_stackmng->cur_scope;
+
+    cur_scope->z_offset += 8;  // quadword size
+
+    offset = current_stack_home_space() +
+        cur_scope->z_offset;
+
+    new_node = init_stack_node(offset, label, 8);
+
+    if(cur_scope->z == NULL)
+    {
+        cur_scope->z = CreateListNode(new_node, LIST_UNSPECIFIED);
+    }
+    else
+    {
+        cur_scope->z = PushListNodeBack(cur_scope->z,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+    }
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d (quadword)\n", label, offset);
+    #endif
+
+    return new_node;
+}
+
 RegStack_t *get_reg_stack()
 {
     assert(global_stackmng != NULL);
