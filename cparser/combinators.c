@@ -272,7 +272,7 @@ static ParseResult map_fn(input_t * in, void * args, char* parser_name) {
     if (!res.is_success) {
         return res;
     }
-    ast_t* new_ast = margs->func(res.value.ast);
+    ast_t* new_ast = margs->func ? margs->func(res.value.ast) : res.value.ast;
     return make_success(new_ast);
 }
 
