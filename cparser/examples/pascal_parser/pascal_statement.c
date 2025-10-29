@@ -7,6 +7,64 @@
 #include <string.h>
 #include <ctype.h>
 
+static ParseResult pointer_deref_lvalue_fn(input_t* in, void* args, char* parser_name)
+{
+    InputState state;
+    save_input_state(in, &state);
+    combinator_t* identifier_parser = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult id_res = parse(in, identifier_parser);
+    free_combinator(identifier_parser);
+    if (!id_res.is_success)
+    {
+        if (id_res.value.error != NULL)
+            free_error(id_res.value.error);
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected pointer dereference"), NULL);
+    }
+
+    ast_t* current = id_res.value.ast;
+    int deref_count = 0;
+
+    while (1)
+    {
+        InputState caret_state;
+        save_input_state(in, &caret_state);
+
+        combinator_t* caret_parser = token(match("^"));
+        ParseResult caret_res = parse(in, caret_parser);
+        free_combinator(caret_parser);
+
+        if (!caret_res.is_success)
+        {
+            restore_input_state(in, &caret_state);
+            break;
+        }
+
+        free_ast(caret_res.value.ast);
+
+        ast_t* deref_node = new_ast();
+        deref_node->typ = PASCAL_T_DEREF;
+        deref_node->child = current;
+        deref_node->next = NULL;
+        deref_node->sym = NULL;
+        deref_node->line = current != NULL ? current->line : in->line;
+        deref_node->col = current != NULL ? current->col : in->col;
+
+        current = deref_node;
+        ++deref_count;
+    }
+
+    if (deref_count == 0)
+    {
+        free_ast(current);
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected pointer dereference"), NULL);
+    }
+
+    set_ast_position(current, in);
+    return make_success(current);
+}
+
 // ASM block body parser - uses proper until() combinator instead of manual scanning
 static combinator_t* asm_body(tag_t tag) {
     return until(match("end"), tag);  // Use raw match instead of token to preserve whitespace
@@ -63,7 +121,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Create the main statement parser pointer for recursive references
     combinator_t** stmt_parser = p;
 
-    // Left-value parser: accepts identifiers, member access expressions, and array access
+    // Left-value parser: accepts identifiers, member access expressions, array access, and pointer dereference
     combinator_t* simple_identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
     combinator_t* member_access_lval = seq(new_combinator(), PASCAL_T_MEMBER_ACCESS,
         token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),     // object name
@@ -78,9 +136,12 @@ void init_pascal_statement_parser(combinator_t** p) {
             sep_by(lazy(expr_parser), token(match(",")))),             // indices
         NULL
     );
+    combinator_t* pointer_deref_lval = new_combinator();
+    pointer_deref_lval->fn = pointer_deref_lvalue_fn;
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
         array_access_lval,       // try array access first
         member_access_lval,      // try member access second
+        pointer_deref_lval,      // pointer dereference expressions
         simple_identifier,       // then simple identifier
         NULL
     );

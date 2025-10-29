@@ -235,6 +235,10 @@ struct Expression *mk_varid(int line_num, char *id);
 
 struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *index_expr);
 
+struct Expression *mk_pointer_deref(int line_num, struct Expression *pointer_expr);
+
+struct Expression *mk_addressof(int line_num, struct Expression *expr);
+
 struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
 
 struct Expression *mk_inum(int line_num, long long i_num);

@@ -551,7 +551,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     if (type_node != NULL)
                         var_kind = type_node->var_type;
 
-                    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL || var_kind == HASHVAR_PCHAR)
+                    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
+                        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER)
                         alloc_size = 8;
                     else
                         alloc_size = DOUBLEWORD;

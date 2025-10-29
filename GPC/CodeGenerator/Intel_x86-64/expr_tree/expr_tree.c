@@ -80,6 +80,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
         case EXPR_BOOL:
+        case EXPR_POINTER_DEREF:
+        case EXPR_ADDR:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -417,6 +419,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     {
         return codegen_array_access(expr, inst_list, ctx, target_reg);
     }
+    else if (expr->type == EXPR_POINTER_DEREF)
+    {
+        return codegen_pointer_deref_leaf(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_ADDR)
+    {
+        return codegen_addressof_leaf(expr, inst_list, ctx, target_reg);
+    }
     else if (expr->type == EXPR_STRING)
     {
         char label[20];
@@ -431,7 +441,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
 
-    int use_qword = (expr->resolved_type == LONGINT_TYPE || expr->resolved_type == REAL_TYPE);
+    int use_qword = codegen_type_uses_qword(expr->resolved_type);
 
 #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf,
