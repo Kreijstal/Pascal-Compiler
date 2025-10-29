@@ -597,7 +597,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL);
     set_combinator_name(interface_section, "interface_section");
 
-    combinator_t* impl_unit_end_marker = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* unit_end_marker = seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("end")),
         token(match(".")),
         NULL
@@ -607,7 +607,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(keyword_ci("initialization")),
         token(keyword_ci("finalization")),
         token(keyword_ci("exports")),
-        impl_unit_end_marker,
+        unit_end_marker,
         NULL
     );
 
@@ -633,15 +633,9 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
-    combinator_t* section_unit_end_marker = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("end")),
-        token(match(".")),
-        NULL
-    );
-
     combinator_t* initialization_end_marker = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("finalization")),
-        section_unit_end_marker,
+        unit_end_marker,
         NULL
     );
 
@@ -653,9 +647,16 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t* finalization_section = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("finalization")),
-        map(until(section_unit_end_marker, PASCAL_T_NONE), discard_ast),
+        map(until(unit_end_marker, PASCAL_T_NONE), discard_ast),
         NULL
     ));
+
+    combinator_t* stmt_list_for_init = sep_end_by(lazy(stmt_parser), token(match(";")));
+    combinator_t* legacy_initialization_block = optional(map(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("begin")),
+        stmt_list_for_init,
+        NULL
+    ), discard_ast));
 
     combinator_t* unit_semicolon_delim = token(match(";"));
     combinator_t* unit_directives = map(until(unit_semicolon_delim, PASCAL_T_NONE), discard_ast);
@@ -670,6 +671,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         exports_section,
         initialization_section,
         finalization_section,
+        legacy_initialization_block,
         token(keyword_ci("end")),
         token(match(".")),
         NULL
