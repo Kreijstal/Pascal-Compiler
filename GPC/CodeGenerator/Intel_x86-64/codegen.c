@@ -661,7 +661,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx);
+    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab);
     codegen_function_locals(proc->declarations, ctx, symtab);
 
     codegen_subprograms(proc->subprograms, ctx, symtab);
@@ -701,7 +701,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
-    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx);
+    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab);
     int return_size = DOUBLEWORD;
     if (symtab != NULL)
     {
@@ -737,7 +737,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 }
 
 /* Code generation for subprogram arguments */
-ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -760,18 +760,35 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             case TREE_VAR_DECL:
                 arg_ids = arg_decl->tree_data.var_decl_data.ids;
                 type = arg_decl->tree_data.var_decl_data.type;
+                
+                // Resolve type aliases if needed
+                if (type == UNKNOWN_TYPE && arg_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id);
+                    if (type_node != NULL && type_node->type_alias != NULL)
+                    {
+                        type = type_node->type_alias->base_type;
+                    }
+                }
+                
                 if(type == REAL_TYPE)
                     fprintf(stderr, "WARNING: Only integers are supported!\n");
                 while(arg_ids != NULL)
                 {
-                    arg_reg = get_arg_reg32_num(arg_num);
+                    // Use 64-bit registers for strings and pointers, 32-bit for other types
+                    int use_64bit = (type == STRING_TYPE || type == POINTER_TYPE);
+                    arg_reg = use_64bit ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
                     if(arg_reg == NULL)
                     {
                         fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
                         exit(1);
                     }
-                    arg_stack = add_l_z((char *)arg_ids->cur);
-                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (use_64bit)
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    else
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
                     inst_list = add_inst(inst_list, buffer);
                     arg_ids = arg_ids->next;
                     ++arg_num;
