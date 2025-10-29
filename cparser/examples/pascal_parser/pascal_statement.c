@@ -70,6 +70,51 @@ static combinator_t* asm_body(tag_t tag) {
     return until(match("end"), tag);  // Use raw match instead of token to preserve whitespace
 }
 
+// Wrap a parsed "^" token into a dedicated dereference AST node so we can
+// reuse the existing array/member lvalue parsers while supporting pointer
+// suffixes.  This mirrors the helper used by the expression parser.
+static ast_t* wrap_pointer_lvalue_suffix(ast_t* parsed) {
+    if (parsed != NULL && parsed != ast_nil) {
+        free_ast(parsed);
+    }
+
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_DEREF;
+    node->child = NULL;
+    node->next = NULL;
+    return node;
+}
+
+// Build a nested dereference chain by attaching each parsed "^" suffix to the
+// base lvalue expression.  If there are no suffixes the original base node is
+// returned unchanged.
+static ast_t* build_pointer_lvalue_chain(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+
+    ast_t* base = parsed;
+    ast_t* suffix = base->next;
+    base->next = NULL;
+
+    if (suffix == ast_nil)
+        suffix = NULL;
+
+    ast_t* current = base;
+    while (suffix != NULL) {
+        ast_t* next_suffix = suffix->next;
+        if (next_suffix == ast_nil)
+            next_suffix = NULL;
+
+        suffix->next = NULL;
+        suffix->child = current;
+        current = suffix;
+
+        suffix = next_suffix;
+    }
+
+    return current;
+}
+
 // Transform "x += y" style compound assignments into a regular assignment
 // with the addition expression on the right-hand side.  This keeps the rest
 // of the compiler unaware of the compound assignment syntax while still
@@ -122,6 +167,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t** stmt_parser = p;
 
     // Left-value parser: accepts identifiers, member access expressions, array access, and pointer dereference
+    // Left-value parser: accepts identifiers, member access expressions, array access,
+    // and optional pointer dereference suffixes.
     combinator_t* simple_identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
     combinator_t* member_access_lval = seq(new_combinator(), PASCAL_T_MEMBER_ACCESS,
         token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),     // object name
@@ -139,12 +186,20 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* pointer_deref_lval = new_combinator();
     pointer_deref_lval->fn = pointer_deref_lvalue_fn;
     combinator_t* lvalue = multi(new_combinator(), PASCAL_T_NONE,
+    combinator_t* pointer_suffix = map(token(match("^")), wrap_pointer_lvalue_suffix);
+    combinator_t* pointer_suffixes = many(pointer_suffix);
+    combinator_t* base_lvalue = multi(new_combinator(), PASCAL_T_NONE,
         array_access_lval,       // try array access first
         member_access_lval,      // try member access second
         pointer_deref_lval,      // pointer dereference expressions
         simple_identifier,       // then simple identifier
         NULL
     );
+    combinator_t* lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
+        base_lvalue,
+        pointer_suffixes,
+        NULL
+    ), build_pointer_lvalue_chain);
 
     // Assignment statement: support both ":=" and "+=" compound assignments
     combinator_t* simple_assignment = seq(new_combinator(), PASCAL_T_ASSIGNMENT,
