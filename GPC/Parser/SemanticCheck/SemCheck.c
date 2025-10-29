@@ -620,6 +620,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                     var_type = HASHVAR_REAL;
                 func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                if (func_return == 0 && resolved_type != NULL && resolved_type->type_alias != NULL)
+                {
+                    HashNode_t *var_node = NULL;
+                    if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                        var_node->type_alias = resolved_type->type_alias;
+                }
             }
             /* Array declarations */
             else

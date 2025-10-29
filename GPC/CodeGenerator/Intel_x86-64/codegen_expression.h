@@ -20,6 +20,13 @@ ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 
 ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64);
 
+int codegen_type_uses_qword(int type_tag);
+
+ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
+ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
+
 /* (DEPRECATED) */
 ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_inum(struct Expression *, ListNode_t *, CodeGenContext *ctx);

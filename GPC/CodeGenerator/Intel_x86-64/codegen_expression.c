@@ -20,6 +20,18 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 
+int codegen_type_uses_qword(int type_tag)
+{
+    return (type_tag == LONGINT_TYPE || type_tag == REAL_TYPE ||
+        type_tag == POINTER_TYPE || type_tag == STRING_TYPE);
+}
+
+ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
+ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
+
+
 /* Code generation for expressions */
 static const char *describe_expression_kind(const struct Expression *expr)
 {
@@ -85,6 +97,92 @@ ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_re
     return add_inst(inst_list, buffer);
 }
 
+ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (expr == NULL || ctx == NULL || target_reg == NULL)
+        return inst_list;
+
+    struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+    if (pointer_expr == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
+        return inst_list;
+    }
+
+    expr_node_t *pointer_tree = build_expr_tree(pointer_expr);
+    Register_t *addr_reg = codegen_try_get_reg(&inst_list, ctx, "pointer dereference");
+    if (addr_reg == NULL)
+    {
+        free_expr_tree(pointer_tree);
+        return inst_list;
+    }
+
+    inst_list = gencode_expr_tree(pointer_tree, inst_list, ctx, addr_reg);
+    free_expr_tree(pointer_tree);
+
+    char buffer[64];
+    if (codegen_type_uses_qword(expr->resolved_type))
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+}
+
+ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (expr == NULL || ctx == NULL || target_reg == NULL)
+        return inst_list;
+
+    struct Expression *inner = expr->expr_data.addr_data.expr;
+    if (inner == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Address-of operator missing operand.");
+        return inst_list;
+    }
+
+    char buffer[64];
+    if (inner->type == EXPR_VAR_ID)
+    {
+        StackNode_t *var_node = find_label(inner->expr_data.id);
+        if (var_node != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
+        else if (nonlocal_flag() == 1)
+        {
+            int offset = 0;
+            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset, current_non_local_reg64(), target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
+
+        codegen_report_error(ctx,
+            "ERROR: Address-of non-local variables is unsupported without -non-local flag.");
+        return inst_list;
+    }
+    else if (inner->type == EXPR_ARRAY_ACCESS)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_array_element_address(inner, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    codegen_report_error(ctx, "ERROR: Unsupported operand for address-of operator.");
+    return inst_list;
+}
+
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -139,6 +237,20 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             return inst_list;
         case EXPR_STRING:
             CODEGEN_DEBUG("DEBUG: Processing string literal expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_POINTER_DEREF:
+            CODEGEN_DEBUG("DEBUG: Processing pointer dereference expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_ADDR:
+            CODEGEN_DEBUG("DEBUG: Processing address-of expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -357,12 +469,17 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
 
     char buffer[100];
-    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-
-    if (expr->resolved_type == LONGINT_TYPE)
+    if (codegen_type_uses_qword(expr->resolved_type))
     {
-        inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        if (expr->resolved_type == LONGINT_TYPE)
+            inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
     }
 
     free_reg(get_reg_stack(), addr_reg);
