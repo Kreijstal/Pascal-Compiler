@@ -915,8 +915,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
         if (use_qword)
         {
-            // Sign-extend 32-bit values to 64-bit for longint arrays
-            if (var_expr->resolved_type == LONGINT_TYPE && assign_expr->resolved_type != LONGINT_TYPE)
+            int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
+            if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
         }
