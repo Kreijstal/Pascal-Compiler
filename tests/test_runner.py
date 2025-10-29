@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import traceback
 import unittest
 
@@ -17,6 +18,20 @@ GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
 EXEC_TIMEOUT = 5
 
+# Meson exposes toggleable behaviour via environment variables so CI can
+# selectively disable particularly slow checks such as the valgrind leak test.
+RUN_VALGRIND_TESTS = os.environ.get("RUN_VALGRIND_TESTS", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+# Track how long individual compiler invocations take so we can identify the
+# slowest scenarios when the test suite finishes. The collected data is emitted
+# from TestCompiler.tearDownClass() and written to stderr to keep TAP output
+# intact.
+COMPILER_RUNS = []
+
 # The compiler is built by Meson now, so this function is not needed.
 
 def run_compiler(input_file, output_file, flags=None):
@@ -29,11 +44,28 @@ def run_compiler(input_file, output_file, flags=None):
 
     command = [GPC_PATH, input_file, output_file] + flags
     print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
+    start = time.perf_counter()
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
+        duration = time.perf_counter() - start
+        COMPILER_RUNS.append(
+            {
+                "command": command,
+                "duration": duration,
+                "returncode": result.returncode,
+            }
+        )
         print(result.stderr, file=sys.stderr) # The compiler prints status messages to stderr
         return result.stderr
     except subprocess.CalledProcessError as e:
+        duration = time.perf_counter() - start
+        COMPILER_RUNS.append(
+            {
+                "command": command,
+                "duration": duration,
+                "returncode": e.returncode,
+            }
+        )
         print(f"--- Compiler execution failed ---", file=sys.stderr)
         print(f"--- stdout: {e.stdout} ---", file=sys.stderr)
         print(f"--- stderr: {e.stderr} ---", file=sys.stderr)
@@ -267,6 +299,47 @@ class TestCompiler(unittest.TestCase):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"ctypes helper library compilation failed: {e.stderr}")
 
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        if not COMPILER_RUNS:
+            return
+
+        total_time = sum(entry["duration"] for entry in COMPILER_RUNS)
+        parse_only_runs = [
+            entry for entry in COMPILER_RUNS if "-parse-only" in entry["command"]
+        ]
+        parse_only_time = sum(entry["duration"] for entry in parse_only_runs)
+        failing_runs = [
+            entry for entry in COMPILER_RUNS if entry["returncode"] != 0
+        ]
+        failing_time = sum(entry["duration"] for entry in failing_runs)
+
+        print("--- Compiler run timing summary ---", file=sys.stderr)
+        print(
+            f"Total compiler invocations: {len(COMPILER_RUNS)} in {total_time:.2f}s",
+            file=sys.stderr,
+        )
+        print(
+            f"Parse-only invocations: {len(parse_only_runs)} taking {parse_only_time:.2f}s",
+            file=sys.stderr,
+        )
+        if failing_runs:
+            print(
+                f"Failing (non-zero exit) invocations: {len(failing_runs)} taking {failing_time:.2f}s",
+                file=sys.stderr,
+            )
+
+        print("Slowest compiler commands:", file=sys.stderr)
+        for entry in sorted(
+            COMPILER_RUNS, key=lambda item: item["duration"], reverse=True
+        )[:5]:
+            command_str = " ".join(entry["command"])
+            print(
+                f"  {entry['duration']:.2f}s | rc={entry['returncode']} | {command_str}",
+                file=sys.stderr,
+            )
+
     def test_constant_folding_o1(self):
         """Tests the -O1 constant folding optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")
@@ -417,6 +490,8 @@ class TestCompiler(unittest.TestCase):
 
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
+        if not RUN_VALGRIND_TESTS:
+            self.skipTest("valgrind checks disabled via Meson option")
         if shutil.which("valgrind") is None:
             self.skipTest("valgrind is not installed")
 

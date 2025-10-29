@@ -19,6 +19,7 @@ int FLAG_NON_LOCAL_CHASING = 0;
 int FLAG_OPTIMIZE = 0;
 int FLAG_PARSE_ONLY = 0;
 static char *FLAG_DUMP_AST_PATH = NULL;
+static int FLAG_TIME_PASSES = 0;
 
 static gpc_target_abi_t FLAG_TARGET_ABI =
 #ifdef _WIN32
@@ -46,6 +47,11 @@ void set_o2_flag(void)
 void set_parse_only_flag(void)
 {
     FLAG_PARSE_ONLY = 1;
+}
+
+void set_time_passes_flag(void)
+{
+    FLAG_TIME_PASSES = 1;
 }
 
 void set_dump_ast_path(const char *path)
@@ -89,6 +95,11 @@ int optimize_flag(void)
 int parse_only_flag(void)
 {
     return FLAG_PARSE_ONLY;
+}
+
+int time_passes_flag(void)
+{
+    return FLAG_TIME_PASSES;
 }
 
 const char *dump_ast_path(void)
