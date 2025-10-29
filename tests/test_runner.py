@@ -147,20 +147,28 @@ class TestCompiler(unittest.TestCase):
 
         build_root = build_dir
         build_ninja = os.path.join(build_root, "build.ninja")
-        # Configure the build directory if it has not been set up yet.
-        if not os.path.exists(build_ninja):
-            try:
-                subprocess.run(
-                    [meson, "setup", build_root],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(
-                    "Meson setup failed:\n"
-                    f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
-                )
+
+        setup_command = [meson, "setup", build_root, "-Dbuild_integration_tests=true"]
+        setup_mode = "setup"
+
+        # If the build directory already exists, reconfigure it so integration tests
+        # stay enabled even if a previous configuration disabled them.
+        if os.path.exists(build_ninja):
+            setup_command.insert(2, "--reconfigure")
+            setup_mode = "reconfigure"
+
+        try:
+            subprocess.run(
+                setup_command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Meson {setup_mode} failed:\n"
+                f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+            )
 
         try:
             subprocess.run(
@@ -358,6 +366,55 @@ class TestCompiler(unittest.TestCase):
         literal_bits = "4609434218613702656"
         self.assertIn(literal_bits, asm)
 
+    def test_bitwise_operations_execute(self):
+        """Bitwise shifts and rotates should execute correctly and match expected output."""
+        input_file = os.path.join(TEST_CASES_DIR, "bitwise_ops.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitwise_ops.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "bitwise_ops")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_path = os.path.join(TEST_CASES_DIR, "bitwise_ops.expected")
+        expected_output = read_file_content(expected_path)
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            expected_output.strip().splitlines(),
+        )
+
+    def test_bitshift_codegen_emits_rotate_instructions(self):
+        """Code generation should emit rotate instructions for ROL and ROR expressions."""
+        input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitshift_expr.s")
+
+        run_compiler(input_file, asm_file)
+        asm = read_file_content(asm_file)
+
+        self.assertIn("\tsall\t", asm)
+        self.assertIn("\tsarl\t", asm)
+        self.assertIn("\troll\t", asm)
+        self.assertIn("\trorl\t", asm)
+
+    def test_bitshift_malformed_input_reports_error(self):
+        """Malformed bitshift expressions should surface a descriptive parse error."""
+        input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr_malformed.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitshift_expr_malformed.s")
+
+        stderr = run_compiler(input_file, asm_file)
+
+        self.assertIsNotNone(stderr)
+        lowered = stderr.lower()
+        self.assertIn("parse error", lowered)
+        self.assertIn("expected", lowered)
+
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
         if shutil.which("valgrind") is None:
@@ -442,6 +499,15 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "42\n7\n1\n")
 
+    def test_type_alias_parameters_accept_new_categories(self):
+        """Type aliases used in parameter lists should accept char/pointer/set/enum/file arguments."""
+        input_file = os.path.join(TEST_CASES_DIR, "type_alias_parameter_calls.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "type_alias_parameter_calls.s")
+
+        run_compiler(input_file, asm_file)
+
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
     def test_runtime_features(self):
         """Verifies string helpers, Inc, and dynamic arrays on NativeUInt values."""
         input_file = os.path.join(TEST_CASES_DIR, "runtime_features.p")
@@ -521,6 +587,25 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
+
+    def test_statement_extensions(self):
+        """Ensure extended statements parse, compile, and execute."""
+        input_file = os.path.join(TEST_CASES_DIR, "statement_extensions.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "112\n1\n3\n")
 
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
@@ -712,6 +797,16 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[0].strip(), "55")
         self.assertEqual(lines[1].strip(), "48")
         self.assertEqual(lines[2].strip(), "5")
+
+    def test_unsupported_expression_reports_tag_name(self):
+        """Unsupported constructs should report the Pascal tag name for clarity."""
+        input_file = os.path.join(TEST_CASES_DIR, "unsupported_addr_expr.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "unsupported_addr_expr.s")
+
+        stderr = run_compiler(input_file, asm_file)
+
+        self.assertIn("unsupported expression tag", stderr)
+        self.assertIn("ADDR", stderr)
 
     def test_ctypes_unit(self):
         """Ensures the ctypes unit exposes C compatible aliases."""

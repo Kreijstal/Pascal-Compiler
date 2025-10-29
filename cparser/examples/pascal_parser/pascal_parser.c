@@ -115,6 +115,8 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_XOR: return "XOR";
         case PASCAL_T_SHL: return "SHL";
         case PASCAL_T_SHR: return "SHR";
+        case PASCAL_T_ROL: return "ROL";
+        case PASCAL_T_ROR: return "ROR";
         case PASCAL_T_ADDR: return "ADDR";
         case PASCAL_T_DEREF: return "DEREF";
         case PASCAL_T_RANGE: return "RANGE";
@@ -165,6 +167,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_RAISE_STMT: return "RAISE_STMT";
         case PASCAL_T_INHERITED_STMT: return "INHERITED_STMT";
         case PASCAL_T_EXIT_STMT: return "EXIT_STMT";
+        case PASCAL_T_BREAK_STMT: return "BREAK_STMT";
         case PASCAL_T_ON_CLAUSE: return "ON_CLAUSE";
         case PASCAL_T_PROGRAM_DECL: return "PROGRAM_DECL";
         case PASCAL_T_PROGRAM_HEADER: return "PROGRAM_HEADER";

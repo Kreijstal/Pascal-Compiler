@@ -44,6 +44,14 @@ void serialize_expression_recursive(FILE *fp, struct Expression *expr) {
             fprintf(fp, "%s\n", expr->expr_data.function_call_data.id);
             // Not serializing args for now to keep it simple
             break;
+        case EXPR_TYPECAST:
+            fprintf(fp, "%d ", expr->expr_data.typecast_data.target_type);
+            if (expr->expr_data.typecast_data.target_type_id != NULL)
+                fprintf(fp, "%s\n", expr->expr_data.typecast_data.target_type_id);
+            else
+                fprintf(fp, "NULL\n");
+            serialize_expression_recursive(fp, expr->expr_data.typecast_data.expr);
+            break;
         default:
             fprintf(fp, "UNKNOWN\n");
     }

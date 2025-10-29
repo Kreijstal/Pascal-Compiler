@@ -331,6 +331,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "Generating code to file: %s\n", argv[2]);
 
             CodeGenContext ctx;
+            memset(&ctx, 0, sizeof(ctx));
             ctx.output_file = fopen(argv[2], "w");
             if (ctx.output_file == NULL)
             {
@@ -342,7 +343,9 @@ int main(int argc, char **argv)
             ctx.symtab = symtab;
             ctx.target_abi = current_target_abi();
             ctx.had_error = 0;
-            ctx.break_target_stack = NULL;
+            ctx.loop_exit_labels = NULL;
+            ctx.loop_depth = 0;
+            ctx.loop_capacity = 0;
 
             codegen(user_tree, argv[1], &ctx, symtab);
 

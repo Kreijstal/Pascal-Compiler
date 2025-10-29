@@ -49,6 +49,52 @@ int codegen_had_error(const CodeGenContext *ctx)
     return (ctx != NULL) ? ctx->had_error : 0;
 }
 
+static void codegen_reset_finally_stack(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->finally_stack != NULL)
+    {
+        free(ctx->finally_stack);
+        ctx->finally_stack = NULL;
+    }
+    ctx->finally_depth = 0;
+    ctx->finally_capacity = 0;
+}
+
+static void codegen_reset_except_stack(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->except_labels != NULL)
+    {
+        for (int i = 0; i < ctx->except_depth; ++i)
+        {
+            free(ctx->except_labels[i]);
+            ctx->except_labels[i] = NULL;
+        }
+        free(ctx->except_labels);
+        ctx->except_labels = NULL;
+    }
+    ctx->except_depth = 0;
+    ctx->except_capacity = 0;
+}
+
+static void codegen_reset_loop_stack(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->loop_exit_labels != NULL)
+    {
+        for (int i = 0; i < ctx->loop_depth; ++i)
+            free(ctx->loop_exit_labels[i]);
+        free(ctx->loop_exit_labels);
+        ctx->loop_exit_labels = NULL;
+    }
+    ctx->loop_depth = 0;
+    ctx->loop_capacity = 0;
+}
+
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
@@ -236,6 +282,10 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     ctx->symtab = symtab;
 
+    codegen_reset_finally_stack(ctx);
+    codegen_reset_loop_stack(ctx);
+    codegen_reset_except_stack(ctx);
+
     CODEGEN_DEBUG("DEBUG: ENTERING codegen\n");
     init_stackmng();
 
@@ -248,6 +298,9 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_program_footer(ctx);
 
     free_stackmng();
+    codegen_reset_loop_stack(ctx);
+    codegen_reset_finally_stack(ctx);
+    codegen_reset_except_stack(ctx);
 
     CODEGEN_DEBUG("DEBUG: LEAVING codegen\n");
     #ifdef DEBUG_CODEGEN
@@ -538,7 +591,6 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     char buffer[50];
-    assert(inst_list != NULL);
     snprintf(buffer, 50, "\tmovl\t$%d, %%eax\n", num_vec);
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

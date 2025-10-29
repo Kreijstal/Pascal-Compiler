@@ -132,13 +132,25 @@ static inline int codegen_target_is_windows(void)
     allowing for a more modular and re-entrant design.
 */
 typedef struct {
+    ListNode_t *statements;
+} CodeGenFinallyFrame;
+
+typedef struct {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
     SymTab_t *symtab;
     gpc_target_abi_t target_abi;
     int had_error;
-    ListNode_t *break_target_stack;
+    char **loop_exit_labels;
+    int loop_depth;
+    int loop_capacity;
+    CodeGenFinallyFrame *finally_stack;
+    int finally_depth;
+    int finally_capacity;
+    char **except_labels;
+    int except_depth;
+    int except_capacity;
 } CodeGenContext;
 
 /* Generates a label */
