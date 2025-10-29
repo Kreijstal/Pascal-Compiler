@@ -739,46 +739,139 @@ void parser_walk_ast(ast_t* ast, ast_visitor_fn visitor, void* context) {
     }
 }
 
-typedef struct visited_node { const void* ptr; struct visited_node* next; } visited_node;
+typedef struct visited_set {
+    size_t capacity;
+    size_t count;
+    const void** entries;
+} visited_set;
+
 typedef struct extra_node {
     void* ptr;
     combinator_t* comb;
     struct extra_node* next;
 } extra_node;
 
-void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra_node** extras);
+static void visited_set_init(visited_set* set);
+static void visited_set_destroy(visited_set* set);
+static bool visited_set_contains(const visited_set* set, const void* ptr);
+static void visited_set_insert(visited_set* set, const void* ptr);
 
-bool is_visited(const void* ptr, visited_node* list) {
-    for (visited_node* current = list; current != NULL; current = current->next) {
-        if (current->ptr == ptr) return true;
-    }
-    return false;
+static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras);
+static void release_extra_nodes(extra_node** extras, visited_set* visited);
+
+static size_t visited_hash_ptr(const void* ptr) {
+    uintptr_t x = (uintptr_t)ptr;
+    x ^= x >> 33;
+    x *= UINT64_C(0xff51afd7ed558ccd);
+    x ^= x >> 33;
+    x *= UINT64_C(0xc4ceb9fe1a85ec53);
+    x ^= x >> 33;
+    return (size_t)x;
 }
 
-static void release_extra_nodes(extra_node** extras, visited_node** visited);
+static void visited_set_init(visited_set* set) {
+    set->capacity = 0;
+    set->count = 0;
+    set->entries = NULL;
+}
+
+static void visited_set_destroy(visited_set* set) {
+    free((void*)set->entries);
+    set->entries = NULL;
+    set->capacity = 0;
+    set->count = 0;
+}
+
+static void visited_set_rehash(visited_set* set, size_t new_capacity) {
+    size_t old_count = set->count;
+    const void** new_entries = (const void**)safe_malloc(new_capacity * sizeof(const void*));
+    for (size_t i = 0; i < new_capacity; ++i) {
+        new_entries[i] = NULL;
+    }
+
+    if (set->entries != NULL) {
+        size_t mask = new_capacity - 1;
+        for (size_t i = 0; i < set->capacity; ++i) {
+            const void* entry = set->entries[i];
+            if (entry != NULL) {
+                size_t idx = visited_hash_ptr(entry) & mask;
+                while (new_entries[idx] != NULL) {
+                    idx = (idx + 1) & mask;
+                }
+                new_entries[idx] = entry;
+            }
+        }
+        free((void*)set->entries);
+    }
+
+    set->entries = new_entries;
+    set->capacity = new_capacity;
+    set->count = old_count;
+}
+
+static bool visited_set_contains(const visited_set* set, const void* ptr) {
+    if (set->capacity == 0) {
+        return false;
+    }
+    size_t mask = set->capacity - 1;
+    size_t idx = visited_hash_ptr(ptr) & mask;
+    while (true) {
+        const void* entry = set->entries[idx];
+        if (entry == NULL) {
+            return false;
+        }
+        if (entry == ptr) {
+            return true;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static void visited_set_insert(visited_set* set, const void* ptr) {
+    if (set->capacity == 0 || (set->count + 1) * 3 >= set->capacity * 2) {
+        size_t new_capacity = set->capacity ? set->capacity * 2 : 64;
+        // Ensure capacity stays a power of two for fast masking.
+        if ((new_capacity & (new_capacity - 1)) != 0) {
+            size_t power_of_two = 1;
+            while (power_of_two < new_capacity) {
+                power_of_two <<= 1;
+            }
+            new_capacity = power_of_two;
+        }
+        visited_set_rehash(set, new_capacity);
+    }
+
+    size_t mask = set->capacity - 1;
+    size_t idx = visited_hash_ptr(ptr) & mask;
+    while (true) {
+        const void* entry = set->entries[idx];
+        if (entry == NULL) {
+            set->entries[idx] = ptr;
+            set->count++;
+            return;
+        }
+        if (entry == ptr) {
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
 
 void free_combinator(combinator_t* comb) {
-    visited_node* visited = NULL;
+    visited_set visited;
+    visited_set_init(&visited);
     extra_node* extras = NULL;
     free_combinator_recursive(comb, &visited, &extras);
     // Drain any heap-allocated pointer wrappers that were deferred during the
     // recursive walk. These nodes own both the wrapper pointer itself and, when
     // present, the combinator the pointer referenced at creation time.
     release_extra_nodes(&extras, &visited);
-    visited_node* current = visited;
-    while (current != NULL) {
-        visited_node* temp = current;
-        current = current->next;
-        free(temp);
-    }
+    visited_set_destroy(&visited);
 }
 
-void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra_node** extras) {
-    if (comb == NULL || is_visited(comb, *visited)) return;
-    visited_node* new_visited = (visited_node*)safe_malloc(sizeof(visited_node));
-    new_visited->ptr = comb;
-    new_visited->next = *visited;
-    *visited = new_visited;
+static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras) {
+    if (comb == NULL || visited_set_contains(visited, comb)) return;
+    visited_set_insert(visited, comb);
 
     // Ensure type is valid to avoid uninitialised value warnings
     if (comb->type >= P_MATCH && comb->type <= P_EOI) {
@@ -981,7 +1074,7 @@ void free_combinator_recursive(combinator_t* comb, visited_node** visited, extra
     free(comb);
 }
 
-static void release_extra_nodes(extra_node** extras, visited_node** visited) {
+static void release_extra_nodes(extra_node** extras, visited_set* visited) {
     while (*extras != NULL) {
         extra_node* node = *extras;
         *extras = node->next;
