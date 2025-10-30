@@ -44,6 +44,7 @@ static bool push_conditional(ConditionalStack *stack, bool parent_active, bool c
 static bool pop_conditional(ConditionalStack *stack);
 static ConditionalFrame *peek_conditional(ConditionalStack *stack);
 static bool current_branch_active(ConditionalStack *stack);
+static void activate_fallback_branch(ConditionalFrame *frame);
 static bool handle_directive(PascalPreprocessor *pp,
                              const char *filename,
                              const char *input,
@@ -72,11 +73,26 @@ static void extract_directory(const char *filename, char *buffer, size_t buffer_
 static bool resolve_include_path(const char *current_file, const char *directive_path, char **result_path);
 static bool parse_identifier(const char *start, const char *end, char **out_identifier);
 static void uppercase(char *str);
-static bool evaluate_if_directive(PascalPreprocessor *pp, const char *expression, bool *result);
-static bool parse_defined_expression(const char **cursor, bool *value, PascalPreprocessor *pp);
-static bool parse_if_expression(const char **cursor, bool *value, PascalPreprocessor *pp);
-static bool parse_if_term(const char **cursor, bool *value, PascalPreprocessor *pp);
-static bool parse_if_factor(const char **cursor, bool *value, PascalPreprocessor *pp);
+static bool evaluate_if_directive(PascalPreprocessor *pp,
+                                  const char *expression,
+                                  bool *result,
+                                  char **error_message);
+static bool parse_defined_expression(const char **cursor,
+                                     bool *value,
+                                     PascalPreprocessor *pp,
+                                     char **error_message);
+static bool parse_if_expression(const char **cursor,
+                                bool *value,
+                                PascalPreprocessor *pp,
+                                char **error_message);
+static bool parse_if_term(const char **cursor,
+                          bool *value,
+                          PascalPreprocessor *pp,
+                          char **error_message);
+static bool parse_if_factor(const char **cursor,
+                            bool *value,
+                            PascalPreprocessor *pp,
+                            char **error_message);
 
 PascalPreprocessor *pascal_preprocessor_create(void) {
     PascalPreprocessor *pp = calloc(1, sizeof(*pp));
@@ -410,10 +426,18 @@ static bool handle_directive(PascalPreprocessor *pp,
     } else if (strcmp(keyword, "IF") == 0) {
         handled = true;
         bool cond_value = false;
-        if (!evaluate_if_directive(pp, rest, &cond_value)) {
+        if (!evaluate_if_directive(pp, rest, &cond_value, error_message)) {
             free(keyword);
             free(content);
-            return set_error(error_message, "unsupported {$IF} expression in '%s'", filename ? filename : "<buffer>");
+            bool has_specific_error = error_message != NULL && *error_message != NULL;
+            if (!has_specific_error) {
+                return set_error(
+                    error_message,
+                    "unsupported {$IF} expression in '%s'",
+                    filename ? filename : "<buffer>"
+                );
+            }
+            return false;
         }
         bool parent_active = current_branch_active(conditions);
         if (!push_conditional(conditions, parent_active, cond_value)) {
@@ -434,13 +458,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             free(content);
             return set_error(error_message, "duplicate {$ELSE} in conditional block");
         }
-        frame->saw_else = true;
-        if (!frame->branch_taken && frame->parent_allows) {
-            frame->active = true;
-            frame->branch_taken = true;
-        } else {
-            frame->active = false;
-        }
+        activate_fallback_branch(frame);
     } else if (strcmp(keyword, "ELSEIFDEF") == 0 || strcmp(keyword, "ELSEIFNDEF") == 0) {
         handled = true;
         ConditionalFrame *frame = peek_conditional(conditions);
@@ -485,17 +503,25 @@ static bool handle_directive(PascalPreprocessor *pp,
             free(content);
             return set_error(error_message, "{$ELSEIF} after {$ELSE}");
         }
-        bool cond_value = false;
-        if (!evaluate_if_directive(pp, rest, &cond_value)) {
-            free(keyword);
-            free(content);
-            return set_error(error_message, "unsupported {$ELSEIF} expression");
-        }
-        if (!frame->branch_taken && frame->parent_allows && cond_value) {
-            frame->active = true;
-            frame->branch_taken = true;
+        if (*rest == '\0') {
+            activate_fallback_branch(frame);
         } else {
-            frame->active = false;
+            bool cond_value = false;
+            if (!evaluate_if_directive(pp, rest, &cond_value, error_message)) {
+                free(keyword);
+                free(content);
+                bool has_specific_error = error_message != NULL && *error_message != NULL;
+                if (!has_specific_error) {
+                    return set_error(error_message, "unsupported {$ELSEIF} expression");
+                }
+                return false;
+            }
+            if (!frame->branch_taken && frame->parent_allows && cond_value) {
+                frame->active = true;
+                frame->branch_taken = true;
+            } else {
+                frame->active = false;
+            }
         }
     } else if (strcmp(keyword, "ENDIF") == 0) {
         handled = true;
@@ -690,6 +716,16 @@ static bool current_branch_active(ConditionalStack *stack) {
     return stack->items[stack->size - 1].active;
 }
 
+static void activate_fallback_branch(ConditionalFrame *frame) {
+    frame->saw_else = true;
+    if (!frame->branch_taken && frame->parent_allows) {
+        frame->active = true;
+        frame->branch_taken = true;
+    } else {
+        frame->active = false;
+    }
+}
+
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
     if (!pp || !symbol || symbol[0] == '\0') {
         return false;
@@ -875,9 +911,12 @@ static bool resolve_include_path(const char *current_file, const char *directive
     return true;
 }
 
-static bool evaluate_if_directive(PascalPreprocessor *pp, const char *expression, bool *result) {
+static bool evaluate_if_directive(PascalPreprocessor *pp,
+                                  const char *expression,
+                                  bool *result,
+                                  char **error_message) {
     const char *cursor = expression;
-    if (!parse_if_expression(&cursor, result, pp)) {
+    if (!parse_if_expression(&cursor, result, pp, error_message)) {
         return false;
     }
     while (*cursor && isspace((unsigned char)*cursor)) {
@@ -886,8 +925,11 @@ static bool evaluate_if_directive(PascalPreprocessor *pp, const char *expression
     return *cursor == '\0';
 }
 
-static bool parse_if_expression(const char **cursor, bool *value, PascalPreprocessor *pp) {
-    if (!parse_if_term(cursor, value, pp)) {
+static bool parse_if_expression(const char **cursor,
+                                bool *value,
+                                PascalPreprocessor *pp,
+                                char **error_message) {
+    if (!parse_if_term(cursor, value, pp, error_message)) {
         return false;
     }
     while (1) {
@@ -898,7 +940,7 @@ static bool parse_if_expression(const char **cursor, bool *value, PascalPreproce
         if (ascii_strncasecmp(*cursor, "OR", 2) == 0 && !isalnum((unsigned char)(*cursor)[2]) && (*cursor)[2] != '_') {
             *cursor += 2;
             bool rhs = false;
-            if (!parse_if_term(cursor, &rhs, pp)) {
+            if (!parse_if_term(cursor, &rhs, pp, error_message)) {
                 return false;
             }
             *value = *value || rhs;
@@ -910,8 +952,11 @@ static bool parse_if_expression(const char **cursor, bool *value, PascalPreproce
     return true;
 }
 
-static bool parse_if_term(const char **cursor, bool *value, PascalPreprocessor *pp) {
-    if (!parse_if_factor(cursor, value, pp)) {
+static bool parse_if_term(const char **cursor,
+                          bool *value,
+                          PascalPreprocessor *pp,
+                          char **error_message) {
+    if (!parse_if_factor(cursor, value, pp, error_message)) {
         return false;
     }
     while (1) {
@@ -922,7 +967,7 @@ static bool parse_if_term(const char **cursor, bool *value, PascalPreprocessor *
         if (ascii_strncasecmp(*cursor, "AND", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
             *cursor += 3;
             bool rhs = false;
-            if (!parse_if_factor(cursor, &rhs, pp)) {
+            if (!parse_if_factor(cursor, &rhs, pp, error_message)) {
                 return false;
             }
             *value = *value && rhs;
@@ -934,14 +979,17 @@ static bool parse_if_term(const char **cursor, bool *value, PascalPreprocessor *
     return true;
 }
 
-static bool parse_if_factor(const char **cursor, bool *value, PascalPreprocessor *pp) {
+static bool parse_if_factor(const char **cursor,
+                            bool *value,
+                            PascalPreprocessor *pp,
+                            char **error_message) {
     while (**cursor && isspace((unsigned char)**cursor)) {
         ++(*cursor);
     }
     if (ascii_strncasecmp(*cursor, "NOT", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
         *cursor += 3;
         bool inner = false;
-        if (!parse_if_factor(cursor, &inner, pp)) {
+        if (!parse_if_factor(cursor, &inner, pp, error_message)) {
             return false;
         }
         *value = !inner;
@@ -949,7 +997,7 @@ static bool parse_if_factor(const char **cursor, bool *value, PascalPreprocessor
     }
     if (**cursor == '(') {
         ++(*cursor);
-        if (!parse_if_expression(cursor, value, pp)) {
+        if (!parse_if_expression(cursor, value, pp, error_message)) {
             return false;
         }
         while (**cursor && isspace((unsigned char)**cursor)) {
@@ -961,10 +1009,13 @@ static bool parse_if_factor(const char **cursor, bool *value, PascalPreprocessor
         ++(*cursor);
         return true;
     }
-    return parse_defined_expression(cursor, value, pp);
+    return parse_defined_expression(cursor, value, pp, error_message);
 }
 
-static bool parse_defined_expression(const char **cursor, bool *value, PascalPreprocessor *pp) {
+static bool parse_defined_expression(const char **cursor,
+                                     bool *value,
+                                     PascalPreprocessor *pp,
+                                     char **error_message) {
     while (**cursor && isspace((unsigned char)**cursor)) {
         ++(*cursor);
     }
@@ -992,7 +1043,8 @@ static bool parse_defined_expression(const char **cursor, bool *value, PascalPre
                 return false;
             }
             ++(*cursor);
-            *value = symbol_is_defined(pp, symbol);
+            bool defined = symbol_is_defined(pp, symbol);
+            *value = defined;
             free(symbol);
             return true;
         }
@@ -1009,7 +1061,17 @@ static bool parse_defined_expression(const char **cursor, bool *value, PascalPre
     if (!symbol) {
         return false;
     }
-    *value = symbol_is_defined(pp, symbol);
+    bool defined = symbol_is_defined(pp, symbol);
+    if (!defined) {
+        bool err = set_error(
+            error_message,
+            "undefined macro '%s' in conditional expression",
+            symbol
+        );
+        free(symbol);
+        return err;
+    }
+    *value = true;
     free(symbol);
     return true;
 }

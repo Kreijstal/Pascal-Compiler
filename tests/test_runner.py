@@ -70,9 +70,6 @@ def run_compiler(input_file, output_file, flags=None):
         print(f"--- Compiler execution failed ---", file=sys.stderr)
         print(f"--- stdout: {e.stdout} ---", file=sys.stderr)
         print(f"--- stderr: {e.stderr} ---", file=sys.stderr)
-        # Still raise the exception, but return stderr if it exists
-        if e.stderr:
-            return e.stderr
         raise
 
 
@@ -273,6 +270,12 @@ class TestCompiler(unittest.TestCase):
         except subprocess.CalledProcessError as e:
             self.fail(f"gcc compilation failed: {e.stderr}")
 
+    def _get_test_paths(self, name, extension="p"):
+        input_file = os.path.join(TEST_CASES_DIR, f"{name}.{extension}")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, f"{name}.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, name)
+        return input_file, asm_file, executable_file
+
     @classmethod
     def _build_ctypes_helper_library(cls):
         if os.name == "nt":
@@ -447,11 +450,58 @@ class TestCompiler(unittest.TestCase):
         literal_bits = "4609434218613702656"
         self.assertIn(literal_bits, asm)
 
+    def test_conditional_macros_skip_inactive_branch(self):
+        """Conditional macros should skip inactive branches during preprocessing."""
+        input_file, asm_file, executable_file = self._get_test_paths("conditional_macros")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "42\n")
+
+    def test_conditional_macros_invalid_syntax_reports_error(self):
+        """Invalid conditional macro syntax should surface a preprocessing error."""
+        input_file, asm_file, _ = self._get_test_paths("conditional_macros_invalid_syntax")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        self.assertIn("Preprocessing failed", stderr)
+        self.assertIn("unsupported {$IF} expression", stderr)
+
+    def test_conditional_macros_undefined_macro_reports_error(self):
+        """Referencing an undefined macro should abort preprocessing."""
+        input_file, asm_file, _ = self._get_test_paths("conditional_macros_undefined_macro")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        self.assertIn("Preprocessing failed", stderr)
+        self.assertIn("undefined macro 'MISSING_SYMBOL'", stderr)
+
+    def test_conditional_macros_malformed_block_reports_error(self):
+        """Missing {$ENDIF} directives should be reported by the preprocessor."""
+        input_file, asm_file, _ = self._get_test_paths("conditional_macros_malformed_block")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        self.assertIn("unterminated conditional", stderr)
+
     def test_bitwise_operations_execute(self):
         """Bitwise shifts and rotates should execute correctly and match expected output."""
-        input_file = os.path.join(TEST_CASES_DIR, "bitwise_ops.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitwise_ops.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "bitwise_ops")
+        input_file, asm_file, executable_file = self._get_test_paths("bitwise_ops")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -486,15 +536,14 @@ class TestCompiler(unittest.TestCase):
 
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
-        input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr_malformed.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "bitshift_expr_malformed.s")
+        input_file, asm_file, _ = self._get_test_paths("bitshift_expr_malformed")
 
-        stderr = run_compiler(input_file, asm_file)
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
 
-        self.assertIsNotNone(stderr)
-        lowered = stderr.lower()
-        self.assertIn("parse error", lowered)
-        self.assertIn("expected", lowered)
+        stderr = (cm.exception.stderr or "").lower()
+        self.assertIn("parse error", stderr)
+        self.assertIn("expected", stderr)
 
     def test_parse_only_has_no_leaks_under_valgrind(self):
         """Runs a small parse-only compilation under valgrind to ensure no leaks are reported."""
