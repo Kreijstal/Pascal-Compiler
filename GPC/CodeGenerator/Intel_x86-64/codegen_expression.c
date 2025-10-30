@@ -206,8 +206,14 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         return 1;
     }
 
-    if (type_tag == RECORD_TYPE || record_type != NULL)
+    if (record_type != NULL)
         return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
+
+    if (type_tag == RECORD_TYPE && type_id == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to resolve anonymous record type for size computation.");
+        return 1;
+    }
 
     if (type_tag != UNKNOWN_TYPE)
     {
@@ -236,7 +242,6 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
 static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
     long long *size_out, int depth)
 {
-    (void)ctx;
     if (size_out == NULL)
         return 1;
 
@@ -398,9 +403,6 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
 
     if (expr->type == EXPR_POINTER_DEREF)
     {
-        if (expr->record_type != NULL)
-            return codegen_sizeof_record(ctx, expr->record_type, size_out, 0);
-
         if (expr->pointer_subtype_id != NULL && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
