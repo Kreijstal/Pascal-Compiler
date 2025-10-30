@@ -1289,7 +1289,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     #endif
     assert(expr != NULL);
     assert(expr->type == EXPR_RELOP);
-    assert(inst_list != NULL);
     assert(ctx != NULL);
 
     CODEGEN_DEBUG("DEBUG: Generating simple relop\n");

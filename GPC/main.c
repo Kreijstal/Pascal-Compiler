@@ -4,16 +4,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #ifndef _WIN32
 #include <strings.h>
+#include <unistd.h>
 #else
 #define strcasecmp _stricmp
+#include <io.h>
+#ifndef R_OK
+#define R_OK 4
+#endif
+#define access _access
 #endif
 #include <ctype.h>
 #include <stdbool.h>
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
+#include "unit_paths.h"
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static UnitSearchPaths g_unit_paths;
 
 typedef struct
 {
@@ -87,31 +101,12 @@ static bool unit_set_add(UnitSet *set, char *name)
 
 static char *lowercase_copy(const char *name)
 {
-    if (name == NULL)
-        return NULL;
-
-    size_t len = strlen(name);
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL)
-        return NULL;
-
-    for (size_t i = 0; i < len; ++i)
-        copy[i] = (char)tolower((unsigned char)name[i]);
-    copy[len] = '\0';
-    return copy;
+    return unit_search_paths_normalize_name(name);
 }
 
 static char *build_unit_path(const char *unit_name)
 {
-    const char *prefix = "GPC/Units/";
-    const char *suffix = ".p";
-    size_t len = strlen(prefix) + strlen(unit_name) + strlen(suffix) + 1;
-    char *path = (char *)malloc(len);
-    if (path == NULL)
-        return NULL;
-
-    snprintf(path, len, "%s%s%s", prefix, unit_name, suffix);
-    return path;
+    return unit_search_paths_resolve(&g_unit_paths, unit_name);
 }
 
 static void append_initialization_statement(Tree_t *program, struct Statement *init_stmt)
@@ -158,6 +153,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
                    unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.interface_const_decls);
+    unit_tree->tree_data.unit_data.interface_const_decls = NULL;
+
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
                    unit_tree->tree_data.unit_data.interface_var_decls);
@@ -167,6 +167,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.implementation_const_decls);
+    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
@@ -271,7 +276,11 @@ int main(int argc, char **argv)
         set_flags(argv + required_args, args_left);
     }
 
+    unit_search_paths_init(&g_unit_paths);
+    unit_search_paths_set_user(&g_unit_paths, argv[1]);
+
     file_to_parse = "GPC/stdlib.p";
+    unit_search_paths_set_vendor(&g_unit_paths, file_to_parse);
     prelude_tree = ParsePascalOnly("GPC/stdlib.p");
     file_to_parse = argv[1];
     user_tree = ParsePascalOnly(argv[1]);
@@ -321,6 +330,7 @@ int main(int argc, char **argv)
 
             destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            unit_search_paths_destroy(&g_unit_paths);
             return 0;
         }
 
@@ -382,6 +392,7 @@ int main(int argc, char **argv)
             user_tree = NULL;
         }
     }
+    unit_search_paths_destroy(&g_unit_paths);
     return exit_status;
 }
 

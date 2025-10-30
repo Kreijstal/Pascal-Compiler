@@ -46,9 +46,11 @@ typedef struct Tree
         {
             char *unit_id;
             ListNode_t *interface_uses;
+            ListNode_t *interface_const_decls;
             ListNode_t *interface_type_decls;
             ListNode_t *interface_var_decls;
             ListNode_t *implementation_uses;
+            ListNode_t *implementation_const_decls;
             ListNode_t *implementation_type_decls;
             ListNode_t *implementation_var_decls;
             ListNode_t *subprograms;
@@ -158,8 +160,10 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     ListNode_t *subprograms, struct Statement *compound_statement);
 
 Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
-    ListNode_t *interface_type_decls, ListNode_t *interface_var_decls,
-    ListNode_t *implementation_uses, ListNode_t *implementation_type_decls,
+    ListNode_t *interface_const_decls, ListNode_t *interface_type_decls,
+    ListNode_t *interface_var_decls, ListNode_t *implementation_uses,
+    ListNode_t *implementation_const_decls,
+    ListNode_t *implementation_type_decls,
     ListNode_t *implementation_var_decls, ListNode_t *subprograms,
     struct Statement *initialization);
 
