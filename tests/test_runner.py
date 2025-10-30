@@ -441,6 +441,20 @@ class TestCompiler(unittest.TestCase):
         self.assertTrue(os.path.exists(ast_file))
         self.assertGreater(os.path.getsize(ast_file), 0)
 
+    def test_mtinf_sample_parses(self):
+        """The mtinf QL sample should parse in parse-only mode without errors."""
+        input_file = os.path.join(TEST_CASES_DIR, "mtinf.pas")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "mtinf_parse_only.s")
+
+        run_compiler(
+            input_file,
+            asm_file,
+            flags=["-parse-only"],
+        )
+
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
     def test_real_literal_codegen(self):
         """Compiling a real literal should succeed and materialize the IEEE-754 bits."""
         input_file = os.path.join(TEST_CASES_DIR, "real_literal.p")
