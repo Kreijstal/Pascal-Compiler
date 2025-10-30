@@ -1427,7 +1427,8 @@ int semcheck_relop(int *type_return,
                         expr->line_num);
                     ++return_val;
                 }
-                if (type_first != INT_TYPE && type_first != LONGINT_TYPE)
+                if (type_first != INT_TYPE && type_first != LONGINT_TYPE &&
+                    type_first != ENUM_TYPE && type_first != CHAR_TYPE && type_first != BOOL)
                 {
                     fprintf(stderr, "Error on line %d, expected integer operand on left side of IN expression!\n\n",
                         expr->line_num);

@@ -1919,9 +1919,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         char *unit_id = unit_name_node != NULL ? dup_symbol(unit_name_node) : strdup("unit");
 
         ListNode_t *interface_uses = NULL;
+        ListNode_t *interface_const_decls = NULL;
         ListNode_t *interface_type_decls = NULL;
         ListNode_t *interface_var_decls = NULL;
         ListNode_t *implementation_uses = NULL;
+        ListNode_t *implementation_const_decls = NULL;
         ListNode_t *implementation_type_decls = NULL;
         ListNode_t *implementation_var_decls = NULL;
         ListNode_t *subprograms = NULL;
@@ -1939,6 +1941,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     switch (node->typ) {
                     case PASCAL_T_USES_SECTION:
                         append_uses_from_section(node, &interface_uses);
+                        break;
+                    case PASCAL_T_CONST_SECTION:
+                        append_const_decls_from_section(node, &interface_const_decls);
                         break;
                     case PASCAL_T_TYPE_SECTION:
                         append_type_decls_from_section(node, &interface_type_decls);
@@ -1962,6 +1967,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     switch (node->typ) {
                     case PASCAL_T_USES_SECTION:
                         append_uses_from_section(node, &implementation_uses);
+                        break;
+                    case PASCAL_T_CONST_SECTION:
+                        append_const_decls_from_section(node, &implementation_const_decls);
                         break;
                     case PASCAL_T_TYPE_SECTION:
                         append_type_decls_from_section(node, &implementation_type_decls);
@@ -1995,8 +2003,10 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 initialization = convert_block(init_block);
         }
 
-        Tree_t *tree = mk_unit(cur->line, unit_id, interface_uses, interface_type_decls,
+        Tree_t *tree = mk_unit(cur->line, unit_id, interface_uses,
+                               interface_const_decls, interface_type_decls,
                                interface_var_decls, implementation_uses,
+                               implementation_const_decls,
                                implementation_type_decls, implementation_var_decls,
                                subprograms, initialization);
         return tree;

@@ -1023,6 +1023,41 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
 
+    def test_set_of_enum_typed_constant_unit(self):
+        """Ensures a unit with a set-of-enum typed constant compiles and runs."""
+        input_file = os.path.join(
+            TEST_CASES_DIR, "set_of_enum_typed_constant_demo.p"
+        )
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "set_of_enum_typed_constant_demo.s")
+        executable_file = os.path.join(
+            TEST_OUTPUT_DIR, "set_of_enum_typed_constant_demo"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("set_of_enum_typed_constant_demo execution timed out")
+            return
+
+        self.assertEqual(process.returncode, 0)
+        lines = process.stdout.strip().splitlines()
+        self.assertEqual(
+            lines,
+            [
+                "readonly",
+                "visible",
+                "system",
+            ],
+        )
+
     def test_ord_builtin(self):
         """Ensures the Ord builtin converts characters to their ordinal values."""
         input_file = os.path.join(TEST_CASES_DIR, "ord_builtin.p")

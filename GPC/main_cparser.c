@@ -87,6 +87,62 @@ static char *duplicate_path(const char *path)
     return dup;
 }
 
+static char *g_unit_vendor_dir = NULL;
+static char *g_user_source_dir = NULL;
+
+static void initialize_user_unit_dir(const char *input_path)
+{
+    if (input_path == NULL || g_user_source_dir != NULL)
+        return;
+
+    char *input_copy = strdup(input_path);
+    if (input_copy == NULL)
+        return;
+
+    char *dir = dirname(input_copy);
+    if (dir != NULL)
+        g_user_source_dir = duplicate_path(dir);
+
+    free(input_copy);
+}
+
+static void initialize_vendor_unit_dir(const char *stdlib_path)
+{
+    if (stdlib_path == NULL || g_unit_vendor_dir != NULL)
+        return;
+
+    char *stdlib_copy = strdup(stdlib_path);
+    if (stdlib_copy == NULL)
+        return;
+
+    char *dir = dirname(stdlib_copy);
+    if (dir != NULL)
+    {
+        char buffer[PATH_MAX];
+        int written = snprintf(buffer, sizeof(buffer), "%s/Units", dir);
+        if (written > 0 && written < (int)sizeof(buffer))
+            g_unit_vendor_dir = duplicate_path(buffer);
+    }
+
+    free(stdlib_copy);
+}
+
+static char *build_candidate_unit_path(const char *dir, const char *unit_name)
+{
+    if (dir == NULL || unit_name == NULL)
+        return NULL;
+
+    char candidate[PATH_MAX];
+    int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
+    if (written <= 0 || written >= (int)sizeof(candidate))
+        return NULL;
+
+    if (!file_is_readable(candidate))
+        return NULL;
+
+    return duplicate_path(candidate);
+}
+
 static bool dump_ast_to_requested_path(Tree_t *tree)
 {
     const char *path = dump_ast_path();
@@ -487,15 +543,35 @@ static char *lowercase_copy(const char *name)
 
 static char *build_unit_path(const char *unit_name)
 {
-    const char *prefix = "GPC/Units/";
-    const char *suffix = ".p";
-    size_t len = strlen(prefix) + strlen(unit_name) + strlen(suffix) + 1;
-    char *path = (char *)malloc(len);
-    if (path == NULL)
+    if (unit_name == NULL)
         return NULL;
 
-    snprintf(path, len, "%s%s%s", prefix, unit_name, suffix);
-    return path;
+    char *path = build_candidate_unit_path(g_unit_vendor_dir, unit_name);
+    if (path != NULL)
+        return path;
+
+    path = build_candidate_unit_path("GPC/Units", unit_name);
+    if (path != NULL)
+        return path;
+
+    const char *source_root = getenv("MESON_SOURCE_ROOT");
+    if (source_root != NULL)
+    {
+        char buffer[PATH_MAX];
+        int written = snprintf(buffer, sizeof(buffer), "%s/GPC/Units", source_root);
+        if (written > 0 && written < (int)sizeof(buffer))
+        {
+            path = build_candidate_unit_path(buffer, unit_name);
+            if (path != NULL)
+                return path;
+        }
+    }
+
+    path = build_candidate_unit_path(g_user_source_dir, unit_name);
+    if (path != NULL)
+        return path;
+
+    return build_candidate_unit_path(".", unit_name);
 }
 
 static void append_initialization_statement(Tree_t *program, struct Statement *init_stmt)
@@ -542,6 +618,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
                    unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.interface_const_decls);
+    unit_tree->tree_data.unit_data.interface_const_decls = NULL;
+
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
                    unit_tree->tree_data.unit_data.interface_var_decls);
@@ -551,6 +632,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.implementation_const_decls);
+    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
@@ -645,6 +731,7 @@ int main(int argc, char **argv)
     }
 
     const char *input_file = argv[1];
+    initialize_user_unit_dir(input_file);
     const char *output_file = argv[2];
 
     int optional_count = argc - 3;
@@ -683,6 +770,8 @@ int main(int argc, char **argv)
         pascal_frontend_cleanup();
         return 1;
     }
+
+    initialize_vendor_unit_dir(stdlib_path);
 
     Tree_t *user_tree = NULL;
     double user_start = track_time ? current_time_seconds() : 0.0;
