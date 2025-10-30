@@ -969,8 +969,15 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
+        /* Allocate shadow space for Windows x64 calling convention and align stack */
+        inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
+        
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
+        
+        /* Restore stack after shadow space allocation */
+        inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
+        
         free_arg_regs();
 
         args = args->next;
@@ -979,7 +986,15 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     if (append_newline)
     {
         inst_list = codegen_vect_reg(inst_list, 0);
+        
+        /* Allocate shadow space for Windows x64 calling convention and align stack */
+        inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
+        
         inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
+        
+        /* Restore stack after shadow space allocation */
+        inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
+        
         free_arg_regs();
     }
 
