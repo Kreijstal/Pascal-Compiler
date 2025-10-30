@@ -126,24 +126,30 @@ static ast_t* wrap_program_params(ast_t* params) {
 
 // Custom parser for main block content that parses statements properly
 static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_name) {
-    // Parse statements until we can't parse any more
-    // Don't look for "end" - that's handled by the parent main_block parser
+    // Parse statements until encountering the END keyword handled by the caller.
+    // Reuse the statement parser so the main program block supports the same
+    // constructs as regular compound statements (case, loops, nested blocks, etc.).
 
-    // Create statement parser to parse the content
-    combinator_t* stmt_parser = new_combinator();
-    init_pascal_statement_parser(&stmt_parser);
+    // `lazy` needs a stable pointer-to-pointer so recursive constructs like CASE
+    // branches can reuse the same statement parser instance.  Wrap the parser in a
+    // heap-allocated pointer so the lifetime matches the combinator graph.
+    combinator_t** stmt_parser_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *stmt_parser_ref = new_combinator();
+    init_pascal_statement_parser(stmt_parser_ref);
 
-    // Parse as many statements as possible, separated by semicolons
-    combinator_t* stmt_list = many(seq(new_combinator(), PASCAL_T_NONE,
-        stmt_parser,
-        optional(token(match(";"))),  // optional semicolon after each statement
+    // Statements in a BEGIN..END block follow the same semicolon rules as any
+    // compound statement: statements are separated by semicolons with an optional
+    // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
+    // the statement parser so complex statements (like CASE) remain available.
+    combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
+        sep_by(lazy_owned(stmt_parser_ref), token(match(";"))),
+        optional(token(match(";"))),
         NULL
-    ));
+    );
 
-    ParseResult stmt_result = parse(in, stmt_list);
+    ParseResult stmt_result = parse(in, stmt_sequence);
 
-    // Clean up
-    free_combinator(stmt_list);
+    free_combinator(stmt_sequence);
 
     return stmt_result;
 }
