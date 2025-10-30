@@ -38,6 +38,7 @@
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
+#include "unit_paths.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -57,6 +58,8 @@ int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
 
+static UnitSearchPaths g_unit_paths;
+
 static void print_usage(const char *prog_name)
 {
     fprintf(stderr, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
@@ -68,23 +71,6 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
     fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
     fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
-}
-
-static int file_is_readable(const char *path)
-{
-    return path != NULL && access(path, R_OK) == 0;
-}
-
-static char *duplicate_path(const char *path)
-{
-    if (path == NULL)
-        return NULL;
-
-    char *dup = strdup(path);
-    if (dup == NULL)
-        fprintf(stderr, "Error: Memory allocation failed while duplicating path '%s'\n", path);
-
-    return dup;
 }
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -148,19 +134,31 @@ static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
 static char *resolve_stdlib_path(const char *argv0)
 {
     const char *env = getenv("GPC_STDLIB");
-    if (file_is_readable(env))
-        return duplicate_path(env);
+    if (env != NULL && access(env, R_OK) == 0)
+    {
+        char *dup = strdup(env);
+        if (dup != NULL)
+            return dup;
+    }
 
-    if (file_is_readable("GPC/stdlib.p"))
-        return duplicate_path("GPC/stdlib.p");
+    if (access("GPC/stdlib.p", R_OK) == 0)
+    {
+        char *dup = strdup("GPC/stdlib.p");
+        if (dup != NULL)
+            return dup;
+    }
 
     const char *source_root = getenv("MESON_SOURCE_ROOT");
     if (source_root != NULL)
     {
         char candidate[PATH_MAX];
-        snprintf(candidate, sizeof(candidate), "%s/GPC/stdlib.p", source_root);
-        if (file_is_readable(candidate))
-            return duplicate_path(candidate);
+        int written = snprintf(candidate, sizeof(candidate), "%s/GPC/stdlib.p", source_root);
+        if (written > 0 && written < (int)sizeof(candidate) && access(candidate, R_OK) == 0)
+        {
+            char *dup = strdup(candidate);
+            if (dup != NULL)
+                return dup;
+        }
     }
 
     char exe_path[PATH_MAX];
@@ -183,9 +181,13 @@ static char *resolve_stdlib_path(const char *argv0)
             for (size_t i = 0; i < sizeof(relative_candidates) / sizeof(relative_candidates[0]); ++i)
             {
                 char candidate[PATH_MAX];
-                snprintf(candidate, sizeof(candidate), "%s/%s", dir, relative_candidates[i]);
-                if (file_is_readable(candidate))
-                    return duplicate_path(candidate);
+                int written = snprintf(candidate, sizeof(candidate), "%s/%s", dir, relative_candidates[i]);
+                if (written > 0 && written < (int)sizeof(candidate) && access(candidate, R_OK) == 0)
+                {
+                    char *dup = strdup(candidate);
+                    if (dup != NULL)
+                        return dup;
+                }
             }
         }
     }
@@ -471,31 +473,12 @@ static bool unit_set_add(UnitSet *set, char *name)
 
 static char *lowercase_copy(const char *name)
 {
-    if (name == NULL)
-        return NULL;
-
-    size_t len = strlen(name);
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL)
-        return NULL;
-
-    for (size_t i = 0; i < len; ++i)
-        copy[i] = (char)tolower((unsigned char)name[i]);
-    copy[len] = '\0';
-    return copy;
+    return unit_search_paths_normalize_name(name);
 }
 
 static char *build_unit_path(const char *unit_name)
 {
-    const char *prefix = "GPC/Units/";
-    const char *suffix = ".p";
-    size_t len = strlen(prefix) + strlen(unit_name) + strlen(suffix) + 1;
-    char *path = (char *)malloc(len);
-    if (path == NULL)
-        return NULL;
-
-    snprintf(path, len, "%s%s%s", prefix, unit_name, suffix);
-    return path;
+    return unit_search_paths_resolve(&g_unit_paths, unit_name);
 }
 
 static void append_initialization_statement(Tree_t *program, struct Statement *init_stmt)
@@ -542,6 +525,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
                    unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.interface_const_decls);
+    unit_tree->tree_data.unit_data.interface_const_decls = NULL;
+
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
                    unit_tree->tree_data.unit_data.interface_var_decls);
@@ -551,6 +539,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.implementation_const_decls);
+    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
@@ -645,6 +638,8 @@ int main(int argc, char **argv)
     }
 
     const char *input_file = argv[1];
+    unit_search_paths_init(&g_unit_paths);
+    unit_search_paths_set_user(&g_unit_paths, input_file);
     const char *output_file = argv[2];
 
     int optional_count = argc - 3;
@@ -659,6 +654,7 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "Error: Unable to locate stdlib.p. Set GPC_STDLIB or run from the project root.\n");
         clear_dump_ast_path();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
 
@@ -681,8 +677,11 @@ int main(int argc, char **argv)
         free(stdlib_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
+
+    unit_search_paths_set_vendor(&g_unit_paths, stdlib_path);
 
     Tree_t *user_tree = NULL;
     double user_start = track_time ? current_time_seconds() : 0.0;
@@ -701,6 +700,7 @@ int main(int argc, char **argv)
         free(stdlib_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
 
@@ -718,6 +718,7 @@ int main(int argc, char **argv)
             ast_nil = NULL;
         }
         pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
 
@@ -734,6 +735,7 @@ int main(int argc, char **argv)
             free(stdlib_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
+            unit_search_paths_destroy(&g_unit_paths);
             return 1;
         }
         fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
@@ -751,6 +753,7 @@ int main(int argc, char **argv)
         }
         clear_dump_ast_path();
         pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
         return 0;
     }
 
@@ -763,6 +766,7 @@ int main(int argc, char **argv)
         free(stdlib_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
 
@@ -808,6 +812,7 @@ int main(int argc, char **argv)
             destroy_tree(prelude_tree);
             destroy_tree(user_tree);
             clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
             return 1;
         }
         ctx.label_counter = 1;
@@ -853,10 +858,12 @@ int main(int argc, char **argv)
     {
         clear_dump_ast_path();
         pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
         return exit_code > 0 ? exit_code : 1;
     }
 
     clear_dump_ast_path();
     pascal_frontend_cleanup();
+    unit_search_paths_destroy(&g_unit_paths);
     return exit_code;
 }
