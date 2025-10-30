@@ -472,10 +472,10 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         asm = read_file_content(asm_file)
 
-        self.assertIn("\tsall\t", asm)
-        self.assertIn("\tsarl\t", asm)
-        self.assertIn("\troll\t", asm)
-        self.assertIn("\trorl\t", asm)
+        self.assertTrue(any(token in asm for token in ("\tsall\t", "\tshlq\t")))
+        self.assertTrue(any(token in asm for token in ("\tsarl\t", "\tsarq\t")))
+        self.assertTrue(any(token in asm for token in ("\troll\t", "\trolq\t")))
+        self.assertTrue(any(token in asm for token in ("\trorl\t", "\trorq\t")))
 
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
@@ -701,6 +701,26 @@ class TestCompiler(unittest.TestCase):
         )
 
         self.assertEqual(result.stdout, "112\n1\n3\n")
+
+    def test_real_arithmetic_program(self):
+        """Compiles and executes a program exercising REAL arithmetic and IO."""
+        input_file = os.path.join(TEST_CASES_DIR, "real_arithmetic.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_output = "3.75\n3.375\nless\nmore\n-0.75\n1.5\n"
+        self.assertEqual(result.stdout, expected_output)
 
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""

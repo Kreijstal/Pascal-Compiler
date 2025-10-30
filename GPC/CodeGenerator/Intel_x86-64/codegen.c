@@ -513,17 +513,11 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
              if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL)
                  FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
 
-             if(tree->tree_data.var_decl_data.type == REAL_TYPE &&
-                 (type_node == NULL || type_node->type_alias == NULL || !type_node->type_alias->is_array))
-             {
-                 fprintf(stderr, "Warning: REAL types not supported, treating as integer\n");
-             }
-
-             while(id_list != NULL)
-             {
-                 if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
-                 {
-                     struct TypeAlias *alias = type_node->type_alias;
+            while(id_list != NULL)
+            {
+                if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
+                {
+                    struct TypeAlias *alias = type_node->type_alias;
                      int element_size = 4;  // Default to 4 bytes (integer)
                      if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
                          element_size = 8;
@@ -776,14 +770,14 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
                 }
                 
-                if(type == REAL_TYPE)
-                    fprintf(stderr, "WARNING: Only integers are supported!\n");
                 while(arg_ids != NULL)
                 {
                     // Var parameters are passed by reference (as pointers), so always use 64-bit
                     // Also use 64-bit for strings and explicit pointers
                     int is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
-                    int use_64bit = is_var_param || (type == STRING_TYPE || type == POINTER_TYPE);
+                    int use_64bit = is_var_param ||
+                        (type == STRING_TYPE || type == POINTER_TYPE ||
+                         type == REAL_TYPE || type == LONGINT_TYPE);
                     arg_reg = use_64bit ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
                     if(arg_reg == NULL)
                     {

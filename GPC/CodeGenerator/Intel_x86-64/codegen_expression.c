@@ -26,6 +26,25 @@ int codegen_type_uses_qword(int type_tag)
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE);
 }
 
+static inline const char *register_name_for_type(const Register_t *reg, int type_tag)
+{
+    if (reg == NULL)
+        return NULL;
+    return codegen_type_uses_qword(type_tag) ? reg->bit_64 : reg->bit_32;
+}
+
+static inline const char *register_name_for_expr(const Register_t *reg, const struct Expression *expr)
+{
+    if (expr == NULL)
+        return register_name_for_type(reg, UNKNOWN_TYPE);
+    return register_name_for_type(reg, expr->resolved_type);
+}
+
+static inline int expression_uses_qword(const struct Expression *expr)
+{
+    return expr != NULL && codegen_type_uses_qword(expr->resolved_type);
+}
+
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -851,15 +870,23 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     CODEGEN_DEBUG("DEBUG: Generating simple relop\n");
 
-    if (relop_type != NULL)
-        *relop_type = expr->expr_data.relop_data.type;
-    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
+    struct Expression *left_expr = expr->expr_data.relop_data.left;
+    struct Expression *right_expr = expr->expr_data.relop_data.right;
+    int relop_kind = expr->expr_data.relop_data.type;
 
+    if (relop_type != NULL)
+        *relop_type = relop_kind;
+
+    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
     Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
     inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
     Register_t *right_reg = front_reg_stack(get_reg_stack());
 
-    int relop_kind = expr->expr_data.relop_data.type;
+    if (left_reg == NULL || right_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+
     if (relop_kind == IN)
     {
         if (relop_type != NULL)
@@ -867,41 +894,64 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         else
             expr->expr_data.relop_data.type = NE;
 
-        if (left_reg == NULL || right_reg == NULL)
-            return inst_list;
-
-        char buffer[100];
         StackNode_t *set_spill = add_l_t("set_relop");
         if (set_spill != NULL)
         {
-            snprintf(buffer, 100, "\tmovl\t%s, -%d(%%rbp)\n", right_reg->bit_32, set_spill->offset);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", right_reg->bit_32, set_spill->offset);
             inst_list = add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, 100, "\tmovl\t%s, %%ecx\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tmovl\t$1, %s\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tshll\t%%cl, %s\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
         if (set_spill != NULL)
         {
-            snprintf(buffer, 100, "\tmovl\t-%d(%%rbp), %s\n", set_spill->offset, right_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", set_spill->offset, right_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, 100, "\ttestl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), left_reg);
         return inst_list;
     }
 
-    char buffer[100];
-    snprintf(buffer, 100, "\tcmpl\t%s, %s\n", right_reg->bit_32, left_reg->bit_32);
-    free_reg(get_reg_stack(), left_reg);
+    if (left_expr != NULL && left_expr->resolved_type == REAL_TYPE)
+    {
+        const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
+        const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
+        const char *arg0 = current_arg_reg64(0);
+        const char *arg1 = current_arg_reg64(1);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", left_name, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_name, arg1);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tgpc_real_compare\n");
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+        free_reg(get_reg_stack(), left_reg);
+        return inst_list;
+    }
+
+    int use_qword = expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
+    const char *left_name = register_name_for_expr(left_reg, left_expr);
+    const char *right_name = use_qword
+        ? register_name_for_type(right_reg, left_expr != NULL ? left_expr->resolved_type : UNKNOWN_TYPE)
+        : register_name_for_expr(right_reg, right_expr);
+    if (use_qword)
+        left_name = register_name_for_type(left_reg, left_expr != NULL ? left_expr->resolved_type : UNKNOWN_TYPE);
+    snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), left_reg);
 
     CODEGEN_DEBUG("DEBUG: Simple relop generated\n");
     #ifdef DEBUG_CODEGEN

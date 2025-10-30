@@ -676,26 +676,59 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     if (stmt == NULL || ctx == NULL)
         return inst_list;
 
-    int is_windows = codegen_target_is_windows();
-    const char *width_dest64 = is_windows ? "%rcx" : "%rdi";
-    const char *value_dest64 = is_windows ? "%rdx" : "%rsi";
-
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     while (args != NULL)
     {
         struct Expression *expr = (struct Expression *)args->cur;
         char buffer[128];
 
-        Register_t *width_reg = NULL;
+        int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
+        const int expr_is_real = (expr_type == REAL_TYPE);
+        const char *width_dest64 = current_arg_reg64(0);
+        const char *precision_dest64 = current_arg_reg64(1);
+        const char *value_dest64 = current_arg_reg64(expr_is_real ? 2 : 1);
+
         if (expr != NULL && expr->field_width != NULL)
         {
             expr_node_t *width_tree = build_expr_tree(expr->field_width);
-            width_reg = get_free_reg(get_reg_stack(), &inst_list);
+            Register_t *width_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_reg);
             free_expr_tree(width_tree);
+            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
+            free_reg(get_reg_stack(), width_reg);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+            inst_list = add_inst(inst_list, buffer);
         }
 
-        int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
+        if (expr_is_real)
+        {
+            if (expr != NULL && expr->field_precision != NULL)
+            {
+                expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
+                Register_t *precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+                inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
+                free_expr_tree(precision_tree);
+                inst_list = codegen_sign_extend32_to64(inst_list, precision_reg->bit_32, precision_dest64);
+                free_reg(get_reg_stack(), precision_reg);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else if (expr != NULL && expr->field_precision != NULL)
+        {
+            expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
+            Register_t *precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+            inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
+            free_expr_tree(precision_tree);
+            free_reg(get_reg_stack(), precision_reg);
+        }
+
         expr_node_t *expr_tree = build_expr_tree(expr);
         Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
         inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
@@ -706,7 +739,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
-        else if (expr_type == LONGINT_TYPE)
+        else if (expr_type == LONGINT_TYPE || expr_is_real || expr_type == POINTER_TYPE)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
@@ -718,17 +751,6 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
 
         free_reg(get_reg_stack(), value_reg);
 
-        if (width_reg != NULL)
-        {
-            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
-            free_reg(get_reg_stack(), width_reg);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-
         inst_list = codegen_vect_reg(inst_list, 0);
 
         const char *call_target = "gpc_write_integer";
@@ -736,6 +758,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             call_target = "gpc_write_string";
         else if (expr_type == BOOL)
             call_target = "gpc_write_boolean";
+        else if (expr_is_real)
+            call_target = "gpc_write_real";
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 

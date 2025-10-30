@@ -17,6 +17,20 @@ static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }
 
+static inline double gpc_bits_to_double(int64_t bits)
+{
+    double value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static inline int64_t gpc_double_to_bits(double value)
+{
+    int64_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
 int gpc_printf(const char *format, ...) {
     va_list args;
     va_start(args, format);
@@ -53,6 +67,57 @@ int __isoc99_scanf(const char *format, ...) {
 
 void print_integer(int n) {
     printf("%d\n", n);
+}
+
+int64_t gpc_real_add(int64_t a_bits, int64_t b_bits)
+{
+    double a = gpc_bits_to_double(a_bits);
+    double b = gpc_bits_to_double(b_bits);
+    double result = a + b;
+    return gpc_double_to_bits(result);
+}
+
+int64_t gpc_real_sub(int64_t a_bits, int64_t b_bits)
+{
+    double a = gpc_bits_to_double(a_bits);
+    double b = gpc_bits_to_double(b_bits);
+    double result = a - b;
+    return gpc_double_to_bits(result);
+}
+
+int64_t gpc_real_mul(int64_t a_bits, int64_t b_bits)
+{
+    double a = gpc_bits_to_double(a_bits);
+    double b = gpc_bits_to_double(b_bits);
+    double result = a * b;
+    return gpc_double_to_bits(result);
+}
+
+int64_t gpc_real_div(int64_t a_bits, int64_t b_bits)
+{
+    double a = gpc_bits_to_double(a_bits);
+    double b = gpc_bits_to_double(b_bits);
+    double result = a / b;
+    return gpc_double_to_bits(result);
+}
+
+int64_t gpc_real_neg(int64_t value_bits)
+{
+    double value = gpc_bits_to_double(value_bits);
+    return gpc_double_to_bits(-value);
+}
+
+int gpc_real_compare(int64_t a_bits, int64_t b_bits)
+{
+    double a = gpc_bits_to_double(a_bits);
+    double b = gpc_bits_to_double(b_bits);
+    if (a < b)
+        return -1;
+    if (a > b)
+        return 1;
+    if (a == b)
+        return 0;
+    return 1;
 }
 
 uint64_t gpc_get_tick_count64(void) {
@@ -176,6 +241,40 @@ void gpc_write_boolean(int width, int value)
         printf("%-*s", -width, text);
     else
         printf("%s", text);
+}
+
+void gpc_write_real(int width, int precision, int64_t value_bits)
+{
+    if (width < -1024 || width > 1024)
+        width = 0;
+    if (precision < -1)
+        precision = -1;
+    if (precision > 18)
+        precision = 18;
+
+    if (width == -1)
+        width = 0;
+
+    double value = gpc_bits_to_double(value_bits);
+
+    if (precision < 0)
+    {
+        if (width > 0)
+            printf("%*g", width, value);
+        else if (width < 0)
+            printf("%-*g", -width, value);
+        else
+            printf("%g", value);
+    }
+    else
+    {
+        if (width > 0)
+            printf("%*.*f", width, precision, value);
+        else if (width < 0)
+            printf("%-*.*f", -width, precision, value);
+        else
+            printf("%.*f", precision, value);
+    }
 }
 
 void gpc_raise(int64_t value)
