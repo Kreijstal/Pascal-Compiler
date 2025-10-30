@@ -10,8 +10,8 @@ import unittest
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
 # Default to "build" for local testing.
-build_dir = os.environ.get('MESON_BUILD_ROOT', 'build')
-GPC_PATH = os.path.join(build_dir, "GPC/gpc")
+build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
+GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if os.name == "nt" else "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
@@ -35,6 +35,7 @@ COMPILER_RUNS = []
 
 # The compiler is built by Meson now, so this function is not needed.
 
+
 def run_compiler(input_file, output_file, flags=None):
     """Runs the GPC compiler with the given arguments."""
     if flags is None:
@@ -56,7 +57,9 @@ def run_compiler(input_file, output_file, flags=None):
                 "returncode": result.returncode,
             }
         )
-        print(result.stderr, file=sys.stderr) # The compiler prints status messages to stderr
+        print(
+            result.stderr, file=sys.stderr
+        )  # The compiler prints status messages to stderr
         return result.stderr
     except subprocess.CalledProcessError as e:
         duration = time.perf_counter() - start
@@ -146,10 +149,12 @@ class TAPTestRunner:
             result.stopTestRun()
         return result
 
+
 def read_file_content(filepath):
     """Reads and returns the content of a file."""
     with open(filepath, "r") as f:
         return f.read()
+
 
 class TestCompiler(unittest.TestCase):
     @classmethod
@@ -197,8 +202,7 @@ class TestCompiler(unittest.TestCase):
             )
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
-                f"Meson {setup_mode} failed:\n"
-                f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+                f"Meson {setup_mode} failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
             )
 
         try:
@@ -210,8 +214,7 @@ class TestCompiler(unittest.TestCase):
             )
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
-                "Meson compile failed:\n"
-                f"STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
+                f"Meson compile failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
             )
 
         if not os.path.exists(GPC_PATH):
@@ -244,8 +247,10 @@ class TestCompiler(unittest.TestCase):
                 )
             except subprocess.CalledProcessError as e:
                 raise RuntimeError(f"runtime compilation failed ({source}): {e.stderr}")
-        
-    def compile_executable(self, asm_file, executable_file, extra_objects=None, extra_link_args=None):
+
+    def compile_executable(
+        self, asm_file, executable_file, extra_objects=None, extra_link_args=None
+    ):
         if extra_objects is None:
             extra_objects = []
         if extra_link_args is None:
@@ -321,9 +326,7 @@ class TestCompiler(unittest.TestCase):
             entry for entry in COMPILER_RUNS if "-parse-only" in entry["command"]
         ]
         parse_only_time = sum(entry["duration"] for entry in parse_only_runs)
-        failing_runs = [
-            entry for entry in COMPILER_RUNS if entry["returncode"] != 0
-        ]
+        failing_runs = [entry for entry in COMPILER_RUNS if entry["returncode"] != 0]
         failing_time = sum(entry["duration"] for entry in failing_runs)
 
         print("--- Compiler run timing summary ---", file=sys.stderr)
@@ -356,7 +359,9 @@ class TestCompiler(unittest.TestCase):
         input_file = os.path.join(TEST_CASES_DIR, "simple_expr.p")
 
         # --- Run without optimization ---
-        unoptimized_output_file = os.path.join(TEST_OUTPUT_DIR, "simple_expr_unoptimized.s")
+        unoptimized_output_file = os.path.join(
+            TEST_OUTPUT_DIR, "simple_expr_unoptimized.s"
+        )
         run_compiler(input_file, unoptimized_output_file)
         unoptimized_asm = read_file_content(unoptimized_output_file)
 
@@ -366,7 +371,9 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("addl", unoptimized_asm)
 
         # --- Run with -O1 optimization ---
-        optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "simple_expr_optimized_o1.s")
+        optimized_output_file = os.path.join(
+            TEST_OUTPUT_DIR, "simple_expr_optimized_o1.s"
+        )
         run_compiler(input_file, optimized_output_file, flags=["-O1"])
         optimized_asm = read_file_content(optimized_output_file)
 
@@ -380,7 +387,9 @@ class TestCompiler(unittest.TestCase):
         input_file = os.path.join(TEST_CASES_DIR, "dead_code.p")
 
         # --- Run without optimization ---
-        unoptimized_output_file = os.path.join(TEST_OUTPUT_DIR, "dead_code_unoptimized.s")
+        unoptimized_output_file = os.path.join(
+            TEST_OUTPUT_DIR, "dead_code_unoptimized.s"
+        )
         run_compiler(input_file, unoptimized_output_file)
         unoptimized_asm = read_file_content(unoptimized_output_file)
 
@@ -394,7 +403,9 @@ class TestCompiler(unittest.TestCase):
             self.assertIn("subq\t$16", unoptimized_asm)
 
         # --- Run with -O2 optimization ---
-        optimized_output_file = os.path.join(TEST_OUTPUT_DIR, "dead_code_optimized_o2.s")
+        optimized_output_file = os.path.join(
+            TEST_OUTPUT_DIR, "dead_code_optimized_o2.s"
+        )
         run_compiler(input_file, optimized_output_file, flags=["-O2"])
         optimized_asm = read_file_content(optimized_output_file)
 
@@ -466,7 +477,9 @@ class TestCompiler(unittest.TestCase):
 
     def test_conditional_macros_skip_inactive_branch(self):
         """Conditional macros should skip inactive branches during preprocessing."""
-        input_file, asm_file, executable_file = self._get_test_paths("conditional_macros")
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "conditional_macros"
+        )
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -483,7 +496,9 @@ class TestCompiler(unittest.TestCase):
 
     def test_conditional_macros_invalid_syntax_reports_error(self):
         """Invalid conditional macro syntax should surface a preprocessing error."""
-        input_file, asm_file, _ = self._get_test_paths("conditional_macros_invalid_syntax")
+        input_file, asm_file, _ = self._get_test_paths(
+            "conditional_macros_invalid_syntax"
+        )
 
         with self.assertRaises(subprocess.CalledProcessError) as cm:
             run_compiler(input_file, asm_file)
@@ -494,7 +509,9 @@ class TestCompiler(unittest.TestCase):
 
     def test_conditional_macros_undefined_macro_reports_error(self):
         """Referencing an undefined macro should abort preprocessing."""
-        input_file, asm_file, _ = self._get_test_paths("conditional_macros_undefined_macro")
+        input_file, asm_file, _ = self._get_test_paths(
+            "conditional_macros_undefined_macro"
+        )
 
         with self.assertRaises(subprocess.CalledProcessError) as cm:
             run_compiler(input_file, asm_file)
@@ -505,7 +522,9 @@ class TestCompiler(unittest.TestCase):
 
     def test_conditional_macros_malformed_block_reports_error(self):
         """Missing {$ENDIF} directives should be reported by the preprocessor."""
-        input_file, asm_file, _ = self._get_test_paths("conditional_macros_malformed_block")
+        input_file, asm_file, _ = self._get_test_paths(
+            "conditional_macros_malformed_block"
+        )
 
         with self.assertRaises(subprocess.CalledProcessError) as cm:
             run_compiler(input_file, asm_file)
@@ -611,9 +630,7 @@ class TestCompiler(unittest.TestCase):
         else:
             path_var = "LD_LIBRARY_PATH"
         existing = env.get(path_var, "")
-        env[path_var] = (
-            TEST_OUTPUT_DIR + (os.pathsep + existing if existing else "")
-        )
+        env[path_var] = TEST_OUTPUT_DIR + (os.pathsep + existing if existing else "")
 
         result = subprocess.run(
             [executable_file],
@@ -673,6 +690,7 @@ class TestCompiler(unittest.TestCase):
 
         self.assertTrue(os.path.exists(asm_file))
         self.assertGreater(os.path.getsize(asm_file), 0)
+
     def test_runtime_features(self):
         """Verifies string helpers, Inc, and dynamic arrays on NativeUInt values."""
         input_file = os.path.join(TEST_CASES_DIR, "runtime_features.p")
@@ -719,14 +737,13 @@ class TestCompiler(unittest.TestCase):
                         input=input_str,
                         capture_output=True,
                         text=True,
-                        timeout=EXEC_TIMEOUT # Add a timeout to prevent hanging
+                        timeout=EXEC_TIMEOUT,  # Add a timeout to prevent hanging
                     )
                     # Compare trimmed output to tolerate the runtime's trailing whitespace
                     self.assertEqual(process.stdout.strip(), expected_output.strip())
                     self.assertEqual(process.returncode, 0)
                 except subprocess.TimeoutExpired:
                     self.fail("Test execution timed out.")
-
 
     def test_helloworld(self):
         """Tests that the helloworld program prints 'Hello, World!'."""
@@ -743,10 +760,7 @@ class TestCompiler(unittest.TestCase):
         # Run the executable and check the output
         try:
             process = subprocess.run(
-                [executable_file],
-                capture_output=True,
-                text=True,
-                timeout=EXEC_TIMEOUT
+                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "Hello, World!\n")
             self.assertEqual(process.returncode, 0)
@@ -871,7 +885,9 @@ class TestCompiler(unittest.TestCase):
 
         # Run the executable and verify the output so we know the program ran.
         try:
-            process = subprocess.run([executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT)
+            process = subprocess.run(
+                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
+            )
             self.assertEqual(process.stdout, "42\n")
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
@@ -882,7 +898,9 @@ class TestCompiler(unittest.TestCase):
         input_file = os.path.join(TEST_CASES_DIR, "record_member_access.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access")
-        expected_output_file = os.path.join(TEST_CASES_DIR, "record_member_access.expected")
+        expected_output_file = os.path.join(
+            TEST_CASES_DIR, "record_member_access.expected"
+        )
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -901,13 +919,9 @@ class TestCompiler(unittest.TestCase):
 
     def test_record_reference_features(self):
         """Exercises record assignment, address-of, and var parameter support."""
-        input_file = os.path.join(
-            TEST_CASES_DIR, "record_reference_features.p"
-        )
+        input_file = os.path.join(TEST_CASES_DIR, "record_reference_features.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features.s")
-        executable_file = os.path.join(
-            TEST_OUTPUT_DIR, "record_reference_features"
-        )
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features")
         expected_output_file = os.path.join(
             TEST_CASES_DIR, "record_reference_features.expected"
         )
@@ -950,17 +964,13 @@ class TestCompiler(unittest.TestCase):
         # Run the executable and check the output
         try:
             process = subprocess.run(
-                [executable_file],
-                capture_output=True,
-                text=True,
-                timeout=EXEC_TIMEOUT
+                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
             )
             expected_output = read_file_content(expected_output_file)
             self.assertEqual(process.stdout, expected_output)
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
-
 
     def test_mod_operator(self):
         """Tests that the mod operator works correctly."""
@@ -977,10 +987,7 @@ class TestCompiler(unittest.TestCase):
         # Run the executable and check the output
         try:
             process = subprocess.run(
-                [executable_file],
-                capture_output=True,
-                text=True,
-                timeout=EXEC_TIMEOUT
+                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "1\n")
             self.assertEqual(process.returncode, 0)
@@ -1039,9 +1046,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_set_of_enum_typed_constant_unit(self):
         """Ensures a unit with a set-of-enum typed constant compiles and runs."""
-        input_file = os.path.join(
-            TEST_CASES_DIR, "set_of_enum_typed_constant_demo.p"
-        )
+        input_file = os.path.join(TEST_CASES_DIR, "set_of_enum_typed_constant_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "set_of_enum_typed_constant_demo.s")
         executable_file = os.path.join(
             TEST_OUTPUT_DIR, "set_of_enum_typed_constant_demo"
@@ -1127,12 +1132,8 @@ class TestCompiler(unittest.TestCase):
 
     def test_typed_const_array_persists_between_calls(self):
         """Typed constant arrays should not be reinitialized on each invocation."""
-        input_file = os.path.join(
-            TEST_CASES_DIR, "typed_const_array_persistent_demo.p"
-        )
-        asm_file = os.path.join(
-            TEST_OUTPUT_DIR, "typed_const_array_persistent_demo.s"
-        )
+        input_file = os.path.join(TEST_CASES_DIR, "typed_const_array_persistent_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_persistent_demo.s")
         executable_file = os.path.join(
             TEST_OUTPUT_DIR, "typed_const_array_persistent_demo"
         )
@@ -1164,7 +1165,7 @@ class TestCompiler(unittest.TestCase):
 
         # ADDR operator is now supported, so compilation should succeed
         run_compiler(input_file, asm_file)
-        
+
         # Verify the assembly file was generated
         self.assertTrue(os.path.exists(asm_file))
         self.assertGreater(os.path.getsize(asm_file), 0)
@@ -1246,7 +1247,6 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.stdout, expected_output)
         self.assertEqual(process.returncode, 0)
 
-
     def test_for_program(self):
         """Tests the for program."""
         input_file = "GPC/TestPrograms/CodeGeneration/for.p"
@@ -1266,7 +1266,7 @@ class TestCompiler(unittest.TestCase):
                 input="3",
                 capture_output=True,
                 text=True,
-                timeout=EXEC_TIMEOUT
+                timeout=EXEC_TIMEOUT,
             )
             self.assertEqual(process.stdout.strip(), "123456")
             self.assertEqual(process.returncode, 0)
