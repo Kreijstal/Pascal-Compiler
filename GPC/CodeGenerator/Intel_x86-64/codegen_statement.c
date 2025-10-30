@@ -45,7 +45,6 @@ static int record_type_is_mp_integer(const struct RecordType *record_type);
 static int codegen_expr_is_mp_integer(struct Expression *expr);
 static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
     Register_t *value_reg);
-static int codegen_expr_is_addressable_ref(struct Expression *expr);
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
@@ -167,23 +166,6 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
 }
 
-static int codegen_expr_is_addressable_ref(struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-
-    switch (expr->type)
-    {
-        case EXPR_VAR_ID:
-        case EXPR_ARRAY_ACCESS:
-        case EXPR_RECORD_ACCESS:
-        case EXPR_POINTER_DEREF:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
 static int record_type_is_mp_integer(const struct RecordType *record_type)
 {
     if (record_type == NULL)
@@ -265,9 +247,13 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     Register_t *dest_reg = NULL;
     inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
     if (codegen_had_error(ctx) || dest_reg == NULL)
+    {
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
         return inst_list;
+    }
 
-    if (!codegen_expr_is_addressable_ref(src_expr))
+    if (!codegen_expr_is_addressable(src_expr))
     {
         codegen_report_error(ctx,
             "ERROR: Unsupported record-valued source expression.");
@@ -844,7 +830,7 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
             free_reg(get_reg_stack(), addr_reg);
         }
     }
-    else if (codegen_expr_is_addressable_ref(target_expr))
+    else if (codegen_expr_is_addressable(target_expr))
     {
         Register_t *addr_reg = NULL;
         inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);

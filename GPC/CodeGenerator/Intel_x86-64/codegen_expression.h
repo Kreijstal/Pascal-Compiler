@@ -22,6 +22,8 @@ ListNode_t *codegen_record_field_address(struct Expression *, ListNode_t *, Code
 ListNode_t *codegen_address_for_expr(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
 
+int codegen_expr_is_addressable(const struct Expression *expr);
+
 int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr, long long *size_out);
 int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,
     long long *size_out);

@@ -64,7 +64,9 @@ static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
 static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     long long *size_out, int depth);
 
-static int codegen_expr_is_addressable(const struct Expression *expr)
+static long long codegen_sizeof_var_type(enum VarType var_type);
+
+int codegen_expr_is_addressable(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -79,6 +81,67 @@ static int codegen_expr_is_addressable(const struct Expression *expr)
         default:
             return 0;
     }
+}
+
+static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
+    long long *size_out, int depth)
+{
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Type resolution exceeded supported recursion depth.");
+        return 1;
+    }
+
+    if (node->is_dynamic_array || node->array_end < node->array_start)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to determine size of dynamic array %s.",
+            node->id != NULL ? node->id : "");
+        return 1;
+    }
+
+    long long element_size = node->element_size;
+    if (element_size <= 0)
+    {
+        if (node->type_alias != NULL && node->type_alias->is_array)
+        {
+            if (codegen_sizeof_type(ctx, node->type_alias->array_element_type,
+                    node->type_alias->array_element_type_id, NULL,
+                    &element_size, depth + 1) != 0)
+                return 1;
+        }
+        else if (node->record_type != NULL && node->var_type == HASHVAR_RECORD)
+        {
+            if (codegen_sizeof_record(ctx, node->record_type, &element_size,
+                    depth + 1) != 0)
+                return 1;
+        }
+        else
+        {
+            long long base = codegen_sizeof_var_type(node->var_type);
+            if (base < 0)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine element size for array %s.",
+                    node->id != NULL ? node->id : "");
+                return 1;
+            }
+            element_size = base;
+        }
+    }
+
+    long long count = (long long)node->array_end - (long long)node->array_start + 1;
+    if (count < 0)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Invalid bounds for array %s during size computation.",
+            node->id != NULL ? node->id : "");
+        return 1;
+    }
+
+    *size_out = element_size * count;
+    return 0;
 }
 
 static long long codegen_sizeof_type_tag(int type_tag)
@@ -288,52 +351,15 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
+    if (node->is_array)
+        return codegen_sizeof_array_node(ctx, node, size_out, depth);
+
     if (node->hash_type == HASHTYPE_TYPE)
     {
         if (node->record_type != NULL)
             return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
         if (node->type_alias != NULL)
             return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
-
-        long long base = codegen_sizeof_var_type(node->var_type);
-        if (base >= 0)
-        {
-            *size_out = base;
-            return 0;
-        }
-    }
-
-    if (node->is_array)
-    {
-        if (node->is_dynamic_array || node->array_end < node->array_start)
-        {
-            codegen_report_error(ctx, "ERROR: Unable to determine size of dynamic array %s.",
-                node->id != NULL ? node->id : "");
-            return 1;
-        }
-
-        long long element_size = node->element_size;
-        if (element_size <= 0)
-        {
-            element_size = codegen_sizeof_var_type(node->var_type);
-            if (element_size < 0)
-            {
-                codegen_report_error(ctx, "ERROR: Unable to determine element size for array %s.",
-                    node->id != NULL ? node->id : "");
-                return 1;
-            }
-        }
-
-        long long count = (long long)node->array_end - (long long)node->array_start + 1;
-        if (count < 0)
-        {
-            codegen_report_error(ctx, "ERROR: Invalid bounds for array %s during size computation.",
-                node->id != NULL ? node->id : "");
-            return 1;
-        }
-
-        *size_out = element_size * count;
-        return 0;
     }
 
     if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
