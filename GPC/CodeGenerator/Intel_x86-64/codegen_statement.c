@@ -41,6 +41,10 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type);
+static int record_type_is_mp_integer(const struct RecordType *record_type);
+static int codegen_expr_is_mp_integer(struct Expression *expr);
+static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
+    Register_t *value_reg);
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
@@ -141,6 +145,62 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     }
 
     return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+}
+
+static int record_type_is_mp_integer(const struct RecordType *record_type)
+{
+    if (record_type == NULL)
+        return 0;
+
+    if (record_type->fields == NULL || record_type->fields->next != NULL)
+        return 0;
+
+    struct RecordField *field = (struct RecordField *)record_type->fields->cur;
+    if (field == NULL || field->name == NULL)
+        return 0;
+
+    return strcmp(field->name, "__gpc_mp_handle") == 0;
+}
+
+static int codegen_expr_is_mp_integer(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_type == RECORD_TYPE)
+        return record_type_is_mp_integer(expr->record_type);
+
+    if (expr->resolved_type == POINTER_TYPE && expr->pointer_subtype == RECORD_TYPE)
+        return record_type_is_mp_integer(expr->record_type);
+
+    return 0;
+}
+
+static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
+    Register_t *value_reg)
+{
+    if (addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_gmp_mpint_assign\n");
+    return inst_list;
 }
 
 static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
@@ -924,6 +984,31 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
+
+    if (codegen_expr_is_mp_integer(var_expr))
+    {
+        inst_list = codegen_expr(assign_expr, inst_list, ctx);
+        if (codegen_had_error(ctx))
+            return inst_list;
+
+        Register_t *value_reg = front_reg_stack(get_reg_stack());
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL || addr_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
+            if (addr_reg != NULL)
+                free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        inst_list = codegen_call_mpint_assign(inst_list, addr_reg, value_reg);
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        free_arg_regs();
+        return inst_list;
+    }
 
     if (var_expr->type == EXPR_VAR_ID)
     {
