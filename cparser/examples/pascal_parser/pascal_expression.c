@@ -344,7 +344,6 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
     }
 
     int literal_start = state.start;
-    bool digits_found = false;
 
     char c = read1(in);
     if (c == '$') {
@@ -353,28 +352,23 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
             restore_input_state(in, &state);
             return make_failure_v2(in, parser_name, strdup("Expected hex digits after '#$'"), NULL);
         }
-        digits_found = true;
         while ((c = read1(in)) != EOF && isxdigit((unsigned char)c));
     } else if (c != EOF && isdigit((unsigned char)c)) {
-        digits_found = true;
-        while ((c = read1(in)) != EOF && isdigit((unsigned char)c));
+        do {
+            c = read1(in);
+        } while (c != EOF && isdigit((unsigned char)c));
     } else {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected digits after '#'"), NULL);
     }
 
-    if (c != EOF) {
+    if (c != EOF && in->start > 0) {
         in->start--;
-    }
-
-    if (!digits_found) {
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Missing digits in character code"), NULL);
     }
 
     int len = in->start - literal_start;
     char* text = (char*)safe_malloc(len + 1);
-    strncpy(text, in->buffer + literal_start, len);
+    memcpy(text, in->buffer + literal_start, len);
     text[len] = '\0';
 
     ast_t* ast = new_ast();
