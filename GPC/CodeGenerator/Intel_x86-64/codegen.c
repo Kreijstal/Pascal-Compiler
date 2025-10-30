@@ -540,9 +540,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 {
                     int alloc_size = DOUBLEWORD;
                     enum VarType var_kind = HASHVAR_INTEGER;
+                    HashNode_t *var_info = NULL;
                     if (symtab != NULL)
                     {
-                        HashNode_t *var_info = NULL;
                         if (FindIdent(&var_info, symtab, (char *)id_list->cur) >= 0 && var_info != NULL)
                             var_kind = var_info->var_type;
                     }
@@ -551,9 +551,33 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
                         var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER)
+                    {
                         alloc_size = 8;
+                    }
+                    else if (var_kind == HASHVAR_RECORD)
+                    {
+                        struct RecordType *record_desc = NULL;
+                        if (var_info != NULL && var_info->record_type != NULL)
+                            record_desc = var_info->record_type;
+                        else if (type_node != NULL && type_node->record_type != NULL)
+                            record_desc = type_node->record_type;
+
+                        long long record_size = 0;
+                        if (record_desc != NULL &&
+                            codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
+                            record_size > 0)
+                        {
+                            alloc_size = (int)record_size;
+                        }
+                        else
+                        {
+                            alloc_size = DOUBLEWORD;
+                        }
+                    }
                     else
+                    {
                         alloc_size = DOUBLEWORD;
+                    }
 
                     add_l_x((char *)id_list->cur, alloc_size);
                 }

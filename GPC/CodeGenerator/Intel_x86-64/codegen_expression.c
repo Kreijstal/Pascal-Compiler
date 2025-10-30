@@ -18,6 +18,11 @@
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../identifier_utils.h"
+
+#define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
 
 int codegen_type_uses_qword(int type_tag)
@@ -43,6 +48,394 @@ static inline const char *register_name_for_expr(const Register_t *reg, const st
 static inline int expression_uses_qword(const struct Expression *expr)
 {
     return expr != NULL && codegen_type_uses_qword(expr->resolved_type);
+}
+
+static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
+    struct RecordType *record_type, long long *size_out, int depth);
+
+static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
+    long long *size_out, int depth);
+int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,
+    long long *size_out);
+
+static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
+    long long *size_out, int depth);
+
+static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
+    long long *size_out, int depth);
+
+static long long codegen_sizeof_var_type(enum VarType var_type);
+
+int codegen_expr_is_addressable(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+        case EXPR_ARRAY_ACCESS:
+        case EXPR_RECORD_ACCESS:
+        case EXPR_POINTER_DEREF:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
+    long long *size_out, int depth)
+{
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Type resolution exceeded supported recursion depth.");
+        return 1;
+    }
+
+    if (node->is_dynamic_array || node->array_end < node->array_start)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to determine size of dynamic array %s.",
+            node->id != NULL ? node->id : "");
+        return 1;
+    }
+
+    long long element_size = node->element_size;
+    if (element_size <= 0)
+    {
+        if (node->type_alias != NULL && node->type_alias->is_array)
+        {
+            if (codegen_sizeof_type(ctx, node->type_alias->array_element_type,
+                    node->type_alias->array_element_type_id, NULL,
+                    &element_size, depth + 1) != 0)
+                return 1;
+        }
+        else if (node->record_type != NULL && node->var_type == HASHVAR_RECORD)
+        {
+            if (codegen_sizeof_record(ctx, node->record_type, &element_size,
+                    depth + 1) != 0)
+                return 1;
+        }
+        else
+        {
+            long long base = codegen_sizeof_var_type(node->var_type);
+            if (base < 0)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine element size for array %s.",
+                    node->id != NULL ? node->id : "");
+                return 1;
+            }
+            element_size = base;
+        }
+    }
+
+    long long count = (long long)node->array_end - (long long)node->array_start + 1;
+    if (count < 0)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Invalid bounds for array %s during size computation.",
+            node->id != NULL ? node->id : "");
+        return 1;
+    }
+
+    *size_out = element_size * count;
+    return 0;
+}
+
+static long long codegen_sizeof_type_tag(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE:
+        case BOOL:
+        case SET_TYPE:
+        case ENUM_TYPE:
+            return 4;
+        case LONGINT_TYPE:
+        case REAL_TYPE:
+            return 8;
+        case STRING_TYPE:
+        case POINTER_TYPE:
+        case FILE_TYPE:
+        case PROCEDURE:
+            return CODEGEN_POINTER_SIZE_BYTES;
+        case CHAR_TYPE:
+            return 1;
+        case RECORD_TYPE:
+            return -1;
+        default:
+            return -1;
+    }
+}
+
+static long long codegen_sizeof_var_type(enum VarType var_type)
+{
+    switch (var_type)
+    {
+        case HASHVAR_INTEGER:
+        case HASHVAR_BOOLEAN:
+        case HASHVAR_SET:
+        case HASHVAR_ENUM:
+            return 4;
+        case HASHVAR_LONGINT:
+        case HASHVAR_REAL:
+            return 8;
+        case HASHVAR_PCHAR:
+        case HASHVAR_PROCEDURE:
+        case HASHVAR_POINTER:
+        case HASHVAR_FILE:
+            return CODEGEN_POINTER_SIZE_BYTES;
+        case HASHVAR_CHAR:
+            return 1;
+        default:
+            return -1;
+    }
+}
+
+static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
+    struct RecordType *record_type, long long *size_out, int depth)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to determine type size due to excessive nesting.");
+        return 1;
+    }
+
+    if (record_type != NULL)
+        return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
+
+    if (type_tag == RECORD_TYPE && type_id == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to resolve anonymous record type for size computation.");
+        return 1;
+    }
+
+    if (type_tag != UNKNOWN_TYPE)
+    {
+        long long base = codegen_sizeof_type_tag(type_tag);
+        if (base >= 0)
+        {
+            *size_out = base;
+            return 0;
+        }
+    }
+
+    if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, (char *)type_id) >= 0 && node != NULL)
+            return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
+
+        codegen_report_error(ctx, "ERROR: Unable to resolve type %s for size computation.", type_id);
+        return 1;
+    }
+
+    codegen_report_error(ctx, "ERROR: Unable to determine size for expression type %d.", type_tag);
+    return 1;
+}
+
+static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
+    long long *size_out, int depth)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (record == NULL)
+    {
+        *size_out = 0;
+        return 0;
+    }
+
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx, "ERROR: Record type nesting exceeds supported depth.");
+        return 1;
+    }
+
+    long long total = 0;
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        long long field_size = 0;
+
+        if (field->nested_record != NULL)
+        {
+            if (codegen_sizeof_record(ctx, field->nested_record, &field_size, depth + 1) != 0)
+                return 1;
+        }
+        else
+        {
+            if (codegen_sizeof_type(ctx, field->type, field->type_id, NULL,
+                    &field_size, depth + 1) != 0)
+                return 1;
+        }
+
+        total += field_size;
+    }
+
+    *size_out = total;
+    return 0;
+}
+
+int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,
+    long long *size_out)
+{
+    return codegen_sizeof_record(ctx, record, size_out, 0);
+}
+
+static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
+    long long *size_out, int depth)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (alias == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Incomplete type alias encountered during size computation.");
+        return 1;
+    }
+
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx, "ERROR: Type alias nesting exceeds supported depth.");
+        return 1;
+    }
+
+    if (alias->is_array)
+    {
+        if (alias->is_open_array || alias->array_end < alias->array_start)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to determine size of open array type.");
+            return 1;
+        }
+
+        long long element_size = 0;
+        if (codegen_sizeof_type(ctx, alias->array_element_type, alias->array_element_type_id,
+                NULL, &element_size, depth + 1) != 0)
+            return 1;
+
+        long long count = (long long)alias->array_end - (long long)alias->array_start + 1;
+        if (count < 0)
+        {
+            codegen_report_error(ctx, "ERROR: Invalid bounds for array type during size computation.");
+            return 1;
+        }
+
+        *size_out = element_size * count;
+        return 0;
+    }
+
+    if (alias->base_type != UNKNOWN_TYPE)
+        return codegen_sizeof_type(ctx, alias->base_type, NULL, NULL, size_out, depth + 1);
+
+    if (alias->target_type_id != NULL)
+        return codegen_sizeof_type(ctx, UNKNOWN_TYPE, alias->target_type_id, NULL,
+            size_out, depth + 1);
+
+    codegen_report_error(ctx, "ERROR: Unable to resolve type alias size.");
+    return 1;
+}
+
+static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
+    long long *size_out, int depth)
+{
+    if (size_out == NULL || node == NULL)
+        return 1;
+
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx, "ERROR: Type resolution exceeded supported recursion depth.");
+        return 1;
+    }
+
+    if (node->is_array)
+        return codegen_sizeof_array_node(ctx, node, size_out, depth);
+
+    if (node->hash_type == HASHTYPE_TYPE)
+    {
+        if (node->record_type != NULL)
+            return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
+        if (node->type_alias != NULL)
+            return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
+    }
+
+    if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
+        return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
+
+    if (node->type_alias != NULL)
+        return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
+
+    long long base = codegen_sizeof_var_type(node->var_type);
+    if (base >= 0)
+    {
+        *size_out = base;
+        return 0;
+    }
+
+    codegen_report_error(ctx, "ERROR: Unable to determine size for symbol %s.",
+        node->id != NULL ? node->id : "");
+    return 1;
+}
+
+int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
+    long long *size_out)
+{
+    if (expr == NULL || size_out == NULL)
+        return 1;
+
+    if (expr->record_type != NULL)
+        return codegen_sizeof_record(ctx, expr->record_type, size_out, 0);
+
+    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
+            return codegen_sizeof_hashnode(ctx, node, size_out, 0);
+    }
+
+    if (expr->type == EXPR_POINTER_DEREF)
+    {
+        if (expr->pointer_subtype_id != NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, expr->pointer_subtype_id) >= 0 && node != NULL)
+                return codegen_sizeof_hashnode(ctx, node, size_out, 0);
+        }
+
+        struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        while (pointer_expr != NULL && pointer_expr->type == EXPR_TYPECAST &&
+            pointer_expr->expr_data.typecast_data.expr != NULL)
+        {
+            pointer_expr = pointer_expr->expr_data.typecast_data.expr;
+        }
+
+        if (pointer_expr != NULL)
+        {
+            if (pointer_expr->record_type != NULL)
+                return codegen_sizeof_record(ctx, pointer_expr->record_type, size_out, 0);
+
+            if (pointer_expr->pointer_subtype_id != NULL && ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, ctx->symtab, pointer_expr->pointer_subtype_id) >= 0 && node != NULL)
+                    return codegen_sizeof_hashnode(ctx, node, size_out, 0);
+            }
+        }
+    }
+
+    if (expr->type == EXPR_TYPECAST && expr->expr_data.typecast_data.expr != NULL)
+        return codegen_get_record_size(ctx, expr->expr_data.typecast_data.expr, size_out);
+
+    codegen_report_error(ctx, "ERROR: Unable to determine size for record expression.");
+    return 1;
 }
 
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -206,6 +599,37 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         Register_t *addr_reg = NULL;
         inst_list = codegen_array_element_address(inner, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+    else if (inner->type == EXPR_RECORD_ACCESS)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_record_field_address(inner, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+            return inst_list;
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+    else if (inner->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = inner->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
+            return inst_list;
+        }
+
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_expr_tree_value(pointer_expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
             return inst_list;
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, target_reg->bit_64);
@@ -1100,41 +1524,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
         {
             // Pass by reference
-            if (arg_expr->type == EXPR_VAR_ID)
+            if (!codegen_expr_is_addressable(arg_expr))
             {
-                StackNode_t *var_node = find_label(arg_expr->expr_data.id);
-                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-                if (addr_reg == NULL)
-                {
-                    fprintf(stderr, "ERROR: Unable to allocate register for by-reference argument.\n");
-                    exit(1);
-                }
+                codegen_report_error(ctx,
+                    "ERROR: Unsupported expression type for var parameter.");
+                return inst_list;
+            }
 
-                snprintf(buffer, 50, "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+                return inst_list;
 
-                if (arg_infos != NULL)
-                {
+            if (arg_infos != NULL)
+            {
                 arg_infos[arg_num].reg = addr_reg;
                 arg_infos[arg_num].spill = NULL;
                 arg_infos[arg_num].expr = arg_expr;
-                }
-            }
-            else if (arg_expr->type == EXPR_ARRAY_ACCESS)
-            {
-                Register_t *addr_reg = NULL;
-                inst_list = codegen_array_element_address(arg_expr, inst_list, ctx, &addr_reg);
-                if (arg_infos != NULL)
-                {
-                arg_infos[arg_num].reg = addr_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
-                }
-            }
-            else
-            {
-                fprintf(stderr, "Error: unsupported expression type for var parameter\n");
-                assert(0);
             }
         }
         else

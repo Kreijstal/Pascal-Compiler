@@ -1207,7 +1207,14 @@ static int semcheck_addressof(int *type_return,
     if (inner_type == POINTER_TYPE && inner->pointer_subtype_id != NULL)
         type_id = inner->pointer_subtype_id;
 
+    struct RecordType *record_info = NULL;
+    if (inner_type == RECORD_TYPE)
+        record_info = inner->record_type;
+    else if (inner_type == POINTER_TYPE && inner->record_type != NULL)
+        record_info = inner->record_type;
+
     semcheck_set_pointer_info(expr, inner_type, type_id);
+    expr->record_type = record_info;
     *type_return = POINTER_TYPE;
     return error_count;
 }

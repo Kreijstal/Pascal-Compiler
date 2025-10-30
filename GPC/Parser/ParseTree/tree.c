@@ -1639,6 +1639,13 @@ struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *ind
 
 struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr, char *field_id)
 {
+    if (record_expr != NULL && record_expr->type == EXPR_ADDR)
+    {
+        struct Expression *inner = record_expr->expr_data.addr_data.expr;
+        free(record_expr);
+        return mk_addressof(line_num, mk_recordaccess(line_num, inner, field_id));
+    }
+
     struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
