@@ -130,14 +130,12 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     // Reuse the statement parser so the main program block supports the same
     // constructs as regular compound statements (case, loops, nested blocks, etc.).
 
-    combinator_t* stmt_parser = new_combinator();
-    init_pascal_statement_parser(&stmt_parser);
-
     // `lazy` needs a stable pointer-to-pointer so recursive constructs like CASE
     // branches can reuse the same statement parser instance.  Wrap the parser in a
     // heap-allocated pointer so the lifetime matches the combinator graph.
     combinator_t** stmt_parser_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser_ref = stmt_parser;
+    *stmt_parser_ref = new_combinator();
+    init_pascal_statement_parser(stmt_parser_ref);
 
     // Statements in a BEGIN..END block follow the same semicolon rules as any
     // compound statement: statements are separated by semicolons with an optional
