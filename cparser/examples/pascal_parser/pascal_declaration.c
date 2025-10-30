@@ -1103,12 +1103,18 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* post_subprogram_var_sections = many(var_section);
 
-    // Complete program: program Name(params); optional uses clause; declaration sections; subprograms; optional trailing vars; optional main block.
-    seq(*p, PASCAL_T_PROGRAM_DECL,
+    // Support optional "program" header so unit-less Pascal files can be parsed.
+    combinator_t* program_header = seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("program")),                   // program keyword (with word boundary check)
         token(cident(PASCAL_T_IDENTIFIER)),          // program name
         program_param_list,                          // optional parameter list
         token(match(";")),                           // semicolon
+        NULL
+    );
+
+    // Complete program: optional header; optional uses clause; declaration sections; subprograms; optional trailing vars; optional main block.
+    seq(*p, PASCAL_T_PROGRAM_DECL,
+        optional(program_header),                    // optional "program" header
         optional(uses_section),                      // optional uses clause
         pre_subprogram_sections,                     // const/type/var sections in any order
         many(all_declarations),                      // zero or more procedure/function/method declarations
