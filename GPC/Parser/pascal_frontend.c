@@ -188,11 +188,17 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
     const char *template = path != NULL ? "Preprocessing failed for '%s': %s"
                                        : "Preprocessing failed: %s";
 
-    size_t needed = 0;
+    int needed_len = 0;
     if (path != NULL)
-        needed = (size_t)snprintf(NULL, 0, template, path, detail_text) + 1;
+        needed_len = snprintf(NULL, 0, template, path, detail_text);
     else
-        needed = (size_t)snprintf(NULL, 0, template, detail_text) + 1;
+        needed_len = snprintf(NULL, 0, template, detail_text);
+    if (needed_len < 0)
+    {
+        free(err);
+        return NULL;
+    }
+    size_t needed = (size_t)needed_len + 1;
     char *message = (char *)malloc(needed);
     if (message == NULL)
     {
@@ -274,7 +280,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
 
-    const char *default_symbols[] = { "FPC", "OBJFPC", "GPC" };
+    const char *default_symbols[] = { "GPC" };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
         if (!pascal_preprocessor_define(preprocessor, default_symbols[i]))
