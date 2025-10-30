@@ -1546,7 +1546,6 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     }
 
     assert(for_var->type == EXPR_VAR_ID);
-    comparison_expr = mk_relop(-1, LE, for_var, expr);
     one_expr = mk_inum(-1, 1);
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
@@ -1557,17 +1556,57 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     /* Condition check - before body */
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_condition_expr(comparison_expr, inst_list, ctx, &relop_type);
     
-    /* If condition fails, jump to exit */
-    inst_list = gencode_jmp(relop_type, 1, exit_label, inst_list);
+    /* Evaluate the loop variable and the 'to' expression each time */
+    Register_t *for_var_reg = NULL;
+    inst_list = codegen_evaluate_expr(for_var, inst_list, ctx, &for_var_reg);
+    if (codegen_had_error(ctx) || for_var_reg == NULL)
+    {
+        free(one_expr);
+        free(update_expr);
+        free(update_stmt);
+        return inst_list;
+    }
+    
+    Register_t *expr_reg = NULL;
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &expr_reg);
+    if (codegen_had_error(ctx) || expr_reg == NULL)
+    {
+        free_reg(get_reg_stack(), for_var_reg);
+        free(one_expr);
+        free(update_expr);
+        free(update_stmt);
+        return inst_list;
+    }
+    
+    /* Compare for_var <= expr */
+    char buffer2[128];
+    if (for_var->resolved_type == LONGINT_TYPE)
+    {
+        snprintf(buffer2, sizeof(buffer2), "\tcmpq\t%s, %s\n", expr_reg->bit_64, for_var_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer2);
+    }
+    else
+    {
+        snprintf(buffer2, sizeof(buffer2), "\tcmpl\t%s, %s\n", expr_reg->bit_32, for_var_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer2);
+    }
+    
+    /* If for_var > expr, jump to exit (inverse of LE) */
+    if (for_var->resolved_type == LONGINT_TYPE)
+        snprintf(buffer2, sizeof(buffer2), "\tjg\t%s\n", exit_label);
+    else
+        snprintf(buffer2, sizeof(buffer2), "\tjg\t%s\n", exit_label);
+    inst_list = add_inst(inst_list, buffer2);
+    
+    free_reg(get_reg_stack(), for_var_reg);
+    free_reg(get_reg_stack(), expr_reg);
 
     /* Body of the loop */
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
     if (!codegen_push_loop_exit(ctx, exit_label))
     {
-        free(comparison_expr);
         free(one_expr);
         free(update_expr);
         free(update_stmt);
@@ -1586,7 +1625,6 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
 
-    free(comparison_expr);
     free(one_expr);
     free(update_expr);
     free(update_stmt);
