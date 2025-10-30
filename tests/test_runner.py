@@ -447,6 +447,25 @@ class TestCompiler(unittest.TestCase):
         literal_bits = "4609434218613702656"
         self.assertIn(literal_bits, asm)
 
+    def test_conditional_macros_skip_inactive_branch(self):
+        """Conditional macros should skip inactive branches during preprocessing."""
+        input_file = os.path.join(TEST_CASES_DIR, "conditional_macros.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "conditional_macros.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "conditional_macros")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "42\n")
+
     def test_bitwise_operations_execute(self):
         """Bitwise shifts and rotates should execute correctly and match expected output."""
         input_file = os.path.join(TEST_CASES_DIR, "bitwise_ops.p")
