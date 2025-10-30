@@ -23,14 +23,12 @@ jobs:
       with:
         msystem: ${{ matrix.sys }}
         update: true
-        install: base-devel git
+        install: base-devel git flex bison
         pacboy: >-
           cc:p
           meson:p
           ninja:p
           python:p
-          flex:p
-          bison:p
 
     - name: Configure build
       shell: msys2 {0}
