@@ -123,10 +123,13 @@ typedef struct StackNode
     int array_lower_bound;
     int element_size;
     int is_dynamic;
+    int is_static;
+    char *static_label;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */
 StackNode_t *init_stack_node(int offset, char *label, int size);
+StackNode_t *add_static_array(char *label, int total_size, int element_size, int lower_bound, const char *static_label);
 void destroy_stack_node(StackNode_t *);
 
 #endif

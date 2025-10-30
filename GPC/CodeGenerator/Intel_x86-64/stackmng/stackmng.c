@@ -863,6 +863,8 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->array_lower_bound = 0;
     new_node->element_size = size;
     new_node->is_dynamic = 0;
+    new_node->is_static = 0;
+    new_node->static_label = NULL;
 
     return new_node;
 }
@@ -873,5 +875,32 @@ void destroy_stack_node(StackNode_t *node)
     assert(node->label != NULL);
 
     free(node->label);
+    if (node->static_label != NULL)
+        free(node->static_label);
     free(node);
+}
+
+StackNode_t *add_static_array(char *label, int total_size, int element_size, int lower_bound, const char *static_label)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    StackNode_t *new_node = init_stack_node(0, label, total_size);
+    new_node->is_array = 1;
+    new_node->array_lower_bound = lower_bound;
+    new_node->element_size = element_size;
+    new_node->is_dynamic = 0;
+    new_node->is_static = 1;
+    if (static_label != NULL)
+        new_node->static_label = strdup(static_label);
+
+    ListNode_t *list_node = CreateListNode(new_node, LIST_UNSPECIFIED);
+    if (cur_scope->x == NULL)
+        cur_scope->x = list_node;
+    else
+        cur_scope->x = PushListNodeBack(cur_scope->x, list_node);
+
+    return new_node;
 }
