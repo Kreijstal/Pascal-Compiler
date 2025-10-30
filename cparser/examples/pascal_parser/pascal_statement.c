@@ -466,6 +466,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
             token(keyword_ci("else")),         // else keyword
             lazy(stmt_parser),                 // else statement
+            optional(token(match(";"))),      // optional semicolon after else block
             NULL
         )),
         token(keyword_ci("end")),              // end keyword
