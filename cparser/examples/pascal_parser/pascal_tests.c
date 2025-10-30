@@ -783,37 +783,46 @@ void test_pascal_char_literal(void) {
     free(input);
 }
 
-void test_pascal_char_code_literal(void) {
-    combinator_t* p = new_combinator();
-    init_pascal_expression_parser(&p);
-
+static void assert_char_code_literal_success(combinator_t* p, const char* literal) {
     input_t* input = new_input();
-    input->buffer = strdup("#13");
-    input->length = strlen("#13");
+    input->buffer = strdup(literal);
+    input->length = (int)strlen(literal);
 
     ParseResult res = parse(input, p);
 
     TEST_ASSERT(res.is_success);
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_CHAR_CODE);
-    TEST_ASSERT(strcmp(res.value.ast->sym->name, "#13") == 0);
+    TEST_ASSERT(strcmp(res.value.ast->sym->name, literal) == 0);
 
     free_ast(res.value.ast);
     free(input->buffer);
     free(input);
+}
 
-    input = new_input();
-    input->buffer = strdup("#$0D");
-    input->length = strlen("#$0D");
+static void assert_char_code_literal_failure(combinator_t* p, const char* literal) {
+    input_t* input = new_input();
+    input->buffer = strdup(literal);
+    input->length = (int)strlen(literal);
 
-    res = parse(input, p);
+    ParseResult res = parse(input, p);
 
-    TEST_ASSERT(res.is_success);
-    TEST_ASSERT(res.value.ast->typ == PASCAL_T_CHAR_CODE);
-    TEST_ASSERT(strcmp(res.value.ast->sym->name, "#$0D") == 0);
+    TEST_ASSERT(!res.is_success);
 
-    free_ast(res.value.ast);
+    free_error(res.value.error);
     free(input->buffer);
     free(input);
+}
+
+void test_pascal_char_code_literal(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
+
+    assert_char_code_literal_success(p, "#13");
+    assert_char_code_literal_success(p, "#$0D");
+
+    assert_char_code_literal_failure(p, "#");
+    assert_char_code_literal_failure(p, "#$ZZ");
+    assert_char_code_literal_failure(p, "#abc");
 
     free_combinator(p);
 }

@@ -117,6 +117,13 @@ combinator_t* create_pascal_param_parser(void) {
 // Bring in the global sentinel value for an empty AST node
 extern ast_t* ast_nil;
 
+static ast_t* wrap_program_params(ast_t* params) {
+    ast_t* params_node = new_ast();
+    params_node->typ = PASCAL_T_PROGRAM_PARAMS;
+    params_node->child = (params == ast_nil) ? NULL : params;
+    return params_node;
+}
+
 // Custom parser for main block content that parses statements properly
 static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_name) {
     // Parse statements until we can't parse any more
@@ -825,10 +832,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Program parameter list: (identifier, identifier, ...)
     combinator_t* program_param = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* program_param_list = optional(between(
-        token(match("(")),
-        token(match(")")),
-        sep_by(program_param, token(match(",")))
+    combinator_t* program_param_list = optional(map(
+        between(
+            token(match("(")),
+            token(match(")")),
+            sep_by(program_param, token(match(",")))
+        ),
+        wrap_program_params
     ));
 
     // Enhanced Variable declaration: var1, var2, var3 : type;
@@ -1104,7 +1114,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* post_subprogram_var_sections = many(var_section);
 
     // Support optional "program" header so unit-less Pascal files can be parsed.
-    combinator_t* program_header = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* program_header = seq(new_combinator(), PASCAL_T_PROGRAM_HEADER,
         token(keyword_ci("program")),                   // program keyword (with word boundary check)
         token(cident(PASCAL_T_IDENTIFIER)),          // program name
         program_param_list,                          // optional parameter list
