@@ -111,6 +111,8 @@ int gpc_real_compare(int64_t a_bits, int64_t b_bits)
 {
     double a = gpc_bits_to_double(a_bits);
     double b = gpc_bits_to_double(b_bits);
+    if (a != a || b != b)
+        return 0;
     if (a < b)
         return -1;
     if (a > b)

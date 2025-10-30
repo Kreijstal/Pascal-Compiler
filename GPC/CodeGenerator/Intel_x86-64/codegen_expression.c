@@ -891,8 +891,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     {
         if (relop_type != NULL)
             *relop_type = NE;
-        else
-            expr->expr_data.relop_data.type = NE;
 
         StackNode_t *set_spill = add_l_t("set_relop");
         if (set_spill != NULL)
@@ -925,53 +923,87 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     {
         const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
         const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
+        char true_label[32];
         char done_label[32];
-        char unordered_label[32];
+        gen_label(true_label, sizeof(true_label), ctx);
         gen_label(done_label, sizeof(done_label), ctx);
-        gen_label(unordered_label, sizeof(unordered_label), ctx);
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", left_name);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$-1, %s\n", left_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = add_inst(inst_list, "\tcomisd\t%xmm1, %xmm0\n");
-        snprintf(buffer, sizeof(buffer), "\tja\t%s\n", done_label);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = add_inst(inst_list, "\tcomisd\t%xmm0, %xmm1\n");
-        snprintf(buffer, sizeof(buffer), "\tja\t%s\n", done_label);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$0, %s\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         inst_list = add_inst(inst_list, "\tucomisd\t%xmm0, %xmm1\n");
-        snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", done_label);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", unordered_label);
-        inst_list = add_inst(inst_list, buffer);
+
+        int relop_kind = expr->expr_data.relop_data.type;
+        switch (relop_kind)
+        {
+            case EQ:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tje\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case NE:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case LT:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjb\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case LE:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjbe\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case GT:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tja\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case GE:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjae\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            default:
+                break;
+        }
+
         snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "%s:\n", unordered_label);
+        snprintf(buffer, sizeof(buffer), "%s:\n", true_label);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "%s:\n", done_label);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
+
+        if (relop_type != NULL)
+            *relop_type = NE;
+
         free_reg(get_reg_stack(), left_reg);
         return inst_list;
     }
 
     int use_qword = expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
-    const char *left_name = register_name_for_expr(left_reg, left_expr);
+    const char *left_name = use_qword
+        ? register_name_for_type(left_reg, LONGINT_TYPE)
+        : register_name_for_expr(left_reg, left_expr);
     const char *right_name = use_qword
-        ? register_name_for_type(right_reg, left_expr != NULL ? left_expr->resolved_type : UNKNOWN_TYPE)
+        ? register_name_for_type(right_reg, LONGINT_TYPE)
         : register_name_for_expr(right_reg, right_expr);
-    if (use_qword)
-        left_name = register_name_for_type(left_reg, left_expr != NULL ? left_expr->resolved_type : UNKNOWN_TYPE);
     snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);
     free_reg(get_reg_stack(), left_reg);
