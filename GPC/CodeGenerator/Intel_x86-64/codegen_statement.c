@@ -1551,8 +1551,10 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
+    /* Jump to condition check first */
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
+    /* Body of the loop */
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
     if (!codegen_push_loop_exit(ctx, exit_label))
@@ -1566,14 +1568,18 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
     codegen_pop_loop_exit(ctx);
 
+    /* Increment loop variable */
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
 
+    /* Condition check - after increment */
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_condition_expr(comparison_expr, inst_list, ctx, &relop_type);
 
+    /* If condition is true, jump back to body */
     inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
 
+    /* Exit label */
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
 
