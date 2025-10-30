@@ -332,6 +332,72 @@ combinator_t* char_literal(tag_t tag) {
     return comb;
 }
 
+// Custom parser for character code literals (e.g., #13, #$0D)
+static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    if (read1(in) != '#') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '#' for character code"), NULL);
+    }
+
+    int literal_start = state.start;
+    bool digits_found = false;
+
+    char c = read1(in);
+    if (c == '$') {
+        c = read1(in);
+        if (c == EOF || !isxdigit((unsigned char)c)) {
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected hex digits after '#$'"), NULL);
+        }
+        digits_found = true;
+        while ((c = read1(in)) != EOF && isxdigit((unsigned char)c));
+    } else if (c != EOF && isdigit((unsigned char)c)) {
+        digits_found = true;
+        while ((c = read1(in)) != EOF && isdigit((unsigned char)c));
+    } else {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected digits after '#'"), NULL);
+    }
+
+    if (c != EOF) {
+        in->start--;
+    }
+
+    if (!digits_found) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Missing digits in character code"), NULL);
+    }
+
+    int len = in->start - literal_start;
+    char* text = (char*)safe_malloc(len + 1);
+    strncpy(text, in->buffer + literal_start, len);
+    text[len] = '\0';
+
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    free(text);
+    return make_success(ast);
+}
+
+combinator_t* char_code_literal(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY;
+    comb->fn = char_code_fn;
+    comb->args = args;
+    return comb;
+}
+
 // Custom parser for range expressions (e.g., 'a'..'z', 1..10)
 static ParseResult range_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -723,6 +789,7 @@ void init_pascal_expression_parser(combinator_t** p) {
         token(hex_integer(PASCAL_T_INTEGER)),     // Hex integers ($FF) - try before decimal
         token(integer(PASCAL_T_INTEGER)),         // Integers (123)
         token(char_literal(PASCAL_T_CHAR)),       // Characters ('A')
+        token(char_code_literal(PASCAL_T_CHAR_CODE)), // Character codes (#13, #$0D)
         token(pascal_string(PASCAL_T_STRING)),    // Strings ("hello" or 'hello')
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]
         token(boolean_true),                      // Boolean true

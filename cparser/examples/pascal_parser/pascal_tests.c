@@ -783,6 +783,41 @@ void test_pascal_char_literal(void) {
     free(input);
 }
 
+void test_pascal_char_code_literal(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("#13");
+    input->length = strlen("#13");
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(res.value.ast->typ == PASCAL_T_CHAR_CODE);
+    TEST_ASSERT(strcmp(res.value.ast->sym->name, "#13") == 0);
+
+    free_ast(res.value.ast);
+    free(input->buffer);
+    free(input);
+
+    input = new_input();
+    input->buffer = strdup("#$0D");
+    input->length = strlen("#$0D");
+
+    res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(res.value.ast->typ == PASCAL_T_CHAR_CODE);
+    TEST_ASSERT(strcmp(res.value.ast->sym->name, "#$0D") == 0);
+
+    free_ast(res.value.ast);
+    free(input->buffer);
+    free(input);
+
+    free_combinator(p);
+}
+
 // Test unary plus operator
 void test_pascal_unary_plus(void) {
     combinator_t* p = new_combinator();
@@ -2858,6 +2893,60 @@ void test_pascal_record_member_access_complete_program(void) {
     free(input);
 }
 
+void test_pascal_unitless_program(void) {
+    combinator_t* p = get_program_parser();
+
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("unitless_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        ast_t* program_decl = res.value.ast;
+        TEST_ASSERT(program_decl->typ == PASCAL_T_PROGRAM_DECL);
+
+        bool found_uses = false;
+        bool found_const = false;
+        bool found_main_block = false;
+
+        for (ast_t* current = program_decl->child; current != NULL; current = current->next) {
+            if (current->typ == PASCAL_T_USES_SECTION) {
+                found_uses = true;
+            } else if (current->typ == PASCAL_T_CONST_SECTION) {
+                found_const = true;
+            } else if (current->typ == PASCAL_T_MAIN_BLOCK) {
+                found_main_block = true;
+            }
+        }
+
+        TEST_ASSERT(found_uses);
+        TEST_ASSERT(found_const);
+        TEST_ASSERT(found_main_block);
+
+        ast_t* set_literal = find_first_node_of_type(program_decl, PASCAL_T_SET);
+        TEST_ASSERT(set_literal != NULL);
+        if (set_literal) {
+            ast_t* char_code = find_first_node_of_type(set_literal, PASCAL_T_CHAR_CODE);
+            TEST_ASSERT(char_code != NULL);
+        }
+
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free(input);
+}
+
 void test_fpc_style_unit_parsing(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
@@ -3604,6 +3693,7 @@ TEST_LIST = {
     { "test_pascal_div_operator", test_pascal_div_operator },
     { "test_pascal_real_number", test_pascal_real_number },
     { "test_pascal_char_literal", test_pascal_char_literal },
+    { "test_pascal_char_code_literal", test_pascal_char_code_literal },
     { "test_pascal_unary_plus", test_pascal_unary_plus },
     { "test_pascal_relational_operators", test_pascal_relational_operators },
     { "test_pascal_boolean_operators", test_pascal_boolean_operators },
@@ -3670,6 +3760,7 @@ TEST_LIST = {
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
     { "test_pascal_record_member_access_complete_program", test_pascal_record_member_access_complete_program },
+    { "test_pascal_unitless_program", test_pascal_unitless_program },
     { "test_pascal_var_section", test_pascal_var_section },
     { "test_pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
     { "test_pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },
