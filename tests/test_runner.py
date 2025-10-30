@@ -1248,7 +1248,7 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
 
     def test_for_program(self):
-        """Tests the for program."""
+        """Tests the for program, including edge cases."""
         input_file = "GPC/TestPrograms/CodeGeneration/for.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "for")
@@ -1259,19 +1259,27 @@ class TestCompiler(unittest.TestCase):
         # Compile the assembly to an executable
         self.compile_executable(asm_file, executable_file)
 
-        # Run the executable and check the output
-        try:
-            process = subprocess.run(
-                [executable_file],
-                input="3",
-                capture_output=True,
-                text=True,
-                timeout=EXEC_TIMEOUT,
-            )
-            self.assertEqual(process.stdout.strip(), "123456")
-            self.assertEqual(process.returncode, 0)
-        except subprocess.TimeoutExpired:
-            self.fail("Test execution timed out.")
+        test_cases = [
+            {"input": "3", "expected_output": "123456", "desc": "normal positive bound"},
+            {"input": "0", "expected_output": "", "desc": "zero bound"},
+            {"input": "-5", "expected_output": "", "desc": "negative bound"},
+        ]
+
+        for case in test_cases:
+            with self.subTest(msg=case["desc"], input=case["input"]):
+                try:
+                    process = subprocess.run(
+                        [executable_file],
+                        input=case["input"],
+                        capture_output=True,
+                        text=True,
+                        timeout=EXEC_TIMEOUT,
+                    )
+                    self.assertEqual(process.stdout.strip(), case["expected_output"])
+                    self.assertEqual(process.returncode, 0)
+                except subprocess.TimeoutExpired:
+                    self.fail("Test execution timed out.")
+
 
 
 def _load_suite():

@@ -1,0 +1,43 @@
+name: MSYS2 CI
+
+on:
+  pull_request:
+    branches: [ "*" ]
+  push:
+    branches: [ "*" ]
+
+jobs:
+  msys2-build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        sys: [MINGW64, UCRT64, CLANG64]
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{ matrix.sys }}
+        update: true
+        install: base-devel git flex bison
+        pacboy: >-
+          cc:p
+          meson:p
+          ninja:p
+          python:p
+
+    - name: Configure build
+      shell: msys2 {0}
+      run: meson setup builddir --buildtype=release
+
+    - name: Build
+      shell: msys2 {0}
+      run: meson compile -C builddir
+
+    - name: Run tests
+      shell: msys2 {0}
+      run: meson test -v -C builddir

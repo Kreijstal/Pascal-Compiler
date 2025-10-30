@@ -970,13 +970,19 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
         /* Allocate shadow space for Windows x64 calling convention and align stack */
-        inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
+        if (codegen_target_is_windows())
+        {
+            inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
+        }
         
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
         
         /* Restore stack after shadow space allocation */
-        inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
+        if (codegen_target_is_windows())
+        {
+            inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
+        }
         
         free_arg_regs();
 
@@ -988,12 +994,18 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         inst_list = codegen_vect_reg(inst_list, 0);
         
         /* Allocate shadow space for Windows x64 calling convention and align stack */
-        inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
+        if (codegen_target_is_windows())
+        {
+            inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
+        }
         
         inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
         
         /* Restore stack after shadow space allocation */
-        inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
+        if (codegen_target_is_windows())
+        {
+            inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
+        }
         
         free_arg_regs();
     }
@@ -1558,148 +1570,21 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     else
     {
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
-        /* Initialize the loop variable to 1 */
-        StackNode_t *var_node = find_label(for_var->expr_data.id);
-        if (var_node != NULL)
-        {
-            char init_buffer[64];
-            if (for_var->resolved_type == LONGINT_TYPE)
-            {
-                snprintf(init_buffer, sizeof(init_buffer), "\tmovq\t$1, -%d(%%rbp)\n", var_node->offset);
-            }
-            else
-            {
-                snprintf(init_buffer, sizeof(init_buffer), "\tmovl\t$1, -%d(%%rbp)\n", var_node->offset);
-            }
-            inst_list = add_inst(inst_list, init_buffer);
-        }
-        else
-        {
-            codegen_report_error(ctx, "ERROR: Loop variable not found for initialization");
-            free(one_expr);
-            free(update_expr);
-            free(update_stmt);
-            return inst_list;
-        }
     }
 
     assert(for_var->type == EXPR_VAR_ID);
+    comparison_expr = mk_relop(-1, LE, for_var, expr);
     one_expr = mk_inum(-1, 1);
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
-    /* Evaluate the 'to' expression once and store it in a temporary variable */
-    Register_t *expr_reg = NULL;
-    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &expr_reg);
-    if (codegen_had_error(ctx) || expr_reg == NULL)
-    {
-        free(one_expr);
-        free(update_expr);
-        free(update_stmt);
-        return inst_list;
-    }
-    
-    /* Create a temporary variable to store the 'to' value */
-    StackNode_t *temp_to_node = add_l_t("for_to_temp");
-    char buffer2[128];
-    if (expr->resolved_type == LONGINT_TYPE)
-    {
-        snprintf(buffer2, sizeof(buffer2), "\tmovq\t%s, -%d(%%rbp)\n", expr_reg->bit_64, temp_to_node->offset);
-    }
-    else
-    {
-        snprintf(buffer2, sizeof(buffer2), "\tmovl\t%s, -%d(%%rbp)\n", expr_reg->bit_32, temp_to_node->offset);
-    }
-    inst_list = add_inst(inst_list, buffer2);
-    free_reg(get_reg_stack(), expr_reg);
-    
-    /* Jump to condition check first */
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
-    /* Condition check - before body */
-    snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
-    inst_list = add_inst(inst_list, buffer);
-    
-    /* Load the loop variable from memory */
-    StackNode_t *var_node = find_label(for_var->expr_data.id);
-    if (var_node == NULL)
-    {
-        codegen_report_error(ctx, "ERROR: Loop variable not found on stack");
-        free(one_expr);
-        free(update_expr);
-        free(update_stmt);
-        return inst_list;
-    }
-    
-    Register_t *for_var_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (for_var_reg == NULL)
-    {
-        codegen_report_error(ctx, "ERROR: Unable to allocate register for loop variable");
-        free(one_expr);
-        free(update_expr);
-        free(update_stmt);
-        return inst_list;
-    }
-    
-    /* Load the current value of the loop variable from the stack */
-    if (for_var->resolved_type == LONGINT_TYPE)
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", var_node->offset, for_var_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", var_node->offset, for_var_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    
-    /* Load the 'to' value from the temporary variable */
-    Register_t *to_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (to_reg == NULL)
-    {
-        free_reg(get_reg_stack(), for_var_reg);
-        codegen_report_error(ctx, "ERROR: Unable to allocate register for 'to' value");
-        free(one_expr);
-        free(update_expr);
-        free(update_stmt);
-        return inst_list;
-    }
-    
-    if (expr->resolved_type == LONGINT_TYPE)
-    {
-        snprintf(buffer2, sizeof(buffer2), "\tmovq\t-%d(%%rbp), %s\n", temp_to_node->offset, to_reg->bit_64);
-    }
-    else
-    {
-        snprintf(buffer2, sizeof(buffer2), "\tmovl\t-%d(%%rbp), %s\n", temp_to_node->offset, to_reg->bit_32);
-    }
-    inst_list = add_inst(inst_list, buffer2);
-    
-    /* Compare for_var <= to_temp */
-    if (for_var->resolved_type == LONGINT_TYPE)
-    {
-        snprintf(buffer2, sizeof(buffer2), "\tcmpq\t%s, %s\n", to_reg->bit_64, for_var_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer2);
-        /* If for_var > to_temp, jump to exit (inverse of LE) */
-        snprintf(buffer2, sizeof(buffer2), "\tjg\t%s\n", exit_label);
-    }
-    else
-    {
-        snprintf(buffer2, sizeof(buffer2), "\tcmpl\t%s, %s\n", to_reg->bit_32, for_var_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer2);
-        /* If for_var > to_temp, jump to exit (inverse of LE) */
-        snprintf(buffer2, sizeof(buffer2), "\tjg\t%s\n", exit_label);
-    }
-    inst_list = add_inst(inst_list, buffer2);
-    
-    free_reg(get_reg_stack(), for_var_reg);
-    free_reg(get_reg_stack(), to_reg);
-
-    /* Body of the loop */
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
     if (!codegen_push_loop_exit(ctx, exit_label))
     {
+        free(comparison_expr);
         free(one_expr);
         free(update_expr);
         free(update_stmt);
@@ -1708,16 +1593,18 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
     codegen_pop_loop_exit(ctx);
 
-    /* Increment loop variable */
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
 
-    /* Jump back to condition check */
-    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+    snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_condition_expr(comparison_expr, inst_list, ctx, &relop_type);
 
-    /* Exit label */
+    inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
+
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
 
+    free(comparison_expr);
     free(one_expr);
     free(update_expr);
     free(update_stmt);
