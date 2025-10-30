@@ -11,6 +11,7 @@
 #include "ErrVars.h"
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
+#include "pascal_preprocessor.h"
 
 extern ast_t *ast_nil;
 
@@ -174,6 +175,79 @@ static combinator_t *get_or_create_program_parser(void)
     return cached_program_parser;
 }
 
+static ParseError *create_preprocessor_error(const char *path, const char *detail)
+{
+    ParseError *err = (ParseError *)calloc(1, sizeof(ParseError));
+    if (err == NULL)
+        return NULL;
+
+    err->line = 0;
+    err->col = 0;
+
+    const char *detail_text = detail != NULL ? detail : "unknown error";
+    const char *template = path != NULL ? "Preprocessing failed for '%s': %s"
+                                       : "Preprocessing failed: %s";
+
+    int needed_len = 0;
+    if (path != NULL)
+        needed_len = snprintf(NULL, 0, template, path, detail_text);
+    else
+        needed_len = snprintf(NULL, 0, template, detail_text);
+    if (needed_len < 0)
+    {
+        free(err);
+        return NULL;
+    }
+    size_t needed = (size_t)needed_len + 1;
+    char *message = (char *)malloc(needed);
+    if (message == NULL)
+    {
+        free(err);
+        return NULL;
+    }
+
+    if (path != NULL)
+        snprintf(message, needed, template, path, detail_text);
+    else
+        snprintf(message, needed, template, detail_text);
+
+    err->message = message;
+
+    const char *stage = "preprocessor";
+    err->parser_name = strdup(stage);
+    if (err->parser_name == NULL)
+    {
+        free(message);
+        free(err);
+        return NULL;
+    }
+
+    err->unexpected = NULL;
+    err->cause = NULL;
+    err->partial_ast = NULL;
+
+    return err;
+}
+
+static void report_preprocessor_error(ParseError **error_out, const char *path, const char *detail)
+{
+    if (error_out != NULL && *error_out == NULL)
+    {
+        ParseError *err = create_preprocessor_error(path, detail);
+        if (err != NULL)
+        {
+            *error_out = err;
+            return;
+        }
+    }
+
+    const char *location = path != NULL ? path : "<buffer>";
+    if (detail != NULL)
+        fprintf(stderr, "Preprocessing failed for %s: %s\n", location, detail);
+    else
+        fprintf(stderr, "Preprocessing failed for %s\n", location);
+}
+
 void pascal_frontend_cleanup(void)
 {
     if (cached_unit_parser != NULL)
@@ -197,6 +271,51 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     char *buffer = read_file(path, &length);
     if (buffer == NULL)
         return false;
+
+    PascalPreprocessor *preprocessor = pascal_preprocessor_create();
+    if (preprocessor == NULL)
+    {
+        report_preprocessor_error(error_out, path, "unable to initialise preprocessor");
+        free(buffer);
+        return false;
+    }
+
+    const char *default_symbols[] = { "GPC" };
+    for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
+    {
+        if (!pascal_preprocessor_define(preprocessor, default_symbols[i]))
+        {
+            char detail[128];
+            snprintf(detail, sizeof(detail), "unable to define default symbol '%s'", default_symbols[i]);
+            report_preprocessor_error(error_out, path, detail);
+            pascal_preprocessor_free(preprocessor);
+            free(buffer);
+            return false;
+        }
+    }
+
+    char *preprocess_error = NULL;
+    size_t preprocessed_length = 0;
+    char *preprocessed_buffer = pascal_preprocess_buffer(preprocessor,
+                                                         path,
+                                                         buffer,
+                                                         length,
+                                                         &preprocessed_length,
+                                                         &preprocess_error);
+    pascal_preprocessor_free(preprocessor);
+
+    if (preprocessed_buffer == NULL)
+    {
+        report_preprocessor_error(error_out, path, preprocess_error);
+        free(preprocess_error);
+        free(buffer);
+        return false;
+    }
+
+    free(preprocess_error);
+    free(buffer);
+    buffer = preprocessed_buffer;
+    length = preprocessed_length;
 
     bool is_unit = buffer_starts_with_unit(buffer, length);
     combinator_t *parser = is_unit ? get_or_create_unit_parser() : get_or_create_program_parser();
