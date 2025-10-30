@@ -485,17 +485,27 @@ static bool handle_directive(PascalPreprocessor *pp,
             free(content);
             return set_error(error_message, "{$ELSEIF} after {$ELSE}");
         }
-        bool cond_value = false;
-        if (!evaluate_if_directive(pp, rest, &cond_value)) {
-            free(keyword);
-            free(content);
-            return set_error(error_message, "unsupported {$ELSEIF} expression");
-        }
-        if (!frame->branch_taken && frame->parent_allows && cond_value) {
-            frame->active = true;
-            frame->branch_taken = true;
+        if (*rest == '\0') {
+            frame->saw_else = true;
+            if (!frame->branch_taken && frame->parent_allows) {
+                frame->active = true;
+                frame->branch_taken = true;
+            } else {
+                frame->active = false;
+            }
         } else {
-            frame->active = false;
+            bool cond_value = false;
+            if (!evaluate_if_directive(pp, rest, &cond_value)) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "unsupported {$ELSEIF} expression");
+            }
+            if (!frame->branch_taken && frame->parent_allows && cond_value) {
+                frame->active = true;
+                frame->branch_taken = true;
+            } else {
+                frame->active = false;
+            }
         }
     } else if (strcmp(keyword, "ENDIF") == 0) {
         handled = true;
