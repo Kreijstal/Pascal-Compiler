@@ -841,7 +841,13 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
     while (decls != NULL)
     {
         Tree_t *decl = (Tree_t *)decls->cur;
-        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        if (decl == NULL)
+        {
+            decls = decls->next;
+            continue;
+        }
+
+        if (decl->type == TREE_VAR_DECL)
         {
             HashNode_t *type_node = NULL;
             if (decl->tree_data.var_decl_data.type_id != NULL)
@@ -872,6 +878,12 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+            if (init_stmt != NULL)
+                inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+        }
+        else if (decl->type == TREE_ARR_DECL)
+        {
+            struct Statement *init_stmt = decl->tree_data.arr_decl_data.initializer;
             if (init_stmt != NULL)
                 inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
         }

@@ -1085,6 +1085,32 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[1].strip(), "48")
         self.assertEqual(lines[2].strip(), "5")
 
+    def test_typed_const_array_lowering(self):
+        """Ensures typed constant arrays are lowered into runtime initializers."""
+        input_file = os.path.join(TEST_CASES_DIR, "typed_const_array_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("typed_const_array_demo execution timed out.")
+            return
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(
+            process.stdout.strip().splitlines(),
+            ["1", "1", "2", "3", "5"],
+        )
+
     def test_unsupported_expression_reports_tag_name(self):
         """Address-of operator (@) is now supported and should compile successfully."""
         input_file = os.path.join(TEST_CASES_DIR, "unsupported_addr_expr.p")

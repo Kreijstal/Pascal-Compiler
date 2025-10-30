@@ -918,6 +918,10 @@ next_identifier:
                 }
             }
         }
+        else if (tree->type == TREE_ARR_DECL && tree->tree_data.arr_decl_data.initializer != NULL)
+        {
+            return_val += semcheck_stmt(symtab, tree->tree_data.arr_decl_data.initializer, INT_MAX);
+        }
 
     }
 
