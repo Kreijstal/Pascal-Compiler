@@ -1128,17 +1128,33 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     int lower_bound = array_node->array_lower_bound;
     char buffer[128];
 
-    if (array_node->is_dynamic)
+    if (array_node->is_dynamic || array_node->is_static)
     {
-        Register_t *base_reg = codegen_try_get_reg(&inst_list, ctx, "dynamic array base");
+        const char *base_usage = array_node->is_dynamic ? "dynamic array base" : "static array base";
+        Register_t *base_reg = codegen_try_get_reg(&inst_list, ctx, base_usage);
         if (base_reg == NULL)
         {
             free_reg(get_reg_stack(), index_reg);
             return inst_list;
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, base_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        if (array_node->is_dynamic)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", array_node->offset, base_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (array_node->static_label != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", array_node->static_label, base_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            codegen_report_error(ctx, "ERROR: Static array %s is missing storage label.", array_id);
+            free_reg(get_reg_stack(), base_reg);
+            free_reg(get_reg_stack(), index_reg);
+            return inst_list;
+        }
 
         if (lower_bound > 0)
         {

@@ -116,6 +116,11 @@ typedef struct Tree
             int s_range;
             int e_range;
             struct Statement *initializer;
+            int is_typed_const;
+            int has_static_storage;
+            int static_storage_emitted;
+            char *static_label;
+            char *init_guard_label;
         } arr_decl_data;
 
         /* A constant declaration */
