@@ -45,6 +45,9 @@ static int record_type_is_mp_integer(const struct RecordType *record_type);
 static int codegen_expr_is_mp_integer(struct Expression *expr);
 static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
     Register_t *value_reg);
+static int codegen_expr_is_addressable_ref(struct Expression *expr);
+static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
@@ -143,8 +146,42 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     {
         return codegen_record_field_address(expr, inst_list, ctx, out_reg);
     }
+    else if (expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
+            return inst_list;
+        }
+
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_evaluate_expr(pointer_expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            return inst_list;
+
+        *out_reg = addr_reg;
+        return inst_list;
+    }
 
     return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+}
+
+static int codegen_expr_is_addressable_ref(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+        case EXPR_ARRAY_ACCESS:
+        case EXPR_RECORD_ACCESS:
+        case EXPR_POINTER_DEREF:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 static int record_type_is_mp_integer(const struct RecordType *record_type)
@@ -200,6 +237,93 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tgpc_gmp_mpint_assign\n");
+    return inst_list;
+}
+
+static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
+        return inst_list;
+
+    long long record_size = 0;
+    int size_status = codegen_get_record_size(ctx, dest_expr, &record_size);
+    if (size_status != 0)
+    {
+        size_status = codegen_get_record_size(ctx, src_expr, &record_size);
+        if (size_status != 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine record size for assignment.");
+            return inst_list;
+        }
+    }
+
+    if (record_size <= 0)
+        return inst_list;
+
+    Register_t *dest_reg = NULL;
+    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+    if (codegen_had_error(ctx) || dest_reg == NULL)
+        return inst_list;
+
+    if (!codegen_expr_is_addressable_ref(src_expr))
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unsupported record-valued source expression.");
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    Register_t *src_reg = NULL;
+    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+    if (codegen_had_error(ctx) || src_reg == NULL)
+    {
+        if (src_reg != NULL)
+            free_reg(get_reg_stack(), src_reg);
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (count_reg == NULL)
+    {
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate register for record copy size.");
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, count_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+
+    free_reg(get_reg_stack(), dest_reg);
+    free_reg(get_reg_stack(), src_reg);
+    free_reg(get_reg_stack(), count_reg);
+    free_arg_regs();
     return inst_list;
 }
 
@@ -660,10 +784,9 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
     Register_t *increment_reg = NULL;
     if (value_expr != NULL)
     {
-        inst_list = codegen_expr(value_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        inst_list = codegen_expr_with_result(value_expr, inst_list, ctx, &increment_reg);
+        if (codegen_had_error(ctx) || increment_reg == NULL)
             return inst_list;
-        increment_reg = front_reg_stack(get_reg_stack());
     }
     else
     {
@@ -710,6 +833,21 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
     {
         Register_t *addr_reg = NULL;
         inst_list = codegen_array_element_address(target_expr, inst_list, ctx, &addr_reg);
+        if (!codegen_had_error(ctx) && addr_reg != NULL)
+        {
+            char buffer[128];
+            if (target_is_long)
+                snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), addr_reg);
+        }
+    }
+    else if (codegen_expr_is_addressable_ref(target_expr))
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
@@ -1009,6 +1147,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         free_arg_regs();
         return inst_list;
     }
+
+    if (var_expr->resolved_type == RECORD_TYPE)
+        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     if (var_expr->type == EXPR_VAR_ID)
     {
