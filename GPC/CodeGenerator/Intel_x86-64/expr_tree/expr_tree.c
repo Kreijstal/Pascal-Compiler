@@ -1,7 +1,6 @@
 /*
     Damon Gwinn
     Tree of simple expressions for the gencode algorithm
-    TODO: Does not handle function calls or arrays
     TODO: Does not handle real numbers
     TODO: Does not handle panic case (not enough registers)
 */

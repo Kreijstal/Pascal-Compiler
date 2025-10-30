@@ -836,6 +836,41 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(result.stdout, expected_output)
         self.assertEqual(result.returncode, 0)
 
+    def test_record_reference_features(self):
+        """Exercises record assignment, address-of, and var parameter support."""
+        input_file = os.path.join(
+            TEST_CASES_DIR, "record_reference_features.p"
+        )
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features.s")
+        executable_file = os.path.join(
+            TEST_OUTPUT_DIR, "record_reference_features"
+        )
+        expected_output_file = os.path.join(
+            TEST_CASES_DIR, "record_reference_features.expected"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        expected_output = read_file_content(expected_output_file)
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            expected_output.strip().splitlines(),
+        )
+        self.assertEqual(result.returncode, 0)
+
+        asm_source = read_file_content(asm_file)
+        self.assertIn("call\tgpc_move", asm_source)
+        self.assertIn("call\tsucc_i", asm_source)
+
     def test_fizzbuzz(self):
         """Tests the fizzbuzz program."""
         input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
