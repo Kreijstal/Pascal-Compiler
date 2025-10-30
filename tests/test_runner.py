@@ -258,7 +258,8 @@ class TestCompiler(unittest.TestCase):
                     self.runtime_object,
                 ]
                 + list(extra_objects)
-                + list(extra_link_args),
+                + list(extra_link_args)
+                + ["-lgmp"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -1060,7 +1061,15 @@ class TestCompiler(unittest.TestCase):
 
         # Compile the assembly to an executable
         try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
+            subprocess.run([
+                "gcc",
+                "-no-pie",
+                "-o",
+                executable_file,
+                asm_file,
+                "GPC/runtime.c",
+                "-lgmp",
+            ], check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             self.fail(f"gcc compilation failed: {e.stderr}")
 
