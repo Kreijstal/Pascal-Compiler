@@ -26,6 +26,25 @@ int codegen_type_uses_qword(int type_tag)
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE);
 }
 
+static inline const char *register_name_for_type(const Register_t *reg, int type_tag)
+{
+    if (reg == NULL)
+        return NULL;
+    return codegen_type_uses_qword(type_tag) ? reg->bit_64 : reg->bit_32;
+}
+
+static inline const char *register_name_for_expr(const Register_t *reg, const struct Expression *expr)
+{
+    if (expr == NULL)
+        return register_name_for_type(reg, UNKNOWN_TYPE);
+    return register_name_for_type(reg, expr->resolved_type);
+}
+
+static inline int expression_uses_qword(const struct Expression *expr)
+{
+    return expr != NULL && codegen_type_uses_qword(expr->resolved_type);
+}
+
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -851,57 +870,143 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     CODEGEN_DEBUG("DEBUG: Generating simple relop\n");
 
-    if (relop_type != NULL)
-        *relop_type = expr->expr_data.relop_data.type;
-    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
+    struct Expression *left_expr = expr->expr_data.relop_data.left;
+    struct Expression *right_expr = expr->expr_data.relop_data.right;
+    int relop_kind = expr->expr_data.relop_data.type;
 
+    if (relop_type != NULL)
+        *relop_type = relop_kind;
+
+    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
     Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
     inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
     Register_t *right_reg = front_reg_stack(get_reg_stack());
 
-    int relop_kind = expr->expr_data.relop_data.type;
+    if (left_reg == NULL || right_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+
     if (relop_kind == IN)
     {
         if (relop_type != NULL)
             *relop_type = NE;
-        else
-            expr->expr_data.relop_data.type = NE;
 
-        if (left_reg == NULL || right_reg == NULL)
-            return inst_list;
-
-        char buffer[100];
         StackNode_t *set_spill = add_l_t("set_relop");
         if (set_spill != NULL)
         {
-            snprintf(buffer, 100, "\tmovl\t%s, -%d(%%rbp)\n", right_reg->bit_32, set_spill->offset);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", right_reg->bit_32, set_spill->offset);
             inst_list = add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, 100, "\tmovl\t%s, %%ecx\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tmovl\t$1, %s\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 100, "\tshll\t%%cl, %s\n", left_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
         if (set_spill != NULL)
         {
-            snprintf(buffer, 100, "\tmovl\t-%d(%%rbp), %s\n", set_spill->offset, right_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", set_spill->offset, right_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, 100, "\ttestl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), left_reg);
         return inst_list;
     }
 
-    char buffer[100];
-    snprintf(buffer, 100, "\tcmpl\t%s, %s\n", right_reg->bit_32, left_reg->bit_32);
-    free_reg(get_reg_stack(), left_reg);
+    if (left_expr != NULL && left_expr->resolved_type == REAL_TYPE)
+    {
+        const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
+        const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
+        char true_label[32];
+        char done_label[32];
+        gen_label(true_label, sizeof(true_label), ctx);
+        gen_label(done_label, sizeof(done_label), ctx);
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", left_name);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tucomisd\t%xmm0, %xmm1\n");
+
+        int relop_kind = expr->expr_data.relop_data.type;
+        switch (relop_kind)
+        {
+            case EQ:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tje\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case NE:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case LT:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjb\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case LE:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjbe\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case GT:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tja\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            case GE:
+                snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tjae\t%s\n", true_label);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            default:
+                break;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "%s:\n", true_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "%s:\n", done_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        if (relop_type != NULL)
+            *relop_type = NE;
+
+        free_reg(get_reg_stack(), left_reg);
+        return inst_list;
+    }
+
+    int use_qword = expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
+    const char *left_name = use_qword
+        ? register_name_for_type(left_reg, LONGINT_TYPE)
+        : register_name_for_expr(left_reg, left_expr);
+    const char *right_name = use_qword
+        ? register_name_for_type(right_reg, LONGINT_TYPE)
+        : register_name_for_expr(right_reg, right_expr);
+    snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), left_reg);
 
     CODEGEN_DEBUG("DEBUG: Simple relop generated\n");
     #ifdef DEBUG_CODEGEN

@@ -22,6 +22,123 @@
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/type_tags.h"
 
+static inline const char *select_register_name(const Register_t *reg, int type_tag)
+{
+    if (reg == NULL)
+        return NULL;
+    return codegen_type_uses_qword(type_tag) ? reg->bit_64 : reg->bit_32;
+}
+
+static inline int expr_uses_qword(const struct Expression *expr)
+{
+    return expr != NULL && codegen_type_uses_qword(expr->resolved_type);
+}
+
+static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *reg,
+    int type_tag, int offset)
+{
+    if (inst_list == NULL || reg == NULL)
+        return inst_list;
+
+    const char *reg_name = select_register_name(reg, type_tag);
+    if (reg_name == NULL)
+        return inst_list;
+
+    char buffer[64];
+    if (codegen_type_uses_qword(type_tag))
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg_name, offset);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", reg_name, offset);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *gencode_real_binary_op(const char *left_operand,
+    const char *right_operand, const char *dest, ListNode_t *inst_list,
+    const char *sse_mnemonic)
+{
+    if (left_operand == NULL || right_operand == NULL || dest == NULL || sse_mnemonic == NULL)
+        return inst_list;
+
+    char buffer[80];
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", left_operand);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", right_operand);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\t%s\t%%xmm1, %%xmm0\n", sse_mnemonic);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", dest);
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+}
+
+static ListNode_t *gencode_real_negate(const char *value_operand,
+    const char *dest, ListNode_t *inst_list)
+{
+    if (value_operand == NULL || dest == NULL)
+        return inst_list;
+
+    char buffer[96];
+
+    if (strcmp(value_operand, dest) != 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_operand, dest);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\txorq\t$0x8000000000000000, %s\n", dest);
+    return add_inst(inst_list, buffer);
+}
+
+static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
+{
+    if (reg_name == NULL)
+        return NULL;
+    if (reg_name[0] != '%' || reg_name[1] != 'r')
+        return reg_name;
+
+    if (strcmp(reg_name, "%rax") == 0) {
+        snprintf(buffer, buf_size, "%%eax");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rbx") == 0) {
+        snprintf(buffer, buf_size, "%%ebx");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rcx") == 0) {
+        snprintf(buffer, buf_size, "%%ecx");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rdx") == 0) {
+        snprintf(buffer, buf_size, "%%edx");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rsi") == 0) {
+        snprintf(buffer, buf_size, "%%esi");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rdi") == 0) {
+        snprintf(buffer, buf_size, "%%edi");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rbp") == 0) {
+        snprintf(buffer, buf_size, "%%ebp");
+        return buffer;
+    }
+    if (strcmp(reg_name, "%rsp") == 0) {
+        snprintf(buffer, buf_size, "%%esp");
+        return buffer;
+    }
+
+    if (reg_name[2] >= '0' && reg_name[2] <= '9')
+    {
+        snprintf(buffer, buf_size, "%%r%sd", reg_name + 2);
+        return buffer;
+    }
+
+    return reg_name;
+}
+
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
@@ -31,7 +148,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
-ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
+ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
     ListNode_t *inst_list);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
     char *buffer, int buf_len);
@@ -173,9 +290,16 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 
     if(node->reg != NULL)
     {
-        char buffer[50];
-        snprintf(buffer, 50, "\tmovl\t%s, %s\n", node->reg->bit_32, target_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        char buffer[64];
+        const char *src = select_register_name(node->reg, node->expr->resolved_type);
+        const char *dst = select_register_name(target_reg, node->expr->resolved_type);
+        if (src != NULL && dst != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmov%s\t%s, %s\n",
+                codegen_type_uses_qword(node->expr->resolved_type) ? "q" : "l",
+                src, dst);
+            inst_list = add_inst(inst_list, buffer);
+        }
         return inst_list;
     }
 
@@ -293,7 +417,7 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 /* Gencode for modulus */
 // left is right operand (B), right is left operand (A)
 // calculates A mod B, stores result in A's location (right)
-ListNode_t *gencode_modulus(char *left, char *right, ListNode_t *inst_list)
+ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *inst_list)
 {
     StackNode_t *temp;
     char buffer[50];
@@ -399,8 +523,18 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
-    snprintf(buffer, 50, "\tnegl\t%s\n", target_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
+    int type_tag = node->expr->resolved_type;
+    const char *dest = select_register_name(target_reg, type_tag);
+    if (type_tag == REAL_TYPE)
+    {
+        inst_list = gencode_real_negate(dest, dest, inst_list);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tneg%s\t%s\n",
+            codegen_type_uses_qword(type_tag) ? "q" : "l", dest);
+        inst_list = add_inst(inst_list, buffer);
+    }
 
     return inst_list;
 }
@@ -428,7 +562,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx, expr->expr_data.function_call_data.resolved_func);
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
-        if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE)
+        if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE ||
+            expr->resolved_type == REAL_TYPE)
             snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", target_reg->bit_64);
         else
             snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
@@ -508,19 +643,25 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             StackNode_t *spill_loc = add_l_t("rhs");
             inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
             snprintf(name_buf, sizeof(name_buf), "-%d(%%rbp)", spill_loc->offset);
-            if (codegen_type_uses_qword(right_expr->resolved_type))
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", target_reg->bit_64, name_buf);
-            else
-                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", target_reg->bit_32, name_buf);
-            inst_list = add_inst(inst_list, buffer);
+            const char *tmp_name = select_register_name(target_reg, right_expr->resolved_type);
+            if (tmp_name != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmov%s\t%s, %s\n",
+                    codegen_type_uses_qword(right_expr->resolved_type) ? "q" : "l",
+                    tmp_name, name_buf);
+                inst_list = add_inst(inst_list, buffer);
+            }
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-            inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
+            const char *target_name = select_register_name(target_reg, expr->resolved_type);
+            inst_list = gencode_op(expr, target_name, name_buf, inst_list);
         }
         else
         {
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
             inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
-            inst_list = gencode_op(expr, target_reg->bit_32, rhs_reg->bit_32, inst_list);
+            const char *target_name = select_register_name(target_reg, expr->resolved_type);
+            const char *rhs_name = select_register_name(rhs_reg, expr->resolved_type);
+            inst_list = gencode_op(expr, target_name, rhs_name, inst_list);
             free_reg(get_reg_stack(), rhs_reg);
         }
         return inst_list;
@@ -530,7 +671,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
-    inst_list = gencode_op(expr, target_reg->bit_32, name_buf, inst_list);
+    const char *target_name = select_register_name(target_reg, expr->resolved_type);
+    inst_list = gencode_op(expr, target_name, name_buf, inst_list);
 
     return inst_list;
 }
@@ -555,21 +697,23 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
 
         StackNode_t *spill_loc = add_l_t("spill");
-        char buffer[50];
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", target_reg->bit_32, spill_loc->offset);
-        inst_list = add_inst(inst_list, buffer);
+        inst_list = emit_store_to_stack(inst_list, target_reg,
+            node->expr->resolved_type, spill_loc->offset);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, spill_mem, inst_list);
+        const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
+        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, temp_reg->bit_32, inst_list);
+        const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
+        const char *temp_name = select_register_name(temp_reg, node->expr->resolved_type);
+        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -595,20 +739,22 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if(temp_reg == NULL)
     {
         StackNode_t *spill_loc = add_l_t("spill");
-        char buffer[50];
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", target_reg->bit_32, spill_loc->offset);
-        inst_list = add_inst(inst_list, buffer);
+        inst_list = emit_store_to_stack(inst_list, target_reg,
+            node->expr->resolved_type, spill_loc->offset);
 
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, spill_mem, inst_list);
+        const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
+        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list);
     }
     else
     {
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-        inst_list = gencode_op(node->expr, target_reg->bit_32, temp_reg->bit_32, inst_list);
+        const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
+        const char *temp_name = select_register_name(temp_reg, node->expr->resolved_type);
+        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -695,7 +841,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 }
 
 /* TODO: Assumes eax and edx registers are free for division */
-ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
+ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
     ListNode_t *inst_list)
 {
     assert(expr != NULL);
@@ -723,6 +869,28 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 }
                 break;
             }
+            if (expr->resolved_type == REAL_TYPE)
+            {
+                const char *sse_op = NULL;
+                switch (type)
+                {
+                    case PLUS:
+                        sse_op = "addsd";
+                        break;
+                    case MINUS:
+                        sse_op = "subsd";
+                        break;
+                    default:
+                        assert(0 && "Unsupported real addop type!");
+                        break;
+                }
+                if (sse_op != NULL)
+                    inst_list = gencode_real_binary_op(left, right, left, inst_list, sse_op);
+                break;
+            }
+            {
+                const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
+                const char arith_suffix = use_qword_op ? 'q' : 'l';
             switch(type)
             {
                 case PLUS:
@@ -732,14 +900,14 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                      * special case lets us use INC instead of ADD to save an instruction byte.
                      */
                     if(strcmp(right, "$1") == 0)
-                        snprintf(buffer, 50, "\tincl\t%s\n", left);
+                        snprintf(buffer, 50, "\tinc%c\t%s\n", arith_suffix, left);
                     else
-                        snprintf(buffer, 50, "\taddl\t%s, %s\n", right, left);
+                        snprintf(buffer, 50, "\tadd%c\t%s, %s\n", arith_suffix, right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 }
                 case MINUS:
-                    snprintf(buffer, 50, "\tsubl\t%s, %s\n", right, left);
+                    snprintf(buffer, 50, "\tsub%c\t%s, %s\n", arith_suffix, right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:
@@ -748,6 +916,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
 
             break;
+            }
 
         case EXPR_MULOP:
             type = expr->expr_data.mulop_data.mulop_type;
@@ -765,27 +934,68 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 }
                 break;
             }
+            if (expr->resolved_type == REAL_TYPE)
+            {
+                const char *sse_op = NULL;
+                switch (type)
+                {
+                    case STAR:
+                        sse_op = "mulsd";
+                        break;
+                    case SLASH:
+                        sse_op = "divsd";
+                        break;
+                    case DIV:
+                    case MOD:
+                        assert(0 && "Unsupported real mulop type!");
+                        break;
+                    default:
+                        break;
+                }
+                if (sse_op != NULL)
+                    inst_list = gencode_real_binary_op(left, right, left, inst_list, sse_op);
+                break;
+            }
+            {
+                const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
+                const char arith_suffix = use_qword_op ? 'q' : 'l';
             if(type == STAR)
             {
-                snprintf(buffer, 50, "\timull\t%s, %s\n", right, left);
+                snprintf(buffer, 50, "\timul%c\t%s, %s\n", arith_suffix, right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
+                if (use_qword_op)
+                {
+                    snprintf(buffer, 50, "\tmovq\t%s, %%rax\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcqo\n");
 
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%s, %%r10\n", right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%%rdx, %s\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    char left32[16];
+                    char right32[16];
+                    const char *mod_left = reg64_to_reg32(left, left32, sizeof(left32));
+                    const char *mod_right = reg64_to_reg32(right, right32, sizeof(right32));
+                    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", mod_left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcdq\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%s, %%r10d\n", mod_right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", mod_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             /* NOTE: Division and modulus is a more special case */
             else if(type == SLASH || type == DIV)
@@ -800,20 +1010,36 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
                 inst_list = add_inst(inst_list, buffer);
 
 
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
+                if (use_qword_op)
+                {
+                    snprintf(buffer, 50, "\tmovq\t%s, %%rax\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcqo\n");
 
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%s, %%r10\n", right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", left);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    char left32[16];
+                    char right32[16];
+                    const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
+                    const char *div_right = reg64_to_reg32(right, right32, sizeof(right32));
+                    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", div_left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcdq\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%s, %%r10d\n", div_right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", div_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
 
                 snprintf(buffer, 50, "\tpopq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
@@ -826,35 +1052,43 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
             else if(type == XOR)
             {
-                snprintf(buffer, 50, "\txorl\t%s, %s\n", right, left);
+                snprintf(buffer, 50, "\txor%c\t%s, %s\n", arith_suffix, right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHL)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tsall\t%%cl, %s\n", left);
+                snprintf(buffer, 50, "\tshl%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHR)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tsarl\t%%cl, %s\n", left);
+                snprintf(buffer, 50, "\tsar%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROL)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\troll\t%%cl, %s\n", left);
+                snprintf(buffer, 50, "\trol%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROR)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\trorl\t%%cl, %s\n", left);
+                snprintf(buffer, 50, "\tror%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
@@ -864,6 +1098,7 @@ ListNode_t *gencode_op(struct Expression *expr, char *left, char *right,
             }
 
             break;
+            }
 
         case EXPR_RELOP:
             snprintf(buffer, 50, "\tcmpl\t%s, %s\n", left, right);

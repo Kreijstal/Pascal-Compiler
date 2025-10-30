@@ -64,9 +64,26 @@ static int var_type_to_expr_type(enum VarType var_type)
             return ENUM_TYPE;
         case HASHVAR_FILE:
             return FILE_TYPE;
+        case HASHVAR_RECORD:
+            return RECORD_TYPE;
         default:
             return UNKNOWN_TYPE;
     }
+}
+
+static int types_numeric_compatible(int lhs, int rhs)
+{
+    if (lhs == rhs)
+        return 1;
+
+    if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+        return 1;
+
+    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE)) ||
+        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE)))
+        return 1;
+
+    return 0;
 }
 
 typedef int (*builtin_semcheck_handler_t)(SymTab_t *, struct Statement *, int);
@@ -252,9 +269,9 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
-        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE)
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE)
         {
-            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, boolean, string, or pointer.\n",
+            fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, real, boolean, string, or pointer.\n",
                     stmt->line_num, arg_index);
             ++return_val;
         }
@@ -708,7 +725,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     }
                 }
 
-                if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
+                if (expected_type != BUILTIN_ANY_TYPE &&
+                    arg_type != expected_type &&
+                    !types_numeric_compatible(expected_type, arg_type))
                 {
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, proc_id, cur_arg);

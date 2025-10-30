@@ -16,6 +16,7 @@ TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
+RUNTIME_GMP_SOURCE = "GPC/runtime_gmp.c"
 EXEC_TIMEOUT = 5
 
 # Meson exposes toggleable behaviour via environment variables so CI can
@@ -162,6 +163,7 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
         cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
+        cls.runtime_gmp_object = os.path.join(TEST_OUTPUT_DIR, "runtime_gmp.o")
         cls._compile_runtime()
         cls._build_ctypes_helper_library()
 
@@ -222,25 +224,30 @@ class TestCompiler(unittest.TestCase):
 
     @classmethod
     def _compile_runtime(cls):
-        """Compile the runtime support file once to speed up repeated links."""
-        try:
-            subprocess.run(
-                [
-                    "gcc",
-                    "-c",
-                    "-O2",
-                    "-pipe",
-                    "-o",
-                    cls.runtime_object,
-                    RUNTIME_SOURCE,
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"runtime compilation failed: {e.stderr}")
-
+        """Compile the runtime support files once to speed up repeated links."""
+        builds = [
+            (cls.runtime_object, RUNTIME_SOURCE),
+            (cls.runtime_gmp_object, RUNTIME_GMP_SOURCE),
+        ]
+        for output, source in builds:
+            try:
+                subprocess.run(
+                    [
+                        "gcc",
+                        "-c",
+                        "-O2",
+                        "-pipe",
+                        "-o",
+                        output,
+                        source,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"runtime compilation failed ({source}): {e.stderr}")
+        
     def compile_executable(self, asm_file, executable_file, extra_objects=None, extra_link_args=None):
         if extra_objects is None:
             extra_objects = []
@@ -472,10 +479,10 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         asm = read_file_content(asm_file)
 
-        self.assertIn("\tsall\t", asm)
-        self.assertIn("\tsarl\t", asm)
-        self.assertIn("\troll\t", asm)
-        self.assertIn("\trorl\t", asm)
+        self.assertTrue(any(token in asm for token in ("\tsall\t", "\tshlq\t")))
+        self.assertTrue(any(token in asm for token in ("\tsarl\t", "\tsarq\t")))
+        self.assertTrue(any(token in asm for token in ("\troll\t", "\trolq\t")))
+        self.assertTrue(any(token in asm for token in ("\trorl\t", "\trorq\t")))
 
     def test_bitshift_malformed_input_reports_error(self):
         """Malformed bitshift expressions should surface a descriptive parse error."""
@@ -701,6 +708,26 @@ class TestCompiler(unittest.TestCase):
         )
 
         self.assertEqual(result.stdout, "112\n1\n3\n")
+
+    def test_real_arithmetic_program(self):
+        """Compiles and executes a program exercising REAL arithmetic and IO."""
+        input_file = os.path.join(TEST_CASES_DIR, "real_arithmetic.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_output = "3.75\n3.375\nless\nmore\n-0.75\n1.5\n"
+        self.assertEqual(result.stdout, expected_output)
 
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
@@ -1039,10 +1066,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run(["gcc", "-no-pie", "-o", executable_file, asm_file, "GPC/runtime.c"], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Run the executable and check the output
         try:
