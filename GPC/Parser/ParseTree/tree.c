@@ -141,6 +141,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           list_print(tree->tree_data.unit_data.interface_uses, f, num_indent+1);
 
           print_indent(f, num_indent);
+          fprintf(f, "[INTERFACE_CONST_DECLS]:\n");
+          list_print(tree->tree_data.unit_data.interface_const_decls, f, num_indent+1);
+
+          print_indent(f, num_indent);
           fprintf(f, "[INTERFACE_TYPE_DECLS]:\n");
           list_print(tree->tree_data.unit_data.interface_type_decls, f, num_indent+1);
 
@@ -151,6 +155,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[IMPLEMENTATION_USES]:\n");
           list_print(tree->tree_data.unit_data.implementation_uses, f, num_indent+1);
+
+          print_indent(f, num_indent);
+          fprintf(f, "[IMPLEMENTATION_CONST_DECLS]:\n");
+          list_print(tree->tree_data.unit_data.implementation_const_decls, f, num_indent+1);
 
           print_indent(f, num_indent);
           fprintf(f, "[IMPLEMENTATION_TYPE_DECLS]:\n");
@@ -705,9 +713,11 @@ void destroy_tree(Tree_t *tree)
         case TREE_UNIT:
           free(tree->tree_data.unit_data.unit_id);
           destroy_list(tree->tree_data.unit_data.interface_uses);
+          destroy_list(tree->tree_data.unit_data.interface_const_decls);
           destroy_list(tree->tree_data.unit_data.interface_type_decls);
           destroy_list(tree->tree_data.unit_data.interface_var_decls);
           destroy_list(tree->tree_data.unit_data.implementation_uses);
+          destroy_list(tree->tree_data.unit_data.implementation_const_decls);
           destroy_list(tree->tree_data.unit_data.implementation_type_decls);
           destroy_list(tree->tree_data.unit_data.implementation_var_decls);
           destroy_list(tree->tree_data.unit_data.subprograms);
@@ -1085,8 +1095,10 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
 }
 
 Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
-    ListNode_t *interface_type_decls, ListNode_t *interface_var_decls,
-    ListNode_t *implementation_uses, ListNode_t *implementation_type_decls,
+    ListNode_t *interface_const_decls, ListNode_t *interface_type_decls,
+    ListNode_t *interface_var_decls, ListNode_t *implementation_uses,
+    ListNode_t *implementation_const_decls,
+    ListNode_t *implementation_type_decls,
     ListNode_t *implementation_var_decls, ListNode_t *subprograms,
     struct Statement *initialization)
 {
@@ -1097,9 +1109,11 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     new_tree->type = TREE_UNIT;
     new_tree->tree_data.unit_data.unit_id = id;
     new_tree->tree_data.unit_data.interface_uses = interface_uses;
+    new_tree->tree_data.unit_data.interface_const_decls = interface_const_decls;
     new_tree->tree_data.unit_data.interface_type_decls = interface_type_decls;
     new_tree->tree_data.unit_data.interface_var_decls = interface_var_decls;
     new_tree->tree_data.unit_data.implementation_uses = implementation_uses;
+    new_tree->tree_data.unit_data.implementation_const_decls = implementation_const_decls;
     new_tree->tree_data.unit_data.implementation_type_decls = implementation_type_decls;
     new_tree->tree_data.unit_data.implementation_var_decls = implementation_var_decls;
     new_tree->tree_data.unit_data.subprograms = subprograms;

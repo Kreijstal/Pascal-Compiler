@@ -2939,6 +2939,10 @@ void test_pascal_threadvar_section(void) {
     assert_pascal_unit_parses_snippet("threadvar_section.pas");
 }
 
+void test_pascal_set_of_enum_typed_constant(void) {
+    assert_pascal_unit_parses_snippet("set_of_enum_typed_constant.pas");
+}
+
 void test_pascal_generic_type_declaration(void) {
     assert_pascal_unit_parses_snippet("generic_type_declaration.pas");
 }
@@ -3672,6 +3676,7 @@ TEST_LIST = {
     { "test_pascal_out_parameter_modifier", test_pascal_out_parameter_modifier },
     { "test_pascal_resourcestring_section", test_pascal_resourcestring_section },
     { "test_pascal_threadvar_section", test_pascal_threadvar_section },
+    { "test_pascal_set_of_enum_typed_constant", test_pascal_set_of_enum_typed_constant },
     { "test_pascal_generic_type_declaration", test_pascal_generic_type_declaration },
     { "test_pascal_specialize_alias", test_pascal_specialize_alias },
     { "test_pascal_class_function_modifier", test_pascal_class_function_modifier },

@@ -138,6 +138,60 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             }
             break;
         }
+        case EXPR_SET:
+        {
+            unsigned long long mask = 0;
+            ListNode_t *element = expr->expr_data.set_data.elements;
+            while (element != NULL)
+            {
+                if (element->cur == NULL)
+                {
+                    element = element->next;
+                    continue;
+                }
+
+                struct SetElement *set_element = (struct SetElement *)element->cur;
+                long long lower = 0;
+                long long upper = 0;
+                if (set_element->lower == NULL ||
+                    evaluate_const_expr(symtab, set_element->lower, &lower) != 0)
+                {
+                    return 1;
+                }
+
+                if (set_element->upper != NULL)
+                {
+                    if (evaluate_const_expr(symtab, set_element->upper, &upper) != 0)
+                        return 1;
+                }
+                else
+                {
+                    upper = lower;
+                }
+
+                if (lower > upper)
+                {
+                    long long tmp = lower;
+                    lower = upper;
+                    upper = tmp;
+                }
+
+                for (long long value = lower; value <= upper; ++value)
+                {
+                    if (value < 0 || value >= 32)
+                    {
+                        fprintf(stderr, "Error: set literal value %lld out of supported range 0..31.\n", value);
+                        return 1;
+                    }
+                    mask |= (1ull << value);
+                }
+
+                element = element->next;
+            }
+
+            *out_value = (long long)mask;
+            return 0;
+        }
         default:
             break;
     }
@@ -282,6 +336,33 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
             record_info, alias_info);
 
+        if (func_return == 0 && alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
+        {
+            int ordinal = 0;
+            ListNode_t *literal_node = alias_info->enum_literals;
+            while (literal_node != NULL)
+            {
+                if (literal_node->cur != NULL)
+                {
+                    char *literal_name = (char *)literal_node->cur;
+                    if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
+                    {
+                        fprintf(stderr, "Error on line %d, redeclaration of enum literal %s!\n",
+                            tree->line_num, literal_name);
+                        ++return_val;
+                    }
+                    else
+                    {
+                        HashNode_t *enum_node = NULL;
+                        if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
+                            enum_node->var_type = HASHVAR_ENUM;
+                    }
+                }
+                ++ordinal;
+                literal_node = literal_node->next;
+            }
+        }
+
         if(func_return > 0)
         {
             fprintf(stderr, "Error on line %d, redeclaration of name %s!\n",
@@ -306,8 +387,9 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
 
+        struct Expression *value_expr = tree->tree_data.const_decl_data.value;
         long long value = 0;
-        if (evaluate_const_expr(symtab, tree->tree_data.const_decl_data.value, &value) != 0)
+        if (evaluate_const_expr(symtab, value_expr, &value) != 0)
         {
             fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
             ++return_val;
@@ -317,6 +399,12 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
                     tree->line_num, tree->tree_data.const_decl_data.id);
             ++return_val;
+        }
+        else if (value_expr != NULL && value_expr->type == EXPR_SET)
+        {
+            HashNode_t *const_node = NULL;
+            if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                const_node->var_type = HASHVAR_SET;
         }
 
         cur = cur->next;
@@ -458,8 +546,8 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
 
-    return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
+    return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0);
