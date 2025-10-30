@@ -52,52 +52,42 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *
     return add_inst(inst_list, buffer);
 }
 
-static ListNode_t *gencode_real_binary_runtime(const char *left_operand,
+static ListNode_t *gencode_real_binary_op(const char *left_operand,
     const char *right_operand, const char *dest, ListNode_t *inst_list,
-    const char *function_name)
+    const char *sse_mnemonic)
 {
-    if (left_operand == NULL || right_operand == NULL || dest == NULL || function_name == NULL)
+    if (left_operand == NULL || right_operand == NULL || dest == NULL || sse_mnemonic == NULL)
         return inst_list;
 
-    const char *arg0 = current_arg_reg64(0);
-    const char *arg1 = current_arg_reg64(1);
     char buffer[80];
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", left_operand, arg0);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", left_operand);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_operand, arg1);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", right_operand);
     inst_list = add_inst(inst_list, buffer);
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", function_name);
+    snprintf(buffer, sizeof(buffer), "\t%s\t%%xmm1, %%xmm0\n", sse_mnemonic);
     inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, dest);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", dest);
     inst_list = add_inst(inst_list, buffer);
-    free_arg_regs();
     return inst_list;
 }
 
-static ListNode_t *gencode_real_unary_runtime(const char *value_operand,
-    const char *dest, ListNode_t *inst_list, const char *function_name)
+static ListNode_t *gencode_real_negate(const char *value_operand,
+    const char *dest, ListNode_t *inst_list)
 {
-    if (value_operand == NULL || dest == NULL || function_name == NULL)
+    if (value_operand == NULL || dest == NULL)
         return inst_list;
 
-    const char *arg0 = current_arg_reg64(0);
-    char buffer[80];
+    char buffer[96];
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_operand, arg0);
-    inst_list = add_inst(inst_list, buffer);
+    if (strcmp(value_operand, dest) != 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_operand, dest);
+        inst_list = add_inst(inst_list, buffer);
+    }
 
-    inst_list = codegen_vect_reg(inst_list, 0);
-    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", function_name);
-    inst_list = add_inst(inst_list, buffer);
-
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, dest);
-    inst_list = add_inst(inst_list, buffer);
-    free_arg_regs();
-    return inst_list;
+    snprintf(buffer, sizeof(buffer), "\txorq\t$0x8000000000000000, %s\n", dest);
+    return add_inst(inst_list, buffer);
 }
 
 static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
@@ -537,7 +527,7 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     const char *dest = select_register_name(target_reg, type_tag);
     if (type_tag == REAL_TYPE)
     {
-        inst_list = gencode_real_unary_runtime(dest, dest, inst_list, "gpc_real_neg");
+        inst_list = gencode_real_negate(dest, dest, inst_list);
     }
     else
     {
@@ -881,21 +871,21 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             if (expr->resolved_type == REAL_TYPE)
             {
-                const char *func_name = NULL;
+                const char *sse_op = NULL;
                 switch (type)
                 {
                     case PLUS:
-                        func_name = "gpc_real_add";
+                        sse_op = "addsd";
                         break;
                     case MINUS:
-                        func_name = "gpc_real_sub";
+                        sse_op = "subsd";
                         break;
                     default:
                         assert(0 && "Unsupported real addop type!");
                         break;
                 }
-                if (func_name != NULL)
-                    inst_list = gencode_real_binary_runtime(left, right, left, inst_list, func_name);
+                if (sse_op != NULL)
+                    inst_list = gencode_real_binary_op(left, right, left, inst_list, sse_op);
                 break;
             }
             {
@@ -946,14 +936,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             if (expr->resolved_type == REAL_TYPE)
             {
-                const char *func_name = NULL;
+                const char *sse_op = NULL;
                 switch (type)
                 {
                     case STAR:
-                        func_name = "gpc_real_mul";
+                        sse_op = "mulsd";
                         break;
                     case SLASH:
-                        func_name = "gpc_real_div";
+                        sse_op = "divsd";
                         break;
                     case DIV:
                     case MOD:
@@ -962,8 +952,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     default:
                         break;
                 }
-                if (func_name != NULL)
-                    inst_list = gencode_real_binary_runtime(left, right, left, inst_list, func_name);
+                if (sse_op != NULL)
+                    inst_list = gencode_real_binary_op(left, right, left, inst_list, sse_op);
                 break;
             }
             {
