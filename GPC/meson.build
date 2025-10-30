@@ -56,6 +56,7 @@ gpc_cparser_sources = [
   'Optimizer/optimizer.c',
   'Optimizer/pass_manager.c',
   'stacktrace.c',
+  'unit_paths.c',
 ]
 
 gpc_cparser_exe = executable('gpc', gpc_cparser_sources,

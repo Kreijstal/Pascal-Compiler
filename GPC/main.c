@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
 #include <limits.h>
 #ifndef _WIN32
 #include <strings.h>
@@ -22,83 +21,13 @@
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParsePascal.h"
+#include "unit_paths.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
 
-static int file_is_readable(const char *path)
-{
-    return path != NULL && access(path, R_OK) == 0;
-}
-
-static char *duplicate_path(const char *path)
-{
-    if (path == NULL)
-        return NULL;
-
-    char *dup = strdup(path);
-    if (dup == NULL)
-        fprintf(stderr, "Error: Memory allocation failed while duplicating path '%s'\n", path);
-
-    return dup;
-}
-
-static char *g_unit_vendor_dir = NULL;
-static char *g_user_source_dir = NULL;
-
-static void initialize_user_unit_dir(const char *input_path)
-{
-    if (input_path == NULL || g_user_source_dir != NULL)
-        return;
-
-    char *input_copy = strdup(input_path);
-    if (input_copy == NULL)
-        return;
-
-    char *dir = dirname(input_copy);
-    if (dir != NULL)
-        g_user_source_dir = duplicate_path(dir);
-
-    free(input_copy);
-}
-
-static void initialize_vendor_unit_dir(const char *stdlib_path)
-{
-    if (stdlib_path == NULL || g_unit_vendor_dir != NULL)
-        return;
-
-    char *stdlib_copy = strdup(stdlib_path);
-    if (stdlib_copy == NULL)
-        return;
-
-    char *dir = dirname(stdlib_copy);
-    if (dir != NULL)
-    {
-        char buffer[PATH_MAX];
-        int written = snprintf(buffer, sizeof(buffer), "%s/Units", dir);
-        if (written > 0 && written < (int)sizeof(buffer))
-            g_unit_vendor_dir = duplicate_path(buffer);
-    }
-
-    free(stdlib_copy);
-}
-
-static char *build_candidate_unit_path(const char *dir, const char *unit_name)
-{
-    if (dir == NULL || unit_name == NULL)
-        return NULL;
-
-    char candidate[PATH_MAX];
-    int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
-    if (written <= 0 || written >= (int)sizeof(candidate))
-        return NULL;
-
-    if (!file_is_readable(candidate))
-        return NULL;
-
-    return duplicate_path(candidate);
-}
+static UnitSearchPaths g_unit_paths;
 
 typedef struct
 {
@@ -172,51 +101,12 @@ static bool unit_set_add(UnitSet *set, char *name)
 
 static char *lowercase_copy(const char *name)
 {
-    if (name == NULL)
-        return NULL;
-
-    size_t len = strlen(name);
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL)
-        return NULL;
-
-    for (size_t i = 0; i < len; ++i)
-        copy[i] = (char)tolower((unsigned char)name[i]);
-    copy[len] = '\0';
-    return copy;
+    return unit_search_paths_normalize_name(name);
 }
 
 static char *build_unit_path(const char *unit_name)
 {
-    if (unit_name == NULL)
-        return NULL;
-
-    char *path = build_candidate_unit_path(g_unit_vendor_dir, unit_name);
-    if (path != NULL)
-        return path;
-
-    path = build_candidate_unit_path("GPC/Units", unit_name);
-    if (path != NULL)
-        return path;
-
-    const char *source_root = getenv("MESON_SOURCE_ROOT");
-    if (source_root != NULL)
-    {
-        char buffer[PATH_MAX];
-        int written = snprintf(buffer, sizeof(buffer), "%s/GPC/Units", source_root);
-        if (written > 0 && written < (int)sizeof(buffer))
-        {
-            path = build_candidate_unit_path(buffer, unit_name);
-            if (path != NULL)
-                return path;
-        }
-    }
-
-    path = build_candidate_unit_path(g_user_source_dir, unit_name);
-    if (path != NULL)
-        return path;
-
-    return build_candidate_unit_path(".", unit_name);
+    return unit_search_paths_resolve(&g_unit_paths, unit_name);
 }
 
 static void append_initialization_statement(Tree_t *program, struct Statement *init_stmt)
@@ -263,6 +153,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
                    unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.interface_const_decls);
+    unit_tree->tree_data.unit_data.interface_const_decls = NULL;
+
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
                    unit_tree->tree_data.unit_data.interface_var_decls);
@@ -272,6 +167,11 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+    program->tree_data.program_data.const_declaration =
+        ConcatList(program->tree_data.program_data.const_declaration,
+                   unit_tree->tree_data.unit_data.implementation_const_decls);
+    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
@@ -376,10 +276,11 @@ int main(int argc, char **argv)
         set_flags(argv + required_args, args_left);
     }
 
-    initialize_user_unit_dir(argv[1]);
+    unit_search_paths_init(&g_unit_paths);
+    unit_search_paths_set_user(&g_unit_paths, argv[1]);
 
     file_to_parse = "GPC/stdlib.p";
-    initialize_vendor_unit_dir(file_to_parse);
+    unit_search_paths_set_vendor(&g_unit_paths, file_to_parse);
     prelude_tree = ParsePascalOnly("GPC/stdlib.p");
     file_to_parse = argv[1];
     user_tree = ParsePascalOnly(argv[1]);
@@ -429,6 +330,7 @@ int main(int argc, char **argv)
 
             destroy_tree(prelude_tree);
             destroy_tree(user_tree);
+            unit_search_paths_destroy(&g_unit_paths);
             return 0;
         }
 
@@ -490,6 +392,7 @@ int main(int argc, char **argv)
             user_tree = NULL;
         }
     }
+    unit_search_paths_destroy(&g_unit_paths);
     return exit_status;
 }
 

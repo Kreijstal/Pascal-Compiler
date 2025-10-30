@@ -49,6 +49,7 @@ int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
+static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
@@ -230,6 +231,61 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 }
 
 /* Pushes a bunch of type declarations onto the current scope */
+static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
+{
+    if (symtab == NULL)
+        return 0;
+
+    int errors = 0;
+    ListNode_t *cur = type_decls;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *tree = (Tree_t *)cur->cur;
+            if (tree->type == TREE_TYPE_DECL &&
+                tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+            {
+                struct TypeAlias *alias_info = &tree->tree_data.type_decl_data.info.alias;
+                if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
+                {
+                    int ordinal = 0;
+                    ListNode_t *literal_node = alias_info->enum_literals;
+                    while (literal_node != NULL)
+                    {
+                        if (literal_node->cur != NULL)
+                        {
+                            char *literal_name = (char *)literal_node->cur;
+                            HashNode_t *existing = NULL;
+                            if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                            {
+                                existing->var_type = HASHVAR_ENUM;
+                                existing->const_int_value = ordinal;
+                            }
+                            else if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
+                            {
+                                fprintf(stderr,
+                                        "Error on line %d, redeclaration of enum literal %s!\n",
+                                        tree->line_num, literal_name);
+                                ++errors;
+                            }
+                            else if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
+                            {
+                                existing->var_type = HASHVAR_ENUM;
+                            }
+                        }
+                        ++ordinal;
+                        literal_node = literal_node->next;
+                    }
+                }
+            }
+        }
+        cur = cur->next;
+    }
+
+    return errors;
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -336,7 +392,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
             record_info, alias_info);
 
-        if (func_return == 0 && alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
+        if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
         {
             int ordinal = 0;
             ListNode_t *literal_node = alias_info->enum_literals;
@@ -345,17 +401,21 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (literal_node->cur != NULL)
                 {
                     char *literal_name = (char *)literal_node->cur;
-                    if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
+                    HashNode_t *enum_node = NULL;
+                    if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
+                    {
+                        enum_node->var_type = HASHVAR_ENUM;
+                        enum_node->const_int_value = ordinal;
+                    }
+                    else if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
                     {
                         fprintf(stderr, "Error on line %d, redeclaration of enum literal %s!\n",
-                            tree->line_num, literal_name);
+                                tree->line_num, literal_name);
                         ++return_val;
                     }
-                    else
+                    else if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
                     {
-                        HashNode_t *enum_node = NULL;
-                        if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
-                            enum_node->var_type = HASHVAR_ENUM;
+                        enum_node->var_type = HASHVAR_ENUM;
                     }
                 }
                 ++ordinal;
@@ -546,8 +606,9 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
 
-    return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
+    return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0);
@@ -979,6 +1040,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* These arguments are themselves like declarations */
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
 
+    return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.declarations);
     return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
 
