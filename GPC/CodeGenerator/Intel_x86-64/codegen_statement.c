@@ -1550,6 +1550,31 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
+    /* Evaluate the 'to' expression once and store it in a temporary variable */
+    Register_t *expr_reg = NULL;
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &expr_reg);
+    if (codegen_had_error(ctx) || expr_reg == NULL)
+    {
+        free(one_expr);
+        free(update_expr);
+        free(update_stmt);
+        return inst_list;
+    }
+    
+    /* Create a temporary variable to store the 'to' value */
+    StackNode_t *temp_to_node = add_l_t("for_to_temp");
+    char buffer2[128];
+    if (expr->resolved_type == LONGINT_TYPE)
+    {
+        snprintf(buffer2, sizeof(buffer2), "\tmovq\t%s, -%d(%%rbp)\n", expr_reg->bit_64, temp_to_node->offset);
+    }
+    else
+    {
+        snprintf(buffer2, sizeof(buffer2), "\tmovl\t%s, -%d(%%rbp)\n", expr_reg->bit_32, temp_to_node->offset);
+    }
+    inst_list = add_inst(inst_list, buffer2);
+    free_reg(get_reg_stack(), expr_reg);
+    
     /* Jump to condition check first */
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
@@ -1590,38 +1615,47 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
         inst_list = add_inst(inst_list, buffer);
     }
     
-    /* Evaluate the 'to' expression */
-    Register_t *expr_reg = NULL;
-    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &expr_reg);
-    if (codegen_had_error(ctx) || expr_reg == NULL)
+    /* Load the 'to' value from the temporary variable */
+    Register_t *to_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (to_reg == NULL)
     {
         free_reg(get_reg_stack(), for_var_reg);
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for 'to' value");
         free(one_expr);
         free(update_expr);
         free(update_stmt);
         return inst_list;
     }
     
-    /* Compare for_var <= expr */
-    char buffer2[128];
+    if (expr->resolved_type == LONGINT_TYPE)
+    {
+        snprintf(buffer2, sizeof(buffer2), "\tmovq\t-%d(%%rbp), %s\n", temp_to_node->offset, to_reg->bit_64);
+    }
+    else
+    {
+        snprintf(buffer2, sizeof(buffer2), "\tmovl\t-%d(%%rbp), %s\n", temp_to_node->offset, to_reg->bit_32);
+    }
+    inst_list = add_inst(inst_list, buffer2);
+    
+    /* Compare for_var <= to_temp */
     if (for_var->resolved_type == LONGINT_TYPE)
     {
-        snprintf(buffer2, sizeof(buffer2), "\tcmpq\t%s, %s\n", expr_reg->bit_64, for_var_reg->bit_64);
+        snprintf(buffer2, sizeof(buffer2), "\tcmpq\t%s, %s\n", to_reg->bit_64, for_var_reg->bit_64);
         inst_list = add_inst(inst_list, buffer2);
-        /* If for_var > expr, jump to exit (inverse of LE) */
+        /* If for_var > to_temp, jump to exit (inverse of LE) */
         snprintf(buffer2, sizeof(buffer2), "\tjg\t%s\n", exit_label);
     }
     else
     {
-        snprintf(buffer2, sizeof(buffer2), "\tcmpl\t%s, %s\n", expr_reg->bit_32, for_var_reg->bit_32);
+        snprintf(buffer2, sizeof(buffer2), "\tcmpl\t%s, %s\n", to_reg->bit_32, for_var_reg->bit_32);
         inst_list = add_inst(inst_list, buffer2);
-        /* If for_var > expr, jump to exit (inverse of LE) */
+        /* If for_var > to_temp, jump to exit (inverse of LE) */
         snprintf(buffer2, sizeof(buffer2), "\tjg\t%s\n", exit_label);
     }
     inst_list = add_inst(inst_list, buffer2);
     
     free_reg(get_reg_stack(), for_var_reg);
-    free_reg(get_reg_stack(), expr_reg);
+    free_reg(get_reg_stack(), to_reg);
 
     /* Body of the loop */
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
