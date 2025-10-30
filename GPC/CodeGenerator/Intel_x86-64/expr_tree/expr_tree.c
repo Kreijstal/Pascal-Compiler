@@ -966,24 +966,36 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == MOD)
             {
-                char left32[16];
-                char right32[16];
-                const char *mod_left = use_qword_op ? reg64_to_reg32(left, left32, sizeof(left32)) : left;
-                const char *mod_right = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", mod_left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
+                if (use_qword_op)
+                {
+                    snprintf(buffer, 50, "\tmovq\t%s, %%rax\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcqo\n");
 
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", mod_right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%s, %%r10\n", right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", mod_left);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%%rdx, %s\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    char left32[16];
+                    char right32[16];
+                    const char *mod_left = reg64_to_reg32(left, left32, sizeof(left32));
+                    const char *mod_right = reg64_to_reg32(right, right32, sizeof(right32));
+                    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", mod_left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcdq\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%s, %%r10d\n", mod_right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", mod_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             /* NOTE: Division and modulus is a more special case */
             else if(type == SLASH || type == DIV)
@@ -998,24 +1010,36 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 inst_list = add_inst(inst_list, buffer);
 
 
-                char left32[16];
-                char right32[16];
-                const char *div_left = use_qword_op ? reg64_to_reg32(left, left32, sizeof(left32)) : left;
-                const char *div_right = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
-                snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", div_left);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tcdq\n");
-                inst_list = add_inst(inst_list, buffer);
+                if (use_qword_op)
+                {
+                    snprintf(buffer, 50, "\tmovq\t%s, %%rax\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcqo\n");
 
-                char reg[10];
-                snprintf(reg, 10, "%%r10d");
-                snprintf(buffer, 50, "\tmovl\t%s, %s\n", div_right, reg);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tidivl\t%s\n", reg);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%s, %%r10\n", right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", div_left);
-                inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    char left32[16];
+                    char right32[16];
+                    const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
+                    const char *div_right = reg64_to_reg32(right, right32, sizeof(right32));
+                    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", div_left);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcdq\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%s, %%r10d\n", div_right);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
+
+                    snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", div_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
 
                 snprintf(buffer, 50, "\tpopq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
@@ -1033,28 +1057,36 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == SHL)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tshl%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHR)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tsar%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROL)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\trol%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROR)
             {
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", right);
+                char right32[16];
+                const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
+                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tror%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);

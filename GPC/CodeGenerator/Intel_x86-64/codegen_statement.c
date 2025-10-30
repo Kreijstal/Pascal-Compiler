@@ -688,19 +688,18 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         const char *precision_dest64 = current_arg_reg64(1);
         const char *value_dest64 = current_arg_reg64(expr_is_real ? 2 : 1);
 
+        Register_t *width_reg = NULL;
+        Register_t *precision_reg = NULL;
+        int has_width_reg = 0;
+        int has_precision_reg = 0;
+
         if (expr != NULL && expr->field_width != NULL)
         {
             expr_node_t *width_tree = build_expr_tree(expr->field_width);
-            Register_t *width_reg = get_free_reg(get_reg_stack(), &inst_list);
+            width_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_reg);
             free_expr_tree(width_tree);
-            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
-            free_reg(get_reg_stack(), width_reg);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
-            inst_list = add_inst(inst_list, buffer);
+            has_width_reg = 1;
         }
 
         if (expr_is_real)
@@ -708,25 +707,19 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             if (expr != NULL && expr->field_precision != NULL)
             {
                 expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
-                Register_t *precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+                precision_reg = get_free_reg(get_reg_stack(), &inst_list);
                 inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
                 free_expr_tree(precision_tree);
-                inst_list = codegen_sign_extend32_to64(inst_list, precision_reg->bit_32, precision_dest64);
-                free_reg(get_reg_stack(), precision_reg);
-            }
-            else
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
-                inst_list = add_inst(inst_list, buffer);
+                has_precision_reg = 1;
             }
         }
         else if (expr != NULL && expr->field_precision != NULL)
         {
             expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
-            Register_t *precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+            precision_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
             free_expr_tree(precision_tree);
-            free_reg(get_reg_stack(), precision_reg);
+            has_precision_reg = 1;
         }
 
         expr_node_t *expr_tree = build_expr_tree(expr);
@@ -750,6 +743,35 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
 
         free_reg(get_reg_stack(), value_reg);
+
+        if (has_width_reg)
+        {
+            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
+            free_reg(get_reg_stack(), width_reg);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        if (expr_is_real)
+        {
+            if (has_precision_reg)
+            {
+                inst_list = codegen_sign_extend32_to64(inst_list, precision_reg->bit_32, precision_dest64);
+                free_reg(get_reg_stack(), precision_reg);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else if (has_precision_reg)
+        {
+            free_reg(get_reg_stack(), precision_reg);
+        }
 
         inst_list = codegen_vect_reg(inst_list, 0);
 
