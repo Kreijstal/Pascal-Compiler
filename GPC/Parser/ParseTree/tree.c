@@ -257,6 +257,12 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
                 tree->tree_data.arr_decl_data.e_range);
 
           list_print(tree->tree_data.arr_decl_data.ids, f, num_indent+1);
+          if (tree->tree_data.arr_decl_data.initializer != NULL)
+          {
+              print_indent(f, num_indent + 1);
+              fprintf(f, "[INITIALIZER]:\n");
+              stmt_print(tree->tree_data.arr_decl_data.initializer, f, num_indent + 2);
+          }
           break;
 
         case TREE_TYPE_DECL:
@@ -754,6 +760,12 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.arr_decl_data.ids);
           if (tree->tree_data.arr_decl_data.type_id != NULL)
             free(tree->tree_data.arr_decl_data.type_id);
+          if (tree->tree_data.arr_decl_data.initializer != NULL)
+              destroy_stmt(tree->tree_data.arr_decl_data.initializer);
+          if (tree->tree_data.arr_decl_data.static_label != NULL)
+              free(tree->tree_data.arr_decl_data.static_label);
+          if (tree->tree_data.arr_decl_data.init_guard_label != NULL)
+              free(tree->tree_data.arr_decl_data.init_guard_label);
           break;
 
         case TREE_CONST_DECL:
@@ -1281,7 +1293,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     return new_tree;
 }
 
-Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end)
+Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
+    struct Statement *initializer)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1294,6 +1307,12 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.type_id = type_id;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
+    new_tree->tree_data.arr_decl_data.initializer = initializer;
+    new_tree->tree_data.arr_decl_data.is_typed_const = 0;
+    new_tree->tree_data.arr_decl_data.has_static_storage = 0;
+    new_tree->tree_data.arr_decl_data.static_storage_emitted = 0;
+    new_tree->tree_data.arr_decl_data.static_label = NULL;
+    new_tree->tree_data.arr_decl_data.init_guard_label = NULL;
 
     return new_tree;
 }

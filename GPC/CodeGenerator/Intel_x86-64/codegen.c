@@ -586,17 +586,39 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
         }
          else if (tree->type == TREE_ARR_DECL)
          {
-             id_list = tree->tree_data.arr_decl_data.ids;
-             int length = tree->tree_data.arr_decl_data.e_range - tree->tree_data.arr_decl_data.s_range + 1;
+             struct Array *arr = &tree->tree_data.arr_decl_data;
+             id_list = arr->ids;
+             int length = arr->e_range - arr->s_range + 1;
              if (length < 0)
                  length = 0;
              int total_size = length * DOUBLEWORD;
              if (total_size <= 0)
                  total_size = DOUBLEWORD;
-             while (id_list != NULL)
+
+             if (arr->has_static_storage)
              {
-                 add_array((char *)id_list->cur, total_size, DOUBLEWORD, tree->tree_data.arr_decl_data.s_range);
-                 id_list = id_list->next;
+                 if (!arr->static_storage_emitted)
+                 {
+                     if (arr->static_label != NULL)
+                         fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n", arr->static_label, total_size, DOUBLEWORD);
+                     if (arr->init_guard_label != NULL)
+                         fprintf(ctx->output_file, "\t.comm\t%s,1,1\n", arr->init_guard_label);
+                     arr->static_storage_emitted = 1;
+                 }
+
+                 while (id_list != NULL)
+                 {
+                     add_static_array((char *)id_list->cur, total_size, DOUBLEWORD, arr->s_range, arr->static_label);
+                     id_list = id_list->next;
+                 }
+             }
+             else
+             {
+                 while (id_list != NULL)
+                 {
+                     add_array((char *)id_list->cur, total_size, DOUBLEWORD, arr->s_range);
+                     id_list = id_list->next;
+                 }
              }
          }
 
@@ -841,7 +863,13 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
     while (decls != NULL)
     {
         Tree_t *decl = (Tree_t *)decls->cur;
-        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        if (decl == NULL)
+        {
+            decls = decls->next;
+            continue;
+        }
+
+        if (decl->type == TREE_VAR_DECL)
         {
             HashNode_t *type_node = NULL;
             if (decl->tree_data.var_decl_data.type_id != NULL)
@@ -874,6 +902,39 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
             if (init_stmt != NULL)
                 inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+        }
+        else if (decl->type == TREE_ARR_DECL)
+        {
+            struct Array *arr = &decl->tree_data.arr_decl_data;
+            struct Statement *init_stmt = arr->initializer;
+            if (init_stmt != NULL)
+            {
+                if (arr->is_typed_const && arr->init_guard_label != NULL)
+                {
+                    char done_label[64];
+                    gen_label(done_label, sizeof(done_label), ctx);
+
+                    char buffer[128];
+                    snprintf(buffer, sizeof(buffer), "\tmovb\t%s(%%rip), %%al\n", arr->init_guard_label);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\ttestb\t%al, %al\n");
+                    snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", done_label);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+
+                    snprintf(buffer, sizeof(buffer), "\tmovb\t$1, %s(%%rip)\n", arr->init_guard_label);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    char label_decl[96];
+                    snprintf(label_decl, sizeof(label_decl), "%s:\n", done_label);
+                    inst_list = add_inst(inst_list, label_decl);
+                }
+                else
+                {
+                    inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+                }
+            }
         }
         decls = decls->next;
     }
