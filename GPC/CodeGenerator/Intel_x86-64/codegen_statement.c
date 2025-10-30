@@ -1543,6 +1543,29 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     else
     {
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
+        /* Initialize the loop variable to 1 */
+        StackNode_t *var_node = find_label(for_var->expr_data.id);
+        if (var_node != NULL)
+        {
+            char init_buffer[64];
+            if (for_var->resolved_type == LONGINT_TYPE)
+            {
+                snprintf(init_buffer, sizeof(init_buffer), "\tmovq\t$1, -%d(%%rbp)\n", var_node->offset);
+            }
+            else
+            {
+                snprintf(init_buffer, sizeof(init_buffer), "\tmovl\t$1, -%d(%%rbp)\n", var_node->offset);
+            }
+            inst_list = add_inst(inst_list, init_buffer);
+        }
+        else
+        {
+            codegen_report_error(ctx, "ERROR: Loop variable not found for initialization");
+            free(one_expr);
+            free(update_expr);
+            free(update_stmt);
+            return inst_list;
+        }
     }
 
     assert(for_var->type == EXPR_VAR_ID);
