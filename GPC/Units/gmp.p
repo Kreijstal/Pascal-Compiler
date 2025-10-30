@@ -2,10 +2,10 @@ unit gmp;
 
 interface
 
-type
-    NativeUInt = longint;
-    AnsiString = string;
+uses
+    SysUtils;
 
+type
     MPInteger = record
         __gpc_mp_handle: Pointer;
     end;
@@ -18,7 +18,7 @@ procedure z_ui_pow_ui(var value: MPInteger; base, exponent: NativeUInt);
 function z_size(var value: MPInteger): NativeUInt;
 procedure z_set(var dest: MPInteger; var src: MPInteger);
 function z_add(var target: MPInteger; var operand: MPInteger): MPInteger;
-function z_get_str(base: NativeUInt; var value: MPInteger): AnsiString;
+function z_get_str(base: NativeUInt; var value: MPInteger): string;
 
 implementation
 
@@ -83,9 +83,9 @@ begin
     z_add := target;
 end;
 
-function z_get_str(base: NativeUInt; var value: MPInteger): AnsiString;
+function z_get_str(base: NativeUInt; var value: MPInteger): string;
 var
-    result_ptr: AnsiString;
+    result_ptr: string;
 begin
     asm
         call gpc_gmp_z_get_str

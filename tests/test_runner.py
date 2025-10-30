@@ -16,6 +16,7 @@ TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 RUNTIME_SOURCE = "GPC/runtime.c"
+RUNTIME_GMP_SOURCE = "GPC/runtime_gmp.c"
 EXEC_TIMEOUT = 5
 
 # Meson exposes toggleable behaviour via environment variables so CI can
@@ -162,6 +163,7 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
         cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
+        cls.runtime_gmp_object = os.path.join(TEST_OUTPUT_DIR, "runtime_gmp.o")
         cls._compile_runtime()
         cls._build_ctypes_helper_library()
 
@@ -222,25 +224,30 @@ class TestCompiler(unittest.TestCase):
 
     @classmethod
     def _compile_runtime(cls):
-        """Compile the runtime support file once to speed up repeated links."""
-        try:
-            subprocess.run(
-                [
-                    "gcc",
-                    "-c",
-                    "-O2",
-                    "-pipe",
-                    "-o",
-                    cls.runtime_object,
-                    RUNTIME_SOURCE,
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"runtime compilation failed: {e.stderr}")
-
+        """Compile the runtime support files once to speed up repeated links."""
+        builds = [
+            (cls.runtime_object, RUNTIME_SOURCE),
+            (cls.runtime_gmp_object, RUNTIME_GMP_SOURCE),
+        ]
+        for output, source in builds:
+            try:
+                subprocess.run(
+                    [
+                        "gcc",
+                        "-c",
+                        "-O2",
+                        "-pipe",
+                        "-o",
+                        output,
+                        source,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"runtime compilation failed ({source}): {e.stderr}")
+        
     def compile_executable(self, asm_file, executable_file, extra_objects=None, extra_link_args=None):
         if extra_objects is None:
             extra_objects = []
@@ -258,8 +265,7 @@ class TestCompiler(unittest.TestCase):
                     self.runtime_object,
                 ]
                 + list(extra_objects)
-                + list(extra_link_args)
-                + ["-lgmp"],
+                + list(extra_link_args),
                 check=True,
                 capture_output=True,
                 text=True,
@@ -1060,18 +1066,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         # Compile the assembly to an executable
-        try:
-            subprocess.run([
-                "gcc",
-                "-no-pie",
-                "-o",
-                executable_file,
-                asm_file,
-                "GPC/runtime.c",
-                "-lgmp",
-            ], check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+        self.compile_executable(asm_file, executable_file)
 
         # Run the executable and check the output
         try:
