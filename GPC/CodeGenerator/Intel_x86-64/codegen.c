@@ -420,8 +420,12 @@ void codegen_stack_space(CodeGenContext *ctx)
         // On Windows, after pushing %rbp, the stack is 8 bytes off 16-byte alignment
         // We need to make sure the total stack space allocated is (16 * N) - 8
         // So that RSP is 16-byte aligned before calls
-        int aligned_space = ((needed_space + 8 + 15) / 16) * 16 - 8;
-        if (aligned_space != 0)
+        int aligned_space = 0;
+        if (needed_space > 0)
+        {
+            aligned_space = ((needed_space + 8 + 15) / 16) * 16 - 8;
+        }
+        if (aligned_space > 0)
         {
             fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
         }
