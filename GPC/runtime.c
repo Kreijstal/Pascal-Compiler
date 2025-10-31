@@ -291,6 +291,33 @@ void gpc_raise(int64_t value)
     exit(EXIT_FAILURE);
 }
 
+void gpc_new(void **target, size_t size)
+{
+    if (target == NULL)
+        return;
+
+    void *memory = calloc(1, size);
+    if (memory == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to allocate %zu bytes.\n", size);
+        exit(EXIT_FAILURE);
+    }
+
+    *target = memory;
+}
+
+void gpc_dispose(void **target)
+{
+    if (target == NULL)
+        return;
+
+    if (*target != NULL)
+    {
+        free(*target);
+        *target = NULL;
+    }
+}
+
 static char *gpc_alloc_empty_string(void)
 {
     char *empty = (char *)malloc(1);

@@ -553,6 +553,18 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(inc_name);
     }
 
+    char *new_name = strdup("New");
+    if (new_name != NULL) {
+        AddBuiltinProc(symtab, new_name, NULL);
+        free(new_name);
+    }
+
+    char *dispose_name = strdup("Dispose");
+    if (dispose_name != NULL) {
+        AddBuiltinProc(symtab, dispose_name, NULL);
+        free(dispose_name);
+    }
+
     char *length_name = strdup("Length");
     if (length_name != NULL) {
         AddBuiltinFunction(symtab, length_name, HASHVAR_LONGINT);
