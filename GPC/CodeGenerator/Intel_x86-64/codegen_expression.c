@@ -1168,14 +1168,16 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     assert(ctx != NULL);
     assert(out_reg != NULL);
 
-    const char *array_id = expr->expr_data.array_access_data.id;
+    const struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
+    const char *array_id = (array_expr != NULL && array_expr->type == EXPR_VAR_ID) ?
+        array_expr->expr_data.id : NULL;
     if (array_id == NULL)
     {
         codegen_report_error(ctx, "ERROR: Missing array identifier in access expression.");
         return inst_list;
     }
 
-    inst_list = codegen_expr(expr->expr_data.array_access_data.array_expr, inst_list, ctx);
+    inst_list = codegen_expr(expr->expr_data.array_access_data.index_expr, inst_list, ctx);
     if (codegen_had_error(ctx))
         return inst_list;
     Register_t *index_reg = codegen_try_get_reg(&inst_list, ctx, "array index");

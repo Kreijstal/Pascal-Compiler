@@ -195,17 +195,10 @@ static struct Expression *clone_expression(const struct Expression *expr)
                 clone_expression(expr->expr_data.mulop_data.right_factor);
             break;
         case EXPR_ARRAY_ACCESS:
-            clone->expr_data.array_access_data.id =
-                expr->expr_data.array_access_data.id != NULL ?
-                    strdup(expr->expr_data.array_access_data.id) : NULL;
             clone->expr_data.array_access_data.array_expr =
                 clone_expression(expr->expr_data.array_access_data.array_expr);
-            if (expr->expr_data.array_access_data.id != NULL &&
-                clone->expr_data.array_access_data.id == NULL)
-            {
-                destroy_expr(clone);
-                return NULL;
-            }
+            clone->expr_data.array_access_data.index_expr =
+                clone_expression(expr->expr_data.array_access_data.index_expr);
             break;
         case EXPR_TYPECAST:
             clone->expr_data.typecast_data.target_type = expr->expr_data.typecast_data.target_type;
@@ -2031,14 +2024,26 @@ int semcheck_arrayaccess(int *type_return,
     char *id;
     int expr_type;
     struct Expression *access_expr;
+    struct Expression *array_expr;
     HashNode_t *hash_return;
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_ARRAY_ACCESS);
 
     return_val = 0;
-    id = expr->expr_data.array_access_data.id;
-    access_expr = expr->expr_data.array_access_data.array_expr;
+    array_expr = expr->expr_data.array_access_data.array_expr;
+    access_expr = expr->expr_data.array_access_data.index_expr;
+    id = (array_expr != NULL && array_expr->type == EXPR_VAR_ID) ?
+        array_expr->expr_data.id : NULL;
+
+    if (id == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unsupported array base expression.\n\n",
+            expr->line_num);
+        ++return_val;
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
 
     /***** FIRST VERIFY ARRAY IDENTIFIER *****/
 

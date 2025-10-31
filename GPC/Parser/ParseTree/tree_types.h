@@ -238,8 +238,8 @@ struct Expression
         /* An indexed array */
         struct ArrayAccess
         {
-            char *id;
             struct Expression *array_expr;
+            struct Expression *index_expr;
         } array_access_data;
 
         /* Record field access */
