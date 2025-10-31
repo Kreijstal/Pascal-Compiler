@@ -73,6 +73,17 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
 
+    bool is_packed = false;
+    combinator_t* packed_keyword = token(keyword_ci("packed"));
+    ParseResult packed_res = parse(in, packed_keyword);
+    if (packed_res.is_success) {
+        is_packed = true;
+        free_ast(packed_res.value.ast);
+    } else {
+        discard_failure(packed_res);
+    }
+    free_combinator(packed_keyword);
+
     // Parse "ARRAY" keyword (case insensitive)
     combinator_t* array_keyword = token(keyword_ci("array"));
     ParseResult array_res = parse(in, array_keyword);
@@ -158,7 +169,7 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     // Build AST
     ast_t* array_ast = new_ast();
     array_ast->typ = pargs->tag;
-    array_ast->sym = NULL;
+    array_ast->sym = is_packed ? sym_lookup("packed") : NULL;
     array_ast->child = indices_ast;
     if (indices_ast) {
         // Link element type as the last child
@@ -360,11 +371,37 @@ combinator_t* type_name(tag_t tag) {
     );
 }
 
+static combinator_t* create_record_field_type_spec(void) {
+    return multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        array_type(PASCAL_T_ARRAY_TYPE),
+        set_type(PASCAL_T_SET),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+        range_type(PASCAL_T_RANGE_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
+        type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+}
+
 // Record type parser: RECORD field1: type1; field2: type2; ... END
 static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
     InputState state;
     save_input_state(in, &state);
+
+    bool is_packed = false;
+    combinator_t* packed_keyword = token(keyword_ci("packed"));
+    ParseResult packed_res = parse(in, packed_keyword);
+    if (packed_res.is_success) {
+        is_packed = true;
+        free_ast(packed_res.value.ast);
+    } else {
+        discard_failure(packed_res);
+    }
+    free_combinator(packed_keyword);
 
     // Parse "RECORD" keyword (case insensitive)
     combinator_t* record_keyword = token(keyword_ci("record"));
@@ -379,7 +416,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Field declaration: field_name[, field_name]* : Type
     combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    combinator_t* field_type = token(cident(PASCAL_T_IDENTIFIER)); // simplified type for now
+    combinator_t* field_type = create_record_field_type_spec();
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         field_name_list,
         token(match(":")),
@@ -447,7 +484,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     // Build AST
     ast_t* record_ast = new_ast();
     record_ast->typ = pargs->tag;
-    record_ast->sym = NULL;
+    record_ast->sym = is_packed ? sym_lookup("packed") : NULL;
     record_ast->child = fields_ast;
     record_ast->next = NULL;
 
