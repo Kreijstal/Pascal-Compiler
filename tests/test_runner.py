@@ -1,3 +1,4 @@
+# THIS PROGRAM WILL NOT WORK IF YOU DO NOT COMPILE SOURCES FIRST WITH MESON
 import argparse
 import os
 import shutil
