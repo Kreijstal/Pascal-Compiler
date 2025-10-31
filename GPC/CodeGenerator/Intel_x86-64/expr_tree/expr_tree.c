@@ -808,34 +808,75 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: gencode_leaf_var: id = %s\n", expr->expr_data.id);
             #endif
-            stack_node = find_label(expr->expr_data.id);
-            #ifdef DEBUG_CODEGEN
-            CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p\n", stack_node);
-            #endif
+            {
+                int scope_depth = 0;
+                stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+                #ifdef DEBUG_CODEGEN
+                CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
+                #endif
 
-            if(stack_node != NULL)
-            {
-                snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
-            }
-            else if(nonlocal_flag() == 1)
-            {
-                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
-                snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
-            }
-            else
-            {
-                HashNode_t *node = NULL;
-                if (ctx != NULL && ctx->symtab != NULL &&
-                    FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
-                    node != NULL && node->hash_type == HASHTYPE_CONST)
+                if(stack_node != NULL)
                 {
-                    snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                    if (scope_depth == 0)
+                    {
+                        /* Variable is in current scope, access normally */
+                        snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
+                    }
+                    else if (scope_depth == 1)
+                    {
+                        /* Variable is in parent scope, use static link */
+                        /* Load parent's frame pointer from static link slot */
+                        StackNode_t *static_link_node = find_label("__static_link__");
+                        if (static_link_node != NULL)
+                        {
+                            /* First load the static link into a temp location, then access the variable */
+                            /* For now, generate code to load through the static link */
+                            /* We need to emit instructions to load the static link into a register first */
+                            StackNode_t *temp_sl = find_in_temp("__temp_static_link__");
+                            if (temp_sl == NULL)
+                            {
+                                temp_sl = add_l_t("__temp_static_link__");
+                            }
+                            char temp_buffer[100];
+                            snprintf(temp_buffer, sizeof(temp_buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
+                                static_link_node->offset);
+                            inst_list = add_inst(inst_list, temp_buffer);
+                            /* Now access the variable through the static link */
+                            snprintf(buffer, buf_len, "-%d(%%r11)", stack_node->offset);
+                        }
+                        else
+                        {
+                            /* No static link, fallback to direct access (shouldn't happen) */
+                            snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
+                        }
+                    }
+                    else
+                    {
+                        /* Multiple levels of nesting not yet supported */
+                        fprintf(stderr, "ERROR: Variables nested more than 1 level deep not yet supported\n");
+                        exit(1);
+                    }
+                }
+                else if(nonlocal_flag() == 1)
+                {
+                    inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                    snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
                 }
                 else
                 {
-                    fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
-                    fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                    exit(1);
+                    HashNode_t *node = NULL;
+                    if (ctx != NULL && ctx->symtab != NULL &&
+                        FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                        node != NULL && node->hash_type == HASHTYPE_CONST)
+                    {
+                        snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                    }
+                    else
+                    {
+                        fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+                        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+                        exit(1);
+                    }
                 }
             }
 

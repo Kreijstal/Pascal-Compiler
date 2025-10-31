@@ -727,7 +727,40 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
+    
+    /* Check if this is a nested procedure (has parent scope) */
+    int is_nested = (get_cur_scope()->prev_scope != NULL);
+    StackNode_t *static_link = NULL;
+    if (is_nested)
+    {
+        /* Reserve space for static link (parent's frame pointer) as first local variable */
+        /* This ensures it's at a predictable offset */
+        static_link = add_l_x("__static_link__", 8);
+    }
+    
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab);
+    
+    if (is_nested && static_link != NULL)
+    {
+        char buffer[64];
+        /* The parent's %rbp will be passed in a register and we store it.
+         * For now, assume it's passed in %rdi for procedures with no parameters,
+         * or %rsi for procedures with 1+ parameters (with static link as hidden first arg) */
+        int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
+        if (num_args == 0)
+        {
+            /* No parameters, static link comes in %rdi */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
+        }
+        else
+        {
+            /* Has parameters, static link comes in first position, shifting other args */
+            /* This is handled by modifying argument passing - for now skip */
+            snprintf(buffer, sizeof(buffer), "\t# TODO: static link with parameters\n");
+        }
+        inst_list = add_inst(inst_list, buffer);
+    }
+    
     codegen_function_locals(proc->declarations, ctx, symtab);
 
     codegen_subprograms(proc->subprograms, ctx, symtab);
@@ -767,7 +800,39 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
     inst_list = NULL;
+    
+    /* Check if this is a nested function (has parent scope) */
+    int is_nested = (get_cur_scope()->prev_scope != NULL);
+    StackNode_t *static_link = NULL;
+    if (is_nested)
+    {
+        /* Reserve space for static link (parent's frame pointer) as first local variable */
+        static_link = add_l_x("__static_link__", 8);
+    }
+    
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab);
+    
+    if (is_nested && static_link != NULL)
+    {
+        char link_buffer[64];
+        /* The parent's %rbp will be passed in a register and we store it.
+         * For now, assume it's passed in %rdi for functions with no parameters,
+         * or as hidden first arg for functions with parameters */
+        int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
+        if (num_args == 0)
+        {
+            /* No parameters, static link comes in %rdi */
+            snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
+        }
+        else
+        {
+            /* Has parameters, static link comes in first position, shifting other args */
+            /* This is handled by modifying argument passing - for now skip */
+            snprintf(link_buffer, sizeof(link_buffer), "\t# TODO: static link with parameters\n");
+        }
+        inst_list = add_inst(inst_list, link_buffer);
+    }
+    
     int return_size = DOUBLEWORD;
     if (symtab != NULL)
     {

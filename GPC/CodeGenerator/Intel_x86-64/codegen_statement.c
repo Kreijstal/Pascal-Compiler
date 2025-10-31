@@ -1195,7 +1195,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (var_expr->type == EXPR_VAR_ID)
     {
-        var = find_label(var_expr->expr_data.id);
+        int scope_depth = 0;
+        var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
         inst_list = codegen_expr(assign_expr, inst_list, ctx);
         if (codegen_had_error(ctx))
             return inst_list;
@@ -1204,10 +1205,45 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = (var->size >= 8);
-            if (use_qword)
-                snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+            if (scope_depth == 0)
+            {
+                /* Variable is in current scope, assign normally */
+                if (use_qword)
+                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                else
+                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+            }
+            else if (scope_depth == 1)
+            {
+                /* Variable is in parent scope, use static link */
+                StackNode_t *static_link_node = find_label("__static_link__");
+                if (static_link_node != NULL)
+                {
+                    /* Load parent's frame pointer from static link */
+                    char temp_buffer[100];
+                    snprintf(temp_buffer, sizeof(temp_buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
+                        static_link_node->offset);
+                    inst_list = add_inst(inst_list, temp_buffer);
+                    /* Store to variable through static link */
+                    if (use_qword)
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%r11)\n", reg->bit_64, var->offset);
+                    else
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%r11)\n", reg->bit_32, var->offset);
+                }
+                else
+                {
+                    /* No static link, fallback to direct access */
+                    if (use_qword)
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                    else
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+                }
+            }
             else
-                snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+            {
+                fprintf(stderr, "ERROR: Variables nested more than 1 level deep not yet supported\n");
+                exit(1);
+            }
         }
         else if(nonlocal_flag() == 1)
         {
@@ -1404,12 +1440,18 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
     HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
 
+    int proc_scope_level = -1;
     if(proc_node == NULL)
     {
-        FindIdent(&proc_node, symtab, unmangled_name);
+        proc_scope_level = FindIdent(&proc_node, symtab, unmangled_name);
         stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
     }
-
+    else
+    {
+        /* proc_node already resolved, but we still need the scope level */
+        HashNode_t *temp_node = NULL;
+        proc_scope_level = FindIdent(&temp_node, symtab, unmangled_name);
+    }
 
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
@@ -1417,6 +1459,21 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
     else
     {
+        /* Determine if we should pass a static link:
+         * - The called procedure was declared at scope level 0 (in the program/current procedure)
+         * - AND it has no parameters (for now, to avoid complexity)
+         * This covers procedures nested in the main program or in the current procedure
+         */
+        int should_pass_static_link = (proc_scope_level == 0);
+        int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
+        
+        /* For nested procedures with no parameters, pass static link in %rdi */
+        if (should_pass_static_link && num_args == 0)
+        {
+            /* Pass current frame pointer as static link */
+            inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+        }
+        
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
