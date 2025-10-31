@@ -1590,26 +1590,73 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             exit(1);
         }
 
-        if (arg_infos != NULL)
+        Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
+        struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
+        
+        // Check if we need to spill this argument due to register conflicts
+        if (stored_reg != NULL && strcmp(stored_reg->bit_64, arg_reg_char) != 0)
         {
-            for (int j = 0; j < i; ++j)
+            CODEGEN_DEBUG("DEBUG: Argument %d needs move from %s to %s\n", i, stored_reg->bit_64, arg_reg_char);
+            
+            // Check if moving this argument would clobber a register already set up for a later argument
+            int needs_spill = 0;
+            for (int j = i + 1; j < arg_num; ++j)
             {
                 if (arg_infos[j].reg != NULL &&
                     strcmp(arg_infos[j].reg->bit_64, arg_reg_char) == 0)
                 {
-                    StackNode_t *spill = add_l_t("arg_spill");
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                        arg_infos[j].reg->bit_64, spill->offset);
-                    inst_list = add_inst(inst_list, buffer);
-                    free_reg(get_reg_stack(), arg_infos[j].reg);
-                    arg_infos[j].reg = NULL;
-                    arg_infos[j].spill = spill;
+                    // The target register is already used by a later argument
+                    CODEGEN_DEBUG("DEBUG: Conflict detected: arg %d target %s conflicts with arg %d source %s\n",
+                        i, arg_reg_char, j, arg_infos[j].reg->bit_64);
+                    needs_spill = 1;
+                    break;
                 }
+            }
+            
+            // Also check if the source register is the same as a later argument's source register
+            // This handles the case where the same register is used for multiple arguments
+            for (int j = i + 1; j < arg_num; ++j)
+            {
+                if (arg_infos[j].reg != NULL &&
+                    strcmp(arg_infos[j].reg->bit_64, stored_reg->bit_64) == 0)
+                {
+                    CODEGEN_DEBUG("DEBUG: Conflict detected: arg %d source %s conflicts with arg %d source %s\n",
+                        i, stored_reg->bit_64, j, arg_infos[j].reg->bit_64);
+                    needs_spill = 1;
+                    break;
+                }
+            }
+            
+            // Check if the target register is already used by a later argument's target register
+            // This handles the case where we need to move from X to Y, but Y already contains a value
+            for (int j = i + 1; j < arg_num; ++j)
+            {
+                const char *later_arg_reg = get_arg_reg64_num(j);
+                if (later_arg_reg != NULL && strcmp(later_arg_reg, arg_reg_char) == 0)
+                {
+                    // The target register for this argument is the same as the target register for a later argument
+                    // This means the later argument's value is already in this register
+                    CODEGEN_DEBUG("DEBUG: Conflict detected: arg %d target %s conflicts with arg %d target %s\n",
+                        i, arg_reg_char, j, later_arg_reg);
+                    needs_spill = 1;
+                    break;
+                }
+            }
+            
+            if (needs_spill)
+            {
+                // Spill the current argument to avoid clobbering
+                CODEGEN_DEBUG("DEBUG: Spilling argument %d from %s to stack\n", i, stored_reg->bit_64);
+                StackNode_t *spill = add_l_t("arg_spill");
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    stored_reg->bit_64, spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), stored_reg);
+                stored_reg = NULL;
+                arg_infos[i].spill = spill;
             }
         }
 
-        Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
-        struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
         if (stored_reg != NULL)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
