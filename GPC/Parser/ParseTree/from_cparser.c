@@ -444,9 +444,10 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
 
         char *field_type_id = NULL;
         struct RecordType *nested_record = NULL;
+        TypeInfo field_info = {0};
         int field_type = UNKNOWN_TYPE;
         if (cursor != NULL)
-            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, NULL);
+            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
         else if (names != NULL)
         {
             char *candidate = pop_last_identifier(&names);
@@ -490,6 +491,13 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
                 field_desc->type = field_type;
                 field_desc->type_id = type_id_copy;
                 field_desc->nested_record = nested_copy;
+                field_desc->is_array = field_info.is_array;
+                field_desc->array_start = field_info.start;
+                field_desc->array_end = field_info.end;
+                field_desc->array_element_type = field_info.element_type;
+                field_desc->array_element_type_id = field_info.element_type_id;
+                field_desc->array_is_open = field_info.is_open_array;
+                field_info.element_type_id = NULL;
                 list_builder_append(&fields_builder, field_desc, LIST_RECORD_FIELD);
             } else {
                 if (field_name != NULL)
@@ -508,6 +516,7 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
             free(field_type_id);
         if (nested_record != NULL)
             destroy_record_type(nested_record);
+        destroy_type_info_contents(&field_info);
     }
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
