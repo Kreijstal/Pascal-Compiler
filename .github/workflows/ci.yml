@@ -3,6 +3,8 @@ name: Pascal Compiler CI
 on:
   pull_request:
     branches: [ "*" ]
+  push:
+    branches: [ "*" ]
 
 jobs:
   build-and-test:
