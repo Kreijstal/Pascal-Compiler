@@ -36,6 +36,14 @@ static int semcheck_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static void semcheck_clear_pointer_info(struct Expression *expr);
 static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id);
+static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
+    const char *type_id, int line_num);
+static void semcheck_clear_array_info(struct Expression *expr);
+static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symtab,
+    struct TypeAlias *alias, int line_num);
+static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *symtab,
+    HashNode_t *node, int line_num);
+static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_recordaccess(int *type_return,
@@ -99,6 +107,145 @@ static void semcheck_set_pointer_info(struct Expression *expr, int subtype, cons
     }
 }
 
+static void semcheck_clear_array_info(struct Expression *expr)
+{
+    if (expr == NULL)
+        return;
+
+    expr->is_array_expr = 0;
+    expr->array_element_type = UNKNOWN_TYPE;
+    if (expr->array_element_type_id != NULL)
+    {
+        free(expr->array_element_type_id);
+        expr->array_element_type_id = NULL;
+    }
+    expr->array_lower_bound = 0;
+    expr->array_upper_bound = -1;
+    expr->array_element_size = 0;
+    expr->array_is_dynamic = 0;
+    expr->array_element_record_type = NULL;
+}
+
+static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
+        return NULL;
+
+    if (type_node->record_type != NULL)
+        return type_node->record_type;
+
+    if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+    {
+        HashNode_t *target_node = NULL;
+        if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
+            target_node != NULL)
+        {
+            return target_node->record_type;
+        }
+    }
+
+    return NULL;
+}
+
+static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symtab,
+    struct TypeAlias *alias, int line_num)
+{
+    if (expr == NULL)
+        return;
+
+    semcheck_clear_array_info(expr);
+    if (alias == NULL || !alias->is_array)
+        return;
+
+    expr->is_array_expr = 1;
+    expr->array_lower_bound = alias->array_start;
+    expr->array_upper_bound = alias->array_end;
+    expr->array_is_dynamic = alias->is_open_array;
+    expr->array_element_type = alias->array_element_type;
+    if (alias->array_element_type_id != NULL)
+    {
+        expr->array_element_type_id = strdup(alias->array_element_type_id);
+        if (expr->array_element_type_id == NULL)
+            fprintf(stderr, "Error: failed to allocate array element type identifier.\n");
+    }
+
+    if (expr->array_element_type == UNKNOWN_TYPE && expr->array_element_type_id != NULL)
+    {
+        int resolved_type = UNKNOWN_TYPE;
+        if (resolve_type_identifier(&resolved_type, symtab, expr->array_element_type_id, line_num) == 0)
+            expr->array_element_type = resolved_type;
+    }
+
+    if (expr->array_element_type == RECORD_TYPE || expr->array_element_type == UNKNOWN_TYPE)
+        expr->array_element_record_type = semcheck_lookup_record_type(symtab,
+            expr->array_element_type_id);
+}
+
+static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *symtab,
+    HashNode_t *node, int line_num)
+{
+    if (expr == NULL)
+        return;
+
+    semcheck_clear_array_info(expr);
+    if (node == NULL || node->hash_type != HASHTYPE_ARRAY)
+        return;
+
+    expr->is_array_expr = 1;
+    int node_lower_bound = node->array_start;
+    int node_upper_bound = node->array_end;
+    int node_element_size = node->element_size;
+    int node_is_dynamic = node->is_dynamic_array;
+
+    expr->array_lower_bound = node_lower_bound;
+    expr->array_upper_bound = node_upper_bound;
+    expr->array_is_dynamic = node_is_dynamic;
+    expr->array_element_size = node_element_size;
+
+    expr->array_element_type = UNKNOWN_TYPE;
+    set_type_from_hashtype(&expr->array_element_type, node);
+
+    if (node->type_alias != NULL && node->type_alias->is_array)
+    {
+        semcheck_set_array_info_from_alias(expr, symtab, node->type_alias, line_num);
+
+        if (node_element_size > 0)
+            expr->array_element_size = node_element_size;
+        else if (expr->array_element_size <= 0 &&
+            node->type_alias->array_end >= node->type_alias->array_start)
+        {
+            long long count = (long long)node->type_alias->array_end -
+                (long long)node->type_alias->array_start + 1;
+            if (count > 0 && node->type_alias->array_element_type != UNKNOWN_TYPE)
+            {
+                long long element_size = 0;
+                if (sizeof_from_type_ref(symtab, node->type_alias->array_element_type,
+                        node->type_alias->array_element_type_id, &element_size,
+                        0, line_num) == 0)
+                {
+                    expr->array_element_size = (int)element_size;
+                }
+            }
+        }
+
+        if (!expr->array_is_dynamic && node_is_dynamic)
+            expr->array_is_dynamic = 1;
+
+        if (node_lower_bound != 0)
+            expr->array_lower_bound = node_lower_bound;
+        if (node_upper_bound != 0)
+            expr->array_upper_bound = node_upper_bound;
+    }
+    else
+    {
+        expr->array_element_record_type = node->record_type;
+    }
+}
+
 static int ensure_with_capacity(void)
 {
     if (with_context_count < with_context_capacity)
@@ -135,6 +282,23 @@ static struct Expression *clone_expression(const struct Expression *expr)
         if (clone->pointer_subtype_id == NULL)
         {
             free(clone);
+            return NULL;
+        }
+    }
+
+    clone->is_array_expr = expr->is_array_expr;
+    clone->array_element_type = expr->array_element_type;
+    clone->array_lower_bound = expr->array_lower_bound;
+    clone->array_upper_bound = expr->array_upper_bound;
+    clone->array_element_size = expr->array_element_size;
+    clone->array_is_dynamic = expr->array_is_dynamic;
+    clone->array_element_record_type = expr->array_element_record_type;
+    if (expr->array_element_type_id != NULL)
+    {
+        clone->array_element_type_id = strdup(expr->array_element_type_id);
+        if (clone->array_element_type_id == NULL)
+        {
+            destroy_expr(clone);
             return NULL;
         }
     }
@@ -1237,6 +1401,7 @@ static int semcheck_pointer_deref(int *type_return,
     assert(expr->type == EXPR_POINTER_DEREF);
 
     semcheck_clear_pointer_info(expr);
+    semcheck_clear_array_info(expr);
     expr->record_type = NULL;
 
     struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
@@ -1302,6 +1467,16 @@ static int semcheck_pointer_deref(int *type_return,
         }
     }
 
+    if (pointer_expr->pointer_subtype_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != -1 && type_node != NULL &&
+            type_node->type_alias != NULL && type_node->type_alias->is_array)
+        {
+            semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+        }
+    }
+
     *type_return = target_type;
     return error_count;
 }
@@ -1315,6 +1490,7 @@ static int semcheck_recordaccess(int *type_return,
     assert(expr->type == EXPR_RECORD_ACCESS);
 
     expr->record_type = NULL;
+    semcheck_clear_array_info(expr);
 
     struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
     const char *field_id = expr->expr_data.record_access_data.field_id;
@@ -1386,6 +1562,40 @@ static int semcheck_recordaccess(int *type_return,
     if (field_record != NULL)
         field_type = RECORD_TYPE;
 
+    if (field_desc->is_array)
+    {
+        semcheck_clear_array_info(expr);
+        expr->is_array_expr = 1;
+        expr->array_lower_bound = field_desc->array_start;
+        expr->array_upper_bound = field_desc->array_end;
+        expr->array_is_dynamic = field_desc->array_is_open;
+        expr->array_element_type = field_desc->array_element_type;
+        if (field_desc->array_element_type_id != NULL)
+        {
+            expr->array_element_type_id = strdup(field_desc->array_element_type_id);
+            if (expr->array_element_type == UNKNOWN_TYPE)
+            {
+                int resolved_type = UNKNOWN_TYPE;
+                if (resolve_type_identifier(&resolved_type, symtab, expr->array_element_type_id,
+                        expr->line_num) == 0)
+                    expr->array_element_type = resolved_type;
+            }
+            expr->array_element_record_type = semcheck_lookup_record_type(symtab,
+                field_desc->array_element_type_id);
+        }
+        else if (expr->array_element_type == RECORD_TYPE)
+        {
+            expr->array_element_record_type = field_record;
+        }
+
+        if (expr->array_element_type != UNKNOWN_TYPE)
+            field_type = expr->array_element_type;
+        if (expr->array_element_record_type != NULL && field_type == RECORD_TYPE)
+            field_record = expr->array_element_record_type;
+    }
+
+    struct TypeAlias *array_alias = NULL;
+
     if (field_desc->type_id != NULL)
     {
         int resolved_type = field_type;
@@ -1407,6 +1617,9 @@ static int semcheck_recordaccess(int *type_return,
                     field_record = target_node->record_type;
                 }
             }
+
+            if (type_node->type_alias != NULL && type_node->type_alias->is_array)
+                array_alias = type_node->type_alias;
         }
 
         if (field_record != NULL && field_type == UNKNOWN_TYPE)
@@ -1428,6 +1641,9 @@ static int semcheck_recordaccess(int *type_return,
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
     }
+
+    if (array_alias != NULL)
+        semcheck_set_array_info_from_alias(expr, symtab, array_alias, expr->line_num);
 
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
     *type_return = field_type;
@@ -1916,6 +2132,7 @@ int semcheck_varid(int *type_return,
     return_val = 0;
     id = expr->expr_data.id;
     semcheck_clear_pointer_info(expr);
+    semcheck_clear_array_info(expr);
 
     scope_return = FindIdent(&hash_return, symtab, id);
     if(scope_return == -1)
@@ -1979,7 +2196,8 @@ int semcheck_varid(int *type_return,
             ++return_val;
         }
         if(hash_return->hash_type != HASHTYPE_VAR &&
-            hash_return->hash_type != HASHTYPE_FUNCTION_RETURN)
+            hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
+            hash_return->hash_type != HASHTYPE_ARRAY)
         {
             if(hash_return->hash_type == HASHTYPE_CONST && mutating == 0)
             {
@@ -1993,6 +2211,10 @@ int semcheck_varid(int *type_return,
             }
         }
         set_type_from_hashtype(type_return, hash_return);
+        if (hash_return->hash_type == HASHTYPE_ARRAY)
+            semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
+        else
+            semcheck_clear_array_info(expr);
         if (*type_return == POINTER_TYPE)
         {
             int subtype = UNKNOWN_TYPE;
@@ -2025,70 +2247,106 @@ int semcheck_varid(int *type_return,
 int semcheck_arrayaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
-    int return_val, scope_return;
-    char *id;
-    int expr_type;
-    struct Expression *access_expr;
+    int return_val = 0;
+    int index_type = UNKNOWN_TYPE;
+    int element_type = UNKNOWN_TYPE;
     struct Expression *array_expr;
-    HashNode_t *hash_return;
+    struct Expression *access_expr;
+
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_ARRAY_ACCESS);
 
-    return_val = 0;
+    semcheck_clear_pointer_info(expr);
+    semcheck_clear_array_info(expr);
+    expr->record_type = NULL;
+
     array_expr = expr->expr_data.array_access_data.array_expr;
     access_expr = expr->expr_data.array_access_data.index_expr;
-    id = (array_expr != NULL && array_expr->type == EXPR_VAR_ID) ?
-        array_expr->expr_data.id : NULL;
 
-    if (id == NULL)
+    if (array_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, unsupported array base expression.\n\n",
+        fprintf(stderr, "Error on line %d, array access requires a base expression.\n\n",
             expr->line_num);
-        ++return_val;
         *type_return = UNKNOWN_TYPE;
-        return return_val;
+        return 1;
     }
 
-    /***** FIRST VERIFY ARRAY IDENTIFIER *****/
+    int base_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
-    scope_return = FindIdent(&hash_return, symtab, id);
-    if(scope_return == -1)
+    if (!array_expr->is_array_expr)
     {
-        fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
-        ++return_val;
-
+        fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
+            expr->line_num);
         *type_return = UNKNOWN_TYPE;
+        return return_val + 1;
     }
-    else
+
+    element_type = array_expr->array_element_type;
+    if (element_type == UNKNOWN_TYPE && array_expr->array_element_type_id != NULL)
     {
-        set_hash_meta(hash_return, mutating);
-        if(scope_return > max_scope_lev)
-        {
-            fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
-                expr->line_num, id);
-            fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
-            ++return_val;
-        }
-        if(hash_return->hash_type != HASHTYPE_ARRAY)
-        {
-            fprintf(stderr, "Error on line %d, \"%s\" is not an array variable!\n\n",
-                expr->line_num, id);
-            ++return_val;
-        }
+        int resolved_type = UNKNOWN_TYPE;
+        if (resolve_type_identifier(&resolved_type, symtab, array_expr->array_element_type_id,
+                expr->line_num) == 0)
+            element_type = resolved_type;
+    }
+    if (element_type == UNKNOWN_TYPE && array_expr->array_element_record_type != NULL)
+        element_type = RECORD_TYPE;
 
-        set_type_from_hashtype(type_return, hash_return);
+    if (array_expr->array_element_type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL &&
+            type_node->type_alias != NULL && type_node->type_alias->is_array)
+        {
+            semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+        }
     }
 
-    /***** THEN VERIFY EXPRESSION INSIDE *****/
-    return_val += semcheck_expr_main(&expr_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
-    if(expr_type != INT_TYPE && expr_type != LONGINT_TYPE)
+    if (element_type == POINTER_TYPE)
+    {
+        int pointer_subtype = UNKNOWN_TYPE;
+        const char *pointer_type_id = NULL;
+        struct RecordType *pointer_record = NULL;
+
+        if (array_expr->array_element_type_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
+                type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_pointer)
+            {
+                struct TypeAlias *alias = type_node->type_alias;
+                pointer_subtype = alias->pointer_type;
+                pointer_type_id = alias->pointer_type_id;
+                if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
+                    pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+            }
+        }
+
+        semcheck_set_pointer_info(expr, pointer_subtype, pointer_type_id);
+        if (pointer_subtype == RECORD_TYPE)
+            expr->record_type = pointer_record;
+        else
+            expr->record_type = NULL;
+    }
+    else if (element_type == RECORD_TYPE)
+    {
+        expr->record_type = array_expr->array_element_record_type;
+    }
+
+    return_val += semcheck_expr_main(&index_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
+    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in array index expression!\n\n",
             expr->line_num);
         ++return_val;
     }
 
+    if (element_type == UNKNOWN_TYPE)
+        element_type = LONGINT_TYPE;
+
+    *type_return = element_type;
     return return_val;
 }
 
