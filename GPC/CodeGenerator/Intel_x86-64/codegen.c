@@ -40,6 +40,12 @@ static int align_to_multiple(int value, int alignment)
     return value + (alignment - remainder);
 }
 
+typedef struct StaticLinkInfo
+{
+    const char *mangled_name;
+    int lexical_depth;
+} StaticLinkInfo;
+
 /* Helper: Increment lexical nesting depth when entering a procedure/function */
 void codegen_enter_lexical_scope(CodeGenContext *ctx)
 {
@@ -64,6 +70,186 @@ int codegen_get_lexical_depth(const CodeGenContext *ctx)
 int codegen_is_nested_context(const CodeGenContext *ctx)
 {
     return codegen_get_lexical_depth(ctx) > 0;
+}
+
+void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_name, int lexical_depth)
+{
+    if (ctx == NULL || mangled_name == NULL)
+        return;
+
+    if (codegen_proc_requires_static_link(ctx, mangled_name))
+        return;
+
+    StaticLinkInfo *info = (StaticLinkInfo *)malloc(sizeof(StaticLinkInfo));
+    if (info == NULL)
+        return;
+
+    info->mangled_name = mangled_name;
+    info->lexical_depth = lexical_depth;
+
+    ListNode_t *entry = CreateListNode(info, LIST_UNSPECIFIED);
+    if (ctx->static_link_procs == NULL)
+        ctx->static_link_procs = entry;
+    else
+        ctx->static_link_procs = PushListNodeFront(ctx->static_link_procs, entry);
+}
+
+int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name)
+{
+    if (ctx == NULL || mangled_name == NULL)
+        return 0;
+
+    ListNode_t *node = ctx->static_link_procs;
+    while (node != NULL)
+    {
+        StaticLinkInfo *info = (StaticLinkInfo *)node->cur;
+        if (info != NULL && info->mangled_name != NULL &&
+            strcmp(info->mangled_name, mangled_name) == 0)
+            return 1;
+        node = node->next;
+    }
+
+    return 0;
+}
+
+int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth)
+{
+    if (ctx == NULL || mangled_name == NULL || out_depth == NULL)
+        return 0;
+
+    ListNode_t *node = ctx->static_link_procs;
+    while (node != NULL)
+    {
+        StaticLinkInfo *info = (StaticLinkInfo *)node->cur;
+        if (info != NULL && info->mangled_name != NULL &&
+            strcmp(info->mangled_name, mangled_name) == 0)
+        {
+            *out_depth = info->lexical_depth;
+            return 1;
+        }
+        node = node->next;
+    }
+
+    return 0;
+}
+
+static void codegen_reset_static_link_cache(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    if (ctx->static_link_reg != NULL)
+    {
+        free_reg(get_reg_stack(), ctx->static_link_reg);
+        ctx->static_link_reg = NULL;
+    }
+    ctx->static_link_reg_level = 0;
+}
+
+static int codegen_find_static_link_offset(StackScope_t *scope, int *offset)
+{
+    if (scope == NULL || offset == NULL)
+        return 0;
+
+    ListNode_t *node = scope->x;
+    while (node != NULL)
+    {
+        StackNode_t *stack_node = (StackNode_t *)node->cur;
+        if (stack_node != NULL && stack_node->label != NULL &&
+            strcmp(stack_node->label, "__static_link__") == 0)
+        {
+            *offset = stack_node->offset;
+            return 1;
+        }
+        node = node->next;
+    }
+
+    return 0;
+}
+
+void codegen_begin_expression(CodeGenContext *ctx)
+{
+    codegen_reset_static_link_cache(ctx);
+}
+
+void codegen_end_expression(CodeGenContext *ctx)
+{
+    codegen_reset_static_link_cache(ctx);
+}
+
+Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list,
+    int levels_to_traverse)
+{
+    if (ctx == NULL || inst_list == NULL || levels_to_traverse <= 0)
+        return NULL;
+
+    if (ctx->static_link_reg != NULL)
+    {
+        if (ctx->static_link_reg_level == levels_to_traverse)
+            return ctx->static_link_reg;
+
+        free_reg(get_reg_stack(), ctx->static_link_reg);
+        ctx->static_link_reg = NULL;
+        ctx->static_link_reg_level = 0;
+    }
+
+    StackScope_t *scope = get_cur_scope();
+    if (scope == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to determine current scope for static link traversal.");
+        return NULL;
+    }
+
+    int *offsets = (int *)calloc((size_t)levels_to_traverse, sizeof(int));
+    if (offsets == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Failed to allocate static link traversal metadata.");
+        return NULL;
+    }
+
+    StackScope_t *current_scope = scope;
+    for (int i = 0; i < levels_to_traverse; ++i)
+    {
+        if (current_scope == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Static link chain shorter than requested depth.");
+            free(offsets);
+            return NULL;
+        }
+
+        if (!codegen_find_static_link_offset(current_scope, &offsets[i]))
+        {
+            codegen_report_error(ctx, "ERROR: Static link slot missing at depth %d.", i);
+            free(offsets);
+            return NULL;
+        }
+
+        current_scope = current_scope->prev_scope;
+    }
+
+    Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == NULL)
+    {
+        free(offsets);
+        return NULL;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offsets[0], reg->bit_64);
+    *inst_list = add_inst(*inst_list, buffer);
+
+    for (int i = 1; i < levels_to_traverse; ++i)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n", offsets[i],
+            reg->bit_64, reg->bit_64);
+        *inst_list = add_inst(*inst_list, buffer);
+    }
+
+    free(offsets);
+
+    ctx->static_link_reg = reg;
+    ctx->static_link_reg_level = levels_to_traverse;
+    return reg;
 }
 
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
@@ -751,25 +937,31 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     proc = &proc_tree->tree_data.subprogram_data;
     sub_id = (proc->mangled_id != NULL) ? proc->mangled_id : proc->id;
 
+    const char *prev_sub_id = ctx->current_subprogram_id;
+    const char *prev_sub_mangled = ctx->current_subprogram_mangled;
+
     /* Enter a new lexical scope */
     codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
-    
+
     /* For now, only support static links for procedures without parameters.
      * Supporting parameters requires a more complex calling convention.
      * Check argument count first to decide whether to set up static link. */
     int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
+    ctx->current_subprogram_id = proc->id;
+    ctx->current_subprogram_mangled = sub_id;
     int is_nested = codegen_is_nested_context(ctx);
     StackNode_t *static_link = NULL;
-    
+
     if (is_nested && num_args == 0)
     {
         /* Reserve space for static link (parent's frame pointer) as first local variable
          * This ensures it's at a predictable offset regardless of other locals */
         static_link = add_l_x("__static_link__", 8);
+        codegen_register_static_link_proc(ctx, sub_id, codegen_get_lexical_depth(ctx));
     }
-    
+
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab);
     
     if (static_link != NULL)
@@ -793,7 +985,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
     pop_stackscope();
-    
+
+    ctx->current_subprogram_id = prev_sub_id;
+    ctx->current_subprogram_mangled = prev_sub_mangled;
+
     /* Leave the lexical scope */
     codegen_leave_lexical_scope(ctx);
     
@@ -823,21 +1018,27 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     func = &func_tree->tree_data.subprogram_data;
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
 
+    const char *prev_sub_id = ctx->current_subprogram_id;
+    const char *prev_sub_mangled = ctx->current_subprogram_mangled;
+
     /* Enter a new lexical scope */
     codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
-    
+
     /* For now, only support static links for functions without parameters.
      * Supporting parameters requires a more complex calling convention. */
     int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
+    ctx->current_subprogram_id = func->id;
+    ctx->current_subprogram_mangled = sub_id;
     int is_nested = codegen_is_nested_context(ctx);
     StackNode_t *static_link = NULL;
-    
+
     if (is_nested && num_args == 0)
     {
         /* Reserve space for static link as first local variable */
         static_link = add_l_x("__static_link__", 8);
+        codegen_register_static_link_proc(ctx, sub_id, codegen_get_lexical_depth(ctx));
     }
     
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab);
@@ -881,7 +1082,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
     pop_stackscope();
-    
+
+    ctx->current_subprogram_id = prev_sub_id;
+    ctx->current_subprogram_mangled = prev_sub_mangled;
+
     /* Leave the lexical scope */
     codegen_leave_lexical_scope(ctx);
     

@@ -822,39 +822,18 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         /* Variable is in current scope, access normally */
                         snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
                     }
-                    else if (scope_depth == 1)
-                    {
-                        /* Variable is in parent scope, use static link */
-                        /* Load parent's frame pointer from static link slot */
-                        StackNode_t *static_link_node = find_label("__static_link__");
-                        if (static_link_node != NULL)
-                        {
-                            /* First load the static link into a temp location, then access the variable */
-                            /* For now, generate code to load through the static link */
-                            /* We need to emit instructions to load the static link into a register first */
-                            StackNode_t *temp_sl = find_in_temp("__temp_static_link__");
-                            if (temp_sl == NULL)
-                            {
-                                temp_sl = add_l_t("__temp_static_link__");
-                            }
-                            char temp_buffer[100];
-                            snprintf(temp_buffer, sizeof(temp_buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-                                static_link_node->offset);
-                            inst_list = add_inst(inst_list, temp_buffer);
-                            /* Now access the variable through the static link */
-                            snprintf(buffer, buf_len, "-%d(%%r11)", stack_node->offset);
-                        }
-                        else
-                        {
-                            /* No static link, fallback to direct access (shouldn't happen) */
-                            snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
-                        }
-                    }
                     else
                     {
-                        /* Multiple levels of nesting not yet supported */
-                        fprintf(stderr, "ERROR: Variables nested more than 1 level deep not yet supported\n");
-                        exit(1);
+                        Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                        if (frame_reg != NULL)
+                            snprintf(buffer, buf_len, "-%d(%s)", stack_node->offset, frame_reg->bit_64);
+                        else
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Failed to acquire static link for variable %s.",
+                                expr->expr_data.id);
+                            snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
+                        }
                     }
                 }
                 else if(nonlocal_flag() == 1)
