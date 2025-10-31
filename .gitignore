@@ -31,3 +31,5 @@ tests/output/
 # Python cache
 __pycache__/
 *.pyc
+quasi-msys2/
+builddir-cross/
