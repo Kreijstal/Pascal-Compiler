@@ -162,6 +162,9 @@ typedef struct {
      * 2 = nested in nested procedure, etc.
      */
     int lexical_depth;
+    const char *current_subprogram_id;
+    const char *current_subprogram_mangled;
+    ListNode_t *static_link_procs;
 
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
@@ -193,6 +196,9 @@ int codegen_had_error(const CodeGenContext *ctx);
 /* Lexical depth management for static links */
 int codegen_get_lexical_depth(const CodeGenContext *ctx);
 int codegen_is_nested_context(const CodeGenContext *ctx);
+void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_name, int lexical_depth);
+int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name);
+int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth);
 
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);

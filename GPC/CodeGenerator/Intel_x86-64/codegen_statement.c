@@ -1167,11 +1167,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (codegen_expr_is_mp_integer(var_expr))
     {
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
+        }
 
-        Register_t *value_reg = front_reg_stack(get_reg_stack());
         Register_t *addr_reg = NULL;
         inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || value_reg == NULL || addr_reg == NULL)
@@ -1197,10 +1201,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     {
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
-        reg = front_reg_stack(get_reg_stack());
+        }
+        reg = value_reg;
 
         if(var != NULL)
         {
@@ -1215,14 +1224,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             else
             {
-                Register_t *reserved_value_reg = NULL;
-                if (reg != NULL)
-                {
-                    reserved_value_reg = get_free_reg(get_reg_stack(), &inst_list);
-                    if (reserved_value_reg != NULL)
-                        reg = reserved_value_reg;
-                }
-
                 codegen_begin_expression(ctx);
                 Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
                 if (frame_reg != NULL)
@@ -1243,8 +1244,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
                 }
                 codegen_end_expression(ctx);
-                if (reserved_value_reg != NULL)
-                    free_reg(get_reg_stack(), reserved_value_reg);
             }
         }
         else if(nonlocal_flag() == 1)
@@ -1256,12 +1255,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             codegen_report_error(ctx,
                 "ERROR: Non-local codegen support disabled (buggy)! Enable with flag '-non-local' after required flags");
+            free_reg(get_reg_stack(), reg);
             return inst_list;
         }
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
-        return add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), reg);
+        return inst_list;
     }
     else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
@@ -1442,17 +1444,16 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
     HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
 
-    int proc_scope_level = -1;
     if(proc_node == NULL)
     {
-        proc_scope_level = FindIdent(&proc_node, symtab, unmangled_name);
+        FindIdent(&proc_node, symtab, unmangled_name);
         stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
     }
     else
     {
         /* proc_node already resolved, but we still need the scope level */
         HashNode_t *temp_node = NULL;
-        proc_scope_level = FindIdent(&temp_node, symtab, unmangled_name);
+        FindIdent(&temp_node, symtab, unmangled_name);
     }
 
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
@@ -1461,37 +1462,23 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
     else
     {
-        /* Determine if we should pass a static link:
-         * We pass the static link when calling a procedure that is declared in the
-         * current scope or within a nested scope relative to the caller
-         * (proc_scope_level <= 0). This includes:
-         * - Procedures declared in the same scope as the caller
-         * - Procedures declared inside the current procedure/function
-         *
-         * The static link allows the callee to access variables in its lexical
-         * parent. For same-scope calls we forward our own static link, while calls
-         * to nested procedures receive the caller's frame pointer directly.
-         */
-        int should_pass_static_link = (proc_scope_level <= 0);
         int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
+        int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
+        int callee_depth = 0;
+        int have_depth = codegen_proc_static_link_depth(ctx, proc_name, &callee_depth);
+        int current_depth = codegen_get_lexical_depth(ctx);
+        int should_pass_static_link = (callee_needs_static_link && num_args == 0 && have_depth);
 
-        /* For nested procedures with no parameters, pass static link in %rdi
-         * TODO: Implement proper calling convention for procedures with parameters.
-         * Options include:
-         * 1. Use a callee-saved register for static link
-         * 2. Pass as hidden first parameter and adjust all arg registers
-         * 3. Pass on stack at a fixed location
-         */
-        if (should_pass_static_link && num_args == 0)
+        if (should_pass_static_link)
         {
-            if (proc_scope_level < 0)
+            if (callee_depth > current_depth)
             {
-                /* Pass current frame pointer for nested children */
+                /* Callee is nested inside the current procedure: pass our frame pointer. */
                 inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
             }
-            else
+            else if (callee_depth == current_depth)
             {
-                /* Forward our own static link to siblings in the same scope */
+                /* Recursion or sibling: forward the stored static link if available. */
                 StackNode_t *static_link_node = find_label("__static_link__");
                 if (static_link_node != NULL)
                 {
@@ -1502,9 +1489,30 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 }
                 else
                 {
-                    /* No stored static link (top-level), fall back to current frame */
-                    inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+                    codegen_report_error(ctx,
+                        "ERROR: Missing static link slot while calling %s.",
+                        unmangled_name);
                 }
+            }
+            else if (current_depth > callee_depth)
+            {
+                /* Callee is in an outer scope: traverse the static link chain. */
+                int levels_to_traverse = current_depth - callee_depth;
+                codegen_begin_expression(ctx);
+                Register_t *link_reg = codegen_acquire_static_link(ctx, &inst_list, levels_to_traverse);
+                if (link_reg != NULL)
+                {
+                    char link_buffer[64];
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %%rdi\n", link_reg->bit_64);
+                    inst_list = add_inst(inst_list, link_buffer);
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to acquire static link for call to %s.",
+                        unmangled_name);
+                }
+                codegen_end_expression(ctx);
             }
         }
         
