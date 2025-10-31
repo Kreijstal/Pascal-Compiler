@@ -45,7 +45,7 @@ jobs:
         run: |
           git clone https://github.com/HolyBlackCat/quasi-msys2.git
           cd quasi-msys2
-          echo "UCRT64 > msystem.txt
+          echo "UCRT64" > msystem.txt
 
       - name: Install MSYS2 packages via quasi-msys2
         run: |
