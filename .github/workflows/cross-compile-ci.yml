@@ -40,7 +40,7 @@ jobs:
       run: |
         cd quasi-msys2
         # Install GCC, GMP, and other required packages
-        make install _gcc _gmp _meson _ninja _python _flex _bison
+        make install _gcc _gmp _meson _ninja _python 
       timeout-minutes: 30
 
     - name: Configure build environment
