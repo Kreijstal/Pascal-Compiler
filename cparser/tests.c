@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "combinators.h"
 #include <stdio.h>
+#include <string.h>
 
 // Declare wrap_failure_with_ast function
 ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult original_result, ast_t* partial_ast);
@@ -148,6 +149,52 @@ void test_sep_by_combinator(void) {
     free_combinator(p);
     free(input->buffer);
     free(input);
+}
+
+void test_sep_by1_combinator(void) {
+    combinator_t* parser = sep_by1(cident(TEST_T_IDENT), match(","));
+
+    input_t* success_input = new_input();
+    success_input->buffer = strdup("a,b,c");
+    success_input->length = strlen(success_input->buffer);
+    ParseResult success = parse(success_input, parser);
+    TEST_ASSERT(success.is_success);
+    ast_t* node = success.value.ast;
+    TEST_ASSERT(node != NULL);
+    TEST_ASSERT(strcmp(node->sym->name, "a") == 0);
+    node = node->next;
+    TEST_ASSERT(node != NULL);
+    TEST_ASSERT(strcmp(node->sym->name, "b") == 0);
+    node = node->next;
+    TEST_ASSERT(node != NULL);
+    TEST_ASSERT(strcmp(node->sym->name, "c") == 0);
+    TEST_ASSERT(node->next == NULL);
+    free_ast(success.value.ast);
+    free(success_input->buffer);
+    free(success_input);
+
+    input_t* trailing_sep_input = new_input();
+    trailing_sep_input->buffer = strdup("a,");
+    trailing_sep_input->length = strlen(trailing_sep_input->buffer);
+    ParseResult trailing = parse(trailing_sep_input, parser);
+    TEST_ASSERT(trailing.is_success);
+    TEST_ASSERT(trailing.value.ast != NULL);
+    TEST_ASSERT(strcmp(trailing.value.ast->sym->name, "a") == 0);
+    TEST_ASSERT(trailing.value.ast->next == NULL);
+    free_ast(trailing.value.ast);
+    free(trailing_sep_input->buffer);
+    free(trailing_sep_input);
+
+    input_t* failure_input = new_input();
+    failure_input->buffer = strdup(",");
+    failure_input->length = strlen(failure_input->buffer);
+    ParseResult failure = parse(failure_input, parser);
+    TEST_ASSERT(!failure.is_success);
+    free_error(failure.value.error);
+    free(failure_input->buffer);
+    free(failure_input);
+
+    free_combinator(parser);
 }
 
 void test_sep_end_by_combinator(void) {
@@ -466,6 +513,7 @@ TEST_LIST = {
     { "gseq_combinator", test_gseq_combinator },
     { "between_combinator", test_between_combinator },
     { "sep_by_combinator", test_sep_by_combinator },
+    { "sep_by1_combinator", test_sep_by1_combinator },
     { "sep_end_by_combinator", test_sep_end_by_combinator },
     { "chainl1_combinator", test_chainl1_combinator },
     { "any_char_combinator", test_any_char_combinator },

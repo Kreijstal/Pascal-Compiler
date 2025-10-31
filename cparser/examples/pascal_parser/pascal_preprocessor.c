@@ -231,6 +231,22 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         if (in_line_comment) {
             if (c == '\n') {
                 in_line_comment = false;
+            } else if (c == '\r' && i + 1 < length && input[i + 1] == '\n') {
+                in_line_comment = false;
+                if (current_branch_active(conditions)) {
+                    if (!string_builder_append_char(output, c)) {
+                        return set_error(error_message, "out of memory");
+                    }
+                    if (!string_builder_append_char(output, '\n')) {
+                        return set_error(error_message, "out of memory");
+                    }
+                } else {
+                    if (!string_builder_append_char(output, '\n')) {
+                        return set_error(error_message, "out of memory");
+                    }
+                }
+                ++i;
+                continue;
             }
         } else if (in_brace_comment) {
             if (c == '}') {

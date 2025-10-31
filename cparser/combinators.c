@@ -115,51 +115,7 @@ static ParseResult between_fn(input_t * in, void * args, char* parser_name) {
     return r_p;
 }
 
-static ParseResult sep_by_fn(input_t * in, void * args, char* parser_name) {
-    sep_by_args* sargs = (sep_by_args*)args;
-    ast_t* head = NULL;
-    ast_t* tail = NULL;
-
-    ParseResult res = parse(in, sargs->p);
-    if (!res.is_success) {
-        free_error(res.value.error);
-        return make_success(ast_nil);
-    }
-    head = tail = res.value.ast;
-
-    while (1) {
-        InputState state; save_input_state(in, &state);
-        ParseResult sep_res = parse(in, sargs->sep);
-        if (!sep_res.is_success) {
-            restore_input_state(in, &state);
-            free_error(sep_res.value.error);
-            break;
-        }
-        free_ast(sep_res.value.ast);
-
-        ParseResult p_res = parse(in, sargs->p);
-        if (!p_res.is_success) {
-            restore_input_state(in, &state);
-            free_error(p_res.value.error);
-            break;
-        }
-        tail->next = p_res.value.ast;
-        tail = tail->next;
-    }
-
-    return make_success(head);
-}
-
-static ParseResult sep_by1_fn(input_t * in, void * args, char* parser_name) {
-    sep_by_args* sargs = (sep_by_args*)args;
-    ParseResult first = parse(in, sargs->p);
-    if (!first.is_success) {
-        return first;
-    }
-
-    ast_t* head = first.value.ast;
-    ast_t* tail = head;
-
+static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
     while (1) {
         InputState state;
         save_input_state(in, &state);
@@ -178,11 +134,38 @@ static ParseResult sep_by1_fn(input_t * in, void * args, char* parser_name) {
             free_error(next_res.value.error);
             break;
         }
+
         tail->next = next_res.value.ast;
         tail = tail->next;
     }
 
+    return tail;
+}
+
+static ParseResult sep_by_common(input_t *in, sep_by_args *sargs, bool require_first) {
+    ParseResult first = parse(in, sargs->p);
+    if (!first.is_success) {
+        if (!require_first) {
+            free_error(first.value.error);
+            return make_success(ast_nil);
+        }
+        return first;
+    }
+
+    ast_t *head = first.value.ast;
+    ast_t *tail = head;
+
+    tail = append_remaining(in, sargs, tail);
+
     return make_success(head);
+}
+
+static ParseResult sep_by_fn(input_t * in, void * args, char* parser_name) {
+    return sep_by_common(in, (sep_by_args*)args, false);
+}
+
+static ParseResult sep_by1_fn(input_t * in, void * args, char* parser_name) {
+    return sep_by_common(in, (sep_by_args*)args, true);
 }
 
 static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
