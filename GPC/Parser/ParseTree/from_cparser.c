@@ -445,8 +445,10 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
         char *field_type_id = NULL;
         struct RecordType *nested_record = NULL;
         int field_type = UNKNOWN_TYPE;
+        TypeInfo field_info;
+        memset(&field_info, 0, sizeof(field_info));
         if (cursor != NULL)
-            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, NULL);
+            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
         else if (names != NULL)
         {
             char *candidate = pop_last_identifier(&names);
@@ -490,6 +492,23 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
                 field_desc->type = field_type;
                 field_desc->type_id = type_id_copy;
                 field_desc->nested_record = nested_copy;
+                field_desc->is_array = field_info.is_array;
+                if (field_info.is_array)
+                {
+                    field_desc->array_lower_bound = field_info.start;
+                    field_desc->array_upper_bound = field_info.end;
+                    field_desc->array_element_type = field_info.element_type;
+                    field_desc->array_element_type_id = field_info.element_type_id != NULL ? strdup(field_info.element_type_id) : NULL;
+                    field_desc->is_open_array = field_info.is_open_array;
+                }
+                else
+                {
+                    field_desc->array_lower_bound = 0;
+                    field_desc->array_upper_bound = -1;
+                    field_desc->array_element_type = UNKNOWN_TYPE;
+                    field_desc->array_element_type_id = NULL;
+                    field_desc->is_open_array = 0;
+                }
                 list_builder_append(&fields_builder, field_desc, LIST_RECORD_FIELD);
             } else {
                 if (field_name != NULL)
@@ -508,6 +527,7 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
             free(field_type_id);
         if (nested_record != NULL)
             destroy_record_type(nested_record);
+        destroy_type_info_contents(&field_info);
     }
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
@@ -809,7 +829,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
 
         struct Expression *index_expr = mk_inum(element->line, index);
-        struct Expression *lhs = mk_arrayaccess(element->line, strdup(*id_ptr), index_expr);
+        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+        struct Expression *lhs = mk_arrayaccess(element->line, base_expr, index_expr);
         struct Statement *assign = mk_varassign(element->line, lhs, rhs);
         list_builder_append(&stmt_builder, assign, LIST_STMT);
 
@@ -1364,10 +1385,11 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         return mk_functioncall(expr_node->line, id, args);
     }
     case PASCAL_T_ARRAY_ACCESS: {
-        ast_t *array_id = expr_node->child;
-        ast_t *index_expr = array_id != NULL ? array_id->next : NULL;
+        ast_t *array_node = expr_node->child;
+        ast_t *index_expr = array_node != NULL ? array_node->next : NULL;
+        struct Expression *base = convert_expression(array_node);
         struct Expression *index = convert_expression(index_expr);
-        return mk_arrayaccess(expr_node->line, dup_symbol(array_id), index);
+        return mk_arrayaccess(expr_node->line, base, index);
     }
     default:
         return NULL;
@@ -1596,11 +1618,27 @@ static struct Expression *convert_member_access(ast_t *node) {
 
     struct Expression *record_expr = convert_expression(base_node);
 
-    char *field_id = NULL;
     ast_t *unwrapped = unwrap_pascal_node(field_node);
     if (unwrapped == NULL)
         unwrapped = field_node;
 
+    if (unwrapped != NULL && unwrapped->typ == PASCAL_T_ARRAY_ACCESS) {
+        ast_t *target_node = unwrapped->child;
+        ast_t *index_node = (target_node != NULL) ? target_node->next : NULL;
+        ast_t *id_node = unwrap_pascal_node(target_node);
+        if (id_node == NULL)
+            id_node = target_node;
+
+        char *field_id = NULL;
+        if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER)
+            field_id = dup_symbol(id_node);
+
+        struct Expression *record_access = mk_recordaccess(node->line, record_expr, field_id);
+        struct Expression *index_expr = convert_expression(index_node);
+        return mk_arrayaccess(node->line, record_access, index_expr);
+    }
+
+    char *field_id = NULL;
     if (unwrapped != NULL) {
         if (unwrapped->typ == PASCAL_T_IDENTIFIER) {
             field_id = dup_symbol(unwrapped);

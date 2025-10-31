@@ -84,12 +84,30 @@ static void semcheck_clear_pointer_info(struct Expression *expr)
     }
 }
 
+static void semcheck_clear_array_info(struct Expression *expr)
+{
+    if (expr == NULL)
+        return;
+
+    expr->is_array_expr = 0;
+    expr->array_lower_bound = 0;
+    expr->array_upper_bound = 0;
+    expr->array_element_size = 0;
+    expr->array_element_type = UNKNOWN_TYPE;
+    if (expr->array_element_type_id != NULL)
+    {
+        free(expr->array_element_type_id);
+        expr->array_element_type_id = NULL;
+    }
+}
+
 static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id)
 {
     if (expr == NULL)
         return;
 
     semcheck_clear_pointer_info(expr);
+    semcheck_clear_array_info(expr);
     expr->pointer_subtype = subtype;
     if (type_id != NULL)
     {
@@ -195,17 +213,10 @@ static struct Expression *clone_expression(const struct Expression *expr)
                 clone_expression(expr->expr_data.mulop_data.right_factor);
             break;
         case EXPR_ARRAY_ACCESS:
-            clone->expr_data.array_access_data.id =
-                expr->expr_data.array_access_data.id != NULL ?
-                    strdup(expr->expr_data.array_access_data.id) : NULL;
             clone->expr_data.array_access_data.array_expr =
                 clone_expression(expr->expr_data.array_access_data.array_expr);
-            if (expr->expr_data.array_access_data.id != NULL &&
-                clone->expr_data.array_access_data.id == NULL)
-            {
-                destroy_expr(clone);
-                return NULL;
-            }
+            clone->expr_data.array_access_data.index_expr =
+                clone_expression(expr->expr_data.array_access_data.index_expr);
             break;
         case EXPR_TYPECAST:
             clone->expr_data.typecast_data.target_type = expr->expr_data.typecast_data.target_type;
@@ -1245,6 +1256,8 @@ static int semcheck_pointer_deref(int *type_return,
 
     semcheck_clear_pointer_info(expr);
     expr->record_type = NULL;
+    semcheck_clear_pointer_info(expr);
+    semcheck_clear_array_info(expr);
 
     struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
     if (pointer_expr == NULL)
@@ -1420,7 +1433,7 @@ static int semcheck_recordaccess(int *type_return,
             field_type = RECORD_TYPE;
     }
 
-    if (field_type == UNKNOWN_TYPE && field_record == NULL)
+    if (!field_desc->is_array && field_type == UNKNOWN_TYPE && field_record == NULL)
     {
         fprintf(stderr, "Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);
@@ -1428,12 +1441,55 @@ static int semcheck_recordaccess(int *type_return,
         return error_count + 1;
     }
 
-    if (field_type == RECORD_TYPE && field_record == NULL)
+    if (!field_desc->is_array && field_type == RECORD_TYPE && field_record == NULL)
     {
         fprintf(stderr, "Error on line %d, missing record definition for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
+    }
+
+    if (field_desc->is_array)
+    {
+        expr->is_array_expr = 1;
+        expr->array_lower_bound = field_desc->array_lower_bound;
+        expr->array_upper_bound = field_desc->array_upper_bound;
+        int array_element_type = field_desc->array_element_type;
+        if (array_element_type == UNKNOWN_TYPE && field_desc->array_element_type_id != NULL)
+        {
+            int resolved_type = array_element_type;
+            if (resolve_type_identifier(&resolved_type, symtab,
+                    field_desc->array_element_type_id, expr->line_num) == 0)
+                array_element_type = resolved_type;
+        }
+        expr->array_element_type = array_element_type;
+        if (field_desc->array_element_type_id != NULL)
+            expr->array_element_type_id = strdup(field_desc->array_element_type_id);
+
+        long long element_size = 0;
+        if (field_desc->array_element_type != UNKNOWN_TYPE || field_desc->array_element_type_id != NULL)
+        {
+            if (sizeof_from_type_ref(symtab, field_desc->array_element_type,
+                    field_desc->array_element_type_id, &element_size, 0, expr->line_num) != 0)
+                element_size = sizeof_from_type_tag(field_desc->array_element_type);
+        }
+        if (element_size <= 0)
+            element_size = POINTER_SIZE_BYTES;
+        expr->array_element_size = (int)element_size;
+
+        if (expr->array_element_type == RECORD_TYPE && field_desc->array_element_type_id != NULL)
+        {
+            HashNode_t *element_node = NULL;
+            if (FindIdent(&element_node, symtab, field_desc->array_element_type_id) != -1 && element_node != NULL)
+                expr->record_type = element_node->record_type;
+            else
+                expr->record_type = NULL;
+        }
+        else
+            expr->record_type = NULL;
+
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
     }
 
     expr->record_type = (field_type == RECORD_TYPE) ? field_record : NULL;
@@ -2011,52 +2067,247 @@ int semcheck_varid(int *type_return,
 int semcheck_arrayaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
-    int return_val, scope_return;
-    char *id;
-    int expr_type;
-    struct Expression *access_expr;
-    HashNode_t *hash_return;
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_ARRAY_ACCESS);
 
-    return_val = 0;
-    id = expr->expr_data.array_access_data.id;
-    access_expr = expr->expr_data.array_access_data.array_expr;
+    int return_val = 0;
+    semcheck_clear_pointer_info(expr);
+    semcheck_clear_array_info(expr);
+    expr->record_type = NULL;
 
-    /***** FIRST VERIFY ARRAY IDENTIFIER *****/
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    struct Expression *index_expr = expr->expr_data.array_access_data.index_expr;
 
-    scope_return = FindIdent(&hash_return, symtab, id);
-    if(scope_return == -1)
+    if (index_expr == NULL)
     {
-        fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
-        ++return_val;
-
+        fprintf(stderr, "Error on line %d, array access requires an index expression.\n\n",
+            expr->line_num);
         *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (base_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, array access is missing a base expression.\n\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int base_type = UNKNOWN_TYPE;
+    if (base_expr->type != EXPR_VAR_ID)
+        return_val += semcheck_expr_main(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
+
+    int element_type = UNKNOWN_TYPE;
+    const char *element_type_id = NULL;
+    struct RecordType *element_record = NULL;
+
+    if (base_expr->is_array_expr)
+    {
+        expr->array_lower_bound = base_expr->array_lower_bound;
+        expr->array_upper_bound = base_expr->array_upper_bound;
+        expr->array_element_size = base_expr->array_element_size;
+        expr->array_element_type = base_expr->array_element_type;
+        if (base_expr->array_element_type_id != NULL)
+            expr->array_element_type_id = strdup(base_expr->array_element_type_id);
+
+        element_type = base_expr->array_element_type;
+        element_type_id = base_expr->array_element_type_id;
+        if (element_type == RECORD_TYPE)
+            element_record = base_expr->record_type;
+        if (element_type == UNKNOWN_TYPE && element_type_id != NULL)
+        {
+            int resolved_type = element_type;
+            if (resolve_type_identifier(&resolved_type, symtab, element_type_id,
+                    expr->line_num) == 0)
+                element_type = resolved_type;
+        }
+    }
+    else if (base_expr->type == EXPR_VAR_ID)
+    {
+        char *id = base_expr->expr_data.id;
+        HashNode_t *hash_return = NULL;
+        int scope_return = FindIdent(&hash_return, symtab, id);
+        if(scope_return == -1)
+        {
+            fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n",
+                expr->line_num, id);
+            ++return_val;
+        }
+        else
+        {
+            set_hash_meta(hash_return, mutating);
+            if(scope_return > max_scope_lev)
+            {
+                fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
+                    expr->line_num, id);
+                fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
+                ++return_val;
+            }
+
+            struct TypeAlias *alias = hash_return->type_alias;
+            int is_declared_array = (hash_return->hash_type == HASHTYPE_ARRAY);
+            if (!is_declared_array && !(alias != NULL && alias->is_array))
+            {
+                fprintf(stderr, "Error on line %d, \"%s\" is not an array variable!\n\n",
+                    expr->line_num, id);
+                ++return_val;
+            }
+
+            element_type = UNKNOWN_TYPE;
+            element_type_id = NULL;
+            if (alias != NULL && alias->is_array)
+            {
+                element_type = alias->array_element_type;
+                element_type_id = alias->array_element_type_id;
+                if (element_type_id != NULL)
+                {
+                    int resolved_type = element_type;
+                    if (resolve_type_identifier(&resolved_type, symtab, element_type_id, expr->line_num) != 0)
+                        ++return_val;
+                    element_type = resolved_type;
+                }
+            }
+            if (element_type == UNKNOWN_TYPE)
+                set_type_from_hashtype(&element_type, hash_return);
+
+            long long lower_bound = hash_return->array_start;
+            long long upper_bound = hash_return->array_end;
+            if (alias != NULL && alias->is_array)
+            {
+                lower_bound = alias->array_start;
+                upper_bound = alias->array_end;
+            }
+
+            long long computed_size = hash_return->element_size;
+            if (alias != NULL && alias->is_array && element_type != RECORD_TYPE)
+            {
+                long long alias_size = 0;
+                if (sizeof_from_type_ref(symtab, alias->array_element_type,
+                        alias->array_element_type_id, &alias_size, 0, expr->line_num) == 0 && alias_size > 0)
+                    computed_size = alias_size;
+            }
+            if (computed_size <= 0)
+            {
+                long long base_size = sizeof_from_var_type(hash_return->var_type);
+                if (base_size > 0)
+                    computed_size = base_size;
+            }
+            if (computed_size <= 0)
+                computed_size = POINTER_SIZE_BYTES;
+
+            expr->array_lower_bound = lower_bound;
+            expr->array_upper_bound = upper_bound;
+            expr->array_element_size = (int)computed_size;
+            expr->array_element_type = element_type;
+            if (element_type_id != NULL)
+                expr->array_element_type_id = strdup(element_type_id);
+
+            if (element_type == RECORD_TYPE)
+            {
+                if (hash_return->record_type != NULL)
+                    element_record = hash_return->record_type;
+                if (element_record == NULL && element_type_id != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, (char *)element_type_id) != -1 && type_node != NULL)
+                    {
+                        if (type_node->record_type != NULL)
+                            element_record = type_node->record_type;
+                        else if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+                        {
+                            HashNode_t *target_node = NULL;
+                            if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
+                                target_node != NULL && target_node->record_type != NULL)
+                                element_record = target_node->record_type;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    else if (base_type == POINTER_TYPE)
+    {
+        const char *subtype_id = base_expr->pointer_subtype_id;
+        HashNode_t *type_node = NULL;
+        struct TypeAlias *alias = NULL;
+        if (subtype_id != NULL &&
+            FindIdent(&type_node, symtab, (char *)subtype_id) != -1 && type_node != NULL)
+            alias = type_node->type_alias;
+
+        int handled_pointer_array = 0;
+        if (alias != NULL && alias->is_array)
+        {
+            handled_pointer_array = 1;
+            expr->array_lower_bound = alias->array_start;
+            expr->array_upper_bound = alias->array_end;
+            expr->array_element_type = alias->array_element_type;
+            if (alias->array_element_type_id != NULL)
+                expr->array_element_type_id = strdup(alias->array_element_type_id);
+
+            long long element_size = 0;
+            if (sizeof_from_type_ref(symtab, alias->array_element_type,
+                    alias->array_element_type_id, &element_size, 0, expr->line_num) != 0 ||
+                element_size <= 0)
+                element_size = sizeof_from_type_tag(alias->array_element_type);
+            if (element_size <= 0)
+                element_size = POINTER_SIZE_BYTES;
+            expr->array_element_size = (int)element_size;
+
+            element_type = alias->array_element_type;
+            element_type_id = alias->array_element_type_id;
+            if (element_type == RECORD_TYPE)
+            {
+                element_record = NULL;
+                if (type_node != NULL)
+                    element_record = type_node->record_type;
+                if (element_record == NULL && alias->array_element_type_id != NULL)
+                {
+                    HashNode_t *element_node = NULL;
+                    if (FindIdent(&element_node, symtab,
+                            alias->array_element_type_id) != -1 && element_node != NULL)
+                        element_record = element_node->record_type;
+                }
+            }
+        }
+        else if (type_node != NULL && type_node->hash_type == HASHTYPE_ARRAY)
+        {
+            handled_pointer_array = 1;
+            expr->array_lower_bound = type_node->array_start;
+            expr->array_upper_bound = type_node->array_end;
+            expr->array_element_size = (int)(type_node->element_size > 0 ?
+                type_node->element_size : POINTER_SIZE_BYTES);
+            element_type = UNKNOWN_TYPE;
+            set_type_from_hashtype(&element_type, type_node);
+            expr->array_element_type = element_type;
+            element_type_id = NULL;
+            if (element_type == RECORD_TYPE)
+                element_record = type_node->record_type;
+        }
+
+        if (!handled_pointer_array)
+        {
+            fprintf(stderr, "Error on line %d, array access base expression is not an array.\n\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return return_val + 1;
+        }
     }
     else
     {
-        set_hash_meta(hash_return, mutating);
-        if(scope_return > max_scope_lev)
-        {
-            fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
-                expr->line_num, id);
-            fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
-            ++return_val;
-        }
-        if(hash_return->hash_type != HASHTYPE_ARRAY)
-        {
-            fprintf(stderr, "Error on line %d, \"%s\" is not an array variable!\n\n",
-                expr->line_num, id);
-            ++return_val;
-        }
-
-        set_type_from_hashtype(type_return, hash_return);
+        fprintf(stderr, "Error on line %d, array access base expression is not an array.\n\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return return_val + 1;
     }
 
-    /***** THEN VERIFY EXPRESSION INSIDE *****/
-    return_val += semcheck_expr_main(&expr_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
-    if(expr_type != INT_TYPE && expr_type != LONGINT_TYPE)
+    expr->record_type = (element_type == RECORD_TYPE) ? element_record : NULL;
+    *type_return = element_type;
+
+    int index_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    if(index_type != INT_TYPE && index_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, expected int in array index expression!\n\n",
             expr->line_num);

@@ -1108,6 +1108,26 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(result.stdout, expected_output)
         self.assertEqual(result.returncode, 0)
 
+    def test_chained_lvalue_access(self):
+        """Ensures chained array and record field accesses execute correctly."""
+        input_file = os.path.join(TEST_CASES_DIR, "test_chained_lvalue.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "test_chained_lvalue.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "test_chained_lvalue")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "65\n")
+        self.assertEqual(result.returncode, 0)
+
     def test_record_reference_features(self):
         """Exercises record assignment, address-of, and var parameter support."""
         input_file = os.path.join(TEST_CASES_DIR, "record_reference_features.p")
