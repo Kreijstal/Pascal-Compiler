@@ -40,6 +40,32 @@ static int align_to_multiple(int value, int alignment)
     return value + (alignment - remainder);
 }
 
+/* Helper: Increment lexical nesting depth when entering a procedure/function */
+void codegen_enter_lexical_scope(CodeGenContext *ctx)
+{
+    if (ctx != NULL)
+        ctx->lexical_depth++;
+}
+
+/* Helper: Decrement lexical nesting depth when leaving a procedure/function */
+void codegen_leave_lexical_scope(CodeGenContext *ctx)
+{
+    if (ctx != NULL && ctx->lexical_depth > 0)
+        ctx->lexical_depth--;
+}
+
+/* Helper: Get current lexical nesting depth */
+int codegen_get_lexical_depth(const CodeGenContext *ctx)
+{
+    return (ctx != NULL) ? ctx->lexical_depth : 0;
+}
+
+/* Helper: Check if we're currently in a nested context (depth > 0) */
+int codegen_is_nested_context(const CodeGenContext *ctx)
+{
+    return codegen_get_lexical_depth(ctx) > 0;
+}
+
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
 {
     va_list args;
@@ -725,45 +751,40 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     proc = &proc_tree->tree_data.subprogram_data;
     sub_id = (proc->mangled_id != NULL) ? proc->mangled_id : proc->id;
 
+    /* Enter a new lexical scope */
+    codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
     
-    /* Check if this is a nested procedure (has parent scope) */
-    int is_nested = (get_cur_scope()->prev_scope != NULL);
+    /* For now, only support static links for procedures without parameters.
+     * Supporting parameters requires a more complex calling convention.
+     * Check argument count first to decide whether to set up static link. */
+    int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
+    int is_nested = codegen_is_nested_context(ctx);
     StackNode_t *static_link = NULL;
-    if (is_nested)
+    
+    if (is_nested && num_args == 0)
     {
-        /* Reserve space for static link (parent's frame pointer) as first local variable */
-        /* This ensures it's at a predictable offset */
+        /* Reserve space for static link (parent's frame pointer) as first local variable
+         * This ensures it's at a predictable offset regardless of other locals */
         static_link = add_l_x("__static_link__", 8);
     }
     
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab);
     
-    if (is_nested && static_link != NULL)
+    if (static_link != NULL)
     {
         char buffer[64];
-        /* The parent's %rbp will be passed in a register and we store it.
-         * For now, assume it's passed in %rdi for procedures with no parameters,
-         * or %rsi for procedures with 1+ parameters (with static link as hidden first arg) */
-        int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
-        if (num_args == 0)
-        {
-            /* No parameters, static link comes in %rdi */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
-        }
-        else
-        {
-            /* Has parameters, static link comes in first position, shifting other args */
-            /* This is handled by modifying argument passing - for now skip */
-            snprintf(buffer, sizeof(buffer), "\t# TODO: static link with parameters\n");
-        }
+        /* No parameters, static link comes in %rdi */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
         inst_list = add_inst(inst_list, buffer);
     }
     
     codegen_function_locals(proc->declarations, ctx, symtab);
 
+    /* Recursively generate nested subprograms */
     codegen_subprograms(proc->subprograms, ctx, symtab);
+    
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
     codegen_function_header(sub_id, ctx);
@@ -772,6 +793,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
     pop_stackscope();
+    
+    /* Leave the lexical scope */
+    codegen_leave_lexical_scope(ctx);
+    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -798,38 +823,30 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     func = &func_tree->tree_data.subprogram_data;
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
 
+    /* Enter a new lexical scope */
+    codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
     
-    /* Check if this is a nested function (has parent scope) */
-    int is_nested = (get_cur_scope()->prev_scope != NULL);
+    /* For now, only support static links for functions without parameters.
+     * Supporting parameters requires a more complex calling convention. */
+    int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
+    int is_nested = codegen_is_nested_context(ctx);
     StackNode_t *static_link = NULL;
-    if (is_nested)
+    
+    if (is_nested && num_args == 0)
     {
-        /* Reserve space for static link (parent's frame pointer) as first local variable */
+        /* Reserve space for static link as first local variable */
         static_link = add_l_x("__static_link__", 8);
     }
     
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab);
     
-    if (is_nested && static_link != NULL)
+    if (static_link != NULL)
     {
         char link_buffer[64];
-        /* The parent's %rbp will be passed in a register and we store it.
-         * For now, assume it's passed in %rdi for functions with no parameters,
-         * or as hidden first arg for functions with parameters */
-        int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
-        if (num_args == 0)
-        {
-            /* No parameters, static link comes in %rdi */
-            snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
-        }
-        else
-        {
-            /* Has parameters, static link comes in first position, shifting other args */
-            /* This is handled by modifying argument passing - for now skip */
-            snprintf(link_buffer, sizeof(link_buffer), "\t# TODO: static link with parameters\n");
-        }
+        /* No parameters, static link comes in %rdi */
+        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
         inst_list = add_inst(inst_list, link_buffer);
     }
     
@@ -848,7 +865,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     return_var = add_l_x(func->id, return_size);
     codegen_function_locals(func->declarations, ctx, symtab);
 
+    /* Recursively generate nested subprograms */
     codegen_subprograms(func->subprograms, ctx, symtab);
+    
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     if (return_var->size >= 8)
@@ -862,6 +881,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer(sub_id, ctx);
     free_inst_list(inst_list);
     pop_stackscope();
+    
+    /* Leave the lexical scope */
+    codegen_leave_lexical_scope(ctx);
+    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif

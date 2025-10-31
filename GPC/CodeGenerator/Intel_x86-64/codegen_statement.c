@@ -1460,14 +1460,24 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     else
     {
         /* Determine if we should pass a static link:
-         * - The called procedure was declared at scope level 0 (in the program/current procedure)
-         * - AND it has no parameters (for now, to avoid complexity)
-         * This covers procedures nested in the main program or in the current procedure
+         * We pass the static link when calling a procedure that is declared in the
+         * current scope (proc_scope_level == 0). This includes:
+         * - Procedures declared in the same scope as the caller
+         * - Procedures declared inside the current procedure/function
+         * 
+         * The static link allows the callee to access the caller's local variables.
+         * This is necessary for nested procedures that reference parent variables.
          */
         int should_pass_static_link = (proc_scope_level == 0);
         int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
         
-        /* For nested procedures with no parameters, pass static link in %rdi */
+        /* For nested procedures with no parameters, pass static link in %rdi
+         * TODO: Implement proper calling convention for procedures with parameters.
+         * Options include:
+         * 1. Use a callee-saved register for static link
+         * 2. Pass as hidden first parameter and adjust all arg registers
+         * 3. Pass on stack at a fixed location
+         */
         if (should_pass_static_link && num_args == 0)
         {
             /* Pass current frame pointer as static link */
