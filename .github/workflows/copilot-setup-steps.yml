@@ -1,0 +1,96 @@
+name: Copilot Setup Validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/copilot-instructions.md'
+  push:
+    paths:
+      - '.github/copilot-instructions.md'
+    branches:
+      - main
+
+jobs:
+  validate-instructions:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+    
+    - name: Verify copilot-instructions.md exists
+      run: |
+        if [ ! -f .github/copilot-instructions.md ]; then
+          echo "Error: .github/copilot-instructions.md not found"
+          exit 1
+        fi
+        echo "✓ Copilot instructions file exists"
+    
+    - name: Check file size
+      run: |
+        size=$(wc -c < .github/copilot-instructions.md)
+        echo "File size: $size bytes"
+        if [ "$size" -lt 1000 ]; then
+          echo "Warning: File seems too small (< 1KB)"
+          exit 1
+        fi
+        echo "✓ File size is reasonable"
+    
+    - name: Validate markdown structure
+      run: |
+        # Check for required sections
+        required_sections=(
+          "Project Overview"
+          "Architecture"
+          "Build System"
+          "Testing"
+          "Platform Support"
+        )
+        
+        missing_sections=()
+        for section in "${required_sections[@]}"; do
+          if ! grep -q "## $section" .github/copilot-instructions.md; then
+            missing_sections+=("$section")
+          fi
+        done
+        
+        if [ ${#missing_sections[@]} -gt 0 ]; then
+          echo "Error: Missing required sections:"
+          printf '%s\n' "${missing_sections[@]}"
+          exit 1
+        fi
+        echo "✓ All required sections present"
+    
+    - name: Check for build commands documentation
+      run: |
+        if ! grep -q "meson setup" .github/copilot-instructions.md; then
+          echo "Error: Build commands not documented"
+          exit 1
+        fi
+        echo "✓ Build commands documented"
+    
+    - name: Validate links (if any)
+      run: |
+        # Extract markdown links and check if they're properly formatted
+        if grep -q '\[.*\](.*)' .github/copilot-instructions.md; then
+          echo "Found markdown links, checking format..."
+          # Basic validation - ensure brackets are closed
+          if grep -E '\[.*\]\([^)]*$' .github/copilot-instructions.md; then
+            echo "Error: Found unclosed markdown links"
+            exit 1
+          fi
+        fi
+        echo "✓ Link formatting is valid"
+    
+    - name: Summary
+      run: |
+        echo "================================"
+        echo "Copilot Instructions Validation"
+        echo "================================"
+        echo "✓ File exists and has reasonable size"
+        echo "✓ Required sections present"
+        echo "✓ Build commands documented"
+        echo "✓ Markdown formatting valid"
+        echo ""
+        echo "File preview:"
+        head -20 .github/copilot-instructions.md
