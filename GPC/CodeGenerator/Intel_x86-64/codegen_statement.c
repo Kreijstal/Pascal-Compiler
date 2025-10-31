@@ -969,21 +969,31 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
-        int shadow_space_bytes = codegen_target_is_windows() ? g_stack_home_space_bytes : 0;
-        int aligned_shadow_space = 0;
-        if (shadow_space_bytes > 0)
+        int extra_shadow_space = 0;
+        if (codegen_target_is_windows())
         {
-            aligned_shadow_space = ((shadow_space_bytes + REQUIRED_OFFSET - 1) / REQUIRED_OFFSET) * REQUIRED_OFFSET;
-            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", aligned_shadow_space);
+            /* Stack frames reserve Windows shadow space up front; only top up if a
+             * call requires more than currently available. */
+            int required_shadow = g_stack_home_space_bytes;
+            int reserved_shadow = current_stack_home_space();
+            if (required_shadow > reserved_shadow)
+            {
+                int missing_shadow = required_shadow - reserved_shadow;
+                extra_shadow_space = ((missing_shadow + REQUIRED_OFFSET - 1) / REQUIRED_OFFSET) * REQUIRED_OFFSET;
+            }
+        }
+        if (extra_shadow_space > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", extra_shadow_space);
             inst_list = add_inst(inst_list, buffer);
         }
 
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
 
-        if (aligned_shadow_space > 0)
+        if (extra_shadow_space > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\taddq\t$%d, %%rsp\n", aligned_shadow_space);
+            snprintf(buffer, sizeof(buffer), "\taddq\t$%d, %%rsp\n", extra_shadow_space);
             inst_list = add_inst(inst_list, buffer);
         }
         
@@ -996,20 +1006,30 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     {
         inst_list = codegen_vect_reg(inst_list, 0);
         
-        int newline_shadow_space = codegen_target_is_windows() ? g_stack_home_space_bytes : 0;
-        int newline_aligned_shadow = 0;
-        if (newline_shadow_space > 0)
+        int newline_extra_shadow = 0;
+        if (codegen_target_is_windows())
         {
-            newline_aligned_shadow = ((newline_shadow_space + REQUIRED_OFFSET - 1) / REQUIRED_OFFSET) * REQUIRED_OFFSET;
-            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", newline_aligned_shadow);
+            /* Stack frames reserve Windows shadow space up front; only top up if a
+             * call requires more than currently available. */
+            int required_shadow = g_stack_home_space_bytes;
+            int reserved_shadow = current_stack_home_space();
+            if (required_shadow > reserved_shadow)
+            {
+                int missing_shadow = required_shadow - reserved_shadow;
+                newline_extra_shadow = ((missing_shadow + REQUIRED_OFFSET - 1) / REQUIRED_OFFSET) * REQUIRED_OFFSET;
+            }
+        }
+        if (newline_extra_shadow > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", newline_extra_shadow);
             inst_list = add_inst(inst_list, buffer);
         }
 
         inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
 
-        if (newline_aligned_shadow > 0)
+        if (newline_extra_shadow > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\taddq\t$%d, %%rsp\n", newline_aligned_shadow);
+            snprintf(buffer, sizeof(buffer), "\taddq\t$%d, %%rsp\n", newline_extra_shadow);
             inst_list = add_inst(inst_list, buffer);
         }
         
