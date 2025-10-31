@@ -74,6 +74,12 @@ bash -c 'source quasi-msys2/env/all.src && meson test -C builddir-cross'
 - `llvm`, `clang`, `lld` - Cross-compilation toolchain
 - `wget`, `tar`, `zstd`, `gawk`, `gpg` - For quasi-msys2 package management
 
+**Quick test script:**
+```bash
+# Automated test script (requires network access to MSYS2 repos)
+./test-cross-compile.sh [UCRT64|MINGW64]
+```
+
 ### Build Outputs
 
 - Main compiler executable: `builddir/GPC/gpc`
