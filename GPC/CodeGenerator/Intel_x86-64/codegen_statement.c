@@ -48,6 +48,60 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
+static unsigned long codegen_next_temp_suffix(void)
+{
+    static unsigned long counter = 0;
+    return ++counter;
+}
+
+static StackNode_t *codegen_alloc_temp_slot(const char *prefix)
+{
+    char label[32];
+    snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp", codegen_next_temp_suffix());
+    return add_l_t(label);
+}
+
+static int codegen_align_to(int value, int alignment)
+{
+    if (alignment <= 0)
+        return value;
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+    return value + (alignment - remainder);
+}
+
+static ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, CodeGenContext *ctx, const char *target)
+{
+    if (ctx == NULL || target == NULL)
+        return inst_list;
+
+    int shadow_space = 0;
+    if (codegen_target_is_windows())
+    {
+        shadow_space = codegen_align_to(current_stack_home_space(), REQUIRED_OFFSET);
+        if (shadow_space > 0)
+        {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", shadow_space);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    char call_buffer[64];
+    snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", target);
+    inst_list = add_inst(inst_list, call_buffer);
+
+    if (shadow_space > 0)
+    {
+        char restore_buffer[64];
+        snprintf(restore_buffer, sizeof(restore_buffer), "\taddq\t$%d, %%rsp\n", shadow_space);
+        inst_list = add_inst(inst_list, restore_buffer);
+    }
+
+    return inst_list;
+}
+
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
 {
@@ -969,8 +1023,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
-        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
-        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, call_target);
 
         free_arg_regs();
 
@@ -981,7 +1034,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     {
         inst_list = codegen_vect_reg(inst_list, 0);
 
-        inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_write_newline");
 
         free_arg_regs();
     }
@@ -1506,9 +1559,6 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
 
-    snprintf(buffer, 50, "%s:\n", exit_label);
-    inst_list = add_inst(inst_list, buffer);
-
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -1526,9 +1576,10 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    struct Expression *expr, *for_var, *update_expr = NULL, *one_expr = NULL;
-    struct Statement *for_body, *for_assign, *update_stmt = NULL;
+    struct Expression *expr = NULL, *for_var = NULL, *update_expr = NULL, *one_expr = NULL;
+    struct Statement *for_body = NULL, *for_assign = NULL, *update_stmt = NULL;
     Register_t *limit_reg = NULL;
+    Register_t *loop_value_reg = NULL;
     char cond_label[18], body_label[18], exit_label[18], buffer[128];
     StackNode_t *limit_temp = NULL;
 
@@ -1560,11 +1611,10 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     if (codegen_had_error(ctx) || limit_reg == NULL)
         goto cleanup;
 
-    limit_temp = find_in_temp("for_to_temp");
-    if (limit_temp == NULL)
-        limit_temp = add_l_t("for_to_temp");
+    limit_temp = codegen_alloc_temp_slot("for_to_temp");
 
     const int limit_is_qword = codegen_type_uses_qword(expr->resolved_type);
+    const int limit_is_signed = codegen_expr_is_signed(expr);
     if (limit_is_qword)
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", limit_reg->bit_64, limit_temp->offset);
     else
@@ -1588,7 +1638,6 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
 
-    Register_t *loop_value_reg = NULL;
     inst_list = codegen_evaluate_expr(for_var, inst_list, ctx, &loop_value_reg);
     if (codegen_had_error(ctx) || loop_value_reg == NULL)
         goto cleanup;
@@ -1608,11 +1657,24 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     inst_list = add_inst(inst_list, buffer);
 
     const int var_is_qword = codegen_type_uses_qword(for_var->resolved_type);
+    const int var_is_signed = codegen_expr_is_signed(for_var);
     const int compare_as_qword = var_is_qword || limit_is_qword;
     if (compare_as_qword && !limit_is_qword)
-        inst_list = codegen_sign_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_64);
+    {
+        if (limit_is_signed)
+            inst_list = codegen_sign_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_64);
+        else
+            inst_list = codegen_zero_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_32);
+    }
     if (compare_as_qword && !var_is_qword)
-        inst_list = codegen_sign_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_64);
+    {
+        if (var_is_signed)
+            inst_list = codegen_sign_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_64);
+        else
+            inst_list = codegen_zero_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_32);
+    }
+
+    const int use_unsigned_compare = !(limit_is_signed && var_is_signed);
 
     const char *cmp_instr = compare_as_qword ? "cmpq" : "cmpl";
     const char *limit_cmp_reg = compare_as_qword ? limit_reg->bit_64 : limit_reg->bit_32;
@@ -1620,12 +1682,14 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", cmp_instr, limit_cmp_reg, loop_cmp_reg);
     inst_list = add_inst(inst_list, buffer);
 
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+    const char *branch_instr = use_unsigned_compare ? "jbe" : "jle";
+    snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", branch_instr, body_label);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), loop_value_reg);
+    loop_value_reg = NULL;
     free_reg(get_reg_stack(), limit_reg);
     limit_reg = NULL;
 
@@ -1635,6 +1699,8 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 cleanup:
     if (limit_reg != NULL)
         free_reg(get_reg_stack(), limit_reg);
+    if (loop_value_reg != NULL)
+        free_reg(get_reg_stack(), loop_value_reg);
     free(one_expr);
     free(update_expr);
     free(update_stmt);

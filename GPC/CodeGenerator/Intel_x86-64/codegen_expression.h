@@ -29,8 +29,11 @@ int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,
     long long *size_out);
 
 ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg64);
+ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg32);
 
 int codegen_type_uses_qword(int type_tag);
+int codegen_type_is_signed(int type_tag);
+int codegen_expr_is_signed(const struct Expression *expr);
 
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);

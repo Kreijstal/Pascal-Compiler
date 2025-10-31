@@ -259,18 +259,18 @@ class TestCompiler(unittest.TestCase):
         if extra_link_args is None:
             extra_link_args = []
         try:
+            link_args = [CC, "-O2"]
+            if os.name != "nt":
+                link_args.append("-no-pie")
+            link_args.extend([
+                "-o",
+                executable_file,
+                asm_file,
+                self.runtime_object,
+            ])
+            command = link_args + list(extra_objects) + list(extra_link_args)
             subprocess.run(
-                [
-                    CC,
-                    "-O2",
-                    "-no-pie",
-                    "-o",
-                    executable_file,
-                    asm_file,
-                    self.runtime_object,
-                ]
-                + list(extra_objects)
-                + list(extra_link_args),
+                command,
                 check=True,
                 capture_output=True,
                 text=True,

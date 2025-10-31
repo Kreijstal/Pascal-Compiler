@@ -328,18 +328,26 @@ void codegen_rodata(CodeGenContext *ctx)
     #endif
     assert(ctx != NULL);
     if (codegen_target_is_windows())
+    {
         fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
+    }
     else
+    {
         fprintf(ctx->output_file, "\t.section\t.rodata\n");
+    }
     fprintf(ctx->output_file, ".format_str_s:\n");
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
     fprintf(ctx->output_file, ".string \"%%d\"\n");
     fprintf(ctx->output_file, ".format_str_lld:\n");
     if (codegen_target_is_windows())
-          fprintf(ctx->output_file, ".string \"%%lld\"\n");
+    {
+        fprintf(ctx->output_file, ".string \"%%lld\"\n");
+    }
     else
-          fprintf(ctx->output_file, ".string \"%%ld\"\n");
+    {
+        fprintf(ctx->output_file, ".string \"%%ld\"\n");
+    }
   
     fprintf(ctx->output_file, ".format_str_sn:\n");
     fprintf(ctx->output_file, ".string \"%%s\\n\"\n");
@@ -383,9 +391,15 @@ void codegen_program_footer(CodeGenContext *ctx)
     #endif
     assert(ctx != NULL);
     if (codegen_target_is_windows())
-        fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
+    {
+        /* The COFF/PE assembler does not support .ident; omit it on Windows. */
+    }
     else
+    {
+        fprintf(ctx->output_file, "\t.section\t.comment\n");
+        fprintf(ctx->output_file, "\t.string\t\"GPC: 0.0.0\"\n");
         fprintf(ctx->output_file, "\t.section\t.note.GNU-stack,\"\",@progbits\n");
+    }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
