@@ -752,23 +752,57 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
                 {
                     struct TypeAlias *alias = type_node->type_alias;
-                     int element_size = 4;  // Default to 4 bytes (integer)
-                     if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
-                         element_size = 8;
-                     if (alias->is_open_array)
-                     {
-                         add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
-                     }
-                     else
-                     {
-                         int length = alias->array_end - alias->array_start + 1;
-                         if (length < 0)
-                             length = 0;
-                         int total_size = length * element_size;
-                         if (total_size <= 0)
-                             total_size = element_size;
-                         add_array((char *)id_list->cur, total_size, element_size, alias->array_start);
-                     }
+                    long long element_size_ll = 0;
+                    const char *element_type_id = alias->array_element_type_id;
+                    struct RecordType *element_record = NULL;
+                    if (element_type_id != NULL && symtab != NULL)
+                    {
+                        HashNode_t *element_node = NULL;
+                        if (FindIdent(&element_node, symtab, (char *)element_type_id) >= 0 && element_node != NULL &&
+                            element_node->record_type != NULL)
+                            element_record = element_node->record_type;
+                    }
+
+                    if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
+                            element_type_id, element_record, &element_size_ll) != 0 ||
+                        element_size_ll <= 0)
+                    {
+                        switch (type_node->var_type)
+                        {
+                            case HASHVAR_REAL:
+                            case HASHVAR_LONGINT:
+                                element_size_ll = 8;
+                                break;
+                            case HASHVAR_CHAR:
+                                element_size_ll = 1;
+                                break;
+                            default:
+                                element_size_ll = DOUBLEWORD;
+                                break;
+                        }
+                    }
+
+                    if (element_size_ll <= 0)
+                        element_size_ll = DOUBLEWORD;
+
+                    int element_size = (int)element_size_ll;
+                    if (element_size <= 0)
+                        element_size = DOUBLEWORD;
+
+                    if (alias->is_open_array)
+                    {
+                        add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
+                    }
+                    else
+                    {
+                        int length = alias->array_end - alias->array_start + 1;
+                        if (length < 0)
+                            length = 0;
+                        int total_size = length * element_size;
+                        if (total_size <= 0)
+                            total_size = element_size;
+                        add_array((char *)id_list->cur, total_size, element_size, alias->array_start);
+                    }
                 }
                 else
                 {
