@@ -216,24 +216,40 @@ class TestCompiler(unittest.TestCase):
             )
 
         cls.ctypes_helper_library = os.environ.get("GPC_CTYPES_HELPER")
-        cls.ctypes_helper_link = os.environ.get("GPC_CTYPES_HELPER_LINK")
-        if cls.ctypes_helper_link is None and cls.ctypes_helper_library is not None:
-            cls.ctypes_helper_link = cls.ctypes_helper_library
-        if cls.ctypes_helper_link is not None and not os.path.exists(cls.ctypes_helper_link):
+        if cls.ctypes_helper_library is not None and not os.path.exists(
+            cls.ctypes_helper_library
+        ):
             raise RuntimeError(
-                "ctypes helper link target provided by Meson does not exist: "
-                f"{cls.ctypes_helper_link}"
+                "ctypes helper shared library provided by Meson does not exist: "
+                f"{cls.ctypes_helper_library}"
+            )
+
+        raw_ctypes_helper_link = os.environ.get("GPC_CTYPES_HELPER_LINK")
+        cls.ctypes_helper_link = cls._resolve_ctypes_helper_link(
+            raw_ctypes_helper_link,
+            cls.ctypes_helper_library,
+        )
+        if (
+            raw_ctypes_helper_link is not None
+            and cls.ctypes_helper_link is None
+            and os.path.exists(raw_ctypes_helper_link)
+        ):
+            # The provided path exists, so use it even if it might not be ideal for
+            # linking (e.g. a DLL without an import library).
+            cls.ctypes_helper_link = raw_ctypes_helper_link
+        if (
+            raw_ctypes_helper_link is not None
+            and cls.ctypes_helper_link is None
+        ):
+            raise RuntimeError(
+                "Unable to resolve ctypes helper import library from Meson-provided path: "
+                f"{raw_ctypes_helper_link}"
             )
         cls.ctypes_helper_dir = (
             os.path.dirname(cls.ctypes_helper_library)
             if cls.ctypes_helper_library is not None
             else None
         )
-        if cls.ctypes_helper_dir is not None and not os.path.exists(cls.ctypes_helper_library):
-            raise RuntimeError(
-                "ctypes helper shared library provided by Meson does not exist: "
-                f"{cls.ctypes_helper_library}"
-            )
 
     @classmethod
     def _ensure_compiler_built(cls):
@@ -287,6 +303,50 @@ class TestCompiler(unittest.TestCase):
             raise RuntimeError(
                 f"Meson build completed but did not produce compiler at {GPC_PATH}"
             )
+
+    @classmethod
+    def _resolve_ctypes_helper_link(cls, candidate_path, shared_library_path):
+        """Determine which file should be passed to the C compiler for ctypes tests."""
+
+        search_paths = []
+        last_resort = None
+
+        if candidate_path:
+            search_paths.append(candidate_path)
+        if shared_library_path and shared_library_path not in search_paths:
+            search_paths.append(shared_library_path)
+
+        for path in search_paths:
+            if path is None:
+                continue
+            if os.path.exists(path) and not path.lower().endswith(".dll"):
+                return path
+            if path.lower().endswith(".dll"):
+                directory = os.path.dirname(path)
+                stem = os.path.splitext(os.path.basename(path))[0]
+                candidates = [
+                    os.path.join(directory, stem + ".dll.a"),
+                    os.path.join(directory, stem + ".a"),
+                    os.path.join(directory, stem + ".lib"),
+                ]
+                if not stem.startswith("lib"):
+                    candidates.extend(
+                        [
+                            os.path.join(directory, "lib" + stem + ".dll.a"),
+                            os.path.join(directory, "lib" + stem + ".a"),
+                        ]
+                    )
+                else:
+                    stripped = stem[3:]
+                    if stripped:
+                        candidates.append(os.path.join(directory, stripped + ".lib"))
+                for candidate in candidates:
+                    if os.path.exists(candidate):
+                        return candidate
+            if os.path.exists(path):
+                last_resort = path
+
+        return last_resort
 
     def compile_executable(
         self, asm_file, executable_file, extra_objects=None, extra_link_args=None
@@ -627,7 +687,9 @@ class TestCompiler(unittest.TestCase):
 
         executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_dll_demo")
         if self.ctypes_helper_link is None:
-            self.fail("GPC_CTYPES_HELPER_LINK must be provided to link ctypes demo")
+            self.fail(
+                "Unable to locate ctypes helper import library; ensure Meson exposed it"
+            )
 
         self.compile_executable(
             asm_file,

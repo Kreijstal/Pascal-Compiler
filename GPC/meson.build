@@ -78,7 +78,7 @@ ctypes_helper = shared_library('ctypes_helper',
 python = find_program('python3')
 env = environment()
 env.set('RUN_BUGGY_TEST', get_option('run_buggy_test').to_string())
-env.set('MESON_BUILD_ROOT', meson.build_root())
+env.set('MESON_BUILD_ROOT', meson.project_build_root())
 env.set('RUN_VALGRIND_TESTS', get_option('run_valgrind_tests').to_string())
 env.set('CC', ' '.join(compiler.cmd_array()))
 env.set('GPC_RUNTIME_LIB', gpc_runtime_lib.full_path())
@@ -86,8 +86,6 @@ env.set('GPC_CTYPES_HELPER', ctypes_helper.full_path())
 
 ctypes_helper_link = ctypes_helper.full_path()
 if host_machine.system() == 'windows'
-  ctypes_import = ctypes_helper.import_library()
-  ctypes_helper_link = ctypes_import.full_path()
   env.append('PATH', meson.current_build_dir(), separator: ';')
 elif host_machine.system() == 'darwin'
   env.append('DYLD_LIBRARY_PATH', meson.current_build_dir())
