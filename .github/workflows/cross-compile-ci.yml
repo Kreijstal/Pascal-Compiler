@@ -79,7 +79,6 @@ jobs:
       run: |
         cd quasi-msys2
         bash -c 'source env/all.src && cd .. && meson test -C builddir-cross'
-      continue-on-error: true
 
     - name: Upload meson logs
       if: always()

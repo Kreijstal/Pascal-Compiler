@@ -7,11 +7,17 @@ set -e
 
 # Find the calculator executable.
 # The script is run from the build directory, so the executable should be there.
+# Support both native and cross-compiled (.exe) executables.
 CALCULATOR_EXEC="./calculator"
 
 if [ ! -x "$CALCULATOR_EXEC" ]; then
-    echo "Error: Calculator executable not found at $CALCULATOR_EXEC"
-    exit 1
+    # Try .exe extension for cross-compiled Windows executables
+    if [ -x "./calculator.exe" ]; then
+        CALCULATOR_EXEC="./calculator.exe"
+    else
+        echo "Error: Calculator executable not found at $CALCULATOR_EXEC or ./calculator.exe"
+        exit 1
+    fi
 fi
 
 echo "Running calculator test suite..."
@@ -29,7 +35,9 @@ check_case() {
     local name="$3"
 
     # Run the calculator and capture the output
-    local actual=$( "$CALCULATOR_EXEC" "$expression" )
+    # Suppress Wine warnings by redirecting stderr when running .exe files
+    # Strip Windows line endings (\r) that may be present in Wine output
+    local actual=$( "$CALCULATOR_EXEC" "$expression" 2>/dev/null | tr -d '\r' )
 
     if [ "$actual" = "$expected" ]; then
         echo "  [PASS] $name: '$expression' -> $expected"

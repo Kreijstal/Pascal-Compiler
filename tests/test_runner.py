@@ -12,6 +12,11 @@ WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
 IS_WINDOWS_ABI = os.name == "nt" or PLATFORM_ID.startswith(WINDOWS_ABI_PLATFORMS)
 
+# Detect if we're running under Wine (Windows Python on Linux)
+# This happens during cross-compilation testing
+# Check for Wine-specific environment variables
+IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
+
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
 # Default to "build" for local testing.
@@ -204,6 +209,38 @@ class TestCompiler(unittest.TestCase):
         cls.c_compiler_cmd = shlex.split(cc_raw)
         if not cls.c_compiler_cmd:
             raise RuntimeError("CC environment variable did not contain an executable")
+
+        # When running under Wine (cross-compilation testing), the CC from meson
+        # points to Linux wrapper scripts that Wine/Windows Python cannot execute.
+        # We need to find and use the Windows-native compiler from MSYS2 instead.
+        if IS_WINE:
+            # Look for gcc.exe in the quasi-msys2 directory structure
+            # Use relative paths from build_dir to avoid absolute Windows paths
+            msys2_search_paths = [
+                # Look in quasi-msys2/root/{ucrt64,mingw64}/bin/
+                os.path.join(build_dir, "..", "quasi-msys2", "root", "ucrt64", "bin"),
+                os.path.join(build_dir, "..", "quasi-msys2", "root", "mingw64", "bin"),
+            ]
+            
+            wine_gcc = None
+            for search_dir in msys2_search_paths:
+                normalized_dir = os.path.normpath(search_dir)
+                gcc_path = os.path.join(normalized_dir, "gcc.exe")
+                if os.path.exists(gcc_path):
+                    wine_gcc = gcc_path
+                    break
+            
+            if wine_gcc:
+                # Use the Windows-native GCC
+                cls.c_compiler_cmd = [wine_gcc]
+                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible {wine_gcc})"
+                print(f"Wine detected: Using Windows-native GCC at {wine_gcc}", file=sys.stderr)
+            else:
+                # Fallback: try to use gcc.exe directly from PATH
+                # The quasi-msys2 environment should have added the bin dir to PATH
+                cls.c_compiler_cmd = ["gcc.exe"]
+                cls.c_compiler_display = f"{cc_raw} (using Wine-compatible gcc.exe from PATH)"
+                print(f"Wine detected: Using gcc.exe from PATH (searched: {msys2_search_paths})", file=sys.stderr)
 
         cls.runtime_library = os.environ.get("GPC_RUNTIME_LIB")
         if not cls.runtime_library:
