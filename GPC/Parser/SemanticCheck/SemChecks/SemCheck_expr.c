@@ -247,6 +247,8 @@ static struct Expression *clone_expression(const struct Expression *expr)
         case EXPR_BOOL:
             clone->expr_data.bool_value = expr->expr_data.bool_value;
             break;
+        case EXPR_NIL:
+            break;
         default:
             destroy_expr(clone);
             return NULL;
@@ -1242,6 +1244,7 @@ static int semcheck_pointer_deref(int *type_return,
     assert(expr->type == EXPR_POINTER_DEREF);
 
     semcheck_clear_pointer_info(expr);
+    expr->record_type = NULL;
 
     struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
     if (pointer_expr == NULL)
@@ -1295,6 +1298,16 @@ static int semcheck_pointer_deref(int *type_return,
 
     if (target_type == POINTER_TYPE)
         semcheck_set_pointer_info(expr, POINTER_TYPE, pointer_expr->pointer_subtype_id);
+    else if (target_type == RECORD_TYPE)
+    {
+        expr->record_type = pointer_expr->record_type;
+        if (expr->record_type == NULL && pointer_expr->pointer_subtype_id != NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 && target_node != NULL)
+                expr->record_type = target_node->record_type;
+        }
+    }
 
     *type_return = target_type;
     return error_count;
@@ -1616,6 +1629,10 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_BOOL:
             *type_return = BOOL;
+            break;
+        case EXPR_NIL:
+            *type_return = POINTER_TYPE;
+            semcheck_clear_pointer_info(expr);
             break;
         case EXPR_SET:
             *type_return = SET_TYPE;
@@ -1973,6 +1990,13 @@ int semcheck_varid(int *type_return,
                 type_id = alias->pointer_type_id;
             }
             semcheck_set_pointer_info(expr, subtype, type_id);
+            expr->record_type = NULL;
+            if (expr->pointer_subtype_id != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) != -1 && target_node != NULL)
+                    expr->record_type = target_node->record_type;
+            }
         }
         if (*type_return == RECORD_TYPE)
             expr->record_type = hash_return->record_type;

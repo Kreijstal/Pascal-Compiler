@@ -1345,6 +1345,8 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         return mk_bool(expr_node->line, 0);
     case PASCAL_T_SET:
         return convert_set_literal(expr_node);
+    case PASCAL_T_NIL:
+        return mk_nil(expr_node->line);
     case PASCAL_T_IDENTIFIER:
         return mk_varid(expr_node->line, dup_symbol(expr_node));
     case PASCAL_T_FUNC_CALL: {
@@ -1437,6 +1439,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
     case PASCAL_T_SET:
+    case PASCAL_T_NIL:
         return convert_factor(expr_node);
     case PASCAL_T_MEMBER_ACCESS:
         return convert_member_access(expr_node);
