@@ -603,6 +603,9 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
         case EXPR_BOOL:
           fprintf(f, "[BOOL:%s]\n", expr->expr_data.bool_value ? "TRUE" : "FALSE");
           break;
+        case EXPR_NIL:
+          fprintf(f, "[NIL]\n");
+          break;
         case EXPR_SET:
           fprintf(f, "[SET:0x%X]\n", expr->expr_data.set_data.bitmask);
           break;
@@ -993,6 +996,9 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_BOOL:
+          break;
+
+        case EXPR_NIL:
           break;
 
         case EXPR_SET:
@@ -1774,6 +1780,15 @@ struct Expression *mk_bool(int line_num, int value)
     init_expression(new_expr, line_num, EXPR_BOOL);
     new_expr->expr_data.bool_value = (value != 0);
 
+    return new_expr;
+}
+
+struct Expression *mk_nil(int line_num)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_NIL);
     return new_expr;
 }
 

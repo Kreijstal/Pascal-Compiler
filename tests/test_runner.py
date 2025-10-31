@@ -826,6 +826,52 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "42\n42\n")
 
+    def test_pointer_simple_program(self):
+        """Compiles and runs a program that assigns NIL to a typed pointer."""
+        input_file = os.path.join(TEST_CASES_DIR, "pointer_simple.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple")
+
+        run_compiler(input_file, asm_file)
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+    def test_pointer_dereference_minimal_program(self):
+        """Compiles and runs a program that dereferences a typed pointer to a record."""
+        input_file = os.path.join(TEST_CASES_DIR, "test_dereference_minimal.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "test_dereference_minimal.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "test_dereference_minimal")
+
+        run_compiler(input_file, asm_file)
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "42\n")
+        self.assertEqual(result.stderr, "")
+
     def test_type_alias_parameters_accept_new_categories(self):
         """Type aliases used in parameter lists should accept char/pointer/set/enum/file arguments."""
         input_file = os.path.join(TEST_CASES_DIR, "type_alias_parameter_calls.p")
@@ -1092,6 +1138,19 @@ class TestCompiler(unittest.TestCase):
         asm_source = read_file_content(asm_file)
         self.assertIn("call\tgpc_move", asm_source)
         self.assertIn("call\tsucc_i", asm_source)
+
+    def test_record_exotic_program(self):
+        """Parses a program that uses packed and variant record constructs."""
+        input_file = os.path.join(TEST_CASES_DIR, "record_exotic.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "record_exotic.s")
+        stderr_output = run_compiler(
+            input_file,
+            asm_file,
+            flags=["-parse-only"],
+        )
+
+        self.assertIn("Parse-only mode enabled.", stderr_output)
+        self.assertNotIn("Parse error", stderr_output)
 
     def test_with_nested_multi_context_program(self):
         """Ensures nested and multi-context with statements compile and run."""

@@ -187,6 +187,7 @@ enum ExprType {
     EXPR_RNUM,
     EXPR_STRING,
     EXPR_BOOL,
+    EXPR_NIL,
     EXPR_SET,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,

@@ -307,6 +307,71 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
     return return_val;
 }
 
+static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, New expects exactly one argument.\\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    int pointer_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
+
+    if (pointer_type != POINTER_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, New expects a pointer variable argument.\\n", stmt->line_num);
+        return ++return_val;
+    }
+
+    if (target_expr->pointer_subtype == UNKNOWN_TYPE && target_expr->pointer_subtype_id == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to determine allocation type for New.\\n", stmt->line_num);
+        return ++return_val;
+    }
+
+    if (target_expr->record_type == NULL && target_expr->pointer_subtype_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, target_expr->pointer_subtype_id) != -1 && type_node != NULL)
+            target_expr->record_type = type_node->record_type;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Dispose expects exactly one argument.\\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    int pointer_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
+
+    if (pointer_type != POINTER_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Dispose expects a pointer variable argument.\\n", stmt->line_num);
+        return ++return_val;
+    }
+
+    return return_val;
+}
+
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
@@ -558,6 +623,8 @@ static const char *type_tag_to_name(int type_tag)
             return "set";
         case RECORD_TYPE:
             return "record";
+        case POINTER_TYPE:
+            return "pointer";
         case UNKNOWN_TYPE:
             return "unknown";
         default:
@@ -652,6 +719,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Inc",
         semcheck_builtin_inc, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "New",
+        semcheck_builtin_new, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Dispose",
+        semcheck_builtin_dispose, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

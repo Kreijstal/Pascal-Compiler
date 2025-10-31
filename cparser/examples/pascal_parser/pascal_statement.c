@@ -14,64 +14,6 @@ static ast_t* wrap_with_contexts(ast_t* contexts) {
     return ast1(PASCAL_T_WITH_CONTEXTS, contexts);
 }
 
-static ParseResult pointer_deref_lvalue_fn(input_t* in, void* args, char* parser_name)
-{
-    InputState state;
-    save_input_state(in, &state);
-    combinator_t* identifier_parser = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
-    ParseResult id_res = parse(in, identifier_parser);
-    free_combinator(identifier_parser);
-    if (!id_res.is_success)
-    {
-        if (id_res.value.error != NULL)
-            free_error(id_res.value.error);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected pointer dereference"), NULL);
-    }
-
-    ast_t* current = id_res.value.ast;
-    int deref_count = 0;
-
-    while (1)
-    {
-        InputState caret_state;
-        save_input_state(in, &caret_state);
-
-        combinator_t* caret_parser = token(match("^"));
-        ParseResult caret_res = parse(in, caret_parser);
-        free_combinator(caret_parser);
-
-        if (!caret_res.is_success)
-        {
-            restore_input_state(in, &caret_state);
-            break;
-        }
-
-        free_ast(caret_res.value.ast);
-
-        ast_t* deref_node = new_ast();
-        deref_node->typ = PASCAL_T_DEREF;
-        deref_node->child = current;
-        deref_node->next = NULL;
-        deref_node->sym = NULL;
-        deref_node->line = current != NULL ? current->line : in->line;
-        deref_node->col = current != NULL ? current->col : in->col;
-
-        current = deref_node;
-        ++deref_count;
-    }
-
-    if (deref_count == 0)
-    {
-        free_ast(current);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected pointer dereference"), NULL);
-    }
-
-    set_ast_position(current, in);
-    return make_success(current);
-}
-
 // ASM block body parser - uses proper until() combinator instead of manual scanning
 static combinator_t* asm_body(tag_t tag) {
     return until(match("end"), tag);  // Use raw match instead of token to preserve whitespace
@@ -92,9 +34,54 @@ static ast_t* wrap_pointer_lvalue_suffix(ast_t* parsed) {
     return node;
 }
 
-// Build a nested dereference chain by attaching each parsed "^" suffix to the
-// base lvalue expression.  If there are no suffixes the original base node is
-// returned unchanged.
+static ast_t* wrap_array_lvalue_suffix(ast_t* parsed) {
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_ARRAY_ACCESS;
+    node->child = (parsed == ast_nil) ? NULL : parsed;
+    node->next = NULL;
+    return node;
+}
+
+static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) {
+    InputState state;
+    save_input_state(in, &state);
+
+    combinator_t* dot = token(match("."));
+    ParseResult dot_res = parse(in, dot);
+    free_combinator(dot);
+    if (!dot_res.is_success) {
+        if (dot_res.value.error != NULL) {
+            free_error(dot_res.value.error);
+        }
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '.' in member access"), NULL);
+    }
+    free_ast(dot_res.value.ast);
+
+    combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult ident_res = parse(in, identifier);
+    free_combinator(identifier);
+    if (!ident_res.is_success) {
+        if (ident_res.value.error != NULL) {
+            free_error(ident_res.value.error);
+        }
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier after '.'"), NULL);
+    }
+
+    ast_t* ident_ast = ident_res.value.ast;
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_MEMBER_ACCESS;
+    node->child = (ident_ast == ast_nil) ? NULL : ident_ast;
+    node->next = NULL;
+    set_ast_position(node, in);
+
+    return make_success(node);
+}
+
+// Build a nested chain by attaching each parsed suffix to the base lvalue
+// expression.  If there are no suffixes the original base node is returned
+// unchanged.
 static ast_t* build_pointer_lvalue_chain(ast_t* parsed) {
     if (parsed == NULL || parsed == ast_nil)
         return parsed;
@@ -113,8 +100,52 @@ static ast_t* build_pointer_lvalue_chain(ast_t* parsed) {
             next_suffix = NULL;
 
         suffix->next = NULL;
-        suffix->child = current;
-        current = suffix;
+
+        switch (suffix->typ) {
+            case PASCAL_T_ARRAY_ACCESS: {
+                ast_t* indices = suffix->child;
+                suffix->child = current;
+
+                if (indices == ast_nil) {
+                    indices = NULL;
+                }
+
+                if (indices != NULL) {
+                    ast_t* tail = current;
+                    while (tail->next != NULL) {
+                        tail = tail->next;
+                    }
+                    tail->next = indices;
+                }
+
+                current = suffix;
+                break;
+            }
+            case PASCAL_T_MEMBER_ACCESS: {
+                ast_t* field = suffix->child;
+                suffix->child = current;
+
+                if (field == ast_nil) {
+                    field = NULL;
+                }
+
+                if (field != NULL) {
+                    ast_t* tail = suffix->child;
+                    while (tail->next != NULL) {
+                        tail = tail->next;
+                    }
+                    tail->next = field;
+                }
+
+                current = suffix;
+                break;
+            }
+            default: {
+                suffix->child = current;
+                current = suffix;
+                break;
+            }
+        }
 
         suffix = next_suffix;
     }
@@ -173,37 +204,30 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Create the main statement parser pointer for recursive references
     combinator_t** stmt_parser = p;
 
-    // Left-value parser: accepts identifiers, member access expressions, array access, and pointer dereference
-    // Left-value parser: accepts identifiers, member access expressions, array access,
-    // and optional pointer dereference suffixes.
+    // Left-value parser: base identifier with optional pointer, array, or member suffixes.
     combinator_t* simple_identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
-    combinator_t* member_access_lval = seq(new_combinator(), PASCAL_T_MEMBER_ACCESS,
-        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),     // object name
-        token(match(".")),                                            // dot
-        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),     // field/property name
-        NULL
-    );
-    // Array access for lvalue: identifier[index, ...]
-    combinator_t* array_access_lval = seq(new_combinator(), PASCAL_T_ARRAY_ACCESS,
-        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),     // array name
-        between(token(match("[")), token(match("]")),
-            sep_by(lazy(expr_parser), token(match(",")))),             // indices
-        NULL
-    );
-    combinator_t* pointer_deref_lval = new_combinator();
-    pointer_deref_lval->fn = pointer_deref_lvalue_fn;
+
     combinator_t* pointer_suffix = map(token(match("^")), wrap_pointer_lvalue_suffix);
-    combinator_t* pointer_suffixes = many(pointer_suffix);
-    combinator_t* base_lvalue = multi(new_combinator(), PASCAL_T_NONE,
-        array_access_lval,       // try array access first
-        member_access_lval,      // try member access second
-        pointer_deref_lval,      // pointer dereference expressions
-        simple_identifier,       // then simple identifier
+    combinator_t* array_indices = between(
+        token(match("[")),
+        token(match("]")),
+        sep_by(lazy(expr_parser), token(match(",")))
+    );
+    combinator_t* array_suffix = map(array_indices, wrap_array_lvalue_suffix);
+    combinator_t* member_suffix = new_combinator();
+    member_suffix->fn = member_suffix_fn;
+
+    combinator_t* suffix_choice = multi(new_combinator(), PASCAL_T_NONE,
+        array_suffix,
+        pointer_suffix,
+        member_suffix,
         NULL
     );
+    combinator_t* suffixes = many(suffix_choice);
+
     combinator_t* lvalue = map(seq(new_combinator(), PASCAL_T_NONE,
-        base_lvalue,
-        pointer_suffixes,
+        simple_identifier,
+        suffixes,
         NULL
     ), build_pointer_lvalue_chain);
 

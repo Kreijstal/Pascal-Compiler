@@ -457,6 +457,32 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     return 1;
 }
 
+int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointer_expr,
+    long long *size_out)
+{
+    if (pointer_expr == NULL || size_out == NULL)
+        return 1;
+
+    int subtype = pointer_expr->pointer_subtype;
+    const char *type_id = pointer_expr->pointer_subtype_id;
+    struct RecordType *record_type = pointer_expr->record_type;
+
+    if (record_type == NULL && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, (char *)type_id) >= 0 && node != NULL)
+            record_type = node->record_type;
+    }
+
+    if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to determine record size for pointer target.");
+        return 1;
+    }
+
+    return codegen_sizeof_type(ctx, subtype, type_id, record_type, size_out, 0);
+}
+
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -1039,6 +1065,13 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             return inst_list;
         case EXPR_BOOL:
             CODEGEN_DEBUG("DEBUG: Processing boolean constant expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_NIL:
+            CODEGEN_DEBUG("DEBUG: Processing nil literal expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
