@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sys: [MINGW64, UCRT64, CLANG64]
+        sys: [MSYS, MINGW64, UCRT64, CLANG64]
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
       with:
         msystem: ${{ matrix.sys }}
         update: true
-        install: base-devel git flex bison
+        install: base-devel git flex bison gmp-devel 
         pacboy: >-
           cc:p
           meson:p
