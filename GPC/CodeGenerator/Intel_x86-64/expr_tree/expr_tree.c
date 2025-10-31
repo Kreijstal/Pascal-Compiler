@@ -406,16 +406,19 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 
         if (codegen_target_is_windows())
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", target_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            // For chained concatenations, we need to be careful about register usage
+            // Move the second argument to RDX first, then the first argument to RCX
+            // This prevents overwriting the second argument when target_reg is reused
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", rhs_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", target_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", target_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", rhs_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", target_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
         }
     }
