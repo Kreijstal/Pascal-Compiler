@@ -1,6 +1,7 @@
 import argparse
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -19,12 +20,7 @@ GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if IS_WINDOWS_ABI else "GPC/gpc
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
-RUNTIME_SOURCE = "GPC/runtime.c"
-RUNTIME_GMP_SOURCE = "GPC/runtime_gmp.c"
 EXEC_TIMEOUT = 5
-
-# Get the C compiler from environment variable, defaulting to gcc
-CC = os.environ.get("CC", "gcc")
 
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
@@ -199,10 +195,45 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
-        cls.runtime_object = os.path.join(TEST_OUTPUT_DIR, "runtime.o")
-        cls.runtime_gmp_object = os.path.join(TEST_OUTPUT_DIR, "runtime_gmp.o")
-        cls._compile_runtime()
-        cls._build_ctypes_helper_library()
+        cc_raw = os.environ.get("CC")
+        if not cc_raw:
+            raise RuntimeError(
+                "CC environment variable must be set by Meson before running tests"
+            )
+        cls.c_compiler_display = cc_raw
+        cls.c_compiler_cmd = shlex.split(cc_raw)
+        if not cls.c_compiler_cmd:
+            raise RuntimeError("CC environment variable did not contain an executable")
+
+        cls.runtime_library = os.environ.get("GPC_RUNTIME_LIB")
+        if not cls.runtime_library:
+            raise RuntimeError(
+                "GPC_RUNTIME_LIB environment variable is required to link generated code"
+            )
+        if not os.path.exists(cls.runtime_library):
+            raise RuntimeError(
+                f"Runtime library path from GPC_RUNTIME_LIB does not exist: {cls.runtime_library}"
+            )
+
+        cls.ctypes_helper_library = os.environ.get("GPC_CTYPES_HELPER")
+        cls.ctypes_helper_link = os.environ.get("GPC_CTYPES_HELPER_LINK")
+        if cls.ctypes_helper_link is None and cls.ctypes_helper_library is not None:
+            cls.ctypes_helper_link = cls.ctypes_helper_library
+        if cls.ctypes_helper_link is not None and not os.path.exists(cls.ctypes_helper_link):
+            raise RuntimeError(
+                "ctypes helper link target provided by Meson does not exist: "
+                f"{cls.ctypes_helper_link}"
+            )
+        cls.ctypes_helper_dir = (
+            os.path.dirname(cls.ctypes_helper_library)
+            if cls.ctypes_helper_library is not None
+            else None
+        )
+        if cls.ctypes_helper_dir is not None and not os.path.exists(cls.ctypes_helper_library):
+            raise RuntimeError(
+                "ctypes helper shared library provided by Meson does not exist: "
+                f"{cls.ctypes_helper_library}"
+            )
 
     @classmethod
     def _ensure_compiler_built(cls):
@@ -257,32 +288,6 @@ class TestCompiler(unittest.TestCase):
                 f"Meson build completed but did not produce compiler at {GPC_PATH}"
             )
 
-    @classmethod
-    def _compile_runtime(cls):
-        """Compile the runtime support files once to speed up repeated links."""
-        builds = [
-            (cls.runtime_object, RUNTIME_SOURCE),
-            (cls.runtime_gmp_object, RUNTIME_GMP_SOURCE),
-        ]
-        for output, source in builds:
-            try:
-                subprocess.run(
-                    [
-                        CC,
-                        "-c",
-                        "-O2",
-                        "-pipe",
-                        "-o",
-                        output,
-                        source,
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"runtime compilation failed ({source}): {e.stderr}")
-
     def compile_executable(
         self, asm_file, executable_file, extra_objects=None, extra_link_args=None
     ):
@@ -291,16 +296,18 @@ class TestCompiler(unittest.TestCase):
         if extra_link_args is None:
             extra_link_args = []
         try:
-            link_args = [CC, "-O2"]
+            command = list(self.c_compiler_cmd)
+            command.append("-O2")
             if not IS_WINDOWS_ABI:
-                link_args.append("-no-pie")
-            link_args.extend([
+                command.append("-no-pie")
+            command.extend([
                 "-o",
                 executable_file,
                 asm_file,
-                self.runtime_object,
+                self.runtime_library,
             ])
-            command = link_args + list(extra_objects) + list(extra_link_args)
+            command.extend(list(extra_objects))
+            command.extend(list(extra_link_args))
             subprocess.run(
                 command,
                 check=True,
@@ -308,47 +315,13 @@ class TestCompiler(unittest.TestCase):
                 text=True,
             )
         except subprocess.CalledProcessError as e:
-            self.fail(f"{CC} compilation failed: {e.stderr}")
+            self.fail(f"{self.c_compiler_display} compilation failed: {e.stderr}")
 
     def _get_test_paths(self, name, extension="p"):
         input_file = os.path.join(TEST_CASES_DIR, f"{name}.{extension}")
         asm_file = os.path.join(TEST_OUTPUT_DIR, f"{name}.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, name)
         return input_file, asm_file, executable_file
-
-    @classmethod
-    def _build_ctypes_helper_library(cls):
-        if IS_WINDOWS_ABI:
-            shared_name = "libctypes_helper.dll"
-            shared_flags = []
-        else:
-            shared_name = "libctypes_helper.so"
-            shared_flags = ["-fPIC"]
-
-        cls.ctypes_helper_library = os.path.join(TEST_OUTPUT_DIR, shared_name)
-        source = os.path.join(TEST_CASES_DIR, "ctypes_helper.c")
-        try:
-            command = [
-                CC,
-                "-shared",
-                "-O2",
-            ]
-            command.extend(shared_flags)
-            command.extend(
-                [
-                    "-o",
-                    cls.ctypes_helper_library,
-                    source,
-                ]
-            )
-            subprocess.run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"ctypes helper library compilation failed: {e.stderr}")
 
     @classmethod
     def tearDownClass(cls):
@@ -653,19 +626,27 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
 
         executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_dll_demo")
+        if self.ctypes_helper_link is None:
+            self.fail("GPC_CTYPES_HELPER_LINK must be provided to link ctypes demo")
+
         self.compile_executable(
             asm_file,
             executable_file,
-            extra_objects=[self.ctypes_helper_library],
+            extra_objects=[self.ctypes_helper_link],
         )
 
         env = os.environ.copy()
         if IS_WINDOWS_ABI:
             path_var = "PATH"
+        elif sys.platform == "darwin":
+            path_var = "DYLD_LIBRARY_PATH"
         else:
             path_var = "LD_LIBRARY_PATH"
         existing = env.get(path_var, "")
-        env[path_var] = TEST_OUTPUT_DIR + (os.pathsep + existing if existing else "")
+        helper_dir = self.ctypes_helper_dir
+        if helper_dir is None:
+            self.fail("GPC_CTYPES_HELPER must be provided to run ctypes demo")
+        env[path_var] = helper_dir + (os.pathsep + existing if existing else "")
 
         result = subprocess.run(
             [executable_file],
