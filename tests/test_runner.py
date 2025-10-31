@@ -19,6 +19,9 @@ RUNTIME_SOURCE = "GPC/runtime.c"
 RUNTIME_GMP_SOURCE = "GPC/runtime_gmp.c"
 EXEC_TIMEOUT = 5
 
+# Get the C compiler from environment variable, defaulting to gcc
+CC = os.environ.get("CC", "gcc")
+
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
 RUN_VALGRIND_TESTS = os.environ.get("RUN_VALGRIND_TESTS", "false").lower() in (
@@ -233,7 +236,7 @@ class TestCompiler(unittest.TestCase):
             try:
                 subprocess.run(
                     [
-                        "gcc",
+                        CC,
                         "-c",
                         "-O2",
                         "-pipe",
@@ -258,7 +261,7 @@ class TestCompiler(unittest.TestCase):
         try:
             subprocess.run(
                 [
-                    "gcc",
+                    CC,
                     "-O2",
                     "-no-pie",
                     "-o",
@@ -273,7 +276,7 @@ class TestCompiler(unittest.TestCase):
                 text=True,
             )
         except subprocess.CalledProcessError as e:
-            self.fail(f"gcc compilation failed: {e.stderr}")
+            self.fail(f"{CC} compilation failed: {e.stderr}")
 
     def _get_test_paths(self, name, extension="p"):
         input_file = os.path.join(TEST_CASES_DIR, f"{name}.{extension}")
@@ -294,7 +297,7 @@ class TestCompiler(unittest.TestCase):
         source = os.path.join(TEST_CASES_DIR, "ctypes_helper.c")
         try:
             command = [
-                "gcc",
+                CC,
                 "-shared",
                 "-O2",
             ]
