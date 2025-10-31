@@ -32,6 +32,8 @@ Required packages:
 
 ### Build Commands
 
+#### Native Linux Build
+
 ```bash
 # Configure build
 meson setup builddir --buildtype=release
@@ -45,6 +47,32 @@ meson compile -C builddir
 # Run tests
 meson test -C builddir
 ```
+
+#### Cross-Compilation for Windows (using quasi-msys2)
+
+The project supports cross-compilation from Linux to Windows using [quasi-msys2](https://github.com/HolyBlackCat/quasi-msys2).
+
+```bash
+# Clone and set up quasi-msys2
+git clone https://github.com/HolyBlackCat/quasi-msys2.git
+cd quasi-msys2
+echo "UCRT64" > msystem.txt  # or MINGW64
+
+# Install required packages
+make install _gcc _gmp _meson _ninja _python _flex _bison
+
+# Configure and build (from project root)
+bash -c 'source quasi-msys2/env/all.src && meson setup builddir-cross --cross-file quasi-msys2/env/meson_cross_file.ini --buildtype=release -Dwith_gmp=enabled'
+bash -c 'source quasi-msys2/env/all.src && meson compile -C builddir-cross'
+
+# Run tests with Wine
+bash -c 'source quasi-msys2/env/all.src && meson test -C builddir-cross'
+```
+
+**Cross-compilation dependencies:**
+- `wine` - Run Windows executables on Linux
+- `llvm`, `clang`, `lld` - Cross-compilation toolchain
+- `wget`, `tar`, `zstd`, `gawk`, `gpg` - For quasi-msys2 package management
 
 ### Build Outputs
 
@@ -154,8 +182,33 @@ This project has **zero tolerance for memory leaks**. When writing code:
 ## Platform Support
 
 - **Primary platform**: Linux (Ubuntu-based systems tested)
+- **Windows support**: Available via MSYS2 or cross-compilation from Linux using quasi-msys2
 - **Architecture**: x86-64 Intel only
 - **Assembly target**: gcc-compatible x86-64 assembly
+
+## CI/CD Workflows
+
+The project has multiple CI workflows in `.github/workflows/`:
+
+### 1. Main CI (`ci.yml`)
+- Runs on Ubuntu Linux
+- Tests native Linux builds
+- Uses Meson build system
+- Runs all test suites
+
+### 2. MSYS2 CI (`msys2-ci.yml`)
+- Runs on Windows using MSYS2
+- Tests multiple MSYS2 environments: MSYS, MINGW64, UCRT64, CLANG64
+- Native Windows builds and tests
+
+### 3. Cross-Compilation CI (`cross-compile-ci.yml`)
+- Runs on Ubuntu Linux with Wine
+- Uses quasi-msys2 for Linux-to-Windows cross-compilation
+- Tests UCRT64 and MINGW64 targets
+- Validates that Windows executables can be built from Linux
+- Experimental - may use `continue-on-error` for some steps
+
+All workflows are triggered on pull requests and pushes to any branch.
 
 ## Optimization Levels
 
