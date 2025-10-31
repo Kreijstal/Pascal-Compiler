@@ -611,8 +611,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char label[20];
         snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
         char add_rodata[1024];
-        snprintf(add_rodata, 1024, "\t.section\t.rodata\n%s:\n\t.string \"%s\"\n\t.text\n",
-            label, expr->expr_data.string);
+        const char *readonly_section = codegen_readonly_section_directive();
+        snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+            readonly_section, label, expr->expr_data.string);
         inst_list = add_inst(inst_list, add_rodata);
         snprintf(buffer, 50, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         return add_inst(inst_list, buffer);

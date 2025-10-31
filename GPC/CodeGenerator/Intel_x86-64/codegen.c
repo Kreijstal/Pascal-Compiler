@@ -327,14 +327,7 @@ void codegen_rodata(CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(ctx != NULL);
-    if (codegen_target_is_windows())
-    {
-        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
-    }
-    else
-    {
-        fprintf(ctx->output_file, "\t.section\t.rodata\n");
-    }
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     fprintf(ctx->output_file, ".format_str_s:\n");
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
@@ -370,10 +363,7 @@ void codegen_program_header(const char *fname, CodeGenContext *ctx)
     assert(fname != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
-    if (codegen_target_is_windows())
-        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
-    else
-        fprintf(ctx->output_file, "\t.section\t.rodata\n");
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
     fprintf(ctx->output_file, "\t.text\n");
     fprintf(ctx->output_file, "\t.set\tGPC_TARGET_WINDOWS, %d\n", codegen_target_is_windows());

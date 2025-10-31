@@ -7,11 +7,15 @@ import time
 import traceback
 import unittest
 
+WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
+PLATFORM_ID = sys.platform.lower()
+IS_WINDOWS_ABI = os.name == "nt" or PLATFORM_ID.startswith(WINDOWS_ABI_PLATFORMS)
+
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
 # Default to "build" for local testing.
 build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
-GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if os.name == "nt" else "GPC/gpc")
+GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if IS_WINDOWS_ABI else "GPC/gpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
@@ -36,6 +40,29 @@ RUN_VALGRIND_TESTS = os.environ.get("RUN_VALGRIND_TESTS", "false").lower() in (
 # intact.
 COMPILER_RUNS = []
 
+# Flags that explicitly request a target ABI so we do not override them.
+EXPLICIT_TARGET_FLAGS = {
+    "--target",
+    "-target",
+    "--target-windows",
+    "-target-windows",
+    "--windows-abi",
+    "--target-sysv",
+    "-target-sysv",
+    "--sysv-abi",
+}
+
+
+def _has_explicit_target_flag(flags):
+    if not flags:
+        return False
+    for flag in flags:
+        if flag in EXPLICIT_TARGET_FLAGS:
+            return True
+        if flag.startswith("--target=") or flag.startswith("-target="):
+            return True
+    return False
+
 # The compiler is built by Meson now, so this function is not needed.
 
 
@@ -43,11 +70,16 @@ def run_compiler(input_file, output_file, flags=None):
     """Runs the GPC compiler with the given arguments."""
     if flags is None:
         flags = []
+    else:
+        flags = list(flags)
 
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    command = [GPC_PATH, input_file, output_file] + flags
+    command = [GPC_PATH, input_file, output_file]
+    if IS_WINDOWS_ABI and not _has_explicit_target_flag(flags):
+        command.append("--target-windows")
+    command.extend(flags)
     print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
     start = time.perf_counter()
     try:
@@ -260,7 +292,7 @@ class TestCompiler(unittest.TestCase):
             extra_link_args = []
         try:
             link_args = [CC, "-O2"]
-            if os.name != "nt":
+            if not IS_WINDOWS_ABI:
                 link_args.append("-no-pie")
             link_args.extend([
                 "-o",
@@ -286,7 +318,7 @@ class TestCompiler(unittest.TestCase):
 
     @classmethod
     def _build_ctypes_helper_library(cls):
-        if os.name == "nt":
+        if IS_WINDOWS_ABI:
             shared_name = "libctypes_helper.dll"
             shared_flags = []
         else:
@@ -628,7 +660,7 @@ class TestCompiler(unittest.TestCase):
         )
 
         env = os.environ.copy()
-        if os.name == "nt":
+        if IS_WINDOWS_ABI:
             path_var = "PATH"
         else:
             path_var = "LD_LIBRARY_PATH"
