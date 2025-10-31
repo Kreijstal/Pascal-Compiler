@@ -31,6 +31,25 @@ int codegen_type_uses_qword(int type_tag)
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE);
 }
 
+int codegen_type_is_signed(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int codegen_expr_is_signed(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    return codegen_type_is_signed(expr->resolved_type);
+}
+
 static inline const char *register_name_for_type(const Register_t *reg, int type_tag)
 {
     if (reg == NULL)
@@ -522,6 +541,16 @@ ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_re
 
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", src_reg32, dst_reg64);
+    return add_inst(inst_list, buffer);
+}
+
+ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_reg32, const char *dst_reg32)
+{
+    assert(src_reg32 != NULL);
+    assert(dst_reg32 != NULL);
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", src_reg32, dst_reg32);
     return add_inst(inst_list, buffer);
 }
 

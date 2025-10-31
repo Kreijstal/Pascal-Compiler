@@ -7,6 +7,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <time.h>
+#include <errno.h>
 #else
 #include <time.h>
 #include <errno.h>

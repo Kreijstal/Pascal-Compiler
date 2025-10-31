@@ -20,14 +20,22 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y flex bison libfl-dev libunwind-dev
+        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
         pip install meson ninja
 
     - name: Configure build
-      run: meson setup builddir --buildtype=release
+      run: meson setup builddir --buildtype=release -Dwith_gmp=enabled
 
     - name: Build
       run: meson compile -C builddir
 
     - name: Run tests
       run: meson test -C builddir
+
+    - name: Upload meson logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs-linux
+        path: builddir/meson-logs/
+        if-no-files-found: ignore
