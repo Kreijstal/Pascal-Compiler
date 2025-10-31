@@ -477,6 +477,46 @@ void test_pascal_preprocessor_conditionals(void) {
     pascal_preprocessor_free(pp);
 }
 
+void test_pascal_preprocessor_comment_mixing(void) {
+    PascalPreprocessor *pp = pascal_preprocessor_create();
+    TEST_ASSERT(pp != NULL);
+    if (!pp) {
+        return;
+    }
+
+    const char *source =
+        "{ brace comment with 'apostrophe' }\n"
+        "(* paren comment with {$ifdef IGNORE} nested 'quote' *)\n"
+        "// line comment with 'quote' and CRLF\r\n"
+        "value := 'text';\n";
+
+    char *error_message = NULL;
+    size_t output_len = 0;
+    char *result = pascal_preprocess_buffer(
+        pp,
+        "<memory>",
+        source,
+        strlen(source),
+        &output_len,
+        &error_message);
+
+    TEST_ASSERT(result != NULL);
+    TEST_ASSERT(error_message == NULL);
+
+    if (error_message) {
+        free(error_message);
+    }
+
+    if (result) {
+        TEST_CHECK(strstr(result, "line comment with 'quote' and CRLF\r\n") != NULL);
+        TEST_CHECK(strstr(result, "value := 'text';") != NULL);
+        TEST_CHECK(strstr(result, "\r\n") != NULL);
+        free(result);
+    }
+
+    pascal_preprocessor_free(pp);
+}
+
 void test_pascal_function_call(void) {
     combinator_t* p = new_combinator();
     init_pascal_expression_parser(&p);
@@ -2000,36 +2040,153 @@ void test_pascal_method_implementation(void) {
     free(input);
 }
 
-void test_pascal_with_statement(void) {
-    combinator_t* p = new_combinator();
-    init_pascal_statement_parser(&p);
+void test_pascal_with_statement_single_context(void) {
+    combinator_t* parser = get_statement_parser();
 
     input_t* input = new_input();
     input->buffer = strdup("with MyRecord do field := 1;");
     input->length = strlen(input->buffer);
 
-    ParseResult res = parse(input, p);
+    ParseResult res = parse(input, parser);
 
-    // This test is expected to fail because 'with' statements are not implemented.
     TEST_ASSERT(res.is_success);
-
     if (res.is_success) {
         ast_t* with_stmt = res.value.ast;
         TEST_ASSERT(with_stmt->typ == PASCAL_T_WITH_STMT);
 
-        ast_t* record_var = with_stmt->child;
-        TEST_ASSERT(record_var->typ == PASCAL_T_IDENTIFIER);
-        TEST_ASSERT(strcmp(record_var->sym->name, "MyRecord") == 0);
+        ast_t* contexts = with_stmt->child;
+        TEST_ASSERT(contexts != NULL);
+        TEST_ASSERT(contexts->typ == PASCAL_T_WITH_CONTEXTS);
 
-        ast_t* statement = record_var->next;
+        ast_t* first_context = contexts->child;
+        TEST_ASSERT(first_context != NULL);
+        TEST_ASSERT(first_context->typ == PASCAL_T_IDENTIFIER);
+        TEST_ASSERT(strcmp(first_context->sym->name, "MyRecord") == 0);
+        TEST_ASSERT(first_context->next == NULL || first_context->next == ast_nil);
+
+        ast_t* statement = contexts->next;
+        TEST_ASSERT(statement != NULL);
         TEST_ASSERT(statement->typ == PASCAL_T_ASSIGNMENT);
 
         free_ast(res.value.ast);
     } else {
         free_error(res.value.error);
     }
+
     free(input->buffer);
     free(input);
+}
+
+void test_pascal_with_statement_multiple_contexts(void) {
+    combinator_t* parser = get_statement_parser();
+
+    input_t* input = new_input();
+    input->buffer = strdup("with Outer, Inner do Value := 1;");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, parser);
+
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* with_stmt = res.value.ast;
+        TEST_ASSERT(with_stmt->typ == PASCAL_T_WITH_STMT);
+
+        ast_t* contexts = with_stmt->child;
+        TEST_ASSERT(contexts != NULL);
+        TEST_ASSERT(contexts->typ == PASCAL_T_WITH_CONTEXTS);
+
+        ast_t* first_context = contexts->child;
+        TEST_ASSERT(first_context != NULL);
+        TEST_ASSERT(first_context->typ == PASCAL_T_IDENTIFIER);
+        TEST_ASSERT(strcmp(first_context->sym->name, "Outer") == 0);
+
+        ast_t* second_context = first_context->next;
+        TEST_ASSERT(second_context != NULL);
+        TEST_ASSERT(second_context->typ == PASCAL_T_IDENTIFIER);
+        TEST_ASSERT(strcmp(second_context->sym->name, "Inner") == 0);
+
+        TEST_ASSERT(second_context->next == NULL || second_context->next == ast_nil);
+
+        ast_t* statement = contexts->next;
+        TEST_ASSERT(statement != NULL);
+        TEST_ASSERT(statement->typ == PASCAL_T_ASSIGNMENT);
+
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_with_statement_nested(void) {
+    combinator_t* parser = get_statement_parser();
+
+    input_t* input = new_input();
+    input->buffer = strdup("with Outer do with Inner do Value := 2;");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, parser);
+
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* outer_with = res.value.ast;
+        TEST_ASSERT(outer_with->typ == PASCAL_T_WITH_STMT);
+
+        ast_t* outer_contexts = outer_with->child;
+        TEST_ASSERT(outer_contexts != NULL);
+        TEST_ASSERT(outer_contexts->typ == PASCAL_T_WITH_CONTEXTS);
+        TEST_ASSERT(outer_contexts->child != NULL);
+        TEST_ASSERT(strcmp(outer_contexts->child->sym->name, "Outer") == 0);
+
+        ast_t* inner_stmt = outer_contexts->next;
+        TEST_ASSERT(inner_stmt != NULL);
+        TEST_ASSERT(inner_stmt->typ == PASCAL_T_WITH_STMT);
+
+        ast_t* inner_contexts = inner_stmt->child;
+        TEST_ASSERT(inner_contexts != NULL);
+        TEST_ASSERT(inner_contexts->typ == PASCAL_T_WITH_CONTEXTS);
+        TEST_ASSERT(inner_contexts->child != NULL);
+        TEST_ASSERT(strcmp(inner_contexts->child->sym->name, "Inner") == 0);
+
+        ast_t* assignment = inner_contexts->next;
+        TEST_ASSERT(assignment != NULL);
+        TEST_ASSERT(assignment->typ == PASCAL_T_ASSIGNMENT);
+
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_with_statement_invalid_syntax(void) {
+    combinator_t* program_parser = get_program_parser();
+
+    input_t* leading_comma_input = new_input();
+    leading_comma_input->buffer = strdup("program p; begin with , Inner do begin end; end.");
+    leading_comma_input->length = strlen(leading_comma_input->buffer);
+    ParseResult leading_comma_result = parse(leading_comma_input, program_parser);
+    TEST_ASSERT(!leading_comma_result.is_success);
+    if (!leading_comma_result.is_success) {
+        free_error(leading_comma_result.value.error);
+    }
+    free(leading_comma_input->buffer);
+    free(leading_comma_input);
+
+    input_t* trailing_comma_input = new_input();
+    trailing_comma_input->buffer = strdup("program p; begin with Outer, do begin end; end.");
+    trailing_comma_input->length = strlen(trailing_comma_input->buffer);
+    ParseResult trailing_comma_result = parse(trailing_comma_input, program_parser);
+    TEST_ASSERT(!trailing_comma_result.is_success);
+    if (!trailing_comma_result.is_success) {
+        free_error(trailing_comma_result.value.error);
+    }
+    free(trailing_comma_input->buffer);
+    free(trailing_comma_input);
 }
 
 void test_pascal_exit_statement(void) {
@@ -3691,6 +3848,7 @@ TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
     { "test_pascal_preprocessor_conditionals", test_pascal_preprocessor_conditionals },
+    { "test_pascal_preprocessor_comment_mixing", test_pascal_preprocessor_comment_mixing },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_string_literal", test_pascal_string_literal },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },
@@ -3744,7 +3902,10 @@ TEST_LIST = {
     { "test_pascal_unit_declaration", test_pascal_unit_declaration },
     { "test_pascal_pointer_type_declaration", test_pascal_pointer_type_declaration },
     { "test_pascal_method_implementation", test_pascal_method_implementation },
-    { "test_pascal_with_statement", test_pascal_with_statement },
+    { "test_pascal_with_statement_single_context", test_pascal_with_statement_single_context },
+    { "test_pascal_with_statement_multiple_contexts", test_pascal_with_statement_multiple_contexts },
+    { "test_pascal_with_statement_nested", test_pascal_with_statement_nested },
+    { "test_pascal_with_statement_invalid_syntax", test_pascal_with_statement_invalid_syntax },
     { "test_pascal_exit_statement", test_pascal_exit_statement },
     { "test_pascal_include_directive", test_pascal_include_directive },
     { "test_pascal_forward_declared_function", test_pascal_forward_declared_function },

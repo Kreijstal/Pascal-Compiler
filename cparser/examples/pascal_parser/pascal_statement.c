@@ -7,6 +7,13 @@
 #include <string.h>
 #include <ctype.h>
 
+static ast_t* wrap_with_contexts(ast_t* contexts) {
+    if (contexts == NULL || contexts == ast_nil) {
+        return ast_nil;
+    }
+    return ast1(PASCAL_T_WITH_CONTEXTS, contexts);
+}
+
 static ParseResult pointer_deref_lvalue_fn(input_t* in, void* args, char* parser_name)
 {
     InputState state;
@@ -320,10 +327,15 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // With statement: with expression do statement
+    // With statement: with expression[, expression...] do statement
+    combinator_t* with_contexts = map(
+        sep_by1(lazy(expr_parser), token(match(","))),
+        wrap_with_contexts
+    );
+
     combinator_t* with_stmt = seq(new_combinator(), PASCAL_T_WITH_STMT,
         token(keyword_ci("with")),               // with keyword (case-insensitive)
-        lazy(expr_parser),                     // expression
+        with_contexts,                        // one or more context expressions
         token(keyword_ci("do")),                 // do keyword (case-insensitive)
         lazy(stmt_parser),                     // body statement
         NULL

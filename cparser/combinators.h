@@ -11,6 +11,7 @@ combinator_t * expect(combinator_t * c, char * msg);
 combinator_t * many(combinator_t* p);
 combinator_t * optional(combinator_t* p);
 combinator_t * sep_by(combinator_t* p, combinator_t* sep);
+combinator_t * sep_by1(combinator_t* p, combinator_t* sep);
 combinator_t * seq(combinator_t * ret, tag_t typ, combinator_t * c1, ...);
 combinator_t * multi(combinator_t * ret, tag_t typ, combinator_t * c1, ...);
 combinator_t * flatMap(combinator_t * p, flatMap_func func);

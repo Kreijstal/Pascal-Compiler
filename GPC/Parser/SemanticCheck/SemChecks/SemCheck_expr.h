@@ -32,4 +32,11 @@ int semcheck_expr_main(int *type_return,
 
 void set_hash_meta(HashNode_t *node, int mutating);
 
+int semcheck_with_push(struct Expression *context_expr, struct RecordType *record_type);
+void semcheck_with_pop(void);
+int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
+    struct Expression **out_record_expr, int line_num);
+struct RecordType *semcheck_with_resolve_record_type(SymTab_t *symtab,
+    struct Expression *context_expr, int expr_type, int line_num);
+
 #endif

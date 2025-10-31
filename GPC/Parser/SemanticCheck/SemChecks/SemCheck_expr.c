@@ -43,6 +43,20 @@ static int semcheck_recordaccess(int *type_return,
 static int semcheck_addressof(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
+typedef struct WithContextEntry {
+    struct Expression *context_expr;
+    struct RecordType *record_type;
+} WithContextEntry;
+
+static WithContextEntry *with_context_stack = NULL;
+static size_t with_context_count = 0;
+static size_t with_context_capacity = 0;
+
+static int ensure_with_capacity(void);
+static struct Expression *clone_expression(const struct Expression *expr);
+static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
+    struct Expression *context_expr, int expr_type, int line_num);
+
 #define SIZEOF_RECURSION_LIMIT 64
 #define POINTER_SIZE_BYTES 8
 
@@ -54,6 +68,9 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     long long *size_out, int depth, int line_num);
 static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num);
+static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int line_num);
 static void semcheck_clear_pointer_info(struct Expression *expr)
 {
     if (expr == NULL)
@@ -80,6 +97,245 @@ static void semcheck_set_pointer_info(struct Expression *expr, int subtype, cons
         if (expr->pointer_subtype_id == NULL)
             fprintf(stderr, "Error: failed to allocate pointer type identifier.\n");
     }
+}
+
+static int ensure_with_capacity(void)
+{
+    if (with_context_count < with_context_capacity)
+        return 0;
+
+    size_t new_capacity = with_context_capacity == 0 ? 8 : with_context_capacity * 2;
+    WithContextEntry *new_stack = realloc(with_context_stack,
+        new_capacity * sizeof(*with_context_stack));
+    if (new_stack == NULL)
+        return 1;
+
+    with_context_stack = new_stack;
+    with_context_capacity = new_capacity;
+    return 0;
+}
+
+static struct Expression *clone_expression(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+
+    struct Expression *clone = (struct Expression *)calloc(1, sizeof(struct Expression));
+    if (clone == NULL)
+        return NULL;
+
+    clone->line_num = expr->line_num;
+    clone->type = expr->type;
+    clone->resolved_type = expr->resolved_type;
+    clone->pointer_subtype = expr->pointer_subtype;
+    clone->record_type = expr->record_type;
+    if (expr->pointer_subtype_id != NULL)
+    {
+        clone->pointer_subtype_id = strdup(expr->pointer_subtype_id);
+        if (clone->pointer_subtype_id == NULL)
+        {
+            free(clone);
+            return NULL;
+        }
+    }
+
+    if (expr->field_width != NULL)
+        clone->field_width = clone_expression(expr->field_width);
+    if (expr->field_precision != NULL)
+        clone->field_precision = clone_expression(expr->field_precision);
+
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+            clone->expr_data.id = expr->expr_data.id != NULL ? strdup(expr->expr_data.id) : NULL;
+            if (expr->expr_data.id != NULL && clone->expr_data.id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+        case EXPR_RECORD_ACCESS:
+            clone->expr_data.record_access_data.record_expr =
+                clone_expression(expr->expr_data.record_access_data.record_expr);
+            clone->expr_data.record_access_data.field_id =
+                expr->expr_data.record_access_data.field_id != NULL ?
+                    strdup(expr->expr_data.record_access_data.field_id) : NULL;
+            clone->expr_data.record_access_data.field_offset =
+                expr->expr_data.record_access_data.field_offset;
+            if (expr->expr_data.record_access_data.field_id != NULL &&
+                clone->expr_data.record_access_data.field_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+        case EXPR_POINTER_DEREF:
+            clone->expr_data.pointer_deref_data.pointer_expr =
+                clone_expression(expr->expr_data.pointer_deref_data.pointer_expr);
+            break;
+        case EXPR_ADDR:
+            clone->expr_data.addr_data.expr =
+                clone_expression(expr->expr_data.addr_data.expr);
+            break;
+        case EXPR_SIGN_TERM:
+            clone->expr_data.sign_term = clone_expression(expr->expr_data.sign_term);
+            break;
+        case EXPR_ADDOP:
+            clone->expr_data.addop_data.addop_type = expr->expr_data.addop_data.addop_type;
+            clone->expr_data.addop_data.left_expr =
+                clone_expression(expr->expr_data.addop_data.left_expr);
+            clone->expr_data.addop_data.right_term =
+                clone_expression(expr->expr_data.addop_data.right_term);
+            break;
+        case EXPR_MULOP:
+            clone->expr_data.mulop_data.mulop_type = expr->expr_data.mulop_data.mulop_type;
+            clone->expr_data.mulop_data.left_term =
+                clone_expression(expr->expr_data.mulop_data.left_term);
+            clone->expr_data.mulop_data.right_factor =
+                clone_expression(expr->expr_data.mulop_data.right_factor);
+            break;
+        case EXPR_ARRAY_ACCESS:
+            clone->expr_data.array_access_data.id =
+                expr->expr_data.array_access_data.id != NULL ?
+                    strdup(expr->expr_data.array_access_data.id) : NULL;
+            clone->expr_data.array_access_data.array_expr =
+                clone_expression(expr->expr_data.array_access_data.array_expr);
+            if (expr->expr_data.array_access_data.id != NULL &&
+                clone->expr_data.array_access_data.id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+        case EXPR_TYPECAST:
+            clone->expr_data.typecast_data.target_type = expr->expr_data.typecast_data.target_type;
+            clone->expr_data.typecast_data.expr =
+                clone_expression(expr->expr_data.typecast_data.expr);
+            if (expr->expr_data.typecast_data.target_type_id != NULL)
+            {
+                clone->expr_data.typecast_data.target_type_id =
+                    strdup(expr->expr_data.typecast_data.target_type_id);
+                if (clone->expr_data.typecast_data.target_type_id == NULL)
+                {
+                    destroy_expr(clone);
+                    return NULL;
+                }
+            }
+            break;
+        case EXPR_RELOP:
+            clone->expr_data.relop_data.type = expr->expr_data.relop_data.type;
+            clone->expr_data.relop_data.left =
+                clone_expression(expr->expr_data.relop_data.left);
+            clone->expr_data.relop_data.right =
+                clone_expression(expr->expr_data.relop_data.right);
+            break;
+        case EXPR_INUM:
+            clone->expr_data.i_num = expr->expr_data.i_num;
+            break;
+        case EXPR_RNUM:
+            clone->expr_data.r_num = expr->expr_data.r_num;
+            break;
+        case EXPR_STRING:
+            clone->expr_data.string = expr->expr_data.string != NULL ?
+                strdup(expr->expr_data.string) : NULL;
+            if (expr->expr_data.string != NULL && clone->expr_data.string == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+        case EXPR_BOOL:
+            clone->expr_data.bool_value = expr->expr_data.bool_value;
+            break;
+        default:
+            destroy_expr(clone);
+            return NULL;
+    }
+
+    return clone;
+}
+
+int semcheck_with_push(struct Expression *context_expr, struct RecordType *record_type)
+{
+    if (context_expr == NULL || record_type == NULL)
+        return 1;
+    if (ensure_with_capacity() != 0)
+    {
+        fprintf(stderr,
+            "Error: failed to expand WITH context stack for semantic analysis.\n");
+        return -1;
+    }
+
+    with_context_stack[with_context_count].context_expr = context_expr;
+    with_context_stack[with_context_count].record_type = record_type;
+    ++with_context_count;
+    return 0;
+}
+
+void semcheck_with_pop(void)
+{
+    if (with_context_count > 0)
+        --with_context_count;
+}
+
+static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
+    struct Expression *context_expr, int expr_type, int line_num)
+{
+    (void)line_num;
+    if (context_expr == NULL)
+        return NULL;
+
+    if (expr_type == RECORD_TYPE)
+        return context_expr->record_type;
+
+    if (expr_type == POINTER_TYPE)
+    {
+        struct RecordType *record_info = context_expr->record_type;
+        if (record_info == NULL && context_expr->pointer_subtype_id != NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != -1 &&
+                target_node != NULL)
+                record_info = target_node->record_type;
+        }
+        return record_info;
+    }
+
+    return NULL;
+}
+
+struct RecordType *semcheck_with_resolve_record_type(SymTab_t *symtab,
+    struct Expression *context_expr, int expr_type, int line_num)
+{
+    return resolve_record_type_for_with(symtab, context_expr, expr_type, line_num);
+}
+
+int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
+    struct Expression **out_record_expr, int line_num)
+{
+    if (field_id == NULL || out_record_expr == NULL)
+        return 1;
+
+    for (size_t index = with_context_count; index > 0; --index)
+    {
+        WithContextEntry *entry = &with_context_stack[index - 1];
+        if (entry->record_type == NULL)
+            continue;
+
+        struct RecordField *field_desc = NULL;
+        long long offset = 0;
+        if (resolve_record_field(symtab, entry->record_type, field_id,
+                &field_desc, &offset, line_num) == 0 && field_desc != NULL)
+        {
+            struct Expression *clone = clone_expression(entry->context_expr);
+            if (clone == NULL)
+                return -1;
+            *out_record_expr = clone;
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
@@ -1654,8 +1910,30 @@ int semcheck_varid(int *type_return,
     scope_return = FindIdent(&hash_return, symtab, id);
     if(scope_return == -1)
     {
-        fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
-        ++return_val;
+        struct Expression *with_expr = NULL;
+        int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
+        if (with_status == 0 && with_expr != NULL)
+        {
+            char *field_id = expr->expr_data.id;
+            expr->type = EXPR_RECORD_ACCESS;
+            expr->expr_data.record_access_data.record_expr = with_expr;
+            expr->expr_data.record_access_data.field_id = field_id;
+            expr->expr_data.record_access_data.field_offset = 0;
+            return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+
+        if (with_status == -1)
+        {
+            fprintf(stderr,
+                "Error on line %d, unable to resolve WITH context for field \"%s\".\n\n",
+                expr->line_num, id);
+            ++return_val;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
+            ++return_val;
+        }
 
         *type_return = UNKNOWN_TYPE;
     }
