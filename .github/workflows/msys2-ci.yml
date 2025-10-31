@@ -23,7 +23,7 @@ jobs:
       with:
         msystem: ${{ matrix.sys }}
         update: true
-        install: base-devel git flex bison gmp-devel 
+        install: base-devel git flex bison gmp-devel  meson python
         pacboy: >-
           cc:p
           meson:p
