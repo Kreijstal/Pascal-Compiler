@@ -417,13 +417,48 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_WITH:
         {
-            if (stmt->stmt_data.with_data.context_expr != NULL)
+            struct Expression *context_expr = stmt->stmt_data.with_data.context_expr;
+            struct Statement *body_stmt = stmt->stmt_data.with_data.body_stmt;
+            struct RecordType *record_info = NULL;
+            int ctx_type = UNKNOWN_TYPE;
+            int pushed = 0;
+
+            if (context_expr == NULL)
             {
-                int ctx_type = UNKNOWN_TYPE;
-                return_val += semcheck_expr_main(&ctx_type, symtab, stmt->stmt_data.with_data.context_expr, max_scope_lev, NO_MUTATE);
+                fprintf(stderr, "Error on line %d, WITH statement requires a context expression.\\n\\n",
+                    stmt->line_num);
+                ++return_val;
             }
-            if (stmt->stmt_data.with_data.body_stmt != NULL)
-                return_val += semcheck_stmt_main(symtab, stmt->stmt_data.with_data.body_stmt, max_scope_lev);
+            else
+            {
+                return_val += semcheck_expr_main(&ctx_type, symtab, context_expr, max_scope_lev, NO_MUTATE);
+                record_info = semcheck_with_resolve_record_type(symtab, context_expr, ctx_type, stmt->line_num);
+                if (record_info == NULL)
+                {
+                    fprintf(stderr,
+                        "Error on line %d, WITH context must be a record or pointer to a record.\\n\\n",
+                        stmt->line_num);
+                    ++return_val;
+                }
+                else
+                {
+                    context_expr->record_type = record_info;
+                    if (semcheck_with_push(context_expr, record_info) != 0)
+                    {
+                        ++return_val;
+                    }
+                    else
+                    {
+                        pushed = 1;
+                    }
+                }
+            }
+
+            if (body_stmt != NULL)
+                return_val += semcheck_stmt_main(symtab, body_stmt, max_scope_lev);
+
+            if (pushed)
+                semcheck_with_pop();
             break;
         }
 

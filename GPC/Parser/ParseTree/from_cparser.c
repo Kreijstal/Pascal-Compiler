@@ -214,6 +214,9 @@ static struct Expression *convert_member_access(ast_t *node);
 static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
+static struct Statement *build_nested_with_statements(int line,
+                                                      ast_t *context_node,
+                                                      struct Statement *body_stmt);
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
@@ -1643,6 +1646,28 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     return call;
 }
 
+static struct Statement *build_nested_with_statements(int line,
+                                                      ast_t *context_node,
+                                                      struct Statement *body_stmt) {
+    if (context_node == NULL || context_node == ast_nil)
+        return NULL;
+
+    ast_t *next_context = context_node->next;
+    struct Statement *inner_stmt = body_stmt;
+    if (next_context != NULL && next_context != ast_nil) {
+        inner_stmt = build_nested_with_statements(line, next_context, body_stmt);
+        if (inner_stmt == NULL)
+            return NULL;
+    }
+
+    ast_t *unwrapped = unwrap_pascal_node(context_node);
+    struct Expression *expr = convert_expression(unwrapped);
+    if (expr == NULL)
+        return NULL;
+
+    return mk_with(line, expr, inner_stmt);
+}
+
 static struct Statement *convert_statement(ast_t *stmt_node) {
     stmt_node = unwrap_pascal_node(stmt_node);
     if (stmt_node == NULL)
@@ -1730,12 +1755,29 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
     case PASCAL_T_WITH_STMT: {
-        ast_t *expr_node = stmt_node->child;
-        ast_t *body_node = unwrap_pascal_node(expr_node != NULL ? expr_node->next : NULL);
+        ast_t *contexts_wrapper = stmt_node->child;
+        ast_t *body_node = unwrap_pascal_node(contexts_wrapper != NULL ? contexts_wrapper->next : NULL);
 
-        struct Expression *context_expr = convert_expression(expr_node);
         struct Statement *body_stmt = convert_statement(body_node);
-        return mk_with(stmt_node->line, context_expr, body_stmt);
+        if (body_stmt == NULL)
+            return NULL;
+
+        if (contexts_wrapper == NULL)
+            return NULL;
+
+        if (contexts_wrapper->typ != PASCAL_T_WITH_CONTEXTS) {
+            ast_t *single_context = unwrap_pascal_node(contexts_wrapper);
+            struct Expression *context_expr = convert_expression(single_context);
+            if (context_expr == NULL)
+                return NULL;
+            return mk_with(stmt_node->line, context_expr, body_stmt);
+        }
+
+        ast_t *contexts_start = contexts_wrapper->child;
+        if (contexts_start == NULL || contexts_start == ast_nil)
+            return NULL;
+
+        return build_nested_with_statements(stmt_node->line, contexts_start, body_stmt);
     }
     case PASCAL_T_TRY_BLOCK: {
         ListBuilder try_builder;

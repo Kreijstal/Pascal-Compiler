@@ -204,11 +204,16 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
 
     bool in_string = false;
     char string_delim = '\0';
+    bool in_brace_comment = false;
+    bool in_paren_comment = false;
+    bool in_line_comment = false;
 
     for (size_t i = 0; i < length; ++i) {
         char c = input[i];
 
-        if (!in_string) {
+        bool in_comment = in_brace_comment || in_paren_comment || in_line_comment;
+
+        if (!in_string && !in_comment) {
             if (c == '{' && i + 1 < length && input[i + 1] == '$') {
                 if (!handle_directive(pp, filename, input, length, &i, false, conditions, output, depth, error_message)) {
                     return false;
@@ -221,20 +226,42 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                 }
                 continue;
             }
-            if (c == '\'' || c == '"') {
-                in_string = true;
-                string_delim = c;
+        }
+
+        if (in_line_comment) {
+            if (c == '\n') {
+                in_line_comment = false;
+            } else if (c == '\r' && i + 1 < length && input[i + 1] == '\n') {
+                in_line_comment = false;
+                if (current_branch_active(conditions)) {
+                    if (!string_builder_append_char(output, c)) {
+                        return set_error(error_message, "out of memory");
+                    }
+                    if (!string_builder_append_char(output, '\n')) {
+                        return set_error(error_message, "out of memory");
+                    }
+                } else {
+                    if (!string_builder_append_char(output, '\n')) {
+                        return set_error(error_message, "out of memory");
+                    }
+                }
+                ++i;
+                continue;
             }
-        } else {
+        } else if (in_brace_comment) {
+            if (c == '}') {
+                in_brace_comment = false;
+            }
+        } else if (in_paren_comment) {
+            if (c == '*' && i + 1 < length && input[i + 1] == ')') {
+                in_paren_comment = false;
+            }
+        } else if (in_string) {
             if (c == string_delim) {
                 if (string_delim == '\'' && i + 1 < length && input[i + 1] == '\'') {
                     // Escaped single quote in Pascal string literal
                     if (current_branch_active(conditions)) {
                         if (!string_builder_append_char(output, c)) {
-                            return set_error(error_message, "out of memory");
-                        }
-                    } else if (c == '\n') {
-                        if (!string_builder_append_char(output, '\n')) {
                             return set_error(error_message, "out of memory");
                         }
                     }
@@ -244,6 +271,17 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                     in_string = false;
                     string_delim = '\0';
                 }
+            }
+        } else {
+            if (c == '{') {
+                in_brace_comment = true;
+            } else if (c == '(' && i + 1 < length && input[i + 1] == '*') {
+                in_paren_comment = true;
+            } else if (c == '/' && i + 1 < length && input[i + 1] == '/') {
+                in_line_comment = true;
+            } else if (c == '\'' || c == '"') {
+                in_string = true;
+                string_delim = c;
             }
         }
 

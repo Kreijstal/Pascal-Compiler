@@ -1092,6 +1092,28 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("call\tgpc_move", asm_source)
         self.assertIn("call\tsucc_i", asm_source)
 
+    def test_with_nested_multi_context_program(self):
+        """Ensures nested and multi-context with statements compile and run."""
+        input_file = os.path.join(
+            TEST_CASES_DIR, "with_nested_multi_context.p"
+        )
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "with_nested_multi_context.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "with_nested_multi_context")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "6\n13\n57\n")
+        self.assertEqual(result.returncode, 0)
+
     def test_fizzbuzz(self):
         """Tests the fizzbuzz program."""
         input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
