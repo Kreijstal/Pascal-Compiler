@@ -29,8 +29,8 @@ echo ""
 
 # Install required packages
 echo "Installing MSYS2 packages (this may take 10-30 minutes)..."
-echo "Packages: gcc, gmp, flex, bison"
-make install _gcc _gmp _flex _bison
+echo "Packages: gcc, gmp, flex"
+make install _gcc _gmp _libunwind
 
 echo ""
 echo "=== Configuring cross-compilation build ==="
