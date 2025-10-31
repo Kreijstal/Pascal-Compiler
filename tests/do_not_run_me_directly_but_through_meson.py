@@ -663,32 +663,6 @@ class TestCompiler(unittest.TestCase):
             expected_output.strip().splitlines(),
         )
 
-    def test_deeply_nested_procedure_access(self):
-        """Nested procedures should access variables from multiple outer scopes."""
-        input_file, asm_file, executable_file = self._get_test_paths(
-            "deeply_nested_procedure"
-        )
-
-        run_compiler(input_file, asm_file)
-        self.compile_executable(asm_file, executable_file)
-
-        result = subprocess.run(
-            [executable_file],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-        )
-
-        expected_path = os.path.join(
-            TEST_CASES_DIR, "deeply_nested_procedure.expected"
-        )
-        expected_output = read_file_content(expected_path)
-        self.assertEqual(
-            result.stdout.strip().splitlines(),
-            expected_output.strip().splitlines(),
-        )
-
     def test_bitshift_codegen_emits_rotate_instructions(self):
         """Code generation should emit rotate instructions for ROL and ROR expressions."""
         input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr.p")
@@ -1037,30 +1011,6 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
         self.assertEqual(process.stdout, "5\n6\n7\n8\n")
 
-    def test_set_operations_program(self):
-        """Exercises set arithmetic, membership, and boolean conditions."""
-        input_file = os.path.join(TEST_CASES_DIR, "set_operations.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "set_operations.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "set_operations")
-
-        run_compiler(input_file, asm_file)
-        self.compile_executable(asm_file, executable_file)
-
-        expected_output = read_file_content(
-            os.path.join(TEST_CASES_DIR, "set_operations.expected")
-        )
-
-        result = subprocess.run(
-            [executable_file],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-        )
-
-        self.assertEqual(result.stdout, expected_output)
-        self.assertEqual(result.returncode, 0)
-
     def test_record_type_declaration(self):
         """Tests that a program declaring a record type compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
@@ -1083,30 +1033,6 @@ class TestCompiler(unittest.TestCase):
             self.assertEqual(process.returncode, 0)
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
-
-    def test_record_member_access(self):
-        """Tests that record field loads and stores compile and execute."""
-        input_file = os.path.join(TEST_CASES_DIR, "record_member_access.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_member_access")
-        expected_output_file = os.path.join(
-            TEST_CASES_DIR, "record_member_access.expected"
-        )
-
-        run_compiler(input_file, asm_file)
-        self.compile_executable(asm_file, executable_file)
-
-        expected_output = read_file_content(expected_output_file)
-        result = subprocess.run(
-            [executable_file],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-        )
-
-        self.assertEqual(result.stdout, expected_output)
-        self.assertEqual(result.returncode, 0)
 
     def test_record_reference_features(self):
         """Exercises record assignment, address-of, and var parameter support."""
@@ -1173,54 +1099,6 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "6\n13\n57\n")
         self.assertEqual(result.returncode, 0)
-
-    def test_fizzbuzz(self):
-        """Tests the fizzbuzz program."""
-        input_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "fizzbuzz")
-        expected_output_file = os.path.join(TEST_CASES_DIR, "fizzbuzz.expected")
-
-        # Compile the pascal program to assembly
-        run_compiler(input_file, asm_file)
-
-        # Compile the assembly to an executable
-        self.compile_executable(asm_file, executable_file)
-
-        # Run the executable and check the output
-        try:
-            process = subprocess.run(
-                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
-            )
-            expected_output = read_file_content(expected_output_file)
-            self.assertEqual(process.stdout, expected_output)
-            self.assertEqual(process.returncode, 0)
-        except subprocess.TimeoutExpired:
-            self.fail("Test execution timed out.")
-
-    def test_function_call_no_parens(self):
-        """Tests function calls without parentheses (zero-argument functions)."""
-        input_file = os.path.join(TEST_CASES_DIR, "function_call_no_parens.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "function_call_no_parens.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "function_call_no_parens")
-        expected_output_file = os.path.join(TEST_CASES_DIR, "function_call_no_parens.expected")
-
-        # Compile the pascal program to assembly
-        run_compiler(input_file, asm_file)
-
-        # Compile the assembly to an executable
-        self.compile_executable(asm_file, executable_file)
-
-        # Run the executable and check the output
-        try:
-            process = subprocess.run(
-                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
-            )
-            expected_output = read_file_content(expected_output_file)
-            self.assertEqual(process.stdout, expected_output)
-            self.assertEqual(process.returncode, 0)
-        except subprocess.TimeoutExpired:
-            self.fail("Test execution timed out.")
 
     def test_mod_operator(self):
         """Tests that the mod operator works correctly."""
@@ -1533,34 +1411,72 @@ class TestCompiler(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     self.fail("Test execution timed out.")
 
-    def test_nested_procedure_parent_vars(self):
-        """Tests that nested procedures can access parent scope variables using static links."""
-        input_file = os.path.join(TEST_CASES_DIR, "nested_procedure_parent_vars.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "nested_procedure_parent_vars.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "nested_procedure_parent_vars")
-        expected_output_file = os.path.join(TEST_CASES_DIR, "nested_procedure_parent_vars.expected")
 
-        # Compile the Pascal program to assembly
-        run_compiler(input_file, asm_file)
+def _discover_and_add_auto_tests():
+    """
+    Auto-discover test cases based on .p files with corresponding .expected files.
+    Dynamically adds test methods to TestCompiler class.
+    """
+    if not os.path.isdir(TEST_CASES_DIR):
+        return
+    
+    # Find all .expected files
+    expected_files = []
+    for filename in os.listdir(TEST_CASES_DIR):
+        if filename.endswith('.expected'):
+            base_name = filename[:-9]  # Remove '.expected'
+            pascal_file = os.path.join(TEST_CASES_DIR, base_name + '.p')
+            if os.path.isfile(pascal_file):
+                expected_files.append(base_name)
+    
+    # Sort to ensure consistent test ordering
+    expected_files.sort()
+    
+    # For each discovered test, create a test method
+    for base_name in expected_files:
+        # Create a safe method name (replace hyphens and other chars with underscores)
+        method_name = 'test_auto_' + base_name.replace('-', '_').replace(' ', '_')
+        
+        # Skip if this test is already manually defined
+        if hasattr(TestCompiler, method_name):
+            continue
+        
+        # Create the test method using a closure to capture base_name
+        def make_test_method(test_base_name):
+            def test_method(self):
+                """Auto-discovered test case."""
+                input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
+                expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
 
-        # Compile the assembly to an executable
-        self.compile_executable(asm_file, executable_file)
+                # Compile the pascal program to assembly
+                run_compiler(input_file, asm_file)
 
-        # Run the executable and capture output
-        result = subprocess.run(
-            [executable_file],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-        )
+                # Compile the assembly to an executable
+                self.compile_executable(asm_file, executable_file)
 
-        # Read expected output
-        expected_output = read_file_content(expected_output_file)
+                # Run the executable and check the output
+                try:
+                    process = subprocess.run(
+                        [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
+                    )
+                    expected_output = read_file_content(expected_output_file)
+                    self.assertEqual(process.stdout, expected_output)
+                    self.assertEqual(process.returncode, 0)
+                except subprocess.TimeoutExpired:
+                    self.fail(f"Test {test_base_name} execution timed out.")
+            
+            test_method.__name__ = method_name
+            test_method.__doc__ = f"Auto-discovered test case for {test_base_name}.p"
+            return test_method
+        
+        # Add the test method to the TestCompiler class
+        setattr(TestCompiler, method_name, make_test_method(base_name))
 
-        # Verify the output matches expected
-        self.assertEqual(result.stdout, expected_output)
-        self.assertEqual(result.returncode, 0)
+
+# Auto-discover and add tests before loading the suite
+_discover_and_add_auto_tests()
 
 
 def _load_suite():
