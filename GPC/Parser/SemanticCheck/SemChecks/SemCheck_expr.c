@@ -1957,10 +1957,15 @@ int semcheck_varid(int *type_return,
     else
     {
         /* If this is a function being used in an expression context (not being assigned to),
-           convert it to a function call with no arguments */
+           convert it to a function call with no arguments.
+           
+           When mutating == NO_MUTATE, we're reading the function's return value.
+           When mutating != NO_MUTATE, we're inside the function assigning to its return value,
+           which should remain as HASHTYPE_FUNCTION_RETURN access. */
         if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE)
         {
             char *func_id = expr->expr_data.id;
+            /* Set to NULL to transfer ownership to function_call_data.id and avoid double-free */
             expr->expr_data.id = NULL;
             
             expr->type = EXPR_FUNCTION_CALL;
