@@ -826,6 +826,29 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "42\n42\n")
 
+    def test_pointer_simple_program(self):
+        """Compiles and runs a program that assigns NIL to a typed pointer."""
+        input_file = os.path.join(TEST_CASES_DIR, "pointer_simple.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple")
+
+        run_compiler(input_file, asm_file)
+        self.assertTrue(os.path.exists(asm_file))
+        self.assertGreater(os.path.getsize(asm_file), 0)
+
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
     def test_type_alias_parameters_accept_new_categories(self):
         """Type aliases used in parameter lists should accept char/pointer/set/enum/file arguments."""
         input_file = os.path.join(TEST_CASES_DIR, "type_alias_parameter_calls.p")

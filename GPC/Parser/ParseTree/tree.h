@@ -262,6 +262,8 @@ struct Expression *mk_string(int line_num, char *string);
 
 struct Expression *mk_bool(int line_num, int value);
 
+struct Expression *mk_nil(int line_num);
+
 struct SetElement *mk_set_element(struct Expression *lower, struct Expression *upper);
 void destroy_set_element(struct SetElement *element);
 struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elements, int is_constant);

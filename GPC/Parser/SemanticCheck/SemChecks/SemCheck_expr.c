@@ -247,6 +247,8 @@ static struct Expression *clone_expression(const struct Expression *expr)
         case EXPR_BOOL:
             clone->expr_data.bool_value = expr->expr_data.bool_value;
             break;
+        case EXPR_NIL:
+            break;
         default:
             destroy_expr(clone);
             return NULL;
@@ -1616,6 +1618,10 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_BOOL:
             *type_return = BOOL;
+            break;
+        case EXPR_NIL:
+            *type_return = POINTER_TYPE;
+            semcheck_clear_pointer_info(expr);
             break;
         case EXPR_SET:
             *type_return = SET_TYPE;
