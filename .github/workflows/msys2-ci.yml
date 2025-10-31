@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sys: [MINGW64, UCRT64, CLANG64]
+        sys: [MSYS, MINGW64, UCRT64, CLANG64]
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
@@ -23,16 +23,17 @@ jobs:
       with:
         msystem: ${{ matrix.sys }}
         update: true
-        install: base-devel git flex bison
+        install: base-devel git flex bison gmp-devel
         pacboy: >-
-          cc:p
+          ${{ matrix.sys != 'MSYS' && 'cc:p' || 'gcc' }}
           meson:p
           ninja:p
           python:p
+          gmp:p
 
     - name: Configure build
       shell: msys2 {0}
-      run: meson setup builddir --buildtype=release
+      run: meson setup builddir --buildtype=release -Dwith_gmp=enabled
 
     - name: Build
       shell: msys2 {0}
@@ -41,3 +42,11 @@ jobs:
     - name: Run tests
       shell: msys2 {0}
       run: meson test -v -C builddir
+
+    - name: Upload meson logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs-${{ matrix.sys }}
+        path: builddir/meson-logs/
+        if-no-files-found: ignore

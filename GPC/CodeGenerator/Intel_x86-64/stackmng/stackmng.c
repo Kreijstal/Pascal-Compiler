@@ -61,8 +61,11 @@ int get_full_stack_offset()
 
     scope = global_stackmng->cur_scope;
 
-    actual_offset = current_stack_home_space() +
-                        scope->t_offset + scope->x_offset + scope->z_offset;
+    /* On Windows x64, we need to reserve shadow space at the top of the frame */
+    /* The shadow space is reserved for the callee to spill register arguments */
+    /* Locals should be placed below the shadow space */
+    /* Total stack space needed = locals_size + shadow_space_size */
+    actual_offset = scope->t_offset + scope->x_offset + scope->z_offset + current_stack_home_space();
 
     /* x86_64 requires stack offsets to avoid undefined behavior */
     div = actual_offset / REQUIRED_OFFSET;
@@ -125,8 +128,11 @@ StackNode_t *add_l_t(char *label)
     cur_scope->t_offset = align_up(cur_scope->t_offset, temp_size);
     cur_scope->t_offset += temp_size;
 
-    offset = current_stack_home_space() +
-        cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    /* Locals are placed below the shadow space */
+    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
+    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
+    /* Locals should be at offsets more negative than RBP-32 */
+    offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
 
     new_node = init_stack_node(offset, label, temp_size);
 
@@ -169,8 +175,11 @@ StackNode_t *add_l_x(char *label, int size)
 
     cur_scope->x_offset += aligned_size;
 
-    offset = current_stack_home_space() +
-        cur_scope->z_offset + cur_scope->x_offset;
+    /* Locals are placed below the shadow space */
+    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
+    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
+    /* Locals should be at offsets more negative than RBP-32 */
+    offset = cur_scope->z_offset + cur_scope->x_offset;
 
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
@@ -202,8 +211,11 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
 
     cur_scope->x_offset += total_size;
 
-    int offset = current_stack_home_space() +
-        cur_scope->z_offset + cur_scope->x_offset;
+    /* Locals are placed below the shadow space */
+    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
+    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
+    /* Locals should be at offsets more negative than RBP-32 */
+    int offset = cur_scope->z_offset + cur_scope->x_offset;
 
     StackNode_t *new_node = init_stack_node(offset, label, total_size);
     new_node->is_array = 1;
@@ -242,8 +254,11 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound)
 
     cur_scope->x_offset += descriptor_size;
 
-    int offset = current_stack_home_space() +
-        cur_scope->z_offset + cur_scope->x_offset;
+    /* Locals are placed below the shadow space */
+    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
+    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
+    /* Locals should be at offsets more negative than RBP-32 */
+    int offset = cur_scope->z_offset + cur_scope->x_offset;
 
     StackNode_t *new_node = init_stack_node(offset, label, descriptor_size);
     new_node->is_array = 1;
@@ -283,8 +298,11 @@ StackNode_t *add_l_z(char *label)
 
     cur_scope->z_offset += DOUBLEWORD;
 
-    offset = current_stack_home_space() +
-        cur_scope->z_offset;
+    /* Arguments are placed below the shadow space */
+    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
+    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
+    /* Arguments should be at offsets more negative than RBP-32 */
+    offset = cur_scope->z_offset;
 
     new_node = init_stack_node(offset, label, DOUBLEWORD);
 
@@ -320,8 +338,11 @@ StackNode_t *add_q_z(char *label)
 
     cur_scope->z_offset += 8;  // quadword size
 
-    offset = current_stack_home_space() +
-        cur_scope->z_offset;
+    /* Arguments are placed below the shadow space */
+    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
+    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
+    /* Arguments should be at offsets more negative than RBP-32 */
+    offset = cur_scope->z_offset;
 
     new_node = init_stack_node(offset, label, 8);
 

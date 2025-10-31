@@ -28,6 +28,18 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
 
+static int align_to_multiple(int value, int alignment)
+{
+    if (alignment <= 0)
+        return value;
+
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+
+    return value + (alignment - remainder);
+}
+
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
 {
     va_list args;
@@ -315,16 +327,21 @@ void codegen_rodata(CodeGenContext *ctx)
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(ctx != NULL);
-    if (codegen_target_is_windows())
-        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
-    else
-        fprintf(ctx->output_file, "\t.section\t.rodata\n");
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     fprintf(ctx->output_file, ".format_str_s:\n");
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
     fprintf(ctx->output_file, ".string \"%%d\"\n");
     fprintf(ctx->output_file, ".format_str_lld:\n");
-    fprintf(ctx->output_file, ".string \"%%ld\"\n");
+    if (codegen_target_is_windows())
+    {
+        fprintf(ctx->output_file, ".string \"%%lld\"\n");
+    }
+    else
+    {
+        fprintf(ctx->output_file, ".string \"%%ld\"\n");
+    }
+  
     fprintf(ctx->output_file, ".format_str_sn:\n");
     fprintf(ctx->output_file, ".string \"%%s\\n\"\n");
     fprintf(ctx->output_file, ".format_str_dn:\n");
@@ -346,10 +363,7 @@ void codegen_program_header(const char *fname, CodeGenContext *ctx)
     assert(fname != NULL);
     assert(ctx != NULL);
     fprintf(ctx->output_file, "\t.file\t\"%s\"\n", fname);
-    if (codegen_target_is_windows())
-        fprintf(ctx->output_file, "\t.section\t.rdata,\"dr\"\n");
-    else
-        fprintf(ctx->output_file, "\t.section\t.rodata\n");
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
     fprintf(ctx->output_file, "\t.text\n");
     fprintf(ctx->output_file, "\t.set\tGPC_TARGET_WINDOWS, %d\n", codegen_target_is_windows());
@@ -367,9 +381,15 @@ void codegen_program_footer(CodeGenContext *ctx)
     #endif
     assert(ctx != NULL);
     if (codegen_target_is_windows())
-        fprintf(ctx->output_file, ".ident\t\"GPC: 0.0.0\"\n");
+    {
+        /* The COFF/PE assembler does not support .ident; omit it on Windows. */
+    }
     else
+    {
+        fprintf(ctx->output_file, "\t.section\t.comment\n");
+        fprintf(ctx->output_file, "\t.string\t\"GPC: 0.0.0\"\n");
         fprintf(ctx->output_file, "\t.section\t.note.GNU-stack,\"\",@progbits\n");
+    }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -415,27 +435,11 @@ void codegen_stack_space(CodeGenContext *ctx)
     needed_space = get_full_stack_offset();
     assert(needed_space >= 0);
 
-    if (codegen_target_is_windows())
+    int aligned_space = align_to_multiple(needed_space, REQUIRED_OFFSET);
+
+    if(aligned_space != 0)
     {
-        // On Windows, after pushing %rbp, the stack is 8 bytes off 16-byte alignment
-        // We need to make sure the total stack space allocated is (16 * N) - 8
-        // So that RSP is 16-byte aligned before calls
-        int aligned_space = 0;
-        if (needed_space > 0)
-        {
-            aligned_space = ((needed_space + 8 + 15) / 16) * 16 - 8;
-        }
-        if (aligned_space > 0)
-        {
-            fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
-        }
-    }
-    else
-    {
-        if(needed_space != 0)
-        {
-            fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", needed_space);
-        }
+        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
     }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
