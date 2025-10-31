@@ -51,6 +51,24 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *
     return add_inst(inst_list, buffer);
 }
 
+static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t *reg,
+    int type_tag, int offset)
+{
+    if (inst_list == NULL || reg == NULL)
+        return inst_list;
+
+    const char *reg_name = select_register_name(reg, type_tag);
+    if (reg_name == NULL)
+        return inst_list;
+
+    char buffer[64];
+    if (codegen_type_uses_qword(type_tag))
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg_name);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", offset, reg_name);
+    return add_inst(inst_list, buffer);
+}
+
 static ListNode_t *gencode_real_binary_op(const char *left_operand,
     const char *right_operand, const char *dest, ListNode_t *inst_list,
     const char *sse_mnemonic)
@@ -656,12 +674,22 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         else
         {
-            inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-            inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
-            const char *target_name = select_register_name(target_reg, expr->resolved_type);
-            const char *rhs_name = select_register_name(rhs_reg, expr->resolved_type);
-            inst_list = gencode_op(expr, target_name, rhs_name, inst_list);
-            free_reg(get_reg_stack(), rhs_reg);
+        StackNode_t *lhs_spill = find_in_temp("binop_lhs_temp");
+        if (lhs_spill == NULL)
+            lhs_spill = add_l_t("binop_lhs_temp");
+
+        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = emit_store_to_stack(inst_list, target_reg, expr->resolved_type,
+            lhs_spill->offset);
+
+        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
+        inst_list = emit_load_from_stack(inst_list, target_reg, expr->resolved_type,
+            lhs_spill->offset);
+
+        const char *target_name = select_register_name(target_reg, expr->resolved_type);
+        const char *rhs_name = select_register_name(rhs_reg, expr->resolved_type);
+        inst_list = gencode_op(expr, target_name, rhs_name, inst_list);
+        free_reg(get_reg_stack(), rhs_reg);
         }
         return inst_list;
     }
@@ -1008,6 +1036,18 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 snprintf(buffer, 50, "\tpushq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
 
+                StackNode_t *quot_spill = find_in_temp("div_quot");
+                if (quot_spill == NULL)
+                {
+                    /*
+                     * Reuse a shared temporary for quotient values so repeated
+                     * divisions do not keep extending the stack frame. The
+                     * slot is sized for pointer-width values, which safely
+                     * covers both 32-bit and 64-bit integer results.
+                     */
+                    quot_spill = add_l_t("div_quot");
+                }
+
 
                 if (use_qword_op)
                 {
@@ -1019,7 +1059,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                    snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", left);
+                    snprintf(buffer, 50, "\tmovq\t%%rax, -%d(%%rbp)\n", quot_spill->offset);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 else
@@ -1036,7 +1076,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
 
-                    snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", div_left);
+                    snprintf(buffer, 50, "\tmovl\t%%eax, -%d(%%rbp)\n", quot_spill->offset);
                     inst_list = add_inst(inst_list, buffer);
                 }
 
@@ -1044,6 +1084,26 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tpopq\t%%rax\n");
                 inst_list = add_inst(inst_list, buffer);
+
+                if (use_qword_op)
+                {
+                    snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", quot_spill->offset, left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    char left32[16];
+                    const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
+                    /* The stack spill stores the quotient truncated to 32 bits
+                     * when operating on INTEGER operands. Reload using the
+                     * register's 32-bit view so the lower half is populated
+                     * without disturbing neighbouring temporaries. Follow-up
+                     * integer instructions continue to address the value via
+                     * the 32-bit name, preserving the signed result.
+                     */
+                    snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", quot_spill->offset, div_left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             else if(type == MOD)
             {

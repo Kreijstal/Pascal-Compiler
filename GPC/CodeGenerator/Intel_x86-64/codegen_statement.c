@@ -969,21 +969,11 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
-        /* Allocate shadow space for Windows x64 calling convention and align stack */
-        if (codegen_target_is_windows())
-        {
-            inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
-        }
-        
+        /* Stack frames reserve the Windows shadow space up front, so the
+         * builtin calls can use it directly without adjusting %rsp. */
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
         inst_list = add_inst(inst_list, buffer);
-        
-        /* Restore stack after shadow space allocation */
-        if (codegen_target_is_windows())
-        {
-            inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
-        }
-        
+
         free_arg_regs();
 
         args = args->next;
@@ -992,21 +982,10 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     if (append_newline)
     {
         inst_list = codegen_vect_reg(inst_list, 0);
-        
-        /* Allocate shadow space for Windows x64 calling convention and align stack */
-        if (codegen_target_is_windows())
-        {
-            inst_list = add_inst(inst_list, "\tsubq\t$40, %rsp\n");
-        }
-        
+
+        /* Newline is emitted via the runtime helper using the reserved shadow space. */
         inst_list = add_inst(inst_list, "\tcall\tgpc_write_newline\n");
-        
-        /* Restore stack after shadow space allocation */
-        if (codegen_target_is_windows())
-        {
-            inst_list = add_inst(inst_list, "\taddq\t$40, %rsp\n");
-        }
-        
+
         free_arg_regs();
     }
 
@@ -1175,6 +1154,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = (var->size >= 8);
+            if (use_qword && assign_expr != NULL &&
+                !codegen_type_uses_qword(assign_expr->resolved_type))
+            {
+                inst_list = codegen_sign_extend32_to64(inst_list,
+                    reg->bit_32, reg->bit_64);
+            }
             if (use_qword)
                 snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
             else
@@ -1550,10 +1535,11 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    int relop_type;
-    struct Expression *expr, *for_var, *comparison_expr, *update_expr, *one_expr;
-    struct Statement *for_body, *for_assign, *update_stmt;
-    char cond_label[18], body_label[18], exit_label[18], buffer[50];
+    struct Expression *expr, *for_var, *update_expr = NULL, *one_expr = NULL;
+    struct Statement *for_body, *for_assign, *update_stmt = NULL;
+    Register_t *limit_reg = NULL;
+    char cond_label[18], body_label[18], exit_label[18], buffer[128];
+    StackNode_t *limit_temp = NULL;
 
     gen_label(cond_label, 18, ctx);
     gen_label(body_label, 18, ctx);
@@ -1572,39 +1558,92 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
     }
 
-    assert(for_var->type == EXPR_VAR_ID);
-    comparison_expr = mk_relop(-1, LE, for_var, expr);
+    if (for_var == NULL)
+        return inst_list;
+
     one_expr = mk_inum(-1, 1);
     update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     update_stmt = mk_varassign(-1, for_var, update_expr);
+
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &limit_reg);
+    if (codegen_had_error(ctx) || limit_reg == NULL)
+        goto cleanup;
+
+    limit_temp = find_in_temp("for_to_temp");
+    if (limit_temp == NULL)
+        limit_temp = add_l_t("for_to_temp");
+
+    const int limit_is_qword = codegen_type_uses_qword(expr->resolved_type);
+    if (limit_is_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", limit_reg->bit_64, limit_temp->offset);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", limit_reg->bit_32, limit_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), limit_reg);
+    limit_reg = NULL;
 
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
     if (!codegen_push_loop_exit(ctx, exit_label))
-    {
-        free(comparison_expr);
-        free(one_expr);
-        free(update_expr);
-        free(update_stmt);
-        return inst_list;
-    }
+        goto cleanup;
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
     codegen_pop_loop_exit(ctx);
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = codegen_condition_expr(comparison_expr, inst_list, ctx, &relop_type);
 
-    inst_list = gencode_jmp(relop_type, 0, body_label, inst_list);
+    Register_t *loop_value_reg = NULL;
+    inst_list = codegen_evaluate_expr(for_var, inst_list, ctx, &loop_value_reg);
+    if (codegen_had_error(ctx) || loop_value_reg == NULL)
+        goto cleanup;
+
+    limit_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (limit_reg == NULL)
+    {
+        free_reg(get_reg_stack(), loop_value_reg);
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for for-loop bound.");
+        goto cleanup;
+    }
+
+    if (limit_is_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", limit_temp->offset, limit_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", limit_temp->offset, limit_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    const int var_is_qword = codegen_type_uses_qword(for_var->resolved_type);
+    const int compare_as_qword = var_is_qword || limit_is_qword;
+    if (compare_as_qword && !limit_is_qword)
+        inst_list = codegen_sign_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_64);
+    if (compare_as_qword && !var_is_qword)
+        inst_list = codegen_sign_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_64);
+
+    const char *cmp_instr = compare_as_qword ? "cmpq" : "cmpl";
+    const char *limit_cmp_reg = compare_as_qword ? limit_reg->bit_64 : limit_reg->bit_32;
+    const char *loop_cmp_reg = compare_as_qword ? loop_value_reg->bit_64 : loop_value_reg->bit_32;
+    snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", cmp_instr, limit_cmp_reg, loop_cmp_reg);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), loop_value_reg);
+    free_reg(get_reg_stack(), limit_reg);
+    limit_reg = NULL;
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
 
-    free(comparison_expr);
+cleanup:
+    if (limit_reg != NULL)
+        free_reg(get_reg_stack(), limit_reg);
     free(one_expr);
     free(update_expr);
     free(update_stmt);

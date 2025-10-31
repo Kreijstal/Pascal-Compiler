@@ -1233,6 +1233,9 @@ class TestCompiler(unittest.TestCase):
         expected_output_lines = [
             "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n",
             "         gerade       ungerade       Positive       Negative\n",
+            "              4              3              4             -7\n",
+            "              0             -7              3               \n",
+            "             12                             0               \n",
             "Gerade Zahlen\n",
             "4 0 12 \n",
             "Ungerade Zahlen\n",
@@ -1280,6 +1283,27 @@ class TestCompiler(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     self.fail("Test execution timed out.")
 
+    def test_division_widths(self):
+        """Ensure integer division spills are reused for 32-bit and 64-bit operands."""
+
+        input_file = "tests/test_cases/division_widths.p"
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "division_widths.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "division_widths")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_output = "-6\n-3074457345618258600\n"
+
+        self.assertEqual(process.stdout, expected_output)
+        self.assertEqual(process.returncode, 0)
 
 
 def _load_suite():

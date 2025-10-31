@@ -1495,6 +1495,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     Register_t *top_reg;
     char buffer[50];
     const char *arg_reg_char;
+    const char *arg_reg32_char;
     expr_node_t *expr_tree;
 
     assert(ctx != NULL);
@@ -1508,6 +1509,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         Register_t *reg;
         StackNode_t *spill;
         struct Expression *expr;
+        int use_qword;
     } ArgInfo;
 
     int total_args = 0;
@@ -1556,6 +1558,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                 arg_infos[arg_num].reg = addr_reg;
                 arg_infos[arg_num].spill = NULL;
                 arg_infos[arg_num].expr = arg_expr;
+                arg_infos[arg_num].use_qword = 1;
             }
         }
         else
@@ -1572,6 +1575,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                 arg_infos[arg_num].reg = top_reg;
                 arg_infos[arg_num].spill = NULL;
                 arg_infos[arg_num].expr = arg_expr;
+                arg_infos[arg_num].use_qword = expression_uses_qword(arg_expr);
             }
         }
 
@@ -1583,8 +1587,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 
     for (int i = arg_num - 1; i >= 0; --i)
     {
+        int use_qword = arg_infos != NULL ? arg_infos[i].use_qword : 1;
+
         arg_reg_char = get_arg_reg64_num(i);
-        if (arg_reg_char == NULL)
+        arg_reg32_char = use_qword ? NULL : get_arg_reg32_num(i);
+        if (arg_reg_char == NULL || (!use_qword && arg_reg32_char == NULL))
         {
             fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
             exit(1);
@@ -1598,8 +1605,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                     strcmp(arg_infos[j].reg->bit_64, arg_reg_char) == 0)
                 {
                     StackNode_t *spill = add_l_t("arg_spill");
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                        arg_infos[j].reg->bit_64, spill->offset);
+                    const char *spill_src = arg_infos[j].use_qword ?
+                        arg_infos[j].reg->bit_64 : arg_infos[j].reg->bit_32;
+                    const char *spill_op = arg_infos[j].use_qword ? "movq" : "movl";
+                    snprintf(buffer, sizeof(buffer), "\t%s\t%s, -%d(%%rbp)\n",
+                        spill_op, spill_src, spill->offset);
                     inst_list = add_inst(inst_list, buffer);
                     free_reg(get_reg_stack(), arg_infos[j].reg);
                     arg_infos[j].reg = NULL;
@@ -1610,16 +1620,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 
         Register_t *stored_reg = arg_infos != NULL ? arg_infos[i].reg : NULL;
         struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
+        const char *mov_op = use_qword ? "movq" : "movl";
+        const char *dest_reg = use_qword ? arg_reg_char : arg_reg32_char;
+
         if (stored_reg != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
+            const char *src_reg = use_qword ? stored_reg->bit_64 : stored_reg->bit_32;
+            snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", mov_op, src_reg, dest_reg);
             inst_list = add_inst(inst_list, buffer);
             free_reg(get_reg_stack(), stored_reg);
         }
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                arg_infos[i].spill->offset, arg_reg_char);
+            snprintf(buffer, sizeof(buffer), "\t%s\t-%d(%%rbp), %s\n",
+                mov_op, arg_infos[i].spill->offset, dest_reg);
             inst_list = add_inst(inst_list, buffer);
         }
         else
