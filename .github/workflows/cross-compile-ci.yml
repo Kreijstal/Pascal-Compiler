@@ -1,0 +1,100 @@
+name: Cross-Compilation CI (Wine + quasi-msys2)
+
+on:
+  pull_request:
+    branches: [ "*" ]
+  push:
+    branches: [ "*" ]
+
+jobs:
+  cross-compile-windows:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        msystem: [UCRT64, MINGW64]
+    
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y make wget tar zstd gawk gpg gpgv wine wine64 flex bison
+        sudo apt-get install -y llvm clang lld
+        pip install meson ninja
+
+    - name: Clone quasi-msys2
+      run: |
+        git clone https://github.com/HolyBlackCat/quasi-msys2.git
+        cd quasi-msys2
+        echo "${{ matrix.msystem }}" > msystem.txt
+
+    - name: Install MSYS2 packages via quasi-msys2
+      run: |
+        cd quasi-msys2
+        # Install GCC, GMP, and other required packages
+        make install _gcc _gmp _meson _ninja _python 
+      timeout-minutes: 30
+
+    - name: Configure build environment
+      run: |
+        cd quasi-msys2
+        # Source the environment to set up cross-compilation
+        bash -c 'source env/vars.src && env | grep -E "^(CC|CXX|AR|RANLIB|PKG_CONFIG|PATH|MSYSTEM)" > ../cross_env.txt'
+        cat ../cross_env.txt
+
+    - name: Configure build with Meson
+      run: |
+        cd quasi-msys2
+        bash -c 'source env/all.src && cd .. && meson setup builddir-cross'
+      continue-on-error: false
+
+    - name: Build
+      if: success()
+      run: |
+        cd quasi-msys2
+        bash -c 'source env/all.src && cd .. && meson compile -C builddir-cross'
+      continue-on-error: true
+
+    - name: Check build outputs
+      if: always()
+      run: |
+        echo "=== Checking for build outputs ==="
+        if [ -d builddir-cross ]; then
+          find builddir-cross -name "*.exe" -o -name "gpc" | head -20
+          ls -lh builddir-cross/GPC/ || true
+        else
+          echo "Build directory not created"
+        fi
+
+    - name: Run tests with Wine
+      if: success()
+      run: |
+        cd quasi-msys2
+        bash -c 'source env/all.src && cd .. && meson test -C builddir-cross'
+      continue-on-error: true
+
+    - name: Upload meson logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs-cross-${{ matrix.msystem }}
+        path: builddir-cross/meson-logs/
+        if-no-files-found: ignore
+
+    - name: Upload cross-compiled binaries
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: gpc-cross-${{ matrix.msystem }}
+        path: |
+          builddir-cross/GPC/gpc.exe
+          builddir-cross/GPC/gpc
+        if-no-files-found: ignore
