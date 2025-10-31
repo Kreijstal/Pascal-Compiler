@@ -625,6 +625,32 @@ class TestCompiler(unittest.TestCase):
             expected_output.strip().splitlines(),
         )
 
+    def test_deeply_nested_procedure_access(self):
+        """Nested procedures should access variables from multiple outer scopes."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "deeply_nested_procedure"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_path = os.path.join(
+            TEST_CASES_DIR, "deeply_nested_procedure.expected"
+        )
+        expected_output = read_file_content(expected_path)
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            expected_output.strip().splitlines(),
+        )
+
     def test_bitshift_codegen_emits_rotate_instructions(self):
         """Code generation should emit rotate instructions for ROL and ROR expressions."""
         input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr.p")

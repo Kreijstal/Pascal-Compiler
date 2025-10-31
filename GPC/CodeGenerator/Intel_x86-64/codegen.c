@@ -66,6 +66,125 @@ int codegen_is_nested_context(const CodeGenContext *ctx)
     return codegen_get_lexical_depth(ctx) > 0;
 }
 
+static void codegen_reset_static_link_cache(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    if (ctx->static_link_reg != NULL)
+    {
+        free_reg(get_reg_stack(), ctx->static_link_reg);
+        ctx->static_link_reg = NULL;
+    }
+    ctx->static_link_reg_level = 0;
+}
+
+static int codegen_find_static_link_offset(StackScope_t *scope, int *offset)
+{
+    if (scope == NULL || offset == NULL)
+        return 0;
+
+    ListNode_t *node = scope->x;
+    while (node != NULL)
+    {
+        StackNode_t *stack_node = (StackNode_t *)node->cur;
+        if (stack_node != NULL && stack_node->label != NULL &&
+            strcmp(stack_node->label, "__static_link__") == 0)
+        {
+            *offset = stack_node->offset;
+            return 1;
+        }
+        node = node->next;
+    }
+
+    return 0;
+}
+
+void codegen_begin_expression(CodeGenContext *ctx)
+{
+    codegen_reset_static_link_cache(ctx);
+}
+
+void codegen_end_expression(CodeGenContext *ctx)
+{
+    codegen_reset_static_link_cache(ctx);
+}
+
+Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list,
+    int levels_to_traverse)
+{
+    if (ctx == NULL || inst_list == NULL || levels_to_traverse <= 0)
+        return NULL;
+
+    if (ctx->static_link_reg != NULL)
+    {
+        if (ctx->static_link_reg_level == levels_to_traverse)
+            return ctx->static_link_reg;
+
+        free_reg(get_reg_stack(), ctx->static_link_reg);
+        ctx->static_link_reg = NULL;
+        ctx->static_link_reg_level = 0;
+    }
+
+    StackScope_t *scope = get_cur_scope();
+    if (scope == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to determine current scope for static link traversal.");
+        return NULL;
+    }
+
+    int *offsets = (int *)calloc((size_t)levels_to_traverse, sizeof(int));
+    if (offsets == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Failed to allocate static link traversal metadata.");
+        return NULL;
+    }
+
+    StackScope_t *current_scope = scope;
+    for (int i = 0; i < levels_to_traverse; ++i)
+    {
+        if (current_scope == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Static link chain shorter than requested depth.");
+            free(offsets);
+            return NULL;
+        }
+
+        if (!codegen_find_static_link_offset(current_scope, &offsets[i]))
+        {
+            codegen_report_error(ctx, "ERROR: Static link slot missing at depth %d.", i);
+            free(offsets);
+            return NULL;
+        }
+
+        current_scope = current_scope->prev_scope;
+    }
+
+    Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == NULL)
+    {
+        free(offsets);
+        return NULL;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offsets[0], reg->bit_64);
+    *inst_list = add_inst(*inst_list, buffer);
+
+    for (int i = 1; i < levels_to_traverse; ++i)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n", offsets[i],
+            reg->bit_64, reg->bit_64);
+        *inst_list = add_inst(*inst_list, buffer);
+    }
+
+    free(offsets);
+
+    ctx->static_link_reg = reg;
+    ctx->static_link_reg_level = levels_to_traverse;
+    return reg;
+}
+
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
 {
     va_list args;

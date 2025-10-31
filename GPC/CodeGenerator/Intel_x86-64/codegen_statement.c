@@ -1213,36 +1213,38 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 else
                     snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
             }
-            else if (scope_depth == 1)
+            else
             {
-                /* Variable is in parent scope, use static link */
-                StackNode_t *static_link_node = find_label("__static_link__");
-                if (static_link_node != NULL)
+                Register_t *reserved_value_reg = NULL;
+                if (reg != NULL)
                 {
-                    /* Load parent's frame pointer from static link */
-                    char temp_buffer[100];
-                    snprintf(temp_buffer, sizeof(temp_buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-                        static_link_node->offset);
-                    inst_list = add_inst(inst_list, temp_buffer);
-                    /* Store to variable through static link */
+                    reserved_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (reserved_value_reg != NULL)
+                        reg = reserved_value_reg;
+                }
+
+                codegen_begin_expression(ctx);
+                Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                if (frame_reg != NULL)
+                {
                     if (use_qword)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%r11)\n", reg->bit_64, var->offset);
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, frame_reg->bit_64);
                     else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%r11)\n", reg->bit_32, var->offset);
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, frame_reg->bit_64);
                 }
                 else
                 {
-                    /* No static link, fallback to direct access */
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to acquire static link for assignment to %s.",
+                        var_expr->expr_data.id);
                     if (use_qword)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
                     else
                         snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
                 }
-            }
-            else
-            {
-                fprintf(stderr, "ERROR: Variables nested more than 1 level deep not yet supported\n");
-                exit(1);
+                codegen_end_expression(ctx);
+                if (reserved_value_reg != NULL)
+                    free_reg(get_reg_stack(), reserved_value_reg);
             }
         }
         else if(nonlocal_flag() == 1)
@@ -1461,16 +1463,18 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         /* Determine if we should pass a static link:
          * We pass the static link when calling a procedure that is declared in the
-         * current scope (proc_scope_level == 0). This includes:
+         * current scope or within a nested scope relative to the caller
+         * (proc_scope_level <= 0). This includes:
          * - Procedures declared in the same scope as the caller
          * - Procedures declared inside the current procedure/function
-         * 
-         * The static link allows the callee to access the caller's local variables.
-         * This is necessary for nested procedures that reference parent variables.
+         *
+         * The static link allows the callee to access variables in its lexical
+         * parent. For same-scope calls we forward our own static link, while calls
+         * to nested procedures receive the caller's frame pointer directly.
          */
-        int should_pass_static_link = (proc_scope_level == 0);
+        int should_pass_static_link = (proc_scope_level <= 0);
         int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
-        
+
         /* For nested procedures with no parameters, pass static link in %rdi
          * TODO: Implement proper calling convention for procedures with parameters.
          * Options include:
@@ -1480,8 +1484,28 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
          */
         if (should_pass_static_link && num_args == 0)
         {
-            /* Pass current frame pointer as static link */
-            inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+            if (proc_scope_level < 0)
+            {
+                /* Pass current frame pointer for nested children */
+                inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+            }
+            else
+            {
+                /* Forward our own static link to siblings in the same scope */
+                StackNode_t *static_link_node = find_label("__static_link__");
+                if (static_link_node != NULL)
+                {
+                    char link_buffer[64];
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %%rdi\n",
+                        static_link_node->offset);
+                    inst_list = add_inst(inst_list, link_buffer);
+                }
+                else
+                {
+                    /* No stored static link (top-level), fall back to current frame */
+                    inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+                }
+            }
         }
         
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
