@@ -1,96 +1,56 @@
-name: Copilot Setup Validation
+name: "Copilot Setup Steps"
 
+# Automatically run the setup steps when they are changed to allow for easy validation, and
+# allow manual testing through the repository's "Actions" tab
 on:
-  pull_request:
-    paths:
-      - '.github/copilot-instructions.md'
+  workflow_dispatch:
   push:
     paths:
-      - '.github/copilot-instructions.md'
-    branches:
-      - main
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
 
 jobs:
-  validate-instructions:
+  # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
+  copilot-setup-steps:
     runs-on: ubuntu-latest
-    
+
+    # Set the permissions to the lowest permissions possible needed for your steps.
+    # Copilot will be given its own token for its operations.
+    permissions:
+      # Clone the repository to install dependencies
+      contents: read
+
+    # You can define any steps you want, and they will run before the agent starts.
+    # If you do not check out your code, Copilot will do this for you.
     steps:
-    - name: Check out repository
-      uses: actions/checkout@v4
-    
-    - name: Verify copilot-instructions.md exists
-      run: |
-        if [ ! -f .github/copilot-instructions.md ]; then
-          echo "Error: .github/copilot-instructions.md not found"
-          exit 1
-        fi
-        echo "✓ Copilot instructions file exists"
-    
-    - name: Check file size
-      run: |
-        size=$(wc -c < .github/copilot-instructions.md)
-        echo "File size: $size bytes"
-        if [ "$size" -lt 1000 ]; then
-          echo "Warning: File seems too small (< 1KB)"
-          exit 1
-        fi
-        echo "✓ File size is reasonable"
-    
-    - name: Validate markdown structure
-      run: |
-        # Check for required sections
-        required_sections=(
-          "Project Overview"
-          "Architecture"
-          "Build System"
-          "Testing"
-          "Platform Support"
-        )
-        
-        missing_sections=()
-        for section in "${required_sections[@]}"; do
-          if ! grep -q "## $section" .github/copilot-instructions.md; then
-            missing_sections+=("$section")
-          fi
-        done
-        
-        if [ ${#missing_sections[@]} -gt 0 ]; then
-          echo "Error: Missing required sections:"
-          printf '%s\n' "${missing_sections[@]}"
-          exit 1
-        fi
-        echo "✓ All required sections present"
-    
-    - name: Check for build commands documentation
-      run: |
-        if ! grep -q "meson setup" .github/copilot-instructions.md; then
-          echo "Error: Build commands not documented"
-          exit 1
-        fi
-        echo "✓ Build commands documented"
-    
-    - name: Validate links (if any)
-      run: |
-        # Extract markdown links and check if they're properly formatted
-        if grep -q '\[.*\](.*)' .github/copilot-instructions.md; then
-          echo "Found markdown links, checking format..."
-          # Basic validation - ensure brackets are closed
-          if grep -E '\[.*\]\([^)]*$' .github/copilot-instructions.md; then
-            echo "Error: Found unclosed markdown links"
-            exit 1
-          fi
-        fi
-        echo "✓ Link formatting is valid"
-    
-    - name: Summary
-      run: |
-        echo "================================"
-        echo "Copilot Instructions Validation"
-        echo "================================"
-        echo "✓ File exists and has reasonable size"
-        echo "✓ Required sections present"
-        echo "✓ Build commands documented"
-        echo "✓ Markdown formatting valid"
-        echo ""
-        echo "File preview:"
-        head -20 .github/copilot-instructions.md
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
+
+      - name: Install Python build tools
+        run: |
+          pip install meson ninja
+
+      - name: Configure build
+        run: |
+          meson setup builddir --buildtype=release -Dwith_gmp=enabled
+
+      - name: Build project
+        run: |
+          meson compile -C builddir
+
+      - name: Verify build outputs
+        run: |
+          ls -lh builddir/GPC/gpc
+          ls -lh builddir/GPC/libgpc_runtime.a
