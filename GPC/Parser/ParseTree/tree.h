@@ -80,13 +80,14 @@ typedef struct Tree
             /* FUNCTION or PROCEDURE */
             enum TreeType sub_type;
             char *id;
-            char *mangled_id; // <-- ADD THIS LINE
+            char *mangled_id;
             ListNode_t *args_var;
             ListNode_t *const_declarations;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
             int cname_flag;
             int overload_flag;
+            int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
 
             ListNode_t *declarations;
             ListNode_t *subprograms;

@@ -57,6 +57,8 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
 StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound);
 StackNode_t *find_in_temp(char *);
 StackNode_t *find_label(char *);
+/* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
+StackNode_t *find_label_with_depth(char *label, int *depth);
 RegStack_t *get_reg_stack();
 void free_stackmng();
 

@@ -391,12 +391,21 @@ StackNode_t *find_in_temp(char *label)
 /* TODO: Does not find variables outside the current scope */
 StackNode_t *find_label(char *label)
 {
+    int depth = 0;
+    return find_label_with_depth(label, &depth);
+}
+
+/* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
+StackNode_t *find_label_with_depth(char *label, int *depth)
+{
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
     assert(label != NULL);
+    assert(depth != NULL);
 
     StackScope_t *cur_scope;
     StackNode_t *cur_node;
+    int scope_depth = 0;
 
     cur_scope = global_stackmng->cur_scope;
 
@@ -405,22 +414,26 @@ StackNode_t *find_label(char *label)
         cur_node = stackscope_find_z(cur_scope, label);
         if(cur_node != NULL)
         {
+            *depth = scope_depth;
             return cur_node;
         }
 
         cur_node = stackscope_find_x(cur_scope, label);
         if(cur_node != NULL)
         {
+            *depth = scope_depth;
             return cur_node;
         }
 
         cur_node = stackscope_find_t(cur_scope, label);
         if(cur_node != NULL)
         {
+            *depth = scope_depth;
             return cur_node;
         }
 
         cur_scope = cur_scope->prev_scope;
+        scope_depth++;
     }
 
     return NULL;

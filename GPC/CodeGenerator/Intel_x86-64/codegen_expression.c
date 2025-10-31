@@ -509,6 +509,7 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
 static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
+    codegen_begin_expression(ctx);
     expr_node_t *expr_tree = build_expr_tree(expr);
     Register_t *target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
     if (target_reg == NULL)
@@ -516,6 +517,7 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         free_expr_tree(expr_tree);
         if (out_reg != NULL)
             *out_reg = NULL;
+        codegen_end_expression(ctx);
         return inst_list;
     }
 
@@ -523,9 +525,15 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
     free_expr_tree(expr_tree);
 
     if (out_reg != NULL)
+    {
         *out_reg = target_reg;
+        codegen_end_expression(ctx);
+    }
     else
+    {
+        codegen_end_expression(ctx);
         free_reg(get_reg_stack(), target_reg);
+    }
     return inst_list;
 }
 
