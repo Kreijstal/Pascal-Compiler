@@ -1730,12 +1730,55 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
     case PASCAL_T_WITH_STMT: {
-        ast_t *expr_node = stmt_node->child;
-        ast_t *body_node = unwrap_pascal_node(expr_node != NULL ? expr_node->next : NULL);
+        ast_t *contexts_wrapper = stmt_node->child;
+        ast_t *body_node = unwrap_pascal_node(contexts_wrapper != NULL ? contexts_wrapper->next : NULL);
 
-        struct Expression *context_expr = convert_expression(expr_node);
         struct Statement *body_stmt = convert_statement(body_node);
-        return mk_with(stmt_node->line, context_expr, body_stmt);
+        if (body_stmt == NULL)
+            return NULL;
+
+        ast_t *contexts_start = NULL;
+        if (contexts_wrapper != NULL) {
+            if (contexts_wrapper->typ == PASCAL_T_WITH_CONTEXTS) {
+                contexts_start = contexts_wrapper->child;
+            } else {
+                contexts_start = contexts_wrapper;
+            }
+        }
+
+        size_t context_count = 0;
+        for (ast_t *cur = contexts_start; cur != NULL && cur != ast_nil; cur = cur->next) {
+            ++context_count;
+        }
+
+        if (context_count == 0) {
+            struct Expression *context_expr = convert_expression(contexts_start);
+            return mk_with(stmt_node->line, context_expr, body_stmt);
+        }
+
+        struct Expression **context_exprs = (struct Expression **)malloc(context_count * sizeof(struct Expression *));
+        if (context_exprs == NULL)
+            return NULL;
+
+        size_t index = 0;
+        for (ast_t *cur = contexts_start; cur != NULL && cur != ast_nil; cur = cur->next) {
+            ast_t *unwrapped = unwrap_pascal_node(cur);
+            struct Expression *expr = convert_expression(unwrapped);
+            if (expr == NULL) {
+                free(context_exprs);
+                return NULL;
+            }
+            context_exprs[index++] = expr;
+        }
+
+        struct Statement *nested_stmt = body_stmt;
+        while (index > 0) {
+            struct Expression *expr = context_exprs[--index];
+            nested_stmt = mk_with(stmt_node->line, expr, nested_stmt);
+        }
+
+        free(context_exprs);
+        return nested_stmt;
     }
     case PASCAL_T_TRY_BLOCK: {
         ListBuilder try_builder;

@@ -2017,11 +2017,14 @@ void test_pascal_with_statement(void) {
         ast_t* with_stmt = res.value.ast;
         TEST_ASSERT(with_stmt->typ == PASCAL_T_WITH_STMT);
 
-        ast_t* record_var = with_stmt->child;
+        ast_t* contexts = with_stmt->child;
+        TEST_ASSERT(contexts->typ == PASCAL_T_WITH_CONTEXTS);
+
+        ast_t* record_var = contexts->child;
         TEST_ASSERT(record_var->typ == PASCAL_T_IDENTIFIER);
         TEST_ASSERT(strcmp(record_var->sym->name, "MyRecord") == 0);
 
-        ast_t* statement = record_var->next;
+        ast_t* statement = contexts->next;
         TEST_ASSERT(statement->typ == PASCAL_T_ASSIGNMENT);
 
         free_ast(res.value.ast);

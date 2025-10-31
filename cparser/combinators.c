@@ -27,6 +27,7 @@ static ParseResult peek_fn(input_t * in, void * args, char* parser_name);
 static ParseResult gseq_fn(input_t * in, void * args, char* parser_name);
 static ParseResult between_fn(input_t * in, void * args, char* parser_name);
 static ParseResult sep_by_fn(input_t * in, void * args, char* parser_name);
+static ParseResult sep_by1_fn(input_t * in, void * args, char* parser_name);
 static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name);
 static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name);
 static ParseResult succeed_fn(input_t * in, void * args, char* parser_name);
@@ -143,6 +144,41 @@ static ParseResult sep_by_fn(input_t * in, void * args, char* parser_name) {
             break;
         }
         tail->next = p_res.value.ast;
+        tail = tail->next;
+    }
+
+    return make_success(head);
+}
+
+static ParseResult sep_by1_fn(input_t * in, void * args, char* parser_name) {
+    sep_by_args* sargs = (sep_by_args*)args;
+    ParseResult first = parse(in, sargs->p);
+    if (!first.is_success) {
+        return first;
+    }
+
+    ast_t* head = first.value.ast;
+    ast_t* tail = head;
+
+    while (1) {
+        InputState state;
+        save_input_state(in, &state);
+
+        ParseResult sep_res = parse(in, sargs->sep);
+        if (!sep_res.is_success) {
+            restore_input_state(in, &state);
+            free_error(sep_res.value.error);
+            break;
+        }
+        free_ast(sep_res.value.ast);
+
+        ParseResult next_res = parse(in, sargs->p);
+        if (!next_res.is_success) {
+            restore_input_state(in, &state);
+            free_error(next_res.value.error);
+            break;
+        }
+        tail->next = next_res.value.ast;
         tail = tail->next;
     }
 
@@ -667,6 +703,18 @@ combinator_t * sep_by(combinator_t* p, combinator_t* sep) {
     asprintf(&comb->name, "%s separated by %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
     comb->type = COMB_SEP_BY;
     comb->fn = sep_by_fn;
+    comb->args = (void *) args;
+    return comb;
+}
+
+combinator_t * sep_by1(combinator_t* p, combinator_t* sep) {
+    sep_by_args* args = (sep_by_args*)safe_malloc(sizeof(sep_by_args));
+    args->p = p;
+    args->sep = sep;
+    combinator_t * comb = new_combinator();
+    asprintf(&comb->name, "%s separated by1 %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    comb->type = COMB_SEP_BY1;
+    comb->fn = sep_by1_fn;
     comb->args = (void *) args;
     return comb;
 }

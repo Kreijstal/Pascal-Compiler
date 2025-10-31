@@ -213,6 +213,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_FOR_STMT: return "FOR_STMT";
         case PASCAL_T_WHILE_STMT: return "WHILE_STMT";
         case PASCAL_T_WITH_STMT: return "WITH_STMT";
+        case PASCAL_T_WITH_CONTEXTS: return "WITH_CONTEXTS";
         case PASCAL_T_DO: return "DO";
         case PASCAL_T_TO: return "TO";
         case PASCAL_T_DOWNTO: return "DOWNTO";
