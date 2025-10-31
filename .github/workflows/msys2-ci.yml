@@ -23,9 +23,9 @@ jobs:
       with:
         msystem: ${{ matrix.sys }}
         update: true
-        install: base-devel git flex bison gmp-devel  meson python
+        install: base-devel git flex bison gmp-devel
         pacboy: >-
-          cc:p
+          ${{ matrix.sys != 'MSYS' && 'cc:p' || '' }}
           meson:p
           ninja:p
           python:p
