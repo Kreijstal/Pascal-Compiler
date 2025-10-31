@@ -809,7 +809,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
 
         struct Expression *index_expr = mk_inum(element->line, index);
-        struct Expression *lhs = mk_arrayaccess(element->line, strdup(*id_ptr), index_expr);
+        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+        struct Expression *lhs = mk_arrayaccess(element->line, base_expr, index_expr);
         struct Statement *assign = mk_varassign(element->line, lhs, rhs);
         list_builder_append(&stmt_builder, assign, LIST_STMT);
 
@@ -1364,10 +1365,11 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         return mk_functioncall(expr_node->line, id, args);
     }
     case PASCAL_T_ARRAY_ACCESS: {
-        ast_t *array_id = expr_node->child;
-        ast_t *index_expr = array_id != NULL ? array_id->next : NULL;
-        struct Expression *index = convert_expression(index_expr);
-        return mk_arrayaccess(expr_node->line, dup_symbol(array_id), index);
+        ast_t *array_node = expr_node->child;
+        ast_t *index_expr_node = array_node != NULL ? array_node->next : NULL;
+        struct Expression *base = convert_expression(array_node);
+        struct Expression *index = convert_expression(index_expr_node);
+        return mk_arrayaccess(expr_node->line, base, index);
     }
     default:
         return NULL;

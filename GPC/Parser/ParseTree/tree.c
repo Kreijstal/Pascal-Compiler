@@ -560,12 +560,16 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
 
         case EXPR_ARRAY_ACCESS:
-          fprintf(f, "[ARRAY_ACC:%s]\n", expr->expr_data.array_access_data.id);
+          fprintf(f, "[ARRAY_ACC]\n");
           ++num_indent;
 
           print_indent(f, num_indent);
-          fprintf(f, "[INDEX]:\n");
+          fprintf(f, "[ARRAY]:\n");
           expr_print(expr->expr_data.array_access_data.array_expr, f, num_indent+1);
+
+          print_indent(f, num_indent);
+          fprintf(f, "[INDEX]:\n");
+          expr_print(expr->expr_data.array_access_data.index_expr, f, num_indent+1);
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -970,8 +974,10 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_ARRAY_ACCESS:
-          free(expr->expr_data.array_access_data.id);
-          destroy_expr(expr->expr_data.array_access_data.array_expr);
+          if (expr->expr_data.array_access_data.array_expr != NULL)
+              destroy_expr(expr->expr_data.array_access_data.array_expr);
+          if (expr->expr_data.array_access_data.index_expr != NULL)
+              destroy_expr(expr->expr_data.array_access_data.index_expr);
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -1663,15 +1669,15 @@ struct Expression *mk_varid(int line_num, char *id)
     return new_expr;
 }
 
-struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *index_expr)
+struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, struct Expression *index_expr)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
-    new_expr->expr_data.array_access_data.id = id;
-    new_expr->expr_data.array_access_data.array_expr = index_expr;
+    new_expr->expr_data.array_access_data.array_expr = array_expr;
+    new_expr->expr_data.array_access_data.index_expr = index_expr;
 
     return new_expr;
 }
