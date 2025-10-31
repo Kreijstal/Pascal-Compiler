@@ -111,6 +111,8 @@ extern int g_stack_home_space_bytes;
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
+#define STATIC_LINK_IDENTIFIER "__static_link__"
+
 static inline int codegen_target_is_windows(void)
 {
     return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS;
@@ -162,6 +164,8 @@ typedef struct {
      * 2 = nested in nested procedure, etc.
      */
     int lexical_depth;
+    int static_link_expr_depth;
+    Register_t *static_link_reg;
 } CodeGenContext;
 
 /* Generates a label */
@@ -197,7 +201,14 @@ ListNode_t *codegen_vect_reg(ListNode_t *, int);
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_procedure(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_function(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
-ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
+ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab, int arg_reg_offset);
+
+void codegen_begin_expression(CodeGenContext *ctx);
+void codegen_end_expression(CodeGenContext *ctx);
+Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list);
+void codegen_release_static_link(CodeGenContext *ctx);
+int codegen_should_pass_static_link(CodeGenContext *ctx, SymTab_t *symtab,
+    HashNode_t **node, const char *identifier);
 
 
 #endif

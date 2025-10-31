@@ -519,7 +519,9 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         return inst_list;
     }
 
+    codegen_begin_expression(ctx);
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+    codegen_end_expression(ctx);
     free_expr_tree(expr_tree);
 
     if (out_reg != NULL)
@@ -575,7 +577,9 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
         return inst_list;
     }
 
+    codegen_begin_expression(ctx);
     inst_list = gencode_expr_tree(pointer_tree, inst_list, ctx, addr_reg);
+    codegen_end_expression(ctx);
     free_expr_tree(pointer_tree);
 
     char buffer[64];
@@ -1515,7 +1519,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 }
 
 /* Code generation for passing arguments */
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
+ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node, int arg_reg_offset)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1593,7 +1597,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
             CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
+            codegen_begin_expression(ctx);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
+            codegen_end_expression(ctx);
             free_expr_tree(expr_tree);
 
             if (arg_infos != NULL)
@@ -1612,7 +1618,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 
     for (int i = arg_num - 1; i >= 0; --i)
     {
-        arg_reg_char = get_arg_reg64_num(i);
+        arg_reg_char = get_arg_reg64_num(i + arg_reg_offset);
         if (arg_reg_char == NULL)
         {
             fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);

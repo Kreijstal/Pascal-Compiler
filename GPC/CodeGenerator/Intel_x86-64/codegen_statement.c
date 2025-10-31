@@ -123,7 +123,9 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     if (reg == NULL)
         return codegen_fail_register(ctx, inst_list, out_reg,
             "ERROR: Unable to allocate register for expression evaluation.");
+    codegen_begin_expression(ctx);
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, reg);
+    codegen_end_expression(ctx);
     free_expr_tree(expr_tree);
     *out_reg = reg;
     return inst_list;
@@ -935,7 +937,9 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         {
             expr_node_t *width_tree = build_expr_tree(expr->field_width);
             width_reg = get_free_reg(get_reg_stack(), &inst_list);
+            codegen_begin_expression(ctx);
             inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_reg);
+            codegen_end_expression(ctx);
             free_expr_tree(width_tree);
             has_width_reg = 1;
         }
@@ -946,7 +950,9 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             {
                 expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
                 precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+                codegen_begin_expression(ctx);
                 inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
+                codegen_end_expression(ctx);
                 free_expr_tree(precision_tree);
                 has_precision_reg = 1;
             }
@@ -955,14 +961,18 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         {
             expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
             precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+            codegen_begin_expression(ctx);
             inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
+            codegen_end_expression(ctx);
             free_expr_tree(precision_tree);
             has_precision_reg = 1;
         }
 
         expr_node_t *expr_tree = build_expr_tree(expr);
         Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        codegen_begin_expression(ctx);
         inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
+        codegen_end_expression(ctx);
         free_expr_tree(expr_tree);
 
         if (expr_type == STRING_TYPE)
@@ -1105,7 +1115,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -1216,33 +1226,27 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             else if (scope_depth == 1)
             {
                 /* Variable is in parent scope, use static link */
-                StackNode_t *static_link_node = find_label("__static_link__");
-                if (static_link_node != NULL)
+                Register_t *static_reg = codegen_acquire_static_link(ctx, &inst_list);
+                if (static_reg != NULL)
                 {
-                    /* Load parent's frame pointer from static link */
-                    char temp_buffer[100];
-                    snprintf(temp_buffer, sizeof(temp_buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-                        static_link_node->offset);
-                    inst_list = add_inst(inst_list, temp_buffer);
-                    /* Store to variable through static link */
                     if (use_qword)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%r11)\n", reg->bit_64, var->offset);
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, static_reg->bit_64);
                     else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%r11)\n", reg->bit_32, var->offset);
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, static_reg->bit_64);
                 }
                 else
                 {
-                    /* No static link, fallback to direct access */
-                    if (use_qword)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
-                    else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+                    codegen_report_error(ctx,
+                        "ERROR: Missing static link for parent scope variable '%s'.",
+                        var_expr->expr_data.id);
+                    buffer[0] = '\0';
                 }
             }
             else
             {
-                fprintf(stderr, "ERROR: Variables nested more than 1 level deep not yet supported\n");
-                exit(1);
+                codegen_report_error(ctx,
+                    "ERROR: Variables nested more than 1 level deep not yet supported");
+                buffer[0] = '\0';
             }
         }
         else if(nonlocal_flag() == 1)
@@ -1259,7 +1263,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
-        return add_inst(inst_list, buffer);
+        if (buffer[0] != '\0')
+            inst_list = add_inst(inst_list, buffer);
+        codegen_release_static_link(ctx);
+        return inst_list;
     }
     else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
@@ -1376,7 +1383,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 "ERROR: Unable to allocate register for pointer assignment address.");
         }
 
+        codegen_begin_expression(ctx);
         inst_list = gencode_expr_tree(pointer_tree, inst_list, ctx, addr_reg);
+        codegen_end_expression(ctx);
         free_expr_tree(pointer_tree);
 
         StackNode_t *addr_temp = add_l_t("pointer_addr");
@@ -1440,17 +1449,10 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
     HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
 
-    int proc_scope_level = -1;
     if(proc_node == NULL)
     {
-        proc_scope_level = FindIdent(&proc_node, symtab, unmangled_name);
+        FindIdent(&proc_node, symtab, unmangled_name);
         stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
-    }
-    else
-    {
-        /* proc_node already resolved, but we still need the scope level */
-        HashNode_t *temp_node = NULL;
-        proc_scope_level = FindIdent(&temp_node, symtab, unmangled_name);
     }
 
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
@@ -1468,24 +1470,24 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
          * The static link allows the callee to access the caller's local variables.
          * This is necessary for nested procedures that reference parent variables.
          */
-        int should_pass_static_link = (proc_scope_level == 0);
-        int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
-        
-        /* For nested procedures with no parameters, pass static link in %rdi
-         * TODO: Implement proper calling convention for procedures with parameters.
-         * Options include:
-         * 1. Use a callee-saved register for static link
-         * 2. Pass as hidden first parameter and adjust all arg registers
-         * 3. Pass on stack at a fixed location
-         */
-        if (should_pass_static_link && num_args == 0)
-        {
-            /* Pass current frame pointer as static link */
-            inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
-        }
-        
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
+        int should_pass_static_link = codegen_should_pass_static_link(ctx, symtab,
+            &proc_node, unmangled_name);
+        stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
+
+        int arg_reg_offset = should_pass_static_link ? 1 : 0;
+
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, arg_reg_offset);
         inst_list = codegen_vect_reg(inst_list, 0);
+        if (should_pass_static_link)
+        {
+            const char *static_link_reg = current_arg_reg64(0);
+            if (static_link_reg != NULL)
+            {
+                char link_buffer[64];
+                snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rbp, %s\n", static_link_reg);
+                inst_list = add_inst(inst_list, link_buffer);
+            }
+        }
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
         free_arg_regs();

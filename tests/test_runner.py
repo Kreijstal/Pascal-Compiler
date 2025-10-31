@@ -1393,6 +1393,28 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(result.stdout, expected_output)
         self.assertEqual(result.returncode, 0)
 
+    def test_nested_procedure_with_params(self):
+        """Tests nested procedures with parameters share static links and arguments."""
+        input_file = os.path.join(TEST_CASES_DIR, "nested_procedure_with_params.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "nested_procedure_with_params.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "nested_procedure_with_params")
+        expected_output_file = os.path.join(TEST_CASES_DIR, "nested_procedure_with_params.expected")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_output = read_file_content(expected_output_file)
+        self.assertEqual(result.stdout, expected_output)
+        self.assertEqual(result.returncode, 0)
+
 
 def _load_suite():
     return unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])

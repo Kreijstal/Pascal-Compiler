@@ -579,7 +579,25 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr, inst_list, ctx, expr->expr_data.function_call_data.resolved_func);
+        int should_pass_static_link = codegen_should_pass_static_link(ctx, ctx->symtab,
+            &expr->expr_data.function_call_data.resolved_func,
+            expr->expr_data.function_call_data.id);
+
+        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
+            inst_list, ctx, expr->expr_data.function_call_data.resolved_func,
+            should_pass_static_link ? 1 : 0);
+
+        if (should_pass_static_link)
+        {
+            const char *static_link_reg = current_arg_reg64(0);
+            if (static_link_reg != NULL)
+            {
+                char link_buffer[64];
+                snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rbp, %s\n", static_link_reg);
+                inst_list = add_inst(inst_list, link_buffer);
+            }
+        }
+
         snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE ||
@@ -824,37 +842,24 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                     else if (scope_depth == 1)
                     {
-                        /* Variable is in parent scope, use static link */
-                        /* Load parent's frame pointer from static link slot */
-                        StackNode_t *static_link_node = find_label("__static_link__");
-                        if (static_link_node != NULL)
+                        Register_t *static_reg = codegen_acquire_static_link(ctx, &inst_list);
+                        if (static_reg != NULL)
                         {
-                            /* First load the static link into a temp location, then access the variable */
-                            /* For now, generate code to load through the static link */
-                            /* We need to emit instructions to load the static link into a register first */
-                            StackNode_t *temp_sl = find_in_temp("__temp_static_link__");
-                            if (temp_sl == NULL)
-                            {
-                                temp_sl = add_l_t("__temp_static_link__");
-                            }
-                            char temp_buffer[100];
-                            snprintf(temp_buffer, sizeof(temp_buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
-                                static_link_node->offset);
-                            inst_list = add_inst(inst_list, temp_buffer);
-                            /* Now access the variable through the static link */
-                            snprintf(buffer, buf_len, "-%d(%%r11)", stack_node->offset);
+                            snprintf(buffer, buf_len, "-%d(%s)", stack_node->offset, static_reg->bit_64);
                         }
                         else
                         {
-                            /* No static link, fallback to direct access (shouldn't happen) */
-                            snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
+                            codegen_report_error(ctx,
+                                "ERROR: Missing static link for parent scope variable '%s'.",
+                                expr->expr_data.id);
+                            buffer[0] = '\0';
                         }
                     }
                     else
                     {
-                        /* Multiple levels of nesting not yet supported */
-                        fprintf(stderr, "ERROR: Variables nested more than 1 level deep not yet supported\n");
-                        exit(1);
+                        codegen_report_error(ctx,
+                            "ERROR: Variables nested more than 1 level deep not yet supported");
+                        buffer[0] = '\0';
                     }
                 }
                 else if(nonlocal_flag() == 1)

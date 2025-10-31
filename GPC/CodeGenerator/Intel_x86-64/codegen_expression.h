@@ -7,7 +7,7 @@
     Expression-related code generation functions
 */
 
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, struct HashNode *proc_node);
+ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, struct HashNode *proc_node, int arg_reg_offset);
 ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *);
 
 ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,

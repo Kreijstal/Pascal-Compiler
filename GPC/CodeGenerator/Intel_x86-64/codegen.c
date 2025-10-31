@@ -40,6 +40,129 @@ static int align_to_multiple(int value, int alignment)
     return value + (alignment - remainder);
 }
 
+static StackNode_t *codegen_setup_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int *out_arg_offset)
+{
+    if (out_arg_offset != NULL)
+        *out_arg_offset = 0;
+
+    if (!codegen_is_nested_context(ctx))
+        return NULL;
+
+    StackNode_t *static_link = add_l_x((char *)STATIC_LINK_IDENTIFIER, 8);
+    if (static_link == NULL)
+        return NULL;
+
+    if (inst_list != NULL)
+    {
+        const char *incoming_reg = current_arg_reg64(0);
+        if (incoming_reg != NULL)
+        {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", incoming_reg, static_link->offset);
+            *inst_list = add_inst(*inst_list, buffer);
+        }
+    }
+
+    if (out_arg_offset != NULL)
+        *out_arg_offset = 1;
+
+    return static_link;
+}
+
+void codegen_begin_expression(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    if (ctx->static_link_expr_depth == 0 && ctx->static_link_reg != NULL)
+        codegen_release_static_link(ctx);
+
+    ctx->static_link_expr_depth++;
+}
+
+void codegen_release_static_link(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    if (ctx->static_link_reg != NULL)
+    {
+        free_reg(get_reg_stack(), ctx->static_link_reg);
+        ctx->static_link_reg = NULL;
+    }
+}
+
+void codegen_end_expression(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+
+    if (ctx->static_link_expr_depth > 0)
+    {
+        ctx->static_link_expr_depth--;
+        if (ctx->static_link_expr_depth == 0)
+            codegen_release_static_link(ctx);
+    }
+}
+
+Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list)
+{
+    if (ctx == NULL || inst_list == NULL)
+        return NULL;
+
+    if (!codegen_is_nested_context(ctx))
+        return NULL;
+
+    if (ctx->static_link_reg != NULL)
+        return ctx->static_link_reg;
+
+    StackNode_t *static_link_node = find_label((char *)STATIC_LINK_IDENTIFIER);
+    if (static_link_node == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Missing static link for current scope.");
+        return NULL;
+    }
+
+    Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
+    if (reg == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for static link.");
+        return NULL;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", static_link_node->offset, reg->bit_64);
+    *inst_list = add_inst(*inst_list, buffer);
+
+    ctx->static_link_reg = reg;
+    return reg;
+}
+
+int codegen_should_pass_static_link(CodeGenContext *ctx, SymTab_t *symtab,
+    HashNode_t **node, const char *identifier)
+{
+    (void)ctx;
+    if (symtab == NULL || identifier == NULL)
+        return 0;
+
+    HashNode_t *resolved = (node != NULL) ? *node : NULL;
+    int scope_level = -1;
+
+    if (resolved == NULL)
+    {
+        scope_level = FindIdent(&resolved, symtab, (char *)identifier);
+        if (node != NULL)
+            *node = resolved;
+    }
+    else
+    {
+        HashNode_t *temp = NULL;
+        scope_level = FindIdent(&temp, symtab, (char *)identifier);
+    }
+
+    return scope_level == 0;
+}
+
 /* Helper: Increment lexical nesting depth when entering a procedure/function */
 void codegen_enter_lexical_scope(CodeGenContext *ctx)
 {
@@ -755,30 +878,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
-    
-    /* For now, only support static links for procedures without parameters.
-     * Supporting parameters requires a more complex calling convention.
-     * Check argument count first to decide whether to set up static link. */
-    int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
-    int is_nested = codegen_is_nested_context(ctx);
-    StackNode_t *static_link = NULL;
-    
-    if (is_nested && num_args == 0)
-    {
-        /* Reserve space for static link (parent's frame pointer) as first local variable
-         * This ensures it's at a predictable offset regardless of other locals */
-        static_link = add_l_x("__static_link__", 8);
-    }
-    
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab);
-    
-    if (static_link != NULL)
-    {
-        char buffer[64];
-        /* No parameters, static link comes in %rdi */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
-        inst_list = add_inst(inst_list, buffer);
-    }
+
+    int arg_reg_offset = 0;
+    codegen_setup_static_link(ctx, &inst_list, &arg_reg_offset);
+
+    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_reg_offset);
     
     codegen_function_locals(proc->declarations, ctx, symtab);
 
@@ -827,28 +931,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
-    
-    /* For now, only support static links for functions without parameters.
-     * Supporting parameters requires a more complex calling convention. */
-    int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
-    int is_nested = codegen_is_nested_context(ctx);
-    StackNode_t *static_link = NULL;
-    
-    if (is_nested && num_args == 0)
-    {
-        /* Reserve space for static link as first local variable */
-        static_link = add_l_x("__static_link__", 8);
-    }
-    
-    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab);
-    
-    if (static_link != NULL)
-    {
-        char link_buffer[64];
-        /* No parameters, static link comes in %rdi */
-        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
-        inst_list = add_inst(inst_list, link_buffer);
-    }
+
+    int arg_reg_offset = 0;
+    codegen_setup_static_link(ctx, &inst_list, &arg_reg_offset);
+
+    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab, arg_reg_offset);
     
     int return_size = DOUBLEWORD;
     if (symtab != NULL)
@@ -891,7 +978,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 }
 
 /* Code generation for subprogram arguments */
-ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab, int arg_reg_offset)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -934,7 +1021,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE);
-                    arg_reg = use_64bit ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
+                    arg_reg = use_64bit ? get_arg_reg64_num(arg_num + arg_reg_offset)
+                                         : get_arg_reg32_num(arg_num + arg_reg_offset);
                     if(arg_reg == NULL)
                     {
                         fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
