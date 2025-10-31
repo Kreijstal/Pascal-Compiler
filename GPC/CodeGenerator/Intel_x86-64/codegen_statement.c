@@ -1167,11 +1167,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (codegen_expr_is_mp_integer(var_expr))
     {
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
+        }
 
-        Register_t *value_reg = front_reg_stack(get_reg_stack());
         Register_t *addr_reg = NULL;
         inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || value_reg == NULL || addr_reg == NULL)
@@ -1195,19 +1199,52 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (var_expr->type == EXPR_VAR_ID)
     {
-        var = find_label(var_expr->expr_data.id);
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        int scope_depth = 0;
+        var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
-        reg = front_reg_stack(get_reg_stack());
+        }
+        reg = value_reg;
 
         if(var != NULL)
         {
             int use_qword = (var->size >= 8);
-            if (use_qword)
-                snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+            if (scope_depth == 0)
+            {
+                /* Variable is in current scope, assign normally */
+                if (use_qword)
+                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                else
+                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+            }
             else
-                snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+            {
+                codegen_begin_expression(ctx);
+                Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                if (frame_reg != NULL)
+                {
+                    if (use_qword)
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, frame_reg->bit_64);
+                    else
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, frame_reg->bit_64);
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to acquire static link for assignment to %s.",
+                        var_expr->expr_data.id);
+                    if (use_qword)
+                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                    else
+                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+                }
+                codegen_end_expression(ctx);
+            }
         }
         else if(nonlocal_flag() == 1)
         {
@@ -1218,12 +1255,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             codegen_report_error(ctx,
                 "ERROR: Non-local codegen support disabled (buggy)! Enable with flag '-non-local' after required flags");
+            free_reg(get_reg_stack(), reg);
             return inst_list;
         }
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
-        return add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), reg);
+        return inst_list;
     }
     else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
@@ -1409,7 +1449,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         FindIdent(&proc_node, symtab, unmangled_name);
         stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
     }
-
+    else
+    {
+        /* proc_node already resolved, but we still need the scope level */
+        HashNode_t *temp_node = NULL;
+        FindIdent(&temp_node, symtab, unmangled_name);
+    }
 
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
@@ -1417,6 +1462,60 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
     else
     {
+        int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
+        int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
+        int callee_depth = 0;
+        int have_depth = codegen_proc_static_link_depth(ctx, proc_name, &callee_depth);
+        int current_depth = codegen_get_lexical_depth(ctx);
+        int should_pass_static_link = (callee_needs_static_link && num_args == 0 && have_depth);
+
+        if (should_pass_static_link)
+        {
+            if (callee_depth > current_depth)
+            {
+                /* Callee is nested inside the current procedure: pass our frame pointer. */
+                inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+            }
+            else if (callee_depth == current_depth)
+            {
+                /* Recursion or sibling: forward the stored static link if available. */
+                StackNode_t *static_link_node = find_label("__static_link__");
+                if (static_link_node != NULL)
+                {
+                    char link_buffer[64];
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %%rdi\n",
+                        static_link_node->offset);
+                    inst_list = add_inst(inst_list, link_buffer);
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Missing static link slot while calling %s.",
+                        unmangled_name);
+                }
+            }
+            else if (current_depth > callee_depth)
+            {
+                /* Callee is in an outer scope: traverse the static link chain. */
+                int levels_to_traverse = current_depth - callee_depth;
+                codegen_begin_expression(ctx);
+                Register_t *link_reg = codegen_acquire_static_link(ctx, &inst_list, levels_to_traverse);
+                if (link_reg != NULL)
+                {
+                    char link_buffer[64];
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %%rdi\n", link_reg->bit_64);
+                    inst_list = add_inst(inst_list, link_buffer);
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to acquire static link for call to %s.",
+                        unmangled_name);
+                }
+                codegen_end_expression(ctx);
+            }
+        }
+        
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);

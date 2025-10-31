@@ -662,6 +662,32 @@ class TestCompiler(unittest.TestCase):
             expected_output.strip().splitlines(),
         )
 
+    def test_deeply_nested_procedure_access(self):
+        """Nested procedures should access variables from multiple outer scopes."""
+        input_file, asm_file, executable_file = self._get_test_paths(
+            "deeply_nested_procedure"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_path = os.path.join(
+            TEST_CASES_DIR, "deeply_nested_procedure.expected"
+        )
+        expected_output = read_file_content(expected_path)
+        self.assertEqual(
+            result.stdout.strip().splitlines(),
+            expected_output.strip().splitlines(),
+        )
+
     def test_bitshift_codegen_emits_rotate_instructions(self):
         """Code generation should emit rotate instructions for ROL and ROR expressions."""
         input_file = os.path.join(TEST_CASES_DIR, "bitshift_expr.p")
@@ -1401,6 +1427,34 @@ class TestCompiler(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     self.fail("Test execution timed out.")
 
+    def test_nested_procedure_parent_vars(self):
+        """Tests that nested procedures can access parent scope variables using static links."""
+        input_file = os.path.join(TEST_CASES_DIR, "nested_procedure_parent_vars.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "nested_procedure_parent_vars.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "nested_procedure_parent_vars")
+        expected_output_file = os.path.join(TEST_CASES_DIR, "nested_procedure_parent_vars.expected")
+
+        # Compile the Pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        self.compile_executable(asm_file, executable_file)
+
+        # Run the executable and capture output
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        # Read expected output
+        expected_output = read_file_content(expected_output_file)
+
+        # Verify the output matches expected
+        self.assertEqual(result.stdout, expected_output)
+        self.assertEqual(result.returncode, 0)
 
 
 def _load_suite():
