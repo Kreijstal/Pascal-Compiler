@@ -29,10 +29,11 @@ jobs:
           meson:p
           ninja:p
           python:p
+          gmp:p
 
     - name: Configure build
       shell: msys2 {0}
-      run: meson setup builddir --buildtype=release
+      run: meson setup builddir --buildtype=release -Dwith_gmp=enabled
 
     - name: Build
       shell: msys2 {0}
@@ -41,3 +42,11 @@ jobs:
     - name: Run tests
       shell: msys2 {0}
       run: meson test -v -C builddir
+
+    - name: Upload meson logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs-${{ matrix.sys }}
+        path: builddir/meson-logs/
+        if-no-files-found: ignore

@@ -250,6 +250,7 @@ class TestCompiler(unittest.TestCase):
             if cls.ctypes_helper_library is not None
             else None
         )
+        cls.have_gmp = os.environ.get("GPC_HAVE_GMP", "0") == "1"
 
     @classmethod
     def _ensure_compiler_built(cls):
@@ -507,6 +508,8 @@ class TestCompiler(unittest.TestCase):
 
     def test_bell_numbers_sample_parses(self):
         """Ensures the large BellNumbers sample that uses "+=" parses successfully."""
+        if not self.have_gmp:
+            self.skipTest("GMP support is not available")
         input_file = os.path.join(TEST_CASES_DIR, "bell_numbers.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "bell_numbers_parse_only.s")
         ast_file = os.path.join(TEST_OUTPUT_DIR, "bell_numbers.ast")

@@ -65,8 +65,24 @@ gpc_cparser_exe = executable('gpc', gpc_cparser_sources,
   c_args: gpc_c_args,
 )
 
+gmp_dep = dependency('gmp', required: get_option('with_gmp'))
+
+runtime_sources = ['runtime.c']
+runtime_deps = []
+runtime_c_args = []
+
+if gmp_dep.found()
+  runtime_sources += ['runtime_gmp.c']
+  runtime_deps += [gmp_dep]
+  runtime_c_args += ['-DHAVE_GMP=1']
+else
+  runtime_c_args += ['-DHAVE_GMP=0']
+endif
+
 gpc_runtime_lib = static_library('gpc_runtime',
-  ['runtime.c', 'runtime_gmp.c'],
+  runtime_sources,
+  c_args: runtime_c_args,
+  dependencies: runtime_deps,
   install: false,
 )
 
@@ -83,6 +99,7 @@ env.set('RUN_VALGRIND_TESTS', get_option('run_valgrind_tests').to_string())
 env.set('CC', ' '.join(compiler.cmd_array()))
 env.set('GPC_RUNTIME_LIB', gpc_runtime_lib.full_path())
 env.set('GPC_CTYPES_HELPER', ctypes_helper.full_path())
+env.set('GPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
 
 ctypes_helper_link = ctypes_helper.full_path()
 if host_machine.system() == 'windows'
