@@ -185,8 +185,20 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         if (addr_reg == NULL)
             return codegen_fail_register(ctx, inst_list, out_reg,
                 "ERROR: Unable to allocate register for address expression.");
-        char buffer[64];
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+
+        char buffer[96];
+        if (var_node->is_static)
+        {
+            const char *label = var_node->static_label != NULL ?
+                var_node->static_label : var_node->label;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+                addr_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                var_node->offset, addr_reg->bit_64);
+        }
         inst_list = add_inst(inst_list, buffer);
         *out_reg = addr_reg;
         return inst_list;
