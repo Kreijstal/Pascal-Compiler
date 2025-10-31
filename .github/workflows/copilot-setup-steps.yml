@@ -28,29 +28,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
+          sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev meson
 
-      - name: Install Python build tools
-        run: |
-          pip install meson ninja
 
-      - name: Configure build
+      - name: Install dependencies
         run: |
-          meson setup builddir --buildtype=release -Dwith_gmp=enabled
+          sudo apt-get update
+          sudo apt-get install -y make wget tar zstd gawk gpg gpgv wine wine64 flex bison
+          sudo apt-get install -y llvm clang lld
 
-      - name: Build project
+      - name: Clone quasi-msys2
         run: |
-          meson compile -C builddir
+          git clone https://github.com/HolyBlackCat/quasi-msys2.git
+          cd quasi-msys2
+          echo "UCRT64 > msystem.txt
 
-      - name: Verify build outputs
+      - name: Install MSYS2 packages via quasi-msys2
         run: |
-          ls -lh builddir/GPC/gpc
-          ls -lh builddir/GPC/libgpc_runtime.a
+          cd quasi-msys2
+          # Install GCC, GMP, and other required packages
+          make install _gcc _gmp _meson _ninja _python 
+        timeout-minutes: 30          
+
+          
+
+
