@@ -28,6 +28,18 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
 
+static int align_to_multiple(int value, int alignment)
+{
+    if (alignment <= 0)
+        return value;
+
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+
+    return value + (alignment - remainder);
+}
+
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...)
 {
     va_list args;
@@ -415,9 +427,11 @@ void codegen_stack_space(CodeGenContext *ctx)
     needed_space = get_full_stack_offset();
     assert(needed_space >= 0);
 
-    if(needed_space != 0)
+    int aligned_space = align_to_multiple(needed_space, REQUIRED_OFFSET);
+
+    if(aligned_space != 0)
     {
-        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", needed_space);
+        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
     }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

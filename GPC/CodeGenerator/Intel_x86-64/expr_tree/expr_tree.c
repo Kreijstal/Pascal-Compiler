@@ -51,6 +51,24 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *
     return add_inst(inst_list, buffer);
 }
 
+static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t *reg,
+    int type_tag, int offset)
+{
+    if (inst_list == NULL || reg == NULL)
+        return inst_list;
+
+    const char *reg_name = select_register_name(reg, type_tag);
+    if (reg_name == NULL)
+        return inst_list;
+
+    char buffer[64];
+    if (codegen_type_uses_qword(type_tag))
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg_name);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", offset, reg_name);
+    return add_inst(inst_list, buffer);
+}
+
 static ListNode_t *gencode_real_binary_op(const char *left_operand,
     const char *right_operand, const char *dest, ListNode_t *inst_list,
     const char *sse_mnemonic)
@@ -656,8 +674,11 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         else
         {
+            StackNode_t *lhs_spill = add_l_t("case1_lhs");
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = emit_store_to_stack(inst_list, target_reg, expr->resolved_type, lhs_spill->offset);
             inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
+            inst_list = emit_load_from_stack(inst_list, target_reg, expr->resolved_type, lhs_spill->offset);
             const char *target_name = select_register_name(target_reg, expr->resolved_type);
             const char *rhs_name = select_register_name(rhs_reg, expr->resolved_type);
             inst_list = gencode_op(expr, target_name, rhs_name, inst_list);
@@ -708,8 +729,11 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     }
     else
     {
+        StackNode_t *rhs_spill = add_l_t("case2_rhs");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
+        inst_list = emit_store_to_stack(inst_list, temp_reg, node->expr->resolved_type, rhs_spill->offset);
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = emit_load_from_stack(inst_list, temp_reg, node->expr->resolved_type, rhs_spill->offset);
         const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
         const char *temp_name = select_register_name(temp_reg, node->expr->resolved_type);
         inst_list = gencode_op(node->expr, target_name, temp_name, inst_list);
@@ -750,7 +774,10 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     }
     else
     {
+        StackNode_t *lhs_spill = add_l_t("case3_lhs");
+        inst_list = emit_store_to_stack(inst_list, target_reg, node->expr->resolved_type, lhs_spill->offset);
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
+        inst_list = emit_load_from_stack(inst_list, target_reg, node->expr->resolved_type, lhs_spill->offset);
         const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
         const char *temp_name = select_register_name(temp_reg, node->expr->resolved_type);
         inst_list = gencode_op(node->expr, target_name, temp_name, inst_list);
@@ -1003,8 +1030,6 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
                 #endif
                 // left is the dividend, right is the divisor
-                snprintf(buffer, 50, "\tpushq\t%%rax\n");
-                inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, 50, "\tpushq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
 
@@ -1041,8 +1066,6 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
 
                 snprintf(buffer, 50, "\tpopq\t%%rdx\n");
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tpopq\t%%rax\n");
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)

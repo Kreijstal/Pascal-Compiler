@@ -1233,6 +1233,9 @@ class TestCompiler(unittest.TestCase):
         expected_output_lines = [
             "Schreib wie viele Zahlen wollen sie eintippen, danach schreiben Sie die Zahlen.\n",
             "         gerade       ungerade       Positive       Negative\n",
+            "              4              3              4             -7\n",
+            "              0             -7              3               \n",
+            "             12                             0               \n",
             "Gerade Zahlen\n",
             "4 0 12 \n",
             "Ungerade Zahlen\n",
