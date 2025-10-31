@@ -948,9 +948,11 @@ static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_
 
     if (codegen_target_is_windows())
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        // Move size to %rdx first, before moving addr to %rcx
+        // This avoids overwriting size_reg if it happens to be %rcx
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
