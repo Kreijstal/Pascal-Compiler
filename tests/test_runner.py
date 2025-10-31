@@ -1198,6 +1198,30 @@ class TestCompiler(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("Test execution timed out.")
 
+    def test_function_call_no_parens(self):
+        """Tests function calls without parentheses (zero-argument functions)."""
+        input_file = os.path.join(TEST_CASES_DIR, "function_call_no_parens.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "function_call_no_parens.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "function_call_no_parens")
+        expected_output_file = os.path.join(TEST_CASES_DIR, "function_call_no_parens.expected")
+
+        # Compile the pascal program to assembly
+        run_compiler(input_file, asm_file)
+
+        # Compile the assembly to an executable
+        self.compile_executable(asm_file, executable_file)
+
+        # Run the executable and check the output
+        try:
+            process = subprocess.run(
+                [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
+            )
+            expected_output = read_file_content(expected_output_file)
+            self.assertEqual(process.stdout, expected_output)
+            self.assertEqual(process.returncode, 0)
+        except subprocess.TimeoutExpired:
+            self.fail("Test execution timed out.")
+
     def test_mod_operator(self):
         """Tests that the mod operator works correctly."""
         input_file = os.path.join(TEST_CASES_DIR, "mod_test.p")

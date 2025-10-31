@@ -1956,6 +1956,22 @@ int semcheck_varid(int *type_return,
     }
     else
     {
+        /* If this is a function being used in an expression context (not being assigned to),
+           convert it to a function call with no arguments */
+        if(hash_return->hash_type == HASHTYPE_FUNCTION && mutating == NO_MUTATE)
+        {
+            char *func_id = expr->expr_data.id;
+            expr->expr_data.id = NULL;
+            
+            expr->type = EXPR_FUNCTION_CALL;
+            expr->expr_data.function_call_data.id = func_id;
+            expr->expr_data.function_call_data.args_expr = NULL;
+            expr->expr_data.function_call_data.mangled_id = NULL;
+            expr->expr_data.function_call_data.resolved_func = NULL;
+            
+            return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+        }
+        
         set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
