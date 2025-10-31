@@ -25,7 +25,7 @@ jobs:
         update: true
         install: base-devel git flex bison gmp-devel
         pacboy: >-
-          ${{ matrix.sys != 'MSYS' && 'cc:p' || '' }}
+          ${{ matrix.sys != 'MSYS' && 'cc:p' || 'gcc' }}
           meson:p
           ninja:p
           python:p
