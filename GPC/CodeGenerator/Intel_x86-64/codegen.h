@@ -116,6 +116,11 @@ static inline int codegen_target_is_windows(void)
     return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS;
 }
 
+static inline const char *codegen_readonly_section_directive(void)
+{
+    return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
+}
+
 #define NORMAL_JMP -1
 
 #include <stdlib.h>

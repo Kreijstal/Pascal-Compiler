@@ -22,7 +22,7 @@ static char *FLAG_DUMP_AST_PATH = NULL;
 static int FLAG_TIME_PASSES = 0;
 
 static gpc_target_abi_t FLAG_TARGET_ABI =
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__CYGWIN__)
     GPC_TARGET_ABI_WINDOWS;
 #else
     GPC_TARGET_ABI_SYSTEM_V;

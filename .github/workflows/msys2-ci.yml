@@ -1,0 +1,52 @@
+name: MSYS2 CI
+
+on:
+  pull_request:
+    branches: [ "*" ]
+  push:
+    branches: [ "*" ]
+
+jobs:
+  msys2-build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        sys: [MSYS, MINGW64, UCRT64, CLANG64]
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{ matrix.sys }}
+        update: true
+        install: base-devel git flex bison gmp-devel
+        pacboy: >-
+          ${{ matrix.sys != 'MSYS' && 'cc:p' || 'gcc' }}
+          meson:p
+          ninja:p
+          python:p
+          gmp:p
+
+    - name: Configure build
+      shell: msys2 {0}
+      run: meson setup builddir --buildtype=release -Dwith_gmp=enabled
+
+    - name: Build
+      shell: msys2 {0}
+      run: meson compile -C builddir
+
+    - name: Run tests
+      shell: msys2 {0}
+      run: meson test -v -C builddir
+
+    - name: Upload meson logs (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: meson-logs-${{ matrix.sys }}
+        path: builddir/meson-logs/
+        if-no-files-found: ignore

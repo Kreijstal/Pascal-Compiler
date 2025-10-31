@@ -65,19 +65,60 @@ gpc_cparser_exe = executable('gpc', gpc_cparser_sources,
   c_args: gpc_c_args,
 )
 
+gmp_dep = dependency('gmp', required: get_option('with_gmp'))
+
+runtime_sources = ['runtime.c']
+runtime_deps = []
+runtime_c_args = []
+
+if gmp_dep.found()
+  runtime_sources += ['runtime_gmp.c']
+  runtime_deps += [gmp_dep]
+  runtime_c_args += ['-DHAVE_GMP=1']
+else
+  runtime_c_args += ['-DHAVE_GMP=0']
+endif
+
+gpc_runtime_lib = static_library('gpc_runtime',
+  runtime_sources,
+  c_args: runtime_c_args,
+  dependencies: runtime_deps,
+  install: false,
+)
+
+ctypes_helper = shared_library('ctypes_helper',
+  meson.project_source_root() / 'tests/test_cases/ctypes_helper.c',
+  install: false,
+)
+
 python = find_program('python3')
+env = environment()
+env.set('RUN_BUGGY_TEST', get_option('run_buggy_test').to_string())
+env.set('MESON_BUILD_ROOT', meson.project_build_root())
+env.set('RUN_VALGRIND_TESTS', get_option('run_valgrind_tests').to_string())
+env.set('CC', ' '.join(compiler.cmd_array()))
+env.set('GPC_RUNTIME_LIB', gpc_runtime_lib.full_path())
+env.set('GPC_CTYPES_HELPER', ctypes_helper.full_path())
+env.set('GPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
+
+ctypes_helper_link = ctypes_helper.full_path()
+if host_machine.system() == 'windows'
+  env.append('PATH', meson.current_build_dir(), separator: ';')
+elif host_machine.system() == 'darwin'
+  env.append('DYLD_LIBRARY_PATH', meson.current_build_dir())
+else
+  env.append('LD_LIBRARY_PATH', meson.current_build_dir())
+endif
+env.set('GPC_CTYPES_HELPER_LINK', ctypes_helper_link)
+
 test('Compiler tests', python,
   args: [
     meson.project_source_root() / 'tests/test_runner.py',
     '--tap',
   ],
   workdir: meson.project_source_root(),
-  depends: gpc_cparser_exe,
-  env: [
-    'RUN_BUGGY_TEST=' + get_option('run_buggy_test').to_string(),
-    'MESON_BUILD_ROOT=' + meson.build_root(),
-    'RUN_VALGRIND_TESTS=' + get_option('run_valgrind_tests').to_string(),
-    ],
+  depends: [gpc_cparser_exe, gpc_runtime_lib, ctypes_helper],
+  env: env,
   protocol: 'tap',
   timeout: 300,
 )
