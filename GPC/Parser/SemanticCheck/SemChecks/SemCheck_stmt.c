@@ -269,7 +269,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
-        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE)
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && expr_type != CHAR_TYPE)
         {
             fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, real, boolean, string, or pointer.\n",
                     stmt->line_num, arg_index);
@@ -617,6 +617,8 @@ static const char *type_tag_to_name(int type_tag)
             return "string";
         case BOOL:
             return "boolean";
+        case CHAR_TYPE:
+            return "char";
         case PROCEDURE:
             return "procedure";
         case SET_TYPE:
@@ -652,22 +654,42 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    if(type_first != type_second)
+    int coerced_rhs_type = type_second;
+    int types_compatible = (type_first == type_second);
+
+    if (!types_compatible)
     {
-        if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
-              (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
+        if ((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+            (type_first == INT_TYPE && type_second == LONGINT_TYPE))
         {
-            const char *lhs_name = "<expression>";
-            if (var != NULL && var->type == EXPR_VAR_ID)
-                lhs_name = var->expr_data.id;
-            fprintf(stderr,
-                "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
-                stmt->line_num,
-                lhs_name,
-                type_tag_to_name(type_first),
-                type_tag_to_name(type_second));
-            ++return_val;
+            types_compatible = 1;
         }
+        else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
+            expr != NULL && expr->type == EXPR_STRING &&
+            expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1)
+        {
+            types_compatible = 1;
+            coerced_rhs_type = CHAR_TYPE;
+            expr->resolved_type = CHAR_TYPE;
+        }
+    }
+
+    if (!types_compatible)
+    {
+        const char *lhs_name = "<expression>";
+        if (var != NULL && var->type == EXPR_VAR_ID)
+            lhs_name = var->expr_data.id;
+        fprintf(stderr,
+            "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
+            stmt->line_num,
+            lhs_name,
+            type_tag_to_name(type_first),
+            type_tag_to_name(type_second));
+        ++return_val;
+    }
+    else
+    {
+        type_second = coerced_rhs_type;
     }
 
     return return_val;
