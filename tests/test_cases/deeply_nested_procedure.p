@@ -15,13 +15,16 @@ var
             inner_local: integer;
         begin
             inner_local := 10;
+            outer_local := outer_local + inner_local;
             global_var := global_var + outer_local + mid_local + inner_local;
+            writeln(outer_local);
             writeln(global_var);
         end;
 
     begin
         mid_local := 3;
         inner;
+        writeln(outer_local);
     end;
 
 begin
