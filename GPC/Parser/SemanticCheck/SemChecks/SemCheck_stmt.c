@@ -558,6 +558,8 @@ static const char *type_tag_to_name(int type_tag)
             return "set";
         case RECORD_TYPE:
             return "record";
+        case POINTER_TYPE:
+            return "pointer";
         case UNKNOWN_TYPE:
             return "unknown";
         default:
