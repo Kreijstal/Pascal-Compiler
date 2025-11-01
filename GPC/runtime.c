@@ -826,6 +826,96 @@ char *gpc_string_copy(const char *value, int64_t index, int64_t count)
     return result;
 }
 
+static long long gpc_val_error_position(const char *text, const char *error_ptr)
+{
+    if (text == NULL || error_ptr == NULL)
+        return 1;
+    return (long long)((error_ptr - text) + 1);
+}
+
+static const char *gpc_val_skip_trailing_whitespace(const char *ptr)
+{
+    if (ptr == NULL)
+        return NULL;
+    while (*ptr != '\0' && isspace((unsigned char)*ptr))
+        ++ptr;
+    return ptr;
+}
+
+static long long gpc_val_parse_integer(const char *text, long long min_value,
+    long long max_value, long long *out_value)
+{
+    if (text == NULL)
+        text = "";
+
+    errno = 0;
+    char *endptr = NULL;
+    long long value = strtoll(text, &endptr, 10);
+    if (endptr == text)
+        return 1;
+
+    if (errno == ERANGE || value < min_value || value > max_value)
+        return gpc_val_error_position(text, endptr);
+
+    const char *rest = gpc_val_skip_trailing_whitespace(endptr);
+    if (rest != NULL && *rest != '\0')
+        return gpc_val_error_position(text, rest);
+
+    if (out_value != NULL)
+        *out_value = value;
+    return 0;
+}
+
+static long long gpc_val_parse_real(const char *text, double *out_value)
+{
+    if (text == NULL)
+        text = "";
+
+    errno = 0;
+    char *endptr = NULL;
+    double value = strtod(text, &endptr);
+    if (endptr == text)
+        return 1;
+
+    if (errno == ERANGE)
+        return gpc_val_error_position(text, endptr);
+
+    const char *rest = gpc_val_skip_trailing_whitespace(endptr);
+    if (rest != NULL && *rest != '\0')
+        return gpc_val_error_position(text, rest);
+
+    if (out_value != NULL)
+        *out_value = value;
+    return 0;
+}
+
+long long gpc_val_integer(const char *text, int32_t *out_value)
+{
+    long long parsed = 0;
+    long long code = gpc_val_parse_integer(text, INT32_MIN, INT32_MAX, &parsed);
+    if (code == 0 && out_value != NULL)
+        *out_value = (int32_t)parsed;
+    return code;
+}
+
+long long gpc_val_longint(const char *text, int64_t *out_value)
+{
+    long long parsed = 0;
+    long long code = gpc_val_parse_integer(text, INT64_MIN, INT64_MAX, &parsed);
+    if (code == 0 && out_value != NULL)
+        *out_value = parsed;
+    return code;
+}
+
+long long gpc_val_real(const char *text, double *out_value)
+{
+    double parsed = 0.0;
+    long long code = gpc_val_parse_real(text, &parsed);
+    if (code == 0 && out_value != NULL)
+        *out_value = parsed;
+    return code;
+}
+
 char *gpc_chr(int64_t value)
 {
     if (value < 0)

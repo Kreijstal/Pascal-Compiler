@@ -218,6 +218,56 @@ static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int m
     return return_val;
 }
 
+static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL ||
+        args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Val expects exactly three arguments.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    int error_count = 0;
+
+    struct Expression *source_expr = (struct Expression *)args->cur;
+    int source_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
+    if (source_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Val expects its first argument to be a string.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    struct Expression *value_expr = (struct Expression *)args->next->cur;
+    int value_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, MUTATE);
+    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != REAL_TYPE)
+    {
+        fprintf(stderr,
+            "Error on line %d, Val target must be an integer, longint, or real variable.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    struct Expression *code_expr = (struct Expression *)args->next->next->cur;
+    int code_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
+    if (code_type != INT_TYPE && code_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Val code argument must be an integer variable.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    return error_count;
+}
+
 static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (stmt == NULL)
@@ -743,6 +793,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Move",
         semcheck_builtin_move, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Val",
+        semcheck_builtin_val, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
