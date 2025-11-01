@@ -20,6 +20,61 @@ static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }
 
+static int gpc_normalize_color(int color)
+{
+    int normalized = color % 16;
+    if (normalized < 0)
+        normalized += 16;
+    return normalized;
+}
+
+static int gpc_lookup_ansi_color(int color)
+{
+    static const int ansi_codes[16] = {
+        30, /* black */
+        34, /* blue */
+        32, /* green */
+        36, /* cyan */
+        31, /* red */
+        35, /* magenta */
+        33, /* brown */
+        37, /* lightgray */
+        90, /* darkgray */
+        94, /* lightblue */
+        92, /* lightgreen */
+        96, /* lightcyan */
+        91, /* lightred */
+        95, /* lightmagenta */
+        93, /* yellow */
+        97, /* white */
+    };
+
+    return ansi_codes[gpc_normalize_color(color)];
+}
+
+void gpc_clrscr(void)
+{
+    fputs("\033[2J\033[H", stdout);
+    fflush(stdout);
+}
+
+void gpc_textcolor(int color)
+{
+    int ansi_code = gpc_lookup_ansi_color(color);
+    fprintf(stdout, "\033[%dm", ansi_code);
+    fflush(stdout);
+}
+
+void gpc_readln(void)
+{
+    int ch;
+    do {
+        ch = getchar();
+        if (ch == EOF)
+            break;
+    } while (ch != '\n');
+}
+
 static inline double gpc_bits_to_double(int64_t bits)
 {
     double value;

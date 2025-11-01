@@ -1172,6 +1172,48 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(lines[1].strip(), "1")
         self.assertEqual(process.returncode, 0)
 
+    def test_crt_unit_colour_list(self):
+        """Ensures the Crt unit provides basic screen helpers."""
+        input_file, asm_file, executable_file = self._get_test_paths("crt_colour_list")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        try:
+            process = subprocess.run(
+                [executable_file],
+                capture_output=True,
+                text=True,
+                input="\n",
+                timeout=EXEC_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("crt_colour_list execution timed out")
+            return
+
+        expected_output = (
+            "\x1b[2J\x1b[H"
+            "\x1b[30m0\n"
+            "\x1b[34m1\n"
+            "\x1b[32m2\n"
+            "\x1b[36m3\n"
+            "\x1b[31m4\n"
+            "\x1b[35m5\n"
+            "\x1b[33m6\n"
+            "\x1b[37m7\n"
+            "\x1b[90m8\n"
+            "\x1b[94m9\n"
+            "\x1b[92m10\n"
+            "\x1b[96m11\n"
+            "\x1b[91m12\n"
+            "\x1b[95m13\n"
+            "\x1b[93m14\n"
+            "\x1b[97m15\n"
+        )
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, expected_output)
+
     def test_set_of_enum_typed_constant_unit(self):
         """Ensures a unit with a set-of-enum typed constant compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "set_of_enum_typed_constant_demo.p")
