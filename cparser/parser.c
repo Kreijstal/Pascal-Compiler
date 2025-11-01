@@ -182,6 +182,55 @@ static char* create_error_context(input_t* in, int line, int col, int index) {
     return context;
 }
 
+void parser_calculate_line_col(input_t* in, int index, int* out_line, int* out_col) {
+    int line = 1;
+    int col = 1;
+
+    if (!in || !in->buffer) {
+        if (out_line) *out_line = line;
+        if (out_col) *out_col = col;
+        return;
+    }
+
+    int length = in->length;
+    if (length <= 0) {
+        length = (int)strlen(in->buffer);
+    }
+    if (index < 0) {
+        index = 0;
+    }
+    if (index > length) {
+        index = length;
+    }
+
+    const char* buffer = in->buffer;
+    int pos = 0;
+
+    while (pos < index) {
+        unsigned char ch = (unsigned char)buffer[pos];
+        if (ch == '\n') {
+            line++;
+            col = 1;
+        } else if (ch == '\r') {
+            if (pos + 1 < index && buffer[pos + 1] == '\n') {
+                pos++;
+            }
+            line++;
+            col = 1;
+        } else {
+            col++;
+        }
+        pos++;
+    }
+
+    if (out_line) *out_line = line;
+    if (out_col) *out_col = col;
+}
+
+char* parser_format_context(input_t* in, int line, int col, int index) {
+    return create_error_context(in, line, col, index);
+}
+
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
     err->line = in ? in->line : 0;

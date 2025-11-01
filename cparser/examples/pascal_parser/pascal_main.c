@@ -308,7 +308,25 @@ int main(int argc, char *argv[]) {
 
     if (result.is_success) {
         if (in->start < in->length) {
-            fprintf(stderr, "Error: Parser did not consume entire input. Trailing characters: '%s'\n", in->buffer + in->start);
+            int trailing_index = in->start;
+            int trailing_line = 1;
+            int trailing_col = 1;
+            parser_calculate_line_col(in, trailing_index, &trailing_line, &trailing_col);
+
+            fprintf(stderr,
+                    "Error: Parser did not consume entire input. Trailing input begins at line %d, column %d.\n",
+                    trailing_line, trailing_col);
+
+            char* context = parser_format_context(in, trailing_line, trailing_col, trailing_index);
+            if (context != NULL) {
+                fprintf(stderr, "%s", context);
+                free(context);
+            }
+
+            const char* remaining = in->buffer + in->start;
+            fprintf(stderr, "Remaining characters: '%.*s'%s\n",
+                    80, remaining, strlen(remaining) > 80 ? "..." : "");
+
             free_ast(result.value.ast);
             free(preprocessed_content);
             free(file_content);

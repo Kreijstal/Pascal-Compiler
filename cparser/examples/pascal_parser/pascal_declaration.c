@@ -808,6 +808,7 @@ void init_pascal_procedure_parser(combinator_t** p) {
         procedure_param_list,                    // optional parameter list
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // procedure body
+        optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
 
@@ -820,6 +821,7 @@ void init_pascal_procedure_parser(combinator_t** p) {
         return_type,                             // return type
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // function body
+        optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
 
