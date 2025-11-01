@@ -209,6 +209,7 @@ static int map_type_name(const char *name, char **type_id_out) {
 }
 
 static struct RecordType *convert_record_type(ast_t *record_node);
+static struct RecordType *convert_class_type(ast_t *class_node);
 static struct Expression *convert_expression(ast_t *expr_node);
 static struct Expression *convert_member_access(ast_t *node);
 static struct Expression *convert_field_width_expr(ast_t *field_width_node);
@@ -217,6 +218,8 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
+static Tree_t *convert_method_impl(ast_t *method_node);
+static struct Statement *convert_method_call(ast_t *member_node);
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
@@ -401,6 +404,16 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             *record_out = record;
         } else {
             destroy_record_type(record);
+        }
+        return UNKNOWN_TYPE;
+    }
+
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
+        struct RecordType *class_record = convert_class_type(spec_node);
+        if (record_out != NULL) {
+            *record_out = class_record;
+        } else {
+            destroy_record_type(class_record);
         }
         return UNKNOWN_TYPE;
     }
@@ -691,6 +704,48 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
         return NULL;
     }
     record->fields = list_builder_finish(&fields_builder);
+    record->is_class = 0;
+    record->class_parent_id = NULL;
+    return record;
+}
+
+static struct RecordType *convert_class_type(ast_t *class_node) {
+    if (class_node == NULL)
+        return NULL;
+
+    ListBuilder fields_builder;
+    list_builder_init(&fields_builder);
+
+    for (ast_t *member = class_node->child; member != NULL; member = member->next) {
+        ast_t *unwrapped = unwrap_pascal_node(member);
+        if (unwrapped == NULL)
+            unwrapped = member;
+
+        if (unwrapped == NULL)
+            continue;
+
+        if (unwrapped->typ == PASCAL_T_CLASS_MEMBER) {
+            ast_t *inner = unwrap_pascal_node(unwrapped->child);
+            if (inner == NULL)
+                inner = unwrapped->child;
+            if (inner != NULL && inner->typ == PASCAL_T_FIELD_DECL) {
+                ListNode_t *fields = convert_field_decl(inner);
+                list_builder_extend(&fields_builder, fields);
+            }
+        } else if (unwrapped->typ == PASCAL_T_FIELD_DECL) {
+            ListNode_t *fields = convert_field_decl(unwrapped);
+            list_builder_extend(&fields_builder, fields);
+        }
+    }
+
+    struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
+    if (record == NULL) {
+        destroy_list(fields_builder.head);
+        return NULL;
+    }
+    record->fields = list_builder_finish(&fields_builder);
+    record->is_class = 1;
+    record->class_parent_id = NULL;
     return record;
 }
 
@@ -1786,6 +1841,46 @@ static struct Expression *convert_member_access(ast_t *node) {
     return mk_recordaccess(node->line, record_expr, field_id);
 }
 
+static struct Statement *convert_method_call(ast_t *member_node) {
+    if (member_node == NULL)
+        return NULL;
+
+    ast_t *base_node = member_node->child;
+    ast_t *member_part = (base_node != NULL) ? base_node->next : NULL;
+
+    struct Expression *self_expr = convert_expression(base_node);
+    if (self_expr == NULL)
+        return NULL;
+
+    char *method_id = NULL;
+    ListNode_t *args = NULL;
+
+    ast_t *unwrapped = unwrap_pascal_node(member_part);
+    if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FUNC_CALL) {
+        ast_t *name_node = unwrapped->child;
+        if (name_node != NULL)
+            method_id = dup_symbol(name_node);
+        ast_t *arg_start = (name_node != NULL) ? name_node->next : NULL;
+        args = convert_expression_list(arg_start);
+    } else if (unwrapped != NULL && unwrapped->typ == PASCAL_T_IDENTIFIER) {
+        method_id = dup_symbol(unwrapped);
+    } else if (member_part != NULL && member_part->typ == PASCAL_T_IDENTIFIER) {
+        method_id = dup_symbol(member_part);
+    }
+
+    if (method_id == NULL) {
+        destroy_expr(self_expr);
+        return NULL;
+    }
+
+    ListNode_t *self_node = CreateListNode(self_expr, LIST_EXPR);
+    if (args != NULL)
+        self_node->next = args;
+    args = self_node;
+
+    return mk_procedurecall(member_node->line, method_id, args);
+}
+
 static struct Statement *convert_assignment(ast_t *assign_node) {
     ast_t *lhs = assign_node->child;
     ast_t *rhs = lhs != NULL ? lhs->next : NULL;
@@ -1872,6 +1967,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_FUNC_CALL:
         return convert_proc_call(stmt_node, true);
+    case PASCAL_T_MEMBER_ACCESS:
+        return convert_method_call(stmt_node);
     case PASCAL_T_ASM_BLOCK: {
         char *code = collect_asm_text(stmt_node->child);
         return mk_asmblock(stmt_node->line, code);
@@ -2291,6 +2388,110 @@ static Tree_t *convert_function(ast_t *func_node) {
     return tree;
 }
 
+static Tree_t *convert_method_impl(ast_t *method_node) {
+    if (method_node == NULL)
+        return NULL;
+
+    ast_t *cursor = method_node->child;
+    if (cursor == NULL || cursor->typ != PASCAL_T_QUALIFIED_IDENTIFIER)
+        return NULL;
+
+    ast_t *class_part = cursor->child;
+    char *class_name = class_part != NULL ? dup_symbol(class_part) : NULL;
+    ast_t *method_part = (class_part != NULL) ? class_part->next : NULL;
+    char *method_name = method_part != NULL ? dup_symbol(method_part) : NULL;
+    cursor = cursor->next;
+
+    if (method_name == NULL) {
+        if (class_name != NULL)
+            free(class_name);
+        return NULL;
+    }
+
+    char *id = strdup(method_name);
+
+    ListNode_t *params = NULL;
+    if (class_name != NULL) {
+        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, RECORD_TYPE,
+                                        strdup(class_name), 1, 0, NULL);
+        params = CreateListNode(self_param, LIST_TREE);
+    }
+
+    ListNode_t *const_decls = NULL;
+    ListBuilder var_decls_builder;
+    list_builder_init(&var_decls_builder);
+    ListNode_t *nested_subs = NULL;
+    ListNode_t **nested_tail = &nested_subs;
+    struct Statement *body = NULL;
+
+    while (cursor != NULL) {
+        switch (cursor->typ) {
+        case PASCAL_T_PARAM_LIST: {
+            ast_t *param_cursor = cursor->child;
+            ListNode_t *param_nodes = convert_param_list(&param_cursor);
+            extend_list(&params, param_nodes);
+            break;
+        }
+        case PASCAL_T_PARAM: {
+            ListNode_t *param_nodes = convert_param(cursor);
+            extend_list(&params, param_nodes);
+            break;
+        }
+        case PASCAL_T_CONST_SECTION:
+            append_const_decls_from_section(cursor, &const_decls, &var_decls_builder);
+            break;
+        case PASCAL_T_VAR_SECTION:
+            list_builder_extend(&var_decls_builder, convert_var_section(cursor));
+            break;
+        case PASCAL_T_PROCEDURE_DECL:
+        case PASCAL_T_FUNCTION_DECL: {
+            Tree_t *sub = (cursor->typ == PASCAL_T_PROCEDURE_DECL)
+                              ? convert_procedure(cursor)
+                              : convert_function(cursor);
+            if (sub != NULL) {
+                ListNode_t *node = CreateListNode(sub, LIST_TREE);
+                *nested_tail = node;
+                nested_tail = &node->next;
+            }
+            break;
+        }
+        case PASCAL_T_BEGIN_BLOCK:
+        case PASCAL_T_MAIN_BLOCK:
+            body = convert_block(cursor);
+            break;
+        case PASCAL_T_ASM_BLOCK: {
+            struct Statement *stmt = convert_statement(cursor);
+            ListBuilder stmts_builder;
+            list_builder_init(&stmts_builder);
+            if (stmt != NULL)
+                list_builder_append(&stmts_builder, stmt, LIST_STMT);
+            body = mk_compoundstatement(cursor->line, list_builder_finish(&stmts_builder));
+            break;
+        }
+        default:
+            break;
+        }
+        cursor = cursor->next;
+    }
+
+    struct Statement *final_body = body;
+    if (final_body != NULL && class_name != NULL) {
+        struct Expression *self_expr = mk_varid(method_node->line, strdup("Self"));
+        final_body = mk_with(method_node->line, self_expr, final_body);
+    }
+
+    Tree_t *tree = mk_procedure(method_node->line, id, params, const_decls,
+                                list_builder_finish(&var_decls_builder), nested_subs, final_body, 0, 0);
+
+    if (class_name != NULL)
+        free(class_name);
+    if (method_name != NULL)
+        free(method_name);
+
+    return tree;
+}
+
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     if (program_ast == NULL)
         return NULL;
@@ -2340,6 +2541,15 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                   : convert_function(section);
                 if (sub != NULL) {
                     ListNode_t *node = CreateListNode(sub, LIST_TREE);
+                    *subprograms_tail = node;
+                    subprograms_tail = &node->next;
+                }
+                break;
+            }
+            case PASCAL_T_METHOD_IMPL: {
+                Tree_t *method = convert_method_impl(section);
+                if (method != NULL) {
+                    ListNode_t *node = CreateListNode(method, LIST_TREE);
                     *subprograms_tail = node;
                     subprograms_tail = &node->next;
                 }
@@ -2441,6 +2651,15 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         Tree_t *func = convert_function(node);
                         if (func != NULL) {
                             ListNode_t *list_node = CreateListNode(func, LIST_TREE);
+                            *subprograms_tail = list_node;
+                            subprograms_tail = &list_node->next;
+                        }
+                        break;
+                    }
+                    case PASCAL_T_METHOD_IMPL: {
+                        Tree_t *method = convert_method_impl(node);
+                        if (method != NULL) {
+                            ListNode_t *list_node = CreateListNode(method, LIST_TREE);
                             *subprograms_tail = list_node;
                             subprograms_tail = &list_node->next;
                         }

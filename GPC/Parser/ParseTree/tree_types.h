@@ -59,6 +59,8 @@ struct RecordField
 struct RecordType
 {
     ListNode_t *fields;
+    int is_class;
+    char *class_parent_id;
 };
 
 struct VariantBranch

@@ -30,6 +30,8 @@ static ParseResult fail_with_message(const char* message, input_t* in, InputStat
     return make_failure_v2(in, parser_name, strdup(message), NULL);
 }
 
+static combinator_t* create_record_field_type_spec(void);
+
 // Range type parser: reuse expression parser and re-tag range AST nodes
 static ParseResult range_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -194,16 +196,52 @@ combinator_t* array_type(tag_t tag) {
     return comb;
 }
 
-static ast_t* build_class_ast(ast_t* ast) {
-    // ast is the result of the seq.
-    // children are: class_keyword, class_body, end_keyword
-    ast_t* class_body = ast->child->next;
+static void append_class_member(ast_t*** tail, ast_t* member) {
+    if (tail == NULL || member == NULL)
+        return;
 
+    ast_t* copy = copy_ast(member);
+    if (copy == NULL)
+        return;
+
+    **tail = copy;
+    while (**tail != NULL && (**tail)->next != NULL)
+        *tail = &((**tail)->next);
+    *tail = &((**tail)->next);
+}
+
+static void collect_class_members(ast_t* node, ast_t*** tail) {
+    if (node == NULL || node == ast_nil || tail == NULL)
+        return;
+
+    ast_t* current = node;
+    while (current != NULL && current != ast_nil) {
+        ast_t* unwrapped = current;
+        if (unwrapped->typ == PASCAL_T_NONE && unwrapped->child != NULL)
+            unwrapped = unwrapped->child;
+
+        if (unwrapped != NULL) {
+            if (unwrapped->typ == PASCAL_T_CLASS_MEMBER ||
+                unwrapped->typ == PASCAL_T_FIELD_DECL) {
+                append_class_member(tail, unwrapped);
+            } else {
+                collect_class_members(unwrapped->child, tail);
+            }
+        }
+
+        current = current->next;
+    }
+}
+
+static ast_t* build_class_ast(ast_t* ast) {
     ast_t* class_node = new_ast();
     class_node->typ = ast->typ;
-    class_node->child = copy_ast(class_body);
+    class_node->child = NULL;
     class_node->line = ast->line;
     class_node->col = ast->col;
+
+    ast_t** tail = &class_node->child;
+    collect_class_members(ast->child, &tail);
 
     free_ast(ast);
     return class_node;
@@ -211,8 +249,8 @@ static ast_t* build_class_ast(ast_t* ast) {
 
 combinator_t* class_type(tag_t tag) {
     // Field declaration: field_name: Type;
-    combinator_t* field_name = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* field_type = token(cident(PASCAL_T_IDENTIFIER)); // simplified type for now
+    combinator_t* field_name = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+    combinator_t* field_type = create_record_field_type_spec();
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         field_name,
         token(match(":")),
