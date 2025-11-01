@@ -316,14 +316,7 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
     combinator_t* p = (combinator_t*)args;
     ast_t* head = NULL;
     ast_t* tail = NULL;
-    int iteration_count = 0;
-    int last_report = 0;
     while (1) {
-        iteration_count++;
-        if (iteration_count > last_report + 100000) {
-            fprintf(stderr, "[DEBUG] many_fn loop: %d iterations, position %d\n", iteration_count, in->start);
-            last_report = iteration_count;
-        }
         InputState state;
         save_input_state(in, &state);
         ParseResult res = parse(in, p);
@@ -338,9 +331,6 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             // Restore state and discard the epsilon match
             restore_input_state(in, &state);
             free_ast(res.value.ast);
-            if (iteration_count > 1000) {
-                fprintf(stderr, "[DEBUG] many_fn: breaking due to no input consumed at position %d after %d iterations\n", in->start, iteration_count);
-            }
             break;
         }
         if (head == NULL) {
@@ -349,9 +339,6 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             tail->next = res.value.ast;
             tail = tail->next;
         }
-    }
-    if (iteration_count > 1000) {
-        fprintf(stderr, "[DEBUG] many_fn completed after %d iterations\n", iteration_count);
     }
     return make_success(head ? head : ast_nil);
 }

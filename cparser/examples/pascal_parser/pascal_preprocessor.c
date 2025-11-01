@@ -208,13 +208,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
     bool in_paren_comment = false;
     bool in_line_comment = false;
 
-    size_t last_progress = 0;
     for (size_t i = 0; i < length; ++i) {
-        if (i > last_progress + 10000) {
-            fprintf(stderr, "[DEBUG] Preprocessing %s: %zu/%zu (%.1f%%)\n", 
-                    filename ? filename : "<buffer>", i, length, 100.0 * i / length);
-            last_progress = i;
-        }
         char c = input[i];
 
         bool in_comment = in_brace_comment || in_paren_comment || in_line_comment;
