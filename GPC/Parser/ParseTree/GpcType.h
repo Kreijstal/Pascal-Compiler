@@ -16,6 +16,9 @@
 // Forward declaration to allow recursive type definitions (e.g., pointers).
 typedef struct GpcType GpcType;
 
+// Forward declaration for symbol table (avoid circular dependency)
+struct SymTab;
+
 // Defines what kind of type we are dealing with.
 typedef enum {
     TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
@@ -75,7 +78,7 @@ GpcType* create_record_type(struct RecordType *record_info);
 void destroy_gpc_type(GpcType *type);
 
 // Utility functions
-int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type);
+int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab);
 const char* gpc_type_to_string(GpcType *type); // For debugging
 
 #endif // GPC_TYPE_H

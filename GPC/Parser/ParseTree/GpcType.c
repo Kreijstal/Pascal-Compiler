@@ -9,6 +9,7 @@
 #include <string.h>
 #include "GpcType.h"
 #include "type_tags.h"
+#include "tree_types.h"
 
 // --- Constructor Implementations ---
 
@@ -86,16 +87,196 @@ void destroy_gpc_type(GpcType *type) {
 
 // --- Utility Implementations ---
 
-int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type) {
-    // TODO in Phase 3: Implement full compatibility logic.
-    // For now, a basic check is enough.
-    if (lhs_type == NULL || rhs_type == NULL) return 0;
-    if (lhs_type->kind != rhs_type->kind) return 0;
-    if (lhs_type->kind == TYPE_KIND_PRIMITIVE) {
-        return lhs_type->info.primitive_type_tag == rhs_type->info.primitive_type_tag;
+/* Helper function to check numeric type compatibility */
+static int types_numeric_compatible(int lhs, int rhs) {
+    /* Exact match */
+    if (lhs == rhs)
+        return 1;
+
+    /* Integer and longint are compatible */
+    if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+        return 1;
+
+    /* Real can accept integer or longint */
+    if (lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE))
+        return 1;
+
+    /* Integer can accept char (for compatibility) */
+    if (lhs == INT_TYPE && rhs == CHAR_TYPE)
+        return 1;
+
+    return 0;
+}
+
+/* Helper function to get GpcType from a parameter Tree_t node 
+ * This is needed for procedure type compatibility checking */
+static GpcType *resolve_type_from_vardecl(Tree_t *var_decl) {
+    if (var_decl == NULL || var_decl->type != TREE_VAR_DECL)
+        return NULL;
+
+    /* For now, we create a primitive type from the type field 
+     * In a fully migrated system, the type would be stored directly */
+    int var_type_tag = var_decl->tree_data.var_decl_data.type;
+    
+    /* Handle special cases */
+    if (var_type_tag == UNKNOWN_TYPE && var_decl->tree_data.var_decl_data.type_id != NULL) {
+        /* This is a named type reference - for now we can't fully resolve it without symtab */
+        /* We'll do a simple check based on the type_id string matching */
+        return NULL;
     }
-    // This will be expanded for procedure signature comparison.
-    return 1;
+
+    return create_primitive_type(var_type_tag);
+}
+
+int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab) {
+    /* NULL types are incompatible */
+    if (lhs_type == NULL || rhs_type == NULL)
+        return 0;
+
+    /* If kinds are different, generally incompatible */
+    /* Exception: we need to check for special cases */
+    if (lhs_type->kind != rhs_type->kind) {
+        /* Allow nil (represented as pointer) to be assigned to any pointer */
+        /* This is a common Pascal idiom but requires special handling */
+        return 0;
+    }
+
+    switch (lhs_type->kind) {
+        case TYPE_KIND_PRIMITIVE:
+            /* Use numeric compatibility for primitives */
+            return types_numeric_compatible(
+                lhs_type->info.primitive_type_tag,
+                rhs_type->info.primitive_type_tag);
+
+        case TYPE_KIND_POINTER:
+            /* Pointers are compatible if they point to compatible types */
+            /* Also allow nil assignment (both point to NULL) */
+            if (lhs_type->info.points_to == NULL && rhs_type->info.points_to == NULL)
+                return 1;
+            if (lhs_type->info.points_to == NULL || rhs_type->info.points_to == NULL)
+                return 1; /* nil can be assigned to any pointer */
+            return are_types_compatible_for_assignment(
+                lhs_type->info.points_to,
+                rhs_type->info.points_to,
+                symtab);
+
+        case TYPE_KIND_ARRAY:
+            /* Arrays are compatible if element types match and dimensions match */
+            if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
+                return 0;
+            if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
+                return 0;
+            return are_types_compatible_for_assignment(
+                lhs_type->info.array_info.element_type,
+                rhs_type->info.array_info.element_type,
+                symtab);
+
+        case TYPE_KIND_RECORD:
+            /* Records are compatible if they are the same record type 
+             * For now, we do pointer equality on record_info */
+            return lhs_type->info.record_info == rhs_type->info.record_info;
+
+        case TYPE_KIND_PROCEDURE: {
+            ProcedureTypeInfo *lhs_proc = &lhs_type->info.proc_info;
+            ProcedureTypeInfo *rhs_proc = &rhs_type->info.proc_info;
+
+            /* 1. Check function vs procedure compatibility 
+             * A procedure variable can only hold a procedure, not a function, and vice versa */
+            int lhs_is_function = (lhs_proc->return_type != NULL);
+            int rhs_is_function = (rhs_proc->return_type != NULL);
+            
+            if (lhs_is_function != rhs_is_function)
+                return 0; /* Cannot assign function to procedure var or vice versa */
+
+            /* 2. If both are functions, check return types */
+            if (lhs_is_function) {
+                if (!are_types_compatible_for_assignment(
+                        lhs_proc->return_type,
+                        rhs_proc->return_type,
+                        symtab))
+                    return 0;
+            }
+
+            /* 3. Check parameter counts */
+            int lhs_param_count = ListLength(lhs_proc->params);
+            int rhs_param_count = ListLength(rhs_proc->params);
+            
+            if (lhs_param_count != rhs_param_count)
+                return 0;
+
+            /* 4. Check each parameter's type and var status */
+            ListNode_t *lhs_p = lhs_proc->params;
+            ListNode_t *rhs_p = rhs_proc->params;
+            
+            while (lhs_p != NULL && rhs_p != NULL) {
+                if (lhs_p->type != LIST_TREE || rhs_p->type != LIST_TREE)
+                    return 0; /* Invalid parameter node */
+
+                Tree_t *lhs_decl = (Tree_t *)lhs_p->cur;
+                Tree_t *rhs_decl = (Tree_t *)rhs_p->cur;
+
+                if (lhs_decl == NULL || rhs_decl == NULL)
+                    return 0;
+
+                if (lhs_decl->type != TREE_VAR_DECL || rhs_decl->type != TREE_VAR_DECL)
+                    return 0;
+
+                /* Check var vs. value parameter 
+                 * var parameters must match exactly */
+                int lhs_is_var = lhs_decl->tree_data.var_decl_data.is_var_param;
+                int rhs_is_var = rhs_decl->tree_data.var_decl_data.is_var_param;
+                
+                if (lhs_is_var != rhs_is_var)
+                    return 0;
+
+                /* Check parameter types */
+                GpcType *lhs_param_type = resolve_type_from_vardecl(lhs_decl);
+                GpcType *rhs_param_type = resolve_type_from_vardecl(rhs_decl);
+
+                int param_compatible = 1;
+                if (lhs_param_type != NULL && rhs_param_type != NULL) {
+                    param_compatible = are_types_compatible_for_assignment(
+                        lhs_param_type, rhs_param_type, symtab);
+                } else if (lhs_param_type != NULL || rhs_param_type != NULL) {
+                    /* One is NULL, other is not - check type_id strings as fallback */
+                    const char *lhs_type_id = lhs_decl->tree_data.var_decl_data.type_id;
+                    const char *rhs_type_id = rhs_decl->tree_data.var_decl_data.type_id;
+                    
+                    /* If both have type IDs, compare them (for named types) */
+                    if (lhs_type_id != NULL && rhs_type_id != NULL) {
+                        param_compatible = (strcmp(lhs_type_id, rhs_type_id) == 0);
+                    } else {
+                        /* Different parameter types (one named, one primitive) */
+                        param_compatible = 0;
+                    }
+                } else {
+                    /* Both are NULL - check if type tags match */
+                    int lhs_tag = lhs_decl->tree_data.var_decl_data.type;
+                    int rhs_tag = rhs_decl->tree_data.var_decl_data.type;
+                    param_compatible = types_numeric_compatible(lhs_tag, rhs_tag);
+                }
+
+                /* Clean up temporary types */
+                if (lhs_param_type != NULL)
+                    destroy_gpc_type(lhs_param_type);
+                if (rhs_param_type != NULL)
+                    destroy_gpc_type(rhs_param_type);
+
+                if (!param_compatible)
+                    return 0;
+
+                lhs_p = lhs_p->next;
+                rhs_p = rhs_p->next;
+            }
+
+            /* All checks passed */
+            return 1;
+        }
+
+        default:
+            /* Unknown type kind */
+            return 0;
+    }
 }
 
 const char* gpc_type_to_string(GpcType *type) {
