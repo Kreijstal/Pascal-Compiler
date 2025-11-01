@@ -558,7 +558,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
 
     int is_var_param = 0;
     if (modifier_node != NULL && modifier_node->sym != NULL && modifier_node->sym->name != NULL) {
-        if (strcasecmp(modifier_node->sym->name, "var") == 0)
+        const char *modifier_name = modifier_node->sym->name;
+        if (strcasecmp(modifier_name, "var") == 0 || strcasecmp(modifier_name, "out") == 0)
             is_var_param = 1;
     }
 
@@ -573,18 +574,13 @@ static ListNode_t *convert_param(ast_t *param_node) {
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
 
-    if (type_node != NULL && type_node->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(type_node, &type_id, NULL, NULL);
-    } else {
-        char *type_name = pop_last_identifier(&ids);
-        if (type_name != NULL) {
-            var_type = map_type_name(type_name, &type_id);
-            if (var_type == UNKNOWN_TYPE && type_id == NULL)
-                type_id = type_name;
-            else
-                free(type_name);
-        }
+    if (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC) {
+        fprintf(stderr, "ERROR: parameter missing type specification.\n");
+        destroy_list(ids);
+        return NULL;
     }
+
+    var_type = convert_type_spec(type_node, &type_id, NULL, NULL);
 
     ListBuilder result_builder;
     list_builder_init(&result_builder);
