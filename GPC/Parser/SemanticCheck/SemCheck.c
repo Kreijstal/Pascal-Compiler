@@ -801,18 +801,22 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                     var_type = HASHVAR_REAL;
                 func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
-                if (func_return == 0 && resolved_type != NULL)
+                if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
                     if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                     {
-                        if (resolved_type->type_alias != NULL)
-                            var_node->type_alias = resolved_type->type_alias;
-                        if (resolved_type->record_type != NULL)
+                        var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        if (resolved_type != NULL)
                         {
-                            if (var_node->record_type != NULL)
-                                destroy_record_type(var_node->record_type);
-                            var_node->record_type = clone_record_type(resolved_type->record_type);
+                            if (resolved_type->type_alias != NULL)
+                                var_node->type_alias = resolved_type->type_alias;
+                            if (resolved_type->record_type != NULL)
+                            {
+                                if (var_node->record_type != NULL)
+                                    destroy_record_type(var_node->record_type);
+                                var_node->record_type = clone_record_type(resolved_type->record_type);
+                            }
                         }
                     }
                 }

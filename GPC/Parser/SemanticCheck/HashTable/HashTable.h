@@ -54,6 +54,7 @@ typedef struct HashNode
     int is_constant;
     long long const_int_value;
 
+    int is_var_parameter;
     int is_array;
     int array_start;
     int array_end;

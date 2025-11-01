@@ -43,10 +43,10 @@ pascal_parser_dep = declare_dependency(
 build_integration_tests = get_option('build_integration_tests')
 
 cparser_tests = executable('cparser_tests', 'cparser/tests.c',
-  dependencies: cparser_dep
+  dependencies: cparser_dep,
 )
 
-test('cparser unit tests', cparser_tests)
+test('cparser unit tests', cparser_tests,timeout:60)
 
 if build_integration_tests
   calculator_logic_lib = static_library('calculator_logic',
@@ -70,7 +70,7 @@ if build_integration_tests
     dependencies: calculator_dep
   )
 
-  test('calculator unit tests', calc_tests)
+  test('calculator unit tests', calc_tests,timeout:60)
 
   bash = find_program('bash', required: false)
   if bash.found()

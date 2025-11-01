@@ -126,6 +126,7 @@ typedef struct StackNode
     int element_size;
     int is_dynamic;
     int is_static;
+    int is_reference;
     char *static_label;
 } StackNode_t;
 

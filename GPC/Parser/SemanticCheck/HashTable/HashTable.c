@@ -66,6 +66,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->mutated = 0;
         hash_node->is_constant = 0;
         hash_node->const_int_value = 0;
+        hash_node->is_var_parameter = 0;
         hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
         hash_node->array_start = 0;
         hash_node->array_end = 0;
@@ -117,6 +118,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType
         hash_node->mutated = 0;
         hash_node->is_constant = 0;
         hash_node->const_int_value = 0;
+        hash_node->is_var_parameter = 0;
         hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
         hash_node->array_start = 0;
         hash_node->array_end = 0;
