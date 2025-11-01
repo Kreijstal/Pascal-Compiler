@@ -24,9 +24,7 @@ static void set_combinator_name(combinator_t* comb, const char* name) {
 }
 
 static ast_t* make_modifier_node(ast_t* original, const char* keyword) {
-    (void)original;
-
-    ast_t* modifier = new_ast();
+    ast_t* modifier = (original != NULL && original != ast_nil) ? original : new_ast();
     modifier->typ = PASCAL_T_IDENTIFIER;
     modifier->sym = sym_lookup(keyword);
     modifier->child = NULL;
@@ -45,10 +43,6 @@ static ast_t* map_var_modifier(ast_t* ast) {
 // Maps the 'out' keyword to a modifier node
 static ast_t* map_out_modifier(ast_t* ast) {
     return make_modifier_node(ast, "out");
-}
-
-static ast_t* identity_map(ast_t* ast) {
-    return ast;
 }
 
 static ast_t* discard_ast(ast_t* ast) {
@@ -81,13 +75,27 @@ static ast_t* create_placeholder_modifier(ast_t* reference) {
     return placeholder;
 }
 
+static combinator_t* create_optional_modifier(void) {
+    combinator_t* modifier_choice = multi(new_combinator(), PASCAL_T_NONE,
+        map(token(keyword_ci("const")), map_const_modifier),
+        map(token(keyword_ci("var")), map_var_modifier),
+        map(token(keyword_ci("out")), map_out_modifier),
+        NULL
+    );
+
+    return optional(modifier_choice);
+}
+
 static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec) {
     ast_t* prev = NULL;
     ast_t* cursor = identifier_start;
     while (cursor != NULL) {
         if (cursor->typ == PASCAL_T_TYPE_SPEC) {
-            if (prev != NULL)
+            if (prev != NULL) {
                 prev->next = NULL;
+            } else {
+                identifier_start = NULL;
+            }
             *out_type_spec = cursor;
             cursor->next = NULL;
             return identifier_start;
@@ -176,39 +184,12 @@ static combinator_t* create_param_type_spec(void) {
     );
 }
 
-static combinator_t* create_modifier_param(const char* keyword, ast_t* (*mapper)(ast_t*), const char* name) {
-    map_func transform = mapper != NULL ? mapper : identity_map;
-    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
-        map(token(match((char*)keyword)), transform),
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-    combinator_t* param = map(param_seq, structure_param_node);
-    set_combinator_name(param, name);
-    return param;
-}
-
-static combinator_t* create_value_param(void) {
-    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
-        succeed(ast_nil),
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-    combinator_t* param = map(param_seq, structure_param_node);
-    set_combinator_name(param, "value_param");
-    return param;
-}
-
 static combinator_t* create_simple_param_list(void) {
     combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
-        optional(map(token(keyword_ci("const")), map_const_modifier)),
-        optional(map(token(keyword_ci("var")), map_var_modifier)),
+        create_optional_modifier(),
         param_name_list,
-        token(match(":")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        create_param_type_spec(),
         NULL
     );
     combinator_t* param = map(param_seq, structure_param_node);
@@ -221,13 +202,13 @@ static combinator_t* create_simple_param_list(void) {
 
 // Helper function to create parameter parser (reduces code duplication)
 combinator_t* create_pascal_param_parser(void) {
-    combinator_t* param = multi(new_combinator(), PASCAL_T_NONE,
-        create_modifier_param("var", map_var_modifier, "var_param"),
-        create_modifier_param("const", map_const_modifier, "const_param"),
-        create_modifier_param("out", map_out_modifier, "out_param"),
-        create_value_param(),
+    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
+        create_optional_modifier(),
+        create_param_name_list(),
+        create_param_type_spec(),
         NULL
     );
+    combinator_t* param = map(param_seq, structure_param_node);
     set_combinator_name(param, "param");
 
     return optional(between(
