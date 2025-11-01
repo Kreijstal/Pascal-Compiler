@@ -188,6 +188,62 @@ static void list_builder_extend(ListBuilder *builder, ListNode_t *nodes) {
         builder->tail_next = &(*builder->tail_next)->next;
 }
 
+static ast_t *unwrap_pascal_node(ast_t *node);
+static struct Expression *convert_expression(ast_t *expr_node);
+
+static struct Expression *convert_case_label_expression(ast_t *node) {
+    struct Expression *expr = convert_expression(node);
+    if (expr != NULL && expr->type == EXPR_STRING && expr->expr_data.string != NULL) {
+        const char *value = expr->expr_data.string;
+        if (value[0] != '\0' && value[1] == '\0') {
+            unsigned int code = (unsigned char)value[0];
+            int line = (node != NULL) ? node->line : 0;
+            destroy_expr(expr);
+            return mk_charcode(line, code);
+        }
+    }
+    return expr;
+}
+
+static void append_case_label(ListBuilder *builder, ast_t *label_node) {
+    if (builder == NULL || label_node == NULL)
+        return;
+
+    ast_t *unwrapped = unwrap_pascal_node(label_node);
+    if (unwrapped == NULL)
+        return;
+
+    if (unwrapped->typ == PASCAL_T_CASE_LABEL) {
+        append_case_label(builder, unwrapped->child);
+        return;
+    }
+
+    if (unwrapped->typ == PASCAL_T_RANGE) {
+        ast_t *lower_node = unwrap_pascal_node(unwrapped->child);
+        ast_t *upper_node = NULL;
+        if (lower_node != NULL)
+            upper_node = unwrap_pascal_node(lower_node->next);
+
+        struct Expression *lower_expr = convert_case_label_expression(lower_node);
+        struct Expression *upper_expr = convert_case_label_expression(upper_node);
+
+        if (lower_expr != NULL && upper_expr != NULL) {
+            struct SetElement *range = mk_set_element(lower_expr, upper_expr);
+            list_builder_append(builder, range, LIST_SET_ELEMENT);
+        } else {
+            if (lower_expr != NULL)
+                destroy_expr(lower_expr);
+            if (upper_expr != NULL)
+                destroy_expr(upper_expr);
+        }
+        return;
+    }
+
+    struct Expression *label_expr = convert_case_label_expression(unwrapped);
+    if (label_expr != NULL)
+        list_builder_append(builder, label_expr, LIST_EXPR);
+}
+
 static void extend_list(ListNode_t **dest, ListNode_t *src) {
     if (src == NULL) {
         return;
@@ -728,19 +784,7 @@ static ListNode_t *convert_variant_labels(ast_t *labels_node) {
 
     ast_t *label_cursor = labels_node;
     while (label_cursor != NULL) {
-        if (label_cursor->typ == PASCAL_T_CASE_LABEL && label_cursor->child != NULL) {
-            struct Expression *label_expr = convert_expression(label_cursor->child);
-            if (label_expr != NULL)
-                list_builder_append(&labels_builder, label_expr, LIST_EXPR);
-        } else if (label_cursor->typ == PASCAL_T_INTEGER ||
-                   label_cursor->typ == PASCAL_T_IDENTIFIER ||
-                   label_cursor->typ == PASCAL_T_CHAR ||
-                   label_cursor->typ == PASCAL_T_CHAR_CODE ||
-                   label_cursor->typ == PASCAL_T_STRING) {
-            struct Expression *label_expr = convert_expression(label_cursor);
-            if (label_expr != NULL)
-                list_builder_append(&labels_builder, label_expr, LIST_EXPR);
-        }
+        append_case_label(&labels_builder, label_cursor);
         label_cursor = label_cursor->next;
     }
 
@@ -2430,36 +2474,25 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                     if (child->typ == PASCAL_T_CASE_LABEL_LIST) {
                         /* CASE_LABEL_LIST contains the labels */
                         ast_t *label_node = child->child;
-                        while (label_node != NULL) {
-                            if (label_node->typ == PASCAL_T_CASE_LABEL && label_node->child != NULL) {
-                                struct Expression *label_expr = convert_expression(label_node->child);
-                                if (label_expr != NULL) {
-                                    list_builder_append(&labels_builder, label_expr, LIST_EXPR);
-                                }
-                            } else if (label_node->typ == PASCAL_T_INTEGER || 
-                                       label_node->typ == PASCAL_T_IDENTIFIER) {
-                                /* Direct value */
-                                struct Expression *label_expr = convert_expression(label_node);
-                                if (label_expr != NULL) {
-                                    list_builder_append(&labels_builder, label_expr, LIST_EXPR);
-                                }
-                            }
-                            label_node = label_node->next;
-                        }
-                    } else if (child->typ == PASCAL_T_CASE_LABEL) {
-                        /* Single CASE_LABEL (not in a list) */
-                        if (child->child != NULL) {
-                            struct Expression *label_expr = convert_expression(child->child);
-                            if (label_expr != NULL) {
-                                list_builder_append(&labels_builder, label_expr, LIST_EXPR);
-                            }
-                        }
-                    } else if (child->typ == PASCAL_T_STATEMENT || 
+                while (label_node != NULL) {
+                    append_case_label(&labels_builder, label_node);
+                    label_node = label_node->next;
+                }
+            } else if (child->typ == PASCAL_T_CASE_LABEL ||
+                       child->typ == PASCAL_T_INTEGER ||
+                       child->typ == PASCAL_T_IDENTIFIER ||
+                       child->typ == PASCAL_T_CHAR ||
+                       child->typ == PASCAL_T_CHAR_CODE ||
+                       child->typ == PASCAL_T_STRING ||
+                       child->typ == PASCAL_T_RANGE) {
+                append_case_label(&labels_builder, child);
+            } else if (child->typ == PASCAL_T_STATEMENT ||
+                       child->typ == PASCAL_T_ASSIGNMENT ||
                                child->typ == PASCAL_T_FUNC_CALL ||
                                child->typ == PASCAL_T_BEGIN_BLOCK) {
-                        /* This is the statement for this branch */
-                        branch_stmt = convert_statement(child);
-                        break; /* Statement is last */
+                /* This is the statement for this branch */
+                branch_stmt = convert_statement(child);
+                break; /* Statement is last */
                     }
                     child = child->next;
                 }
