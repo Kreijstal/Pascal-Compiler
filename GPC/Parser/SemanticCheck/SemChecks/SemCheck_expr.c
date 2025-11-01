@@ -2319,10 +2319,16 @@ int semcheck_addop(int *type_return,
         return return_val;
     }
 
-    if (op_type == PLUS && type_first == STRING_TYPE && type_second == STRING_TYPE)
+    if (op_type == PLUS)
     {
-        *type_return = STRING_TYPE;
-        return return_val;
+        int left_is_string_like = (type_first == STRING_TYPE || type_first == CHAR_TYPE);
+        int right_is_string_like = (type_second == STRING_TYPE || type_second == CHAR_TYPE);
+
+        if (left_is_string_like && right_is_string_like)
+        {
+            *type_return = STRING_TYPE;
+            return return_val;
+        }
     }
 
     /* Checking numeric types */
