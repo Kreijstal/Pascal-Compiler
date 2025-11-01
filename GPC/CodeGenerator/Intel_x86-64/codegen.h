@@ -211,7 +211,8 @@ ListNode_t *codegen_vect_reg(ListNode_t *, int);
 void codegen_subprograms(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_procedure(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
 void codegen_function(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
-ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
+ListNode_t *codegen_subprogram_arguments(ListNode_t *, ListNode_t *,
+    CodeGenContext *ctx, SymTab_t *symtab, int arg_start_index);
 
 
 #endif

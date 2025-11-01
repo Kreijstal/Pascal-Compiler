@@ -497,6 +497,41 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
     if (!codegen_expr_is_addressable(src_expr))
     {
+        if (src_expr->type == EXPR_FUNCTION_CALL && src_expr->resolved_type == RECORD_TYPE)
+        {
+            const char *ret_ptr_reg = current_arg_reg64(0);
+            if (ret_ptr_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine register for record return pointer.");
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, ret_ptr_reg);
+            inst_list = add_inst(inst_list, buffer);
+
+            HashNode_t *func_node = src_expr->expr_data.function_call_data.resolved_func;
+            if (func_node == NULL && ctx != NULL && ctx->symtab != NULL &&
+                src_expr->expr_data.function_call_data.id != NULL)
+            {
+                FindIdent(&func_node, ctx->symtab, src_expr->expr_data.function_call_data.id);
+            }
+
+            inst_list = codegen_pass_arguments(
+                src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                func_node, 1);
+
+            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
+                src_expr->expr_data.function_call_data.mangled_id);
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), dest_reg);
+            free_arg_regs();
+            return inst_list;
+        }
+
         codegen_report_error(ctx,
             "ERROR: Unsupported record-valued source expression.");
         free_reg(get_reg_stack(), dest_reg);
@@ -1493,7 +1528,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -1995,7 +2030,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
         
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
