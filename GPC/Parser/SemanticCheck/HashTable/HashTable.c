@@ -26,9 +26,119 @@ HashTable_t *InitHashTable()
     return new_table;
 }
 
-/* Adds an identifier to the table */
+/* Adds an identifier to the table - NEW VERSION with GpcType */
+/* Returns 0 if successfully added, 1 if the identifier already exists */
+int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
+    enum HashType hash_type, ListNode_t *args, GpcType *type)
+{
+    ListNode_t *list, *cur;
+    HashNode_t *hash_node;
+    int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return 1;
+
+    hash = hashpjw(canonical_id);
+    list = table->table[hash];
+    if(list == NULL)
+    {
+        hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+        assert(hash_node != NULL);
+        hash_node->hash_type = hash_type;
+        hash_node->type = type; // NEW: Use unified type system
+        hash_node->id = strdup(id);
+        if (hash_node->id == NULL)
+        {
+            free(hash_node);
+            free(canonical_id);
+            return 1;
+        }
+        hash_node->canonical_id = canonical_id;
+        hash_node->mangled_id = mangled_id;
+        hash_node->args = args;
+        hash_node->referenced = 0;
+        hash_node->mutated = 0;
+        hash_node->is_constant = 0;
+        hash_node->const_int_value = 0;
+        hash_node->is_var_parameter = 0;
+        
+        // Initialize legacy fields to defaults for backward compatibility
+        hash_node->var_type = HASHVAR_UNTYPED;
+        hash_node->record_type = NULL;
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        hash_node->type_alias = NULL;
+
+        table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
+        return 0;
+    }
+    else
+    {
+        cur = list;
+        while(cur != NULL)
+        {
+            hash_node = (HashNode_t *)cur->cur;
+            if(strcmp(hash_node->canonical_id, canonical_id) == 0)
+            {
+                int is_new_proc_func = (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
+                int is_existing_proc_func = (hash_node->hash_type == HASHTYPE_PROCEDURE || hash_node->hash_type == HASHTYPE_FUNCTION);
+
+                if (!is_new_proc_func || !is_existing_proc_func)
+                {
+                    // If either is not a proc/func, it's a redeclaration error.
+                    free(canonical_id);
+                    return 1;
+                }
+            }
+            cur = cur->next;
+        }
+
+        /* Success if here */
+        hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+        assert(hash_node != NULL);
+        hash_node->hash_type = hash_type;
+        hash_node->type = type; // NEW: Use unified type system
+        hash_node->id = strdup(id);
+        if (hash_node->id == NULL)
+        {
+            free(hash_node);
+            free(canonical_id);
+            return 1;
+        }
+        hash_node->canonical_id = canonical_id;
+        hash_node->mangled_id = mangled_id;
+        hash_node->args = args;
+        hash_node->referenced = 0;
+        hash_node->mutated = 0;
+        hash_node->is_constant = 0;
+        hash_node->const_int_value = 0;
+        hash_node->is_var_parameter = 0;
+        
+        // Initialize legacy fields to defaults for backward compatibility
+        hash_node->var_type = HASHVAR_UNTYPED;
+        hash_node->record_type = NULL;
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        hash_node->type_alias = NULL;
+
+        table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
+        return 0;
+    }
+}
+
+/* Adds an identifier to the table - LEGACY VERSION */
 /* Returns 1 if successfully added, 0 if the identifier already exists */
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
+int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
     enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
     struct TypeAlias *type_alias)
 {
