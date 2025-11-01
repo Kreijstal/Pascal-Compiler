@@ -239,7 +239,10 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     // compound statement: statements are separated by semicolons with an optional
     // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
     // the statement parser so complex statements (like CASE) remain available.
+    combinator_t* leading_semicolons = many(token(match(";")));
+
     combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
+        leading_semicolons,
         sep_by(lazy_owned(stmt_parser_ref), token(match(";"))),
         optional(token(match(";"))),
         NULL

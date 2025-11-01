@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 // Initialize ast_nil if not already initialized
 static ast_t* ensure_ast_nil_initialized() {
@@ -35,6 +36,29 @@ static ParseResult map_fn(input_t * in, void * args, char* parser_name);
 static ParseResult errmap_fn(input_t * in, void * args, char* parser_name);
 static ParseResult many_fn(input_t * in, void * args, char* parser_name);
 static ParseResult optional_fn(input_t * in, void * args, char* parser_name);
+
+typedef struct {
+    int index;
+    int line;
+    int col;
+} error_position_t;
+
+static error_position_t error_best_position(ParseError* err) {
+    if (err == NULL) {
+        return (error_position_t){ .index = -1, .line = -1, .col = -1 };
+    }
+
+    error_position_t best = { .index = err->index, .line = err->line, .col = err->col };
+    if (err->cause != NULL) {
+        error_position_t nested = error_best_position(err->cause);
+        if (nested.index > best.index ||
+            (nested.index == best.index && (nested.line > best.line ||
+             (nested.line == best.line && nested.col > best.col)))) {
+            best = nested;
+        }
+    }
+    return best;
+}
 
 // --- _fn Implementations ---
 
@@ -378,7 +402,10 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
 
-    ParseResult last_res;
+    bool has_best = false;
+    ParseResult best_res = {0};
+    error_position_t best_pos = { .index = -1, .line = -1, .col = -1 };
+
     for (seq_list *current = seq; current != NULL; current = current->next) {
         restore_input_state(in, &state);
         ParseResult res = parse(in, current->comb);
@@ -386,16 +413,33 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
             if (sa->typ != 0) {
                 res.value.ast = ast1(sa->typ, res.value.ast);
             }
+            if (has_best) {
+                free_error(best_res.value.error);
+            }
             return res;
         }
-        if (current->next == NULL) {
-            last_res = res;
+
+        error_position_t current_pos = error_best_position(res.value.error);
+        if (!has_best || current_pos.index > best_pos.index ||
+            (current_pos.index == best_pos.index &&
+             (current_pos.line > best_pos.line ||
+              (current_pos.line == best_pos.line && current_pos.col >= best_pos.col)))) {
+            if (has_best) {
+                free_error(best_res.value.error);
+            }
+            best_res = res;
+            best_pos = current_pos;
+            has_best = true;
         } else {
             free_error(res.value.error);
         }
     }
 
-    return last_res;
+    if (!has_best) {
+        return make_failure(in, strdup("multi parser had no valid failure to report"));
+    }
+
+    return best_res;
 }
 
 static ParseResult flatMap_fn(input_t * in, void * args, char* parser_name) {
