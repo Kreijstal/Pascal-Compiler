@@ -48,6 +48,44 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
+static const char *register_name8(const Register_t *reg)
+{
+    if (reg == NULL || reg->bit_64 == NULL)
+        return NULL;
+
+    static const struct
+    {
+        const char *wide;
+        const char *byte;
+    } register_map[] = {
+        { "%rax", "%al" },
+        { "%rbx", "%bl" },
+        { "%rcx", "%cl" },
+        { "%rdx", "%dl" },
+        { "%rsi", "%sil" },
+        { "%rdi", "%dil" },
+        { "%rbp", "%bpl" },
+        { "%rsp", "%spl" },
+        { "%r8", "%r8b" },
+        { "%r9", "%r9b" },
+        { "%r10", "%r10b" },
+        { "%r11", "%r11b" },
+        { "%r12", "%r12b" },
+        { "%r13", "%r13b" },
+        { "%r14", "%r14b" },
+        { "%r15", "%r15b" },
+    };
+
+    size_t count = sizeof(register_map) / sizeof(register_map[0]);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
+            return register_map[i].byte;
+    }
+
+    return NULL;
+}
+
 static unsigned long codegen_next_temp_suffix(void)
 {
     static unsigned long counter = 0;
@@ -285,6 +323,96 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tgpc_gmp_mpint_assign\n");
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64 ABI: first arg in %rcx, second in %rdx */
+        /* Handle register conflicts by checking if value_reg is already in %rcx */
+        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
+        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+
+        if (value_in_rcx && addr_in_rdx)
+        {
+            /* Both registers conflict - swap them */
+            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+        }
+        else if (value_in_rcx)
+        {
+            /* value is in %rcx but needs to go to %rdx, addr needs to go to %rcx */
+            /* Move value to %rdx first to avoid overwriting */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rdx)
+        {
+            /* addr is in %rdx but needs to go to %rcx, value needs to go to %rdx */
+            /* Move addr to %rcx first to avoid overwriting */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* No conflicts - standard order */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    else
+    {
+        /* System V ABI: first arg in %rdi, second in %rsi */
+        /* Handle register conflicts similarly */
+        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
+        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+
+        if (value_in_rdi && addr_in_rsi)
+        {
+            /* Both registers conflict - swap them */
+            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+        }
+        else if (value_in_rdi)
+        {
+            /* value is in %rdi but needs to go to %rsi, addr needs to go to %rdi */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rsi)
+        {
+            /* addr is in %rsi but needs to go to %rdi, value needs to go to %rsi */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* No conflicts - standard order */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_assign\n");
+    free_arg_regs();
     return inst_list;
 }
 
@@ -1344,6 +1472,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 free_reg(get_reg_stack(), value_reg);
             return inst_list;
         }
+
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), value_reg);
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
         reg = value_reg;
 
         if(var != NULL)
@@ -1432,16 +1579,40 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
-        if (use_qword)
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if (use_qword)
         {
             int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
-            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            if (var_expr->resolved_type == CHAR_TYPE)
+            {
+                const char *value_reg8 = register_name8(value_reg);
+                if (value_reg8 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
 
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);
@@ -1480,18 +1651,40 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
-        if (use_qword)
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if (use_qword)
         {
             int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
-            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+            if (var_expr->resolved_type == CHAR_TYPE)
+            {
+                const char *value_reg8 = register_name8(value_reg);
+                if (value_reg8 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
         }
-        inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);
@@ -1543,11 +1736,37 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        if (codegen_type_uses_qword(var_expr->resolved_type))
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if (codegen_type_uses_qword(var_expr->resolved_type))
+        {
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
         else
-            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            if (var_expr->resolved_type == CHAR_TYPE)
+            {
+                const char *value_reg8 = register_name8(value_reg);
+                if (value_reg8 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
 
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);

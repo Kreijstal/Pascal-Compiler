@@ -2337,7 +2337,8 @@ int semcheck_arrayaccess(int *type_return,
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
-    if (!array_expr->is_array_expr)
+    int base_is_string = (base_type == STRING_TYPE && !array_expr->is_array_expr);
+    if (!array_expr->is_array_expr && !base_is_string)
     {
         fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
@@ -2345,56 +2346,63 @@ int semcheck_arrayaccess(int *type_return,
         return return_val + 1;
     }
 
-    element_type = array_expr->array_element_type;
-    if (element_type == UNKNOWN_TYPE && array_expr->array_element_type_id != NULL)
+    if (base_is_string)
     {
-        int resolved_type = UNKNOWN_TYPE;
-        if (resolve_type_identifier(&resolved_type, symtab, array_expr->array_element_type_id,
-                expr->line_num) == 0)
-            element_type = resolved_type;
+        element_type = CHAR_TYPE;
     }
-    if (element_type == UNKNOWN_TYPE && array_expr->array_element_record_type != NULL)
-        element_type = RECORD_TYPE;
-
-    if (array_expr->array_element_type_id != NULL)
+    else
     {
-        HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL &&
-            type_node->type_alias != NULL && type_node->type_alias->is_array)
+        element_type = array_expr->array_element_type;
+        if (element_type == UNKNOWN_TYPE && array_expr->array_element_type_id != NULL)
         {
-            semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+            int resolved_type = UNKNOWN_TYPE;
+            if (resolve_type_identifier(&resolved_type, symtab, array_expr->array_element_type_id,
+                    expr->line_num) == 0)
+                element_type = resolved_type;
         }
-    }
-
-    if (element_type == POINTER_TYPE)
-    {
-        int pointer_subtype = UNKNOWN_TYPE;
-        const char *pointer_type_id = NULL;
-        struct RecordType *pointer_record = NULL;
+        if (element_type == UNKNOWN_TYPE && array_expr->array_element_record_type != NULL)
+            element_type = RECORD_TYPE;
 
         if (array_expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
-                type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_pointer)
+            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL &&
+                type_node->type_alias != NULL && type_node->type_alias->is_array)
             {
-                struct TypeAlias *alias = type_node->type_alias;
-                pointer_subtype = alias->pointer_type;
-                pointer_type_id = alias->pointer_type_id;
-                if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
-                    pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
             }
         }
 
-        semcheck_set_pointer_info(expr, pointer_subtype, pointer_type_id);
-        if (pointer_subtype == RECORD_TYPE)
-            expr->record_type = pointer_record;
-        else
-            expr->record_type = NULL;
-    }
-    else if (element_type == RECORD_TYPE)
-    {
-        expr->record_type = array_expr->array_element_record_type;
+        if (element_type == POINTER_TYPE)
+        {
+            int pointer_subtype = UNKNOWN_TYPE;
+            const char *pointer_type_id = NULL;
+            struct RecordType *pointer_record = NULL;
+
+            if (array_expr->array_element_type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
+                    type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_pointer)
+                {
+                    struct TypeAlias *alias = type_node->type_alias;
+                    pointer_subtype = alias->pointer_type;
+                    pointer_type_id = alias->pointer_type_id;
+                    if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
+                        pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                }
+            }
+
+            semcheck_set_pointer_info(expr, pointer_subtype, pointer_type_id);
+            if (pointer_subtype == RECORD_TYPE)
+                expr->record_type = pointer_record;
+            else
+                expr->record_type = NULL;
+        }
+        else if (element_type == RECORD_TYPE)
+        {
+            expr->record_type = array_expr->array_element_record_type;
+        }
     }
 
     return_val += semcheck_expr_main(&index_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
