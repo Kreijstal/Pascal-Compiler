@@ -2500,32 +2500,109 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             /* Check each label in this branch */
             ListNode_t *label_node = branch->labels;
             while (label_node != NULL) {
-                struct Expression *label_expr = (struct Expression *)label_node->cur;
+                if (label_node->type == LIST_EXPR) {
+                    struct Expression *label_expr = (struct Expression *)label_node->cur;
 
-                if (label_expr->type == EXPR_INUM) {
-                    if (selector_is_qword)
-                        snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
-                                 label_expr->expr_data.i_num, selector_reg->bit_64);
-                    else
-                        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
-                                 label_expr->expr_data.i_num, selector_reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
-                    inst_list = add_inst(inst_list, buffer);
-                } else {
-                    Register_t *label_reg = NULL;
-                    inst_list = codegen_expr_with_result(label_expr, inst_list, ctx, &label_reg);
-                    if (label_reg != NULL) {
+                    if (label_expr->type == EXPR_INUM) {
                         if (selector_is_qword)
-                            snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
-                                     label_reg->bit_64, selector_reg->bit_64);
+                            snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
+                                     label_expr->expr_data.i_num, selector_reg->bit_64);
                         else
-                            snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
-                                     label_reg->bit_32, selector_reg->bit_32);
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
+                                     label_expr->expr_data.i_num, selector_reg->bit_32);
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
                         inst_list = add_inst(inst_list, buffer);
-                        free_reg(get_reg_stack(), label_reg);
+                    } else {
+                        Register_t *label_reg = NULL;
+                        inst_list = codegen_expr_with_result(label_expr, inst_list, ctx, &label_reg);
+                        if (label_reg != NULL) {
+                            if (selector_is_qword)
+                                snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
+                                         label_reg->bit_64, selector_reg->bit_64);
+                            else
+                                snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
+                                         label_reg->bit_32, selector_reg->bit_32);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), label_reg);
+                        }
+                    }
+                } else if (label_node->type == LIST_SET_ELEMENT) {
+                    struct SetElement *range = (struct SetElement *)label_node->cur;
+                    if (range != NULL) {
+                        char range_skip_label[18];
+                        gen_label(range_skip_label, 18, ctx);
+
+                        int emitted_lower_cmp = 0;
+                        if (range->lower != NULL) {
+                            if (range->lower->type == EXPR_INUM) {
+                                if (selector_is_qword)
+                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
+                                             range->lower->expr_data.i_num, selector_reg->bit_64);
+                                else
+                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
+                                             range->lower->expr_data.i_num, selector_reg->bit_32);
+                                inst_list = add_inst(inst_list, buffer);
+                                emitted_lower_cmp = 1;
+                            } else {
+                                Register_t *lower_reg = NULL;
+                                inst_list = codegen_expr_with_result(range->lower, inst_list, ctx, &lower_reg);
+                                if (lower_reg != NULL) {
+                                    if (selector_is_qword)
+                                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
+                                                 lower_reg->bit_64, selector_reg->bit_64);
+                                    else
+                                        snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
+                                                 lower_reg->bit_32, selector_reg->bit_32);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    emitted_lower_cmp = 1;
+                                    free_reg(get_reg_stack(), lower_reg);
+                                }
+                            }
+
+                            if (emitted_lower_cmp) {
+                                snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", range_skip_label);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                        }
+
+                        int emitted_upper_cmp = 0;
+                        if (range->upper != NULL) {
+                            if (range->upper->type == EXPR_INUM) {
+                                if (selector_is_qword)
+                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
+                                             range->upper->expr_data.i_num, selector_reg->bit_64);
+                                else
+                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
+                                             range->upper->expr_data.i_num, selector_reg->bit_32);
+                                inst_list = add_inst(inst_list, buffer);
+                                emitted_upper_cmp = 1;
+                            } else {
+                                Register_t *upper_reg = NULL;
+                                inst_list = codegen_expr_with_result(range->upper, inst_list, ctx, &upper_reg);
+                                if (upper_reg != NULL) {
+                                    if (selector_is_qword)
+                                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
+                                                 upper_reg->bit_64, selector_reg->bit_64);
+                                    else
+                                        snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
+                                                 upper_reg->bit_32, selector_reg->bit_32);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    emitted_upper_cmp = 1;
+                                    free_reg(get_reg_stack(), upper_reg);
+                                }
+                            }
+
+                            if (emitted_upper_cmp) {
+                                snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", branch_label);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "%s:\n", range_skip_label);
+                        inst_list = add_inst(inst_list, buffer);
                     }
                 }
 

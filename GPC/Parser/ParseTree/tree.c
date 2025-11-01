@@ -57,6 +57,24 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
             case LIST_RECORD_FIELD:
                 print_record_field((struct RecordField *)cur->cur, f, num_indent);
                 break;
+            case LIST_SET_ELEMENT: {
+                struct SetElement *element = (struct SetElement *)cur->cur;
+                print_indent(f, num_indent);
+                fprintf(f, "[SET_ELEMENT]:\n");
+                if (element != NULL) {
+                    if (element->lower != NULL) {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[LOWER]:\n");
+                        expr_print(element->lower, f, num_indent + 2);
+                    }
+                    if (element->upper != NULL) {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[UPPER]:\n");
+                        expr_print(element->upper, f, num_indent + 2);
+                    }
+                }
+                break;
+            }
             case LIST_VARIANT_PART:
                 print_variant_part((struct VariantPart *)cur->cur, f, num_indent);
                 break;
