@@ -2460,6 +2460,8 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     else
         inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
 
+    inst_list = add_inst(inst_list, "\tcall\tgpc_raise_clear\n");
+
     snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
     inst_list = add_inst(inst_list, buffer);
 
@@ -2479,7 +2481,23 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
     if (except_label != NULL)
     {
         if (exc_expr != NULL)
-            inst_list = codegen_expr(exc_expr, inst_list, ctx);
+        {
+            Register_t *value_reg = NULL;
+            inst_list = codegen_expr_with_result(exc_expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL)
+                return inst_list;
+
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), value_reg);
+            inst_list = add_inst(inst_list, "\tcall\tgpc_raise_store\n");
+        }
+        else
+        {
+            inst_list = add_inst(inst_list, "\tcall\tgpc_raise_reraise\n");
+        }
+
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label);
         return inst_list;
     }
@@ -2496,9 +2514,23 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
     }
 
     if (exc_expr != NULL)
-        inst_list = codegen_expr(exc_expr, inst_list, ctx);
+    {
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(exc_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx))
+            return inst_list;
+        if (value_reg != NULL)
+        {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), value_reg);
+        }
+    }
     else
-        inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+    {
+        inst_list = add_inst(inst_list, "\txorl\t%edi, %edi\n");
+    }
 
     inst_list = add_inst(inst_list, "\tcall\tgpc_raise\n");
     inst_list = add_inst(inst_list, "\tud2\n");

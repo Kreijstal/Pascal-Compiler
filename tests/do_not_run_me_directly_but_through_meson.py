@@ -951,6 +951,25 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "112\n1\n3\n")
 
+    def test_exception_reraise(self):
+        """Verify that exceptions rethrow through nested handlers."""
+        input_file = os.path.join(TEST_CASES_DIR, "exception_reraise.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "exception_reraise.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "exception_reraise")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout, "1\n")
+
     def test_real_arithmetic_program(self):
         """Compiles and executes a program exercising REAL arithmetic and IO."""
         input_file = os.path.join(TEST_CASES_DIR, "real_arithmetic.p")

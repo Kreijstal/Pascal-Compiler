@@ -394,6 +394,9 @@ void gpc_write_real(GPCTextFile *file, int width, int precision, int64_t value_b
     }
 }
 
+static int gpc_exception_active = 0;
+static int64_t gpc_exception_value = 0;
+
 void gpc_raise(int64_t value)
 {
     if (value == 0)
@@ -402,6 +405,34 @@ void gpc_raise(int64_t value)
         fprintf(stderr, "Unhandled exception raised with code %lld.\n", (long long)value);
     fflush(stderr);
     exit(EXIT_FAILURE);
+}
+
+void gpc_raise_store(int64_t value)
+{
+    gpc_exception_value = value;
+    gpc_exception_active = 1;
+}
+
+void gpc_raise_reraise(void)
+{
+    if (!gpc_exception_active)
+        gpc_raise(0);
+}
+
+int64_t gpc_raise_load(void)
+{
+    return gpc_exception_value;
+}
+
+int gpc_raise_is_active(void)
+{
+    return gpc_exception_active;
+}
+
+void gpc_raise_clear(void)
+{
+    gpc_exception_value = 0;
+    gpc_exception_active = 0;
 }
 
 void gpc_new(void **target, size_t size)
