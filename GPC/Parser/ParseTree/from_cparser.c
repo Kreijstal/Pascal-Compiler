@@ -91,14 +91,11 @@ static void register_class_method(const char *class_name, const char *method_nam
 
     binding->class_name = strdup(class_name);
     binding->method_name = strdup(method_name);
-    if (binding->class_name == NULL || binding->method_name == NULL) {
-        free(binding->class_name);
-        free(binding->method_name);
-        free(binding);
-        return;
-    }
 
-    ListNode_t *node = CreateListNode(binding, LIST_UNSPECIFIED);
+    ListNode_t *node = NULL;
+    if (binding->class_name != NULL && binding->method_name != NULL)
+        node = CreateListNode(binding, LIST_UNSPECIFIED);
+
     if (node == NULL) {
         free(binding->class_name);
         free(binding->method_name);
@@ -2436,7 +2433,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
     }
 
-    ListNode_t *params = NULL;
+    ListBuilder params_builder;
+    list_builder_init(&params_builder);
     ListNode_t *const_decls = NULL;
     ListBuilder var_builder;
     list_builder_init(&var_builder);
@@ -2448,8 +2446,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     if (effective_class != NULL)
         self_type_id = strdup(effective_class);
     Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE, self_type_id, 1, 0, NULL);
-    params = CreateListNode(self_param, LIST_TREE);
-    ListNode_t **params_tail = &params->next;
+    list_builder_append(&params_builder, self_param, LIST_TREE);
 
     cur = qualified->next;
     while (cur != NULL) {
@@ -2461,20 +2458,14 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         case PASCAL_T_PARAM_LIST: {
             ast_t *param_cursor = node->child;
             ListNode_t *extra_params = convert_param_list(&param_cursor);
-            if (extra_params != NULL) {
-                *params_tail = extra_params;
-                while (*params_tail != NULL)
-                    params_tail = &(*params_tail)->next;
-            }
+            if (extra_params != NULL)
+                list_builder_extend(&params_builder, extra_params);
             break;
         }
         case PASCAL_T_PARAM: {
             ListNode_t *extra_params = convert_param(node);
-            if (extra_params != NULL) {
-                *params_tail = extra_params;
-                while (*params_tail != NULL)
-                    params_tail = &(*params_tail)->next;
-            }
+            if (extra_params != NULL)
+                list_builder_extend(&params_builder, extra_params);
             break;
         }
         case PASCAL_T_CONST_SECTION:
@@ -2509,6 +2500,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         body = mk_with(method_node->line, self_expr, body);
     }
 
+    ListNode_t *params = list_builder_finish(&params_builder);
     Tree_t *tree = mk_procedure(method_node->line, proc_name, params, const_decls,
                                 list_builder_finish(&var_builder), nested_subs, body, 0, 0);
 
