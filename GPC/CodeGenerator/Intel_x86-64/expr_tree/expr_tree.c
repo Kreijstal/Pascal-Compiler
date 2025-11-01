@@ -273,6 +273,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
+static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *value_reg);
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
@@ -481,6 +483,33 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
+static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *value_reg)
+{
+    if (node == NULL || node->expr == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (node->expr->resolved_type != CHAR_TYPE)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+
+    /* Move the character value into the first integer argument register, zero-extending as needed. */
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_chr\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg)
 {
@@ -494,10 +523,12 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     {
         StackNode_t *spill_loc = add_l_t("str_concat_rhs");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
+        inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
 
         if (codegen_target_is_windows())
         {
@@ -516,8 +547,17 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     }
     else
     {
+        StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, lhs_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
+        inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", lhs_spill->offset, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
 
         if (codegen_target_is_windows())
         {
