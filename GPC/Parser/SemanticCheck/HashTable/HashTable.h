@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 #include "../../List/List.h"
+#include "../../ParseTree/GpcType.h"
 
 struct RecordType;
 struct TypeAlias;
@@ -43,9 +44,13 @@ typedef struct HashNode
     char *canonical_id;
     char *mangled_id;
     enum HashType hash_type;
-    enum VarType var_type;
+    
+    /* NEW: Unified type system - this one pointer replaces var_type, type_alias, 
+     * record_type, is_array, array_start, array_end, and other scattered type info */
+    GpcType *type;
+    
+    /* Keep args for now for declared procedures/functions */
     ListNode_t *args; /* NULL when no args (or not applicable to given type) */
-    struct RecordType *record_type; /* Used for type declarations */
 
     /* Symbol table resources */
     int referenced;
@@ -55,6 +60,11 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
+    
+    /* OLD fields kept temporarily for backward compatibility during migration
+     * These will be removed in later phases */
+    enum VarType var_type;
+    struct RecordType *record_type;
     int is_array;
     int array_start;
     int array_end;
@@ -76,7 +86,11 @@ HashTable_t *InitHashTable();
 
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
-int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
+int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
+    enum HashType hash_type, ListNode_t *args, GpcType *type);
+
+/* DEPRECATED: Old signature kept for backward compatibility during migration */
+int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
     enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
     struct TypeAlias *type_alias);
 
