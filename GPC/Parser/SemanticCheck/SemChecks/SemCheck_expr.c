@@ -2813,6 +2813,18 @@ int semcheck_funccall(int *type_return,
 
         set_type_from_hashtype(type_return, hash_return);
 
+        if (*type_return == RECORD_TYPE)
+        {
+            if (hash_return->record_type != NULL)
+                expr->record_type = hash_return->record_type;
+            else
+                expr->record_type = NULL;
+        }
+        else
+        {
+            expr->record_type = NULL;
+        }
+
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
         true_args = hash_return->args;

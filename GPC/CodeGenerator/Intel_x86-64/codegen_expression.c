@@ -276,6 +276,137 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
     return 1;
 }
 
+static int codegen_sizeof_variant_part(CodeGenContext *ctx, struct VariantPart *variant,
+    long long *size_out, int depth);
+
+static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *members,
+    long long *size_out, int depth)
+{
+    if (size_out == NULL)
+        return 1;
+
+    long long total = 0;
+    ListNode_t *cur = members;
+    while (cur != NULL)
+    {
+        if (cur->cur == NULL)
+        {
+            cur = cur->next;
+            continue;
+        }
+
+        if (cur->type == LIST_RECORD_FIELD)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            long long field_size = 0;
+
+            if (field->is_array)
+            {
+                if (field->array_is_open || field->array_end < field->array_start)
+                {
+                    field_size = CODEGEN_POINTER_SIZE_BYTES;
+                }
+                else
+                {
+                    long long element_size = 0;
+                    if (codegen_sizeof_type(ctx, field->array_element_type,
+                            field->array_element_type_id, NULL,
+                            &element_size, depth + 1) != 0)
+                        return 1;
+
+                    long long count = (long long)field->array_end - (long long)field->array_start + 1;
+                    if (count < 0)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Invalid bounds for array field %s.",
+                            field->name != NULL ? field->name : "");
+                        return 1;
+                    }
+
+                    field_size = element_size * count;
+                }
+
+                total += field_size;
+                cur = cur->next;
+                continue;
+            }
+
+            if (field->nested_record != NULL)
+            {
+                if (codegen_sizeof_record(ctx, field->nested_record, &field_size, depth + 1) != 0)
+                    return 1;
+            }
+            else
+            {
+                if (codegen_sizeof_type(ctx, field->type, field->type_id, NULL,
+                        &field_size, depth + 1) != 0)
+                    return 1;
+            }
+
+            total += field_size;
+        }
+        else if (cur->type == LIST_VARIANT_PART)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            long long variant_size = 0;
+            if (codegen_sizeof_variant_part(ctx, variant, &variant_size, depth + 1) != 0)
+                return 1;
+            total += variant_size;
+        }
+
+        cur = cur->next;
+    }
+
+    *size_out = total;
+    return 0;
+}
+
+static int codegen_sizeof_variant_part(CodeGenContext *ctx, struct VariantPart *variant,
+    long long *size_out, int depth)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (variant == NULL)
+    {
+        *size_out = 0;
+        return 0;
+    }
+
+    if (variant->has_cached_size)
+    {
+        *size_out = variant->cached_size;
+        return 0;
+    }
+
+    if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
+    {
+        codegen_report_error(ctx, "ERROR: Variant part nesting exceeds supported depth.");
+        return 1;
+    }
+
+    long long max_size = 0;
+    ListNode_t *cur = variant->branches;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH && cur->cur != NULL)
+        {
+            struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
+            long long branch_size = 0;
+            if (codegen_sizeof_record_members(ctx, branch->members, &branch_size, depth + 1) != 0)
+                return 1;
+            if (branch_size > max_size)
+                max_size = branch_size;
+        }
+        cur = cur->next;
+    }
+
+    variant->cached_size = max_size;
+    variant->has_cached_size = 1;
+    *size_out = max_size;
+    return 0;
+}
+
 static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
     long long *size_out, int depth)
 {
@@ -294,62 +425,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         return 1;
     }
 
-    long long total = 0;
-    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
-    {
-        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
-            continue;
-
-        struct RecordField *field = (struct RecordField *)cur->cur;
-        long long field_size = 0;
-
-        if (field->is_array)
-        {
-            if (field->array_is_open || field->array_end < field->array_start)
-            {
-                field_size = CODEGEN_POINTER_SIZE_BYTES;
-            }
-            else
-            {
-                long long element_size = 0;
-                if (codegen_sizeof_type(ctx, field->array_element_type,
-                        field->array_element_type_id, NULL,
-                        &element_size, depth + 1) != 0)
-                    return 1;
-
-                long long count = (long long)field->array_end - (long long)field->array_start + 1;
-                if (count < 0)
-                {
-                    codegen_report_error(ctx,
-                        "ERROR: Invalid bounds for array field %s.",
-                        field->name != NULL ? field->name : "");
-                    return 1;
-                }
-
-                field_size = element_size * count;
-            }
-
-            total += field_size;
-            continue;
-        }
-
-        if (field->nested_record != NULL)
-        {
-            if (codegen_sizeof_record(ctx, field->nested_record, &field_size, depth + 1) != 0)
-                return 1;
-        }
-        else
-        {
-            if (codegen_sizeof_type(ctx, field->type, field->type_id, NULL,
-                    &field_size, depth + 1) != 0)
-                return 1;
-        }
-
-        total += field_size;
-    }
-
-    *size_out = total;
-    return 0;
+    return codegen_sizeof_record_members(ctx, record->fields, size_out, depth);
 }
 
 int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,
@@ -1616,7 +1692,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 }
 
 /* Code generation for passing arguments */
-ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, HashNode_t *proc_node)
+ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
+    CodeGenContext *ctx, HashNode_t *proc_node, int arg_start_index)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1654,6 +1731,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             exit(1);
         }
     }
+
+    if (arg_start_index < 0)
+        arg_start_index = 0;
 
     arg_num = 0;
     while(args != NULL)
@@ -1809,7 +1889,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
 
     for (int i = arg_num - 1; i >= 0; --i)
     {
-        arg_reg_char = get_arg_reg64_num(i);
+        int reg_index = arg_start_index + i;
+        arg_reg_char = get_arg_reg64_num(reg_index);
         if (arg_reg_char == NULL)
         {
             fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
@@ -1820,8 +1901,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         {
             for (int j = 0; j < i; ++j)
             {
+                const char *check_reg = arg_reg_char;
                 if (arg_infos[j].reg != NULL &&
-                    strcmp(arg_infos[j].reg->bit_64, arg_reg_char) == 0)
+                    strcmp(arg_infos[j].reg->bit_64, check_reg) == 0)
                 {
                     StackNode_t *spill = add_l_t("arg_spill");
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
