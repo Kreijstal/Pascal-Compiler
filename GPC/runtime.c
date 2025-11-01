@@ -568,7 +568,7 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
 
         if (match_token_ci(cursor, "yyyy"))
         {
-            char buffer[8];
+            char buffer[16];  // Increased from 8 to handle extreme values
             snprintf(buffer, sizeof(buffer), "%04d", tm_value.tm_year + 1900);
             if (!append_text(&result, &length, &capacity, buffer))
             {
@@ -592,7 +592,7 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
         }
         if (match_token_ci(cursor, "mm"))
         {
-            char buffer[4];
+            char buffer[16];  // Increased from 4 to handle extreme values
             snprintf(buffer, sizeof(buffer), "%02d", tm_value.tm_mon + 1);
             if (!append_text(&result, &length, &capacity, buffer))
             {

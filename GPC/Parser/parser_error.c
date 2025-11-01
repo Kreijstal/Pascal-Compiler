@@ -103,7 +103,7 @@ static void extract_token_sections(const char *message, char *unexpected, size_t
         size_t len = strlen(expected_start);
         if (len >= sizeof(raw_buffer))
             len = sizeof(raw_buffer) - 1;
-        strncpy(raw_buffer, expected_start, len);
+        memcpy(raw_buffer, expected_start, len);
         raw_buffer[len] = '\0';
 
         char formatted[512] = "";
@@ -133,8 +133,11 @@ static void extract_token_sections(const char *message, char *unexpected, size_t
             cursor = next + 4;
         }
 
-        strncpy(expected, formatted, expected_size - 1);
-        expected[expected_size - 1] = '\0';
+        size_t copy_len = strlen(formatted);
+        if (copy_len >= expected_size)
+            copy_len = expected_size - 1;
+        memcpy(expected, formatted, copy_len);
+        expected[copy_len] = '\0';
     }
 }
 
