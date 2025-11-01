@@ -522,6 +522,13 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return ENUM_TYPE;
     }
 
+    if (spec_node->typ == PASCAL_T_PROCEDURE_TYPE || spec_node->typ == PASCAL_T_FUNCTION_TYPE) {
+        // Note: For now, we return PROCEDURE as the type tag for both procedures and functions
+        // The actual GpcType object will be created later in the semantic checker
+        // This is a temporary bridge solution until full migration to GpcType
+        return PROCEDURE;
+    }
+
     if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
         struct RecordType *record = convert_record_type(spec_node);
         if (record_out != NULL) {
