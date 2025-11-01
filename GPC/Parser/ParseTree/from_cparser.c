@@ -421,103 +421,269 @@ static ListNode_t *convert_identifier_list(ast_t **cursor) {
     return list_builder_finish(&builder);
 }
 
+static ListNode_t *convert_field_decl(ast_t *field_decl_node);
+static void convert_record_members(ast_t *node, ListBuilder *builder);
+static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields);
+static struct VariantBranch *convert_variant_branch(ast_t *branch_node);
+
+static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
+    if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
+        return NULL;
+
+    ast_t *cursor = field_decl_node->child;
+    ListNode_t *names = convert_identifier_list(&cursor);
+    if (names == NULL) {
+        fprintf(stderr, "ERROR: record field declaration missing identifier list.\n");
+        return NULL;
+    }
+
+    while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
+           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER) {
+        cursor = cursor->next;
+    }
+
+    char *field_type_id = NULL;
+    struct RecordType *nested_record = NULL;
+    TypeInfo field_info;
+    memset(&field_info, 0, sizeof(TypeInfo));
+    int field_type = UNKNOWN_TYPE;
+
+    if (cursor != NULL) {
+        field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+    } else if (names != NULL) {
+        char *candidate = pop_last_identifier(&names);
+        if (candidate != NULL) {
+            char *mapped_id = NULL;
+            int mapped_type = map_type_name(candidate, &mapped_id);
+            if (mapped_type != UNKNOWN_TYPE) {
+                field_type = mapped_type;
+                field_type_id = mapped_id;
+                free(candidate);
+            } else {
+                field_type_id = candidate;
+            }
+        }
+    }
+
+    ListBuilder result_builder;
+    list_builder_init(&result_builder);
+
+    ListNode_t *name_node = names;
+    while (name_node != NULL) {
+        char *field_name = (char *)name_node->cur;
+        char *type_id_copy = NULL;
+        if (field_type_id != NULL)
+            type_id_copy = strdup(field_type_id);
+
+        struct RecordType *nested_copy = NULL;
+        if (nested_record != NULL) {
+            if (name_node->next == NULL) {
+                nested_copy = nested_record;
+                nested_record = NULL;
+            } else {
+                nested_copy = clone_record_type(nested_record);
+            }
+        }
+
+        struct RecordField *field_desc = (struct RecordField *)malloc(sizeof(struct RecordField));
+        if (field_desc != NULL) {
+            field_desc->name = field_name;
+            field_desc->type = field_type;
+            field_desc->type_id = type_id_copy;
+            field_desc->nested_record = nested_copy;
+            field_desc->is_array = field_info.is_array;
+            field_desc->array_start = field_info.start;
+            field_desc->array_end = field_info.end;
+            field_desc->array_element_type = field_info.element_type;
+            field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_is_open = field_info.is_open_array;
+            field_info.element_type_id = NULL;
+            list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
+        } else {
+            if (field_name != NULL)
+                free(field_name);
+            if (type_id_copy != NULL)
+                free(type_id_copy);
+            destroy_record_type(nested_copy);
+        }
+
+        ListNode_t *next_name = name_node->next;
+        free(name_node);
+        name_node = next_name;
+    }
+
+    if (field_type_id != NULL)
+        free(field_type_id);
+    if (nested_record != NULL)
+        destroy_record_type(nested_record);
+    destroy_type_info_contents(&field_info);
+
+    return list_builder_finish(&result_builder);
+}
+
+static ListNode_t *convert_variant_labels(ast_t *labels_node) {
+    if (labels_node == NULL)
+        return NULL;
+
+    ListBuilder labels_builder;
+    list_builder_init(&labels_builder);
+
+    ast_t *label_cursor = labels_node;
+    while (label_cursor != NULL) {
+        if (label_cursor->typ == PASCAL_T_CASE_LABEL && label_cursor->child != NULL) {
+            struct Expression *label_expr = convert_expression(label_cursor->child);
+            if (label_expr != NULL)
+                list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+        } else if (label_cursor->typ == PASCAL_T_INTEGER ||
+                   label_cursor->typ == PASCAL_T_IDENTIFIER ||
+                   label_cursor->typ == PASCAL_T_CHAR ||
+                   label_cursor->typ == PASCAL_T_CHAR_CODE ||
+                   label_cursor->typ == PASCAL_T_STRING) {
+            struct Expression *label_expr = convert_expression(label_cursor);
+            if (label_expr != NULL)
+                list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+        }
+        label_cursor = label_cursor->next;
+    }
+
+    return list_builder_finish(&labels_builder);
+}
+
+static struct VariantBranch *convert_variant_branch(ast_t *branch_node) {
+    if (branch_node == NULL || branch_node->typ != PASCAL_T_VARIANT_BRANCH)
+        return NULL;
+
+    struct VariantBranch *branch = (struct VariantBranch *)calloc(1, sizeof(struct VariantBranch));
+    if (branch == NULL)
+        return NULL;
+
+    ast_t *cursor = branch_node->child;
+    if (cursor != NULL && cursor->typ == PASCAL_T_CASE_LABEL_LIST) {
+        branch->labels = convert_variant_labels(cursor->child);
+        cursor = cursor->next;
+    } else if (cursor != NULL && cursor->typ == PASCAL_T_CASE_LABEL) {
+        branch->labels = convert_variant_labels(cursor);
+        cursor = cursor->next;
+    }
+
+    ListBuilder members_builder;
+    list_builder_init(&members_builder);
+    convert_record_members(cursor, &members_builder);
+    branch->members = list_builder_finish(&members_builder);
+
+    return branch;
+}
+
+static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields) {
+    if (out_tag_fields != NULL)
+        *out_tag_fields = NULL;
+
+    if (variant_node == NULL || variant_node->typ != PASCAL_T_VARIANT_PART)
+        return NULL;
+
+    struct VariantPart *variant = (struct VariantPart *)calloc(1, sizeof(struct VariantPart));
+    if (variant == NULL)
+        return NULL;
+
+    ast_t *cursor = variant_node->child;
+    if (cursor != NULL && cursor->typ == PASCAL_T_VARIANT_TAG) {
+        ast_t *tag_cursor = cursor->child;
+        char *tag_name = NULL;
+        ast_t *type_cursor = tag_cursor;
+        if (tag_cursor != NULL && tag_cursor->typ == PASCAL_T_IDENTIFIER && tag_cursor->next != NULL) {
+            tag_name = dup_symbol(tag_cursor);
+            type_cursor = tag_cursor->next;
+        }
+
+        char *tag_type_id = NULL;
+        struct RecordType *tag_record = NULL;
+        int tag_type = UNKNOWN_TYPE;
+        if (type_cursor != NULL)
+            tag_type = convert_type_spec(type_cursor, &tag_type_id, &tag_record, NULL);
+
+        if (tag_name != NULL) {
+            struct RecordField *tag_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
+            if (tag_field != NULL) {
+                tag_field->name = tag_name;
+                tag_field->type = tag_type;
+                tag_field->type_id = (tag_type_id != NULL) ? strdup(tag_type_id) : NULL;
+                tag_field->nested_record = tag_record;
+                tag_field->is_array = 0;
+                tag_field->array_start = 0;
+                tag_field->array_end = 0;
+                tag_field->array_element_type = UNKNOWN_TYPE;
+                tag_field->array_element_type_id = NULL;
+                tag_field->array_is_open = 0;
+
+                ListNode_t *field_node = CreateListNode(tag_field, LIST_RECORD_FIELD);
+                if (out_tag_fields != NULL)
+                    *out_tag_fields = field_node;
+                variant->tag_field = tag_field;
+                variant->tag_type = tag_type;
+                variant->tag_type_id = NULL;
+                variant->tag_record = NULL;
+                tag_record = NULL;
+            } else {
+                free(tag_name);
+                destroy_record_type(tag_record);
+            }
+        } else {
+            variant->tag_field = NULL;
+            variant->tag_type = tag_type;
+            variant->tag_type_id = tag_type_id;
+            variant->tag_record = tag_record;
+            tag_type_id = NULL;
+            tag_record = NULL;
+        }
+
+        variant->tag_type = tag_type;
+
+        if (tag_type_id != NULL)
+            free(tag_type_id);
+        if (tag_record != NULL)
+            destroy_record_type(tag_record);
+
+        cursor = cursor->next;
+    }
+
+    ListBuilder branches_builder;
+    list_builder_init(&branches_builder);
+    for (; cursor != NULL; cursor = cursor->next) {
+        if (cursor->typ != PASCAL_T_VARIANT_BRANCH)
+            continue;
+        struct VariantBranch *branch = convert_variant_branch(cursor);
+        if (branch != NULL)
+            list_builder_append(&branches_builder, branch, LIST_VARIANT_BRANCH);
+    }
+    variant->branches = list_builder_finish(&branches_builder);
+    variant->has_cached_size = 0;
+    variant->cached_size = 0;
+
+    return variant;
+}
+
+static void convert_record_members(ast_t *node, ListBuilder *builder) {
+    for (ast_t *cur = node; cur != NULL; cur = cur->next) {
+        if (cur->typ == PASCAL_T_FIELD_DECL) {
+            ListNode_t *fields = convert_field_decl(cur);
+            list_builder_extend(builder, fields);
+        } else if (cur->typ == PASCAL_T_VARIANT_PART) {
+            ListNode_t *tag_fields = NULL;
+            struct VariantPart *variant = convert_variant_part(cur, &tag_fields);
+            list_builder_extend(builder, tag_fields);
+            if (variant != NULL)
+                list_builder_append(builder, variant, LIST_VARIANT_PART);
+        }
+    }
+}
+
 static struct RecordType *convert_record_type(ast_t *record_node) {
     if (record_node == NULL)
         return NULL;
 
     ListBuilder fields_builder;
     list_builder_init(&fields_builder);
-
-    for (ast_t *field_decl = record_node->child; field_decl != NULL; field_decl = field_decl->next) {
-        if (field_decl->typ != PASCAL_T_FIELD_DECL)
-            continue;
-
-        ast_t *cursor = field_decl->child;
-        ListNode_t *names = convert_identifier_list(&cursor);
-        if (names == NULL)
-            continue;
-
-        while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
-               cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER) {
-            cursor = cursor->next;
-        }
-
-        char *field_type_id = NULL;
-        struct RecordType *nested_record = NULL;
-        TypeInfo field_info = {0};
-        int field_type = UNKNOWN_TYPE;
-        if (cursor != NULL)
-            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
-        else if (names != NULL)
-        {
-            char *candidate = pop_last_identifier(&names);
-            if (candidate != NULL)
-            {
-                char *mapped_id = NULL;
-                int mapped_type = map_type_name(candidate, &mapped_id);
-                if (mapped_type != UNKNOWN_TYPE)
-                {
-                    field_type = mapped_type;
-                    field_type_id = mapped_id;
-                    free(candidate);
-                }
-                else
-                {
-                    field_type_id = candidate;
-                }
-            }
-        }
-
-        ListNode_t *name_node = names;
-        while (name_node != NULL) {
-            char *field_name = (char *)name_node->cur;
-            char *type_id_copy = NULL;
-            if (field_type_id != NULL)
-                type_id_copy = strdup(field_type_id);
-
-            struct RecordType *nested_copy = NULL;
-            if (nested_record != NULL) {
-                if (name_node->next == NULL) {
-                    nested_copy = nested_record;
-                    nested_record = NULL;
-                } else {
-                    nested_copy = clone_record_type(nested_record);
-                }
-            }
-
-            struct RecordField *field_desc = (struct RecordField *)malloc(sizeof(struct RecordField));
-            if (field_desc != NULL) {
-                field_desc->name = field_name;
-                field_desc->type = field_type;
-                field_desc->type_id = type_id_copy;
-                field_desc->nested_record = nested_copy;
-                field_desc->is_array = field_info.is_array;
-                field_desc->array_start = field_info.start;
-                field_desc->array_end = field_info.end;
-                field_desc->array_element_type = field_info.element_type;
-                field_desc->array_element_type_id = field_info.element_type_id;
-                field_desc->array_is_open = field_info.is_open_array;
-                field_info.element_type_id = NULL;
-                list_builder_append(&fields_builder, field_desc, LIST_RECORD_FIELD);
-            } else {
-                if (field_name != NULL)
-                    free(field_name);
-                if (type_id_copy != NULL)
-                    free(type_id_copy);
-                destroy_record_type(nested_copy);
-            }
-
-            ListNode_t *next_name = name_node->next;
-            free(name_node);
-            name_node = next_name;
-        }
-
-        if (field_type_id != NULL)
-            free(field_type_id);
-        if (nested_record != NULL)
-            destroy_record_type(nested_record);
-        destroy_type_info_contents(&field_info);
-    }
+    convert_record_members(record_node->child, &fields_builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {

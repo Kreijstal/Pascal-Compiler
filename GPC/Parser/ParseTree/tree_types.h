@@ -61,6 +61,23 @@ struct RecordType
     ListNode_t *fields;
 };
 
+struct VariantBranch
+{
+    ListNode_t *labels; /* List of Expression */
+    ListNode_t *members; /* List of RecordField / VariantPart */
+};
+
+struct VariantPart
+{
+    struct RecordField *tag_field; /* Optional discriminant field */
+    int tag_type;
+    char *tag_type_id;
+    struct RecordType *tag_record;
+    ListNode_t *branches; /* List of VariantBranch */
+    int has_cached_size;
+    long long cached_size;
+};
+
 /* Case branch structure */
 struct CaseBranch
 {

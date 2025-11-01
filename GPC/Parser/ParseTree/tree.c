@@ -13,6 +13,14 @@
 
 static void print_record_field(struct RecordField *field, FILE *f, int num_indent);
 static void destroy_record_field(struct RecordField *field);
+static void print_variant_part(struct VariantPart *variant, FILE *f, int num_indent);
+static void print_variant_branch(struct VariantBranch *branch, FILE *f, int num_indent);
+static void destroy_variant_part(struct VariantPart *variant);
+static void destroy_variant_branch(struct VariantBranch *branch);
+static ListNode_t *clone_member_list(const ListNode_t *members);
+static struct RecordField *clone_record_field(const struct RecordField *field);
+static struct VariantBranch *clone_variant_branch_internal(const struct VariantBranch *branch);
+static struct VariantPart *clone_variant_part_internal(const struct VariantPart *variant);
 
 /* NOTE: tree_print and destroy_tree implicitely call stmt and expr functions */
 /* Tree printing */
@@ -48,6 +56,12 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
                 break;
             case LIST_RECORD_FIELD:
                 print_record_field((struct RecordField *)cur->cur, f, num_indent);
+                break;
+            case LIST_VARIANT_PART:
+                print_variant_part((struct VariantPart *)cur->cur, f, num_indent);
+                break;
+            case LIST_VARIANT_BRANCH:
+                print_variant_branch((struct VariantBranch *)cur->cur, f, num_indent);
                 break;
             default:
                 fprintf(stderr, "BAD TYPE IN list_print!\n");
@@ -90,6 +104,52 @@ static void print_record_field(struct RecordField *field, FILE *f, int num_inden
     }
 }
 
+static void print_variant_branch(struct VariantBranch *branch, FILE *f, int num_indent)
+{
+    if (branch == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[VARIANT_BRANCH]\n");
+
+    if (branch->labels != NULL)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[LABELS]:\n");
+        list_print(branch->labels, f, num_indent + 2);
+    }
+
+    if (branch->members != NULL)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[MEMBERS]:\n");
+        list_print(branch->members, f, num_indent + 2);
+    }
+}
+
+static void print_variant_part(struct VariantPart *variant, FILE *f, int num_indent)
+{
+    if (variant == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[VARIANT_PART]\n");
+
+    if (variant->tag_field != NULL)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[TAG]:\n");
+        print_record_field(variant->tag_field, f, num_indent + 2);
+    }
+
+    if (variant->branches != NULL)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[BRANCHES]:\n");
+        list_print(variant->branches, f, num_indent + 2);
+    }
+}
+
 static void destroy_record_field(struct RecordField *field)
 {
     if (field == NULL)
@@ -103,6 +163,30 @@ static void destroy_record_field(struct RecordField *field)
         free(field->array_element_type_id);
     destroy_record_type(field->nested_record);
     free(field);
+}
+
+static void destroy_variant_branch(struct VariantBranch *branch)
+{
+    if (branch == NULL)
+        return;
+
+    destroy_list(branch->labels);
+    destroy_list(branch->members);
+    free(branch);
+}
+
+static void destroy_variant_part(struct VariantPart *variant)
+{
+    if (variant == NULL)
+        return;
+
+    if (variant->tag_type_id != NULL)
+        free(variant->tag_type_id);
+    if (variant->tag_record != NULL)
+        destroy_record_type(variant->tag_record);
+    destroy_list(variant->branches);
+    /* tag_field is owned by the surrounding field list */
+    free(variant);
 }
 
 void tree_print(Tree_t *tree, FILE *f, int num_indent)
@@ -706,6 +790,12 @@ void destroy_list(ListNode_t *list)
                 /* Case branches are handled specially in destroy_stmt for STMT_CASE */
                 /* Don't free the branch here as it's already freed there */
                 break;
+            case LIST_VARIANT_PART:
+                destroy_variant_part((struct VariantPart *)cur->cur);
+                break;
+            case LIST_VARIANT_BRANCH:
+                destroy_variant_branch((struct VariantBranch *)cur->cur);
+                break;
             default:
                 fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
                 exit(1);
@@ -1090,35 +1180,129 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     assert(clone != NULL);
     clone->fields = NULL;
 
-    ListNode_t *cur = record_type->fields;
+    clone->fields = clone_member_list(record_type->fields);
+
+    return clone;
+}
+
+static struct RecordField *clone_record_field(const struct RecordField *field)
+{
+    if (field == NULL)
+        return NULL;
+
+    struct RecordField *clone = (struct RecordField *)malloc(sizeof(struct RecordField));
+    assert(clone != NULL);
+    clone->name = field->name != NULL ? strdup(field->name) : NULL;
+    clone->type = field->type;
+    clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
+    clone->nested_record = clone_record_type(field->nested_record);
+    clone->is_array = field->is_array;
+    clone->array_start = field->array_start;
+    clone->array_end = field->array_end;
+    clone->array_element_type = field->array_element_type;
+    clone->array_element_type_id = field->array_element_type_id != NULL ?
+        strdup(field->array_element_type_id) : NULL;
+    clone->array_is_open = field->array_is_open;
+    return clone;
+}
+
+static ListNode_t *clone_member_list(const ListNode_t *members)
+{
+    if (members == NULL)
+        return NULL;
+
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
+    const ListNode_t *cur = members;
+    struct RecordField *last_orig_field = NULL;
+    struct RecordField *last_clone_field = NULL;
+
     while (cur != NULL)
     {
-        struct RecordField *field = (struct RecordField *)cur->cur;
-        assert(field != NULL);
-
-        struct RecordField *field_clone = (struct RecordField *)malloc(sizeof(struct RecordField));
-        assert(field_clone != NULL);
-        field_clone->name = field->name != NULL ? strdup(field->name) : NULL;
-        field_clone->type = field->type;
-        field_clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
-        field_clone->nested_record = clone_record_type(field->nested_record);
-        field_clone->is_array = field->is_array;
-        field_clone->array_start = field->array_start;
-        field_clone->array_end = field->array_end;
-        field_clone->array_element_type = field->array_element_type;
-        field_clone->array_element_type_id = field->array_element_type_id != NULL ?
-            strdup(field->array_element_type_id) : NULL;
-        field_clone->array_is_open = field->array_is_open;
-
-        ListNode_t *node = CreateListNode(field_clone, LIST_RECORD_FIELD);
-        if (clone->fields == NULL)
-            clone->fields = node;
-        else
-            PushListNodeBack(clone->fields, node);
-
+        switch (cur->type)
+        {
+            case LIST_RECORD_FIELD:
+            {
+                struct RecordField *field = (struct RecordField *)cur->cur;
+                struct RecordField *field_clone = clone_record_field(field);
+                last_orig_field = field;
+                last_clone_field = field_clone;
+                ListNode_t *node = CreateListNode(field_clone, LIST_RECORD_FIELD);
+                *tail = node;
+                tail = &node->next;
+                break;
+            }
+            case LIST_VARIANT_PART:
+            {
+                struct VariantPart *variant = (struct VariantPart *)cur->cur;
+                struct VariantPart *variant_clone = clone_variant_part_internal(variant);
+                if (variant_clone != NULL && variant->tag_field != NULL)
+                {
+                    if (variant->tag_field == last_orig_field)
+                        variant_clone->tag_field = last_clone_field;
+                    else
+                        variant_clone->tag_field = NULL;
+                }
+                ListNode_t *node = CreateListNode(variant_clone, LIST_VARIANT_PART);
+                *tail = node;
+                tail = &node->next;
+                last_orig_field = NULL;
+                last_clone_field = NULL;
+                break;
+            }
+            default:
+                /* Unsupported type in member list */
+                break;
+        }
         cur = cur->next;
     }
 
+    return head;
+}
+
+static struct VariantBranch *clone_variant_branch_internal(const struct VariantBranch *branch)
+{
+    if (branch == NULL)
+        return NULL;
+
+    struct VariantBranch *clone = (struct VariantBranch *)calloc(1, sizeof(struct VariantBranch));
+    assert(clone != NULL);
+
+    clone->labels = NULL; /* Labels are not deep-cloned to avoid duplication */
+    clone->members = clone_member_list(branch->members);
+    return clone;
+}
+
+static struct VariantPart *clone_variant_part_internal(const struct VariantPart *variant)
+{
+    if (variant == NULL)
+        return NULL;
+
+    struct VariantPart *clone = (struct VariantPart *)calloc(1, sizeof(struct VariantPart));
+    assert(clone != NULL);
+
+    clone->tag_field = NULL;
+    clone->tag_type = variant->tag_type;
+    clone->tag_type_id = variant->tag_type_id != NULL ? strdup(variant->tag_type_id) : NULL;
+    clone->tag_record = clone_record_type(variant->tag_record);
+    clone->has_cached_size = variant->has_cached_size;
+    clone->cached_size = variant->cached_size;
+
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
+    ListNode_t *cur = variant->branches;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH)
+        {
+            struct VariantBranch *branch_clone = clone_variant_branch_internal((struct VariantBranch *)cur->cur);
+            ListNode_t *node = CreateListNode(branch_clone, LIST_VARIANT_BRANCH);
+            *tail = node;
+            tail = &node->next;
+        }
+        cur = cur->next;
+    }
+    clone->branches = head;
     return clone;
 }
 
