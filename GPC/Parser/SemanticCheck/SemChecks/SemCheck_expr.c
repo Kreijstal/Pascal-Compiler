@@ -79,6 +79,18 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
 static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
     int line_num);
+static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
+    long long *size_out, int depth, int line_num);
+static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
+    long long *size_out, int depth, int line_num);
+static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *variant,
+    long long *size_out, int depth, int line_num);
+static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int depth, int line_num, int *found);
+static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int depth, int line_num, int *found);
 static void semcheck_clear_pointer_info(struct Expression *expr)
 {
     if (expr == NULL)
@@ -518,43 +530,20 @@ static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
         return 1;
 
     long long offset = 0;
-    ListNode_t *cur = record->fields;
-    while (cur != NULL)
+    int found = 0;
+    if (find_field_in_members(symtab, record->fields, field_name, out_field,
+            &offset, 0, line_num, &found) != 0)
+        return 1;
+
+    if (!found)
     {
-        assert(cur->type == LIST_RECORD_FIELD);
-        struct RecordField *field = (struct RecordField *)cur->cur;
-        if (field != NULL && field->name != NULL &&
-            pascal_identifier_equals(field->name, field_name))
-        {
-            if (out_field != NULL)
-                *out_field = field;
-            if (offset_out != NULL)
-                *offset_out = offset;
-            return 0;
-        }
-
-        long long field_size = 0;
-        if (field != NULL)
-        {
-            if (field->nested_record != NULL)
-            {
-                if (sizeof_from_record(symtab, field->nested_record, &field_size, 0, line_num) != 0)
-                    return 1;
-            }
-            else
-            {
-                if (sizeof_from_type_ref(symtab, field->type, field->type_id,
-                        &field_size, 0, line_num) != 0)
-                    return 1;
-            }
-            offset += field_size;
-        }
-
-        cur = cur->next;
+        fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
+        return 1;
     }
 
-    fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
-    return 1;
+    if (offset_out != NULL)
+        *offset_out = offset;
+    return 0;
 }
 static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
@@ -966,69 +955,245 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         return 1;
     }
 
+    return sizeof_from_record_members(symtab, record->fields, size_out, depth + 1, line_num);
+}
+
+static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
+    long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (field == NULL)
+    {
+        *size_out = 0;
+        return 0;
+    }
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
+            line_num);
+        return 1;
+    }
+
+    if (field->is_array)
+    {
+        if (field->array_is_open || field->array_end < field->array_start)
+        {
+            *size_out = POINTER_SIZE_BYTES;
+            return 0;
+        }
+
+        long long element_size = 0;
+        int elem_status = 1;
+        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
+            elem_status = sizeof_from_record(symtab, field->nested_record,
+                &element_size, depth + 1, line_num);
+        else if (field->array_element_type != UNKNOWN_TYPE ||
+            field->array_element_type_id != NULL)
+            elem_status = sizeof_from_type_ref(symtab, field->array_element_type,
+                field->array_element_type_id, &element_size, depth + 1, line_num);
+        else
+            elem_status = sizeof_from_type_ref(symtab, field->type, field->type_id,
+                &element_size, depth + 1, line_num);
+
+        if (elem_status != 0)
+            return 1;
+
+        long long count = (long long)field->array_end - (long long)field->array_start + 1;
+        if (count < 0)
+        {
+            fprintf(stderr, "Error on line %d, invalid bounds for array field %s.\n",
+                line_num, field->name != NULL ? field->name : "");
+            return 1;
+        }
+
+        *size_out = element_size * count;
+        return 0;
+    }
+
+    if (field->nested_record != NULL)
+        return sizeof_from_record(symtab, field->nested_record, size_out, depth + 1, line_num);
+
+    return sizeof_from_type_ref(symtab, field->type, field->type_id, size_out, depth + 1, line_num);
+}
+
+static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
+    long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
     long long total = 0;
-    ListNode_t *cur = record->fields;
+    ListNode_t *cur = members;
     while (cur != NULL)
     {
-        assert(cur->type == LIST_RECORD_FIELD);
-        struct RecordField *field = (struct RecordField *)cur->cur;
-        long long field_size = 0;
-
-        if (field->is_array)
+        if (cur->type == LIST_RECORD_FIELD)
         {
-            if (field->array_is_open || field->array_end < field->array_start)
-            {
-                field_size = POINTER_SIZE_BYTES;
-            }
-            else
-            {
-                long long element_size = 0;
-                int elem_status = 1;
-                if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
-                    elem_status = sizeof_from_record(symtab, field->nested_record,
-                        &element_size, depth + 1, line_num);
-                else if (field->array_element_type != UNKNOWN_TYPE ||
-                    field->array_element_type_id != NULL)
-                    elem_status = sizeof_from_type_ref(symtab, field->array_element_type,
-                        field->array_element_type_id, &element_size, depth + 1, line_num);
-
-                if (elem_status != 0)
-                    return 1;
-
-                long long count = (long long)field->array_end - (long long)field->array_start + 1;
-                if (count < 0)
-                {
-                    fprintf(stderr, "Error on line %d, invalid bounds for array field %s.\n",
-                        line_num, field->name != NULL ? field->name : "");
-                    return 1;
-                }
-
-                field_size = element_size * count;
-            }
-
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            long long field_size = 0;
+            if (compute_field_size(symtab, field, &field_size, depth + 1, line_num) != 0)
+                return 1;
             total += field_size;
-            cur = cur->next;
-            continue;
         }
-
-        if (field->nested_record != NULL)
+        else if (cur->type == LIST_VARIANT_PART)
         {
-            if (sizeof_from_record(symtab, field->nested_record, &field_size,
-                    depth + 1, line_num) != 0)
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            long long variant_size = 0;
+            if (sizeof_from_variant_part(symtab, variant, &variant_size, depth + 1, line_num) != 0)
                 return 1;
+            total += variant_size;
         }
-        else
-        {
-            if (sizeof_from_type_ref(symtab, field->type, field->type_id,
-                    &field_size, depth + 1, line_num) != 0)
-                return 1;
-        }
-
-        total += field_size;
         cur = cur->next;
     }
 
     *size_out = total;
+    return 0;
+}
+
+static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *variant,
+    long long *size_out, int depth, int line_num)
+{
+    if (size_out == NULL)
+        return 1;
+
+    if (variant == NULL)
+    {
+        *size_out = 0;
+        return 0;
+    }
+
+    if (variant->has_cached_size)
+    {
+        *size_out = variant->cached_size;
+        return 0;
+    }
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving variant part.\n",
+            line_num);
+        return 1;
+    }
+
+    long long max_size = 0;
+    ListNode_t *cur = variant->branches;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH)
+        {
+            struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
+            long long branch_size = 0;
+            if (sizeof_from_record_members(symtab, branch->members, &branch_size,
+                    depth + 1, line_num) != 0)
+                return 1;
+            if (branch_size > max_size)
+                max_size = branch_size;
+        }
+        cur = cur->next;
+    }
+
+    variant->cached_size = max_size;
+    variant->has_cached_size = 1;
+    *size_out = max_size;
+    return 0;
+}
+
+static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int depth, int line_num, int *found)
+{
+    if (found != NULL)
+        *found = 0;
+
+    if (variant == NULL || field_name == NULL)
+        return 0;
+
+    ListNode_t *cur = variant->branches;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_VARIANT_BRANCH)
+        {
+            struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
+            long long branch_offset = 0;
+            int branch_found = 0;
+            if (find_field_in_members(symtab, branch->members, field_name, out_field,
+                    &branch_offset, depth + 1, line_num, &branch_found) != 0)
+                return 1;
+            if (branch_found)
+            {
+                if (offset_out != NULL)
+                    *offset_out = branch_offset;
+                if (found != NULL)
+                    *found = 1;
+                return 0;
+            }
+        }
+        cur = cur->next;
+    }
+
+    return 0;
+}
+
+static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
+    const char *field_name, struct RecordField **out_field, long long *offset_out,
+    int depth, int line_num, int *found)
+{
+    if (found != NULL)
+        *found = 0;
+
+    long long offset = 0;
+    ListNode_t *cur = members;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field != NULL && field->name != NULL &&
+                pascal_identifier_equals(field->name, field_name))
+            {
+                if (out_field != NULL)
+                    *out_field = field;
+                if (offset_out != NULL)
+                    *offset_out = offset;
+                if (found != NULL)
+                    *found = 1;
+                return 0;
+            }
+
+            long long field_size = 0;
+            if (compute_field_size(symtab, field, &field_size, depth + 1, line_num) != 0)
+                return 1;
+            offset += field_size;
+        }
+        else if (cur->type == LIST_VARIANT_PART)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            long long variant_field_offset = 0;
+            int variant_found = 0;
+            if (find_field_in_variant(symtab, variant, field_name, out_field,
+                    &variant_field_offset, depth + 1, line_num, &variant_found) != 0)
+                return 1;
+            if (variant_found)
+            {
+                if (offset_out != NULL)
+                    *offset_out = offset + variant_field_offset;
+                if (found != NULL)
+                    *found = 1;
+                return 0;
+            }
+
+            long long variant_size = 0;
+            if (sizeof_from_variant_part(symtab, variant, &variant_size, depth + 1, line_num) != 0)
+                return 1;
+            offset += variant_size;
+        }
+        cur = cur->next;
+    }
+
+    if (offset_out != NULL)
+        *offset_out = offset;
     return 0;
 }
 
