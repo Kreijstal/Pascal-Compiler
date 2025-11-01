@@ -1371,7 +1371,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", left32);
                     inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left32, right32);
+                    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", right32, left32);
                     inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\tsetne\t%s\n", left8);
                     inst_list = add_inst(inst_list, buffer);
@@ -1544,7 +1544,33 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 int use_qword = codegen_type_uses_qword(left_type) || codegen_type_uses_qword(right_type);
                 char cmp_suffix = use_qword ? 'q' : 'l';
 
-                snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", cmp_suffix, right, left);
+                const char *cmp_left = left;
+                const char *cmp_right = right;
+                char left32_buf[16];
+                char right32_buf[16];
+                char left64_buf[16];
+                char right64_buf[16];
+
+                if (use_qword)
+                {
+                    const char *left_candidate = left;
+                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    if (left32 != NULL)
+                        left_candidate = left32;
+                    const char *left64 = reg32_to_reg64(left_candidate, left64_buf, sizeof(left64_buf));
+                    if (left64 != NULL)
+                        cmp_left = left64;
+
+                    const char *right_candidate = right;
+                    const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                    if (right32 != NULL)
+                        right_candidate = right32;
+                    const char *right64 = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
+                    if (right64 != NULL)
+                        cmp_right = right64;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", cmp_suffix, cmp_right, cmp_left);
                 inst_list = add_inst(inst_list, buffer);
 
                 const char *set_instr = NULL;
