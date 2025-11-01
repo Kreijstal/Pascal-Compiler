@@ -61,6 +61,7 @@ typedef struct ParseError {
     char* context;
     struct ParseError* cause;
     ast_t* partial_ast;
+    bool committed;  // If true, prevents backtracking in multi combinator
 } ParseError;
 
 struct ParseResult {
@@ -77,6 +78,7 @@ typedef enum {
     COMB_EXPECT, COMB_SEQ, COMB_MULTI, COMB_FLATMAP, COMB_MANY, COMB_EXPR,
     COMB_OPTIONAL, COMB_SEP_BY, COMB_SEP_BY1, COMB_LEFT, COMB_RIGHT, COMB_NOT, COMB_PEEK,
     COMB_GSEQ, COMB_BETWEEN, COMB_SEP_END_BY, COMB_CHAINL1, COMB_MAP, COMB_ERRMAP,
+    COMB_COMMIT,
     COMB_LAZY,
     COMB_VARIANT_TAG,
     COMB_VARIANT_PART,

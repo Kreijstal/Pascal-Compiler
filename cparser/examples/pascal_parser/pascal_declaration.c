@@ -960,7 +960,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Var section: var var_decl var_decl ...
     combinator_t* var_section = seq(new_combinator(), PASCAL_T_VAR_SECTION,
         token(keyword_ci("var")),                       // var keyword (with word boundary check)
-        many(var_decl),                              // multiple variable declarations
+        commit(many(var_decl)),                              // multiple variable declarations
         NULL
     );
     var_section->extra_to_free = program_expr_parser;
@@ -977,7 +977,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Type section: type type_decl type_decl ...
     combinator_t* type_section = seq(new_combinator(), PASCAL_T_TYPE_SECTION,
         token(keyword_ci("type")),                      // type keyword (with word boundary check)
-        many(type_decl),                             // multiple type declarations
+        commit(many(type_decl)),                             // multiple type declarations
         NULL
     );
 
@@ -1014,7 +1014,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
         token(keyword_ci("const")),                     // const keyword (with word boundary check)
-        many(const_decl),                            // multiple const declarations
+        commit(many(const_decl)),                            // multiple const declarations
         NULL
     );
     const_section->extra_to_free = program_const_expr_parser;
@@ -1167,13 +1167,16 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* pre_subprogram_sections = many(multi(new_combinator(), PASCAL_T_NONE,
-        const_section,
-        type_section,
-        var_section,
-        NULL));
-
-    combinator_t* post_subprogram_var_sections = many(var_section);
+    // Allow const/type/var sections to be interspersed with procedure/function declarations
+    // Parse them in a single many() to avoid backtracking issues
+    // Try declaration sections first (they have distinctive keywords), then procedures/functions
+    combinator_t* declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
+        const_section,      // Try const first (keyword "const")
+        type_section,       // Try type second (keyword "type")
+        var_section,        // Try var third (keyword "var")  
+        all_declarations,   // Try procedures/functions last (keywords "procedure", "function", etc.)
+        NULL
+    );
 
     // Support optional "program" header so unit-less Pascal files can be parsed.
     combinator_t* program_header = seq(new_combinator(), PASCAL_T_PROGRAM_HEADER,
@@ -1184,13 +1187,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    // Complete program: optional header; optional uses clause; declaration sections; subprograms; optional trailing vars; optional main block.
+    // Complete program: optional header; optional uses clause; declarations/sections interspersed; optional main block.
     seq(*p, PASCAL_T_PROGRAM_DECL,
         optional(program_header),                    // optional "program" header
         optional(uses_section),                      // optional uses clause
-        pre_subprogram_sections,                     // const/type/var sections in any order
-        many(all_declarations),                      // zero or more procedure/function/method declarations
-        post_subprogram_var_sections,                // additional var sections allowed after subprograms
+        many(declaration_or_section),                // const/type/var sections and procedures/functions in any order
         optional(main_block),                        // optional main program block
         token(match(".")),                           // final period
         NULL

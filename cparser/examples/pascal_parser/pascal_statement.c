@@ -260,17 +260,6 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // Begin-end block: begin [statement_list] end
-    // Handle empty begin-end blocks explicitly to avoid recursive parsing issues
-    combinator_t* empty_begin_end = seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
-        token(keyword_ci("begin")),              // begin keyword
-        token(keyword_ci("end")),                // end keyword (immediately after begin)
-        NULL
-    );
-
-    // Standard BEGIN-END block for main statement parser (uses full recursive parsing)
-    // Create custom statement list parser to properly handle Pascal semicolon rules
-    // Pascal semicolons are separators, but there can be an optional trailing semicolon
-
     // Simplified statement list parser - just use sep_by with optional trailing semicolon
     combinator_t* stmt_list = seq(new_combinator(), PASCAL_T_NONE,
         sep_by(lazy(stmt_parser), token(match(";"))),     // statements separated by semicolons
@@ -279,34 +268,38 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // Pascal allows empty statements represented by standalone semicolons.
-    // Consume any leading semicolons so constructs like "begin; stmt; end" parse
-    // correctly as a block with an initial empty statement.
     combinator_t* leading_semicolons = many(token(match(";")));
 
-    combinator_t* non_empty_begin_end = seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
-        token(keyword_ci("begin")),              // begin keyword
-        leading_semicolons,                      // allow optional empty statements at the start
-        stmt_list,                             // statements each terminated by semicolon
-        token(keyword_ci("end")),                // end keyword
-        NULL
-    );
-
-    // Try empty block first, then non-empty
+    // Try empty block first (begin end), then non-empty
     combinator_t* begin_end_block = multi(new_combinator(), PASCAL_T_NONE,
-        empty_begin_end,                       // try empty block first
-        non_empty_begin_end,                   // then try non-empty block
+        seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
+            token(keyword_ci("begin")),
+            token(keyword_ci("end")),
+            NULL
+        ),
+        seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
+            token(keyword_ci("begin")),
+            leading_semicolons,
+            stmt_list,
+            token(keyword_ci("end")),
+            NULL
+        ),
         NULL
     );
 
     // If statement: if expression then statement [else statement]
+    // Once we see "if", commit to parsing an if statement
     combinator_t* if_stmt = seq(new_combinator(), PASCAL_T_IF_STMT,
         token(keyword_ci("if")),                     // if keyword (case-insensitive)
-        lazy(expr_parser),                         // condition
-        token(keyword_ci("then")),                   // then keyword (case-insensitive)
-        lazy(stmt_parser),                         // then statement
-        optional(seq(new_combinator(), PASCAL_T_ELSE,    // optional else part
-            token(keyword_ci("else")),               // else keyword (case-insensitive)
-            lazy(stmt_parser),
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            lazy(expr_parser),                         // condition
+            token(keyword_ci("then")),                   // then keyword (case-insensitive)
+            lazy(stmt_parser),                         // then statement
+            optional(seq(new_combinator(), PASCAL_T_ELSE,    // optional else part
+                token(keyword_ci("else")),               // else keyword (case-insensitive)
+                lazy(stmt_parser),
+                NULL
+            )),
             NULL
         )),
         NULL
@@ -325,20 +318,26 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
     combinator_t* for_stmt = seq(new_combinator(), PASCAL_T_FOR_STMT,
         token(keyword_ci("for")),                // for keyword (case-insensitive)
-        for_initializer,                        // loop initializer (assignment or bare identifier)
-        for_direction,                          // to or downto
-        lazy(expr_parser),                      // end expression
-        token(keyword_ci("do")),                 // do keyword (case-insensitive)
-        lazy(stmt_parser),                      // loop body statement
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            for_initializer,                        // loop initializer (assignment or bare identifier)
+            for_direction,                          // to or downto
+            lazy(expr_parser),                      // end expression
+            token(keyword_ci("do")),                 // do keyword (case-insensitive)
+            lazy(stmt_parser),                      // loop body statement
+            NULL
+        )),
         NULL
     );
 
     // While statement: while expression do statement
     combinator_t* while_stmt = seq(new_combinator(), PASCAL_T_WHILE_STMT,
         token(keyword_ci("while")),              // while keyword (case-insensitive)
-        lazy(expr_parser),                     // condition
-        token(keyword_ci("do")),                 // do keyword (case-insensitive)
-        lazy(stmt_parser),                     // body statement
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            lazy(expr_parser),                     // condition
+            token(keyword_ci("do")),                 // do keyword (case-insensitive)
+            lazy(stmt_parser),                     // body statement
+            NULL
+        )),
         NULL
     );
 
@@ -351,9 +350,12 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     combinator_t* repeat_stmt = seq(new_combinator(), PASCAL_T_REPEAT_STMT,
         token(keyword_ci("repeat")),           // repeat keyword (case-insensitive)
-        repeat_stmt_list,                      // repeated statements
-        token(keyword_ci("until")),           // until keyword (case-insensitive)
-        lazy(expr_parser),                     // termination expression
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            repeat_stmt_list,                      // repeated statements
+            token(keyword_ci("until")),           // until keyword (case-insensitive)
+            lazy(expr_parser),                     // termination expression
+            NULL
+        )),
         NULL
     );
 
@@ -365,17 +367,23 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     combinator_t* with_stmt = seq(new_combinator(), PASCAL_T_WITH_STMT,
         token(keyword_ci("with")),               // with keyword (case-insensitive)
-        with_contexts,                        // one or more context expressions
-        token(keyword_ci("do")),                 // do keyword (case-insensitive)
-        lazy(stmt_parser),                     // body statement
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            with_contexts,                        // one or more context expressions
+            token(keyword_ci("do")),                 // do keyword (case-insensitive)
+            lazy(stmt_parser),                     // body statement
+            NULL
+        )),
         NULL
     );
 
     // ASM block: asm ... end
     combinator_t* asm_stmt = seq(new_combinator(), PASCAL_T_ASM_BLOCK,
         token(match("asm")),                   // asm keyword
-        asm_body(PASCAL_T_NONE),               // asm body content
-        token(match("end")),                   // end keyword
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            asm_body(PASCAL_T_NONE),               // asm body content
+            token(match("end")),                   // end keyword
+            NULL
+        )),
         NULL
     );
 
@@ -502,16 +510,19 @@ void init_pascal_statement_parser(combinator_t** p) {
     
     combinator_t* case_stmt = seq(new_combinator(), PASCAL_T_CASE_STMT,
         token(keyword_ci("case")),             // case keyword
-        lazy(expr_parser),                     // case expression
-        token(keyword_ci("of")),               // of keyword
-        sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
-        optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
-            token(keyword_ci("else")),         // else keyword
-            lazy(stmt_parser),                 // else statement
-            optional(token(match(";"))),      // optional semicolon after else block
+        commit(seq(new_combinator(), PASCAL_T_NONE,
+            lazy(expr_parser),                     // case expression
+            token(keyword_ci("of")),               // of keyword
+            sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
+            optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
+                token(keyword_ci("else")),         // else keyword
+                lazy(stmt_parser),                 // else statement
+                optional(token(match(";"))),      // optional semicolon after else block
+                NULL
+            )),
+            token(keyword_ci("end")),              // end keyword
             NULL
         )),
-        token(keyword_ci("end")),              // end keyword
         NULL
     );
 
