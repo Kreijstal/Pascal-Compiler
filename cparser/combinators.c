@@ -159,9 +159,9 @@ static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
             break;
         }
 
-        // Check if we consumed any input
+        // Check if we consumed any input - prevents infinite loop on epsilon matches
         if (in->start == state.start) {
-            // No input consumed - restore and break to prevent infinite loop
+            // No input consumed - restore and break
             restore_input_state(in, &state);
             free_ast(next_res.value.ast);
             break;
@@ -229,9 +229,9 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
             break;
         }
 
-        // Check if we consumed any input
+        // Check if we consumed any input - prevents infinite loop on epsilon matches
         if (in->start == state.start) {
-            // No input consumed - restore and break to prevent infinite loop
+            // No input consumed - restore and break
             restore_input_state(in, &state);
             free_ast(p_res.value.ast);
             break;
@@ -283,9 +283,9 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name) {
         }
         ast_t* right = right_res.value.ast;
 
-        // Check if we consumed any input
+        // Check if we consumed any input - prevents infinite loop on epsilon matches
         if (in->start == state.start) {
-            // No input consumed - restore and break to prevent infinite loop
+            // No input consumed - restore and break
             restore_input_state(in, &state);
             free_ast(right);
             break;
@@ -325,10 +325,9 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             free_error(res.value.error);
             break;
         }
-        // Check if the parser consumed any input
+        // Check if the parser consumed any input - prevents infinite loop on epsilon matches
         if (in->start == state.start) {
-            // Parser succeeded but didn't consume input - this would cause infinite loop
-            // Restore state and discard the epsilon match
+            // Parser succeeded but didn't consume input - restore state and break
             restore_input_state(in, &state);
             free_ast(res.value.ast);
             break;
