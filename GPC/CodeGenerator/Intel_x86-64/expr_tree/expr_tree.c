@@ -183,6 +183,90 @@ static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf
     return reg_name;
 }
 
+static const char *reg_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
+{
+    if (reg_name == NULL)
+        return NULL;
+    if (reg_name[0] == '%' && reg_name[1] == 'r' && strchr(reg_name, 'd') == NULL)
+        return reg64_to_reg32(reg_name, buffer, buf_size);
+    return reg_name;
+}
+
+static const char *reg32_to_reg8(const char *reg_name, char *buffer, size_t buf_size)
+{
+    if (reg_name == NULL)
+        return NULL;
+
+    if (strcmp(reg_name, "%eax") == 0)
+        return "%al";
+    if (strcmp(reg_name, "%ebx") == 0)
+        return "%bl";
+    if (strcmp(reg_name, "%ecx") == 0)
+        return "%cl";
+    if (strcmp(reg_name, "%edx") == 0)
+        return "%dl";
+    if (strcmp(reg_name, "%esi") == 0)
+        return "%sil";
+    if (strcmp(reg_name, "%edi") == 0)
+        return "%dil";
+    if (strcmp(reg_name, "%ebp") == 0)
+        return "%bpl";
+    if (strcmp(reg_name, "%esp") == 0)
+        return "%spl";
+
+    size_t len = strlen(reg_name);
+    if (len > 0 && reg_name[0] == '%' && reg_name[len - 1] == 'd')
+    {
+        if (buf_size > len)
+        {
+            memcpy(buffer, reg_name, len + 1);
+            buffer[len - 1] = 'b';
+            buffer[len] = '\0';
+            return buffer;
+        }
+        return NULL;
+    }
+
+    return NULL;
+}
+
+static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size)
+{
+    if (reg_name == NULL)
+        return NULL;
+
+    if (strcmp(reg_name, "%eax") == 0)
+        return "%rax";
+    if (strcmp(reg_name, "%ebx") == 0)
+        return "%rbx";
+    if (strcmp(reg_name, "%ecx") == 0)
+        return "%rcx";
+    if (strcmp(reg_name, "%edx") == 0)
+        return "%rdx";
+    if (strcmp(reg_name, "%esi") == 0)
+        return "%rsi";
+    if (strcmp(reg_name, "%edi") == 0)
+        return "%rdi";
+    if (strcmp(reg_name, "%ebp") == 0)
+        return "%rbp";
+    if (strcmp(reg_name, "%esp") == 0)
+        return "%rsp";
+
+    size_t len = strlen(reg_name);
+    if (len > 0 && reg_name[0] == '%' && reg_name[len - 1] == 'd')
+    {
+        if (buf_size > len)
+        {
+            memcpy(buffer, reg_name, len + 1);
+            buffer[len - 1] = '\0';
+            return buffer;
+        }
+        return NULL;
+    }
+
+    return reg_name;
+}
+
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
@@ -471,18 +555,18 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *inst_list)
 {
     StackNode_t *temp;
-    char buffer[50];
+    char buffer[128];
 
     assert(left != NULL);
     assert(right != NULL);
     assert(inst_list != NULL);
 
     // Move dividend (A, right) to eax
-    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", right);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", right);
     inst_list = add_inst(inst_list, buffer);
 
     // Sign extend eax to edx
-    snprintf(buffer, 50, "\tcltd\n");
+    snprintf(buffer, sizeof(buffer), "\tcltd\n");
     inst_list = add_inst(inst_list, buffer);
 
     // If divisor (B, left) is a constant, move it to memory
@@ -491,19 +575,19 @@ ListNode_t *gencode_modulus(const char *left, const char *right, ListNode_t *ins
         temp = find_in_temp("TEMP_MOD");
         if(temp == NULL)
             temp = add_l_t("TEMP_MOD");
-        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", left, temp->offset);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, 50, "\tidivl\t-%d(%%rbp)\n", temp->offset);
+        snprintf(buffer, sizeof(buffer), "\tidivl\t-%d(%%rbp)\n", temp->offset);
         inst_list = add_inst(inst_list, buffer);
     }
     else // Divisor is a register
     {
-        snprintf(buffer, 50, "\tidivl\t%s\n", left);
+        snprintf(buffer, sizeof(buffer), "\tidivl\t%s\n", left);
         inst_list = add_inst(inst_list, buffer);
     }
 
     // Move remainder from edx to the target register (A's location, right)
-    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", right);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%%edx, %s\n", right);
     inst_list = add_inst(inst_list, buffer);
 
     return inst_list;
@@ -612,13 +696,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     {
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
             inst_list, ctx, expr->expr_data.function_call_data.resolved_func, 0);
-        snprintf(buffer, 50, "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
+        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE ||
             expr->resolved_type == REAL_TYPE)
-            snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
         else
-            snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         return inst_list;
     }
@@ -645,7 +729,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             unsigned char value = 0;
             if (expr->expr_data.string != NULL && expr->expr_data.string[0] != '\0')
                 value = (unsigned char)expr->expr_data.string[0];
-            snprintf(buffer, 50, "\tmovl\t$%u, %s\n", (unsigned)value, target_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%u, %s\n", (unsigned)value, target_reg->bit_32);
             return add_inst(inst_list, buffer);
         }
 
@@ -656,7 +740,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
             readonly_section, label, expr->expr_data.string);
         inst_list = add_inst(inst_list, add_rodata);
-        snprintf(buffer, 50, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
 
@@ -670,9 +754,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 #endif
 
     if (use_qword)
-        snprintf(buffer, 50, "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
     else
-        snprintf(buffer, 50, "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
 
     return add_inst(inst_list, buffer);
 }
@@ -948,7 +1032,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
     assert(right != NULL);
 
     int type;
-    char buffer[50];
+    char buffer[128];
 
     switch(expr->type)
     {
@@ -959,7 +1043,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 switch(type)
                 {
                     case PLUS:
-                        snprintf(buffer, 50, "\torl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", right, left);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     default:
@@ -990,7 +1074,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             {
                 const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
-            switch(type)
+                if (expr->resolved_type == BOOL && type == OR)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right, left);
+                    inst_list = add_inst(inst_list, buffer);
+                    break;
+                }
+                switch(type)
             {
                 case PLUS:
                 {
@@ -999,14 +1089,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                      * special case lets us use INC instead of ADD to save an instruction byte.
                      */
                     if(strcmp(right, "$1") == 0)
-                        snprintf(buffer, 50, "\tinc%c\t%s\n", arith_suffix, left);
+                        snprintf(buffer, sizeof(buffer), "\tinc%c\t%s\n", arith_suffix, left);
                     else
-                        snprintf(buffer, 50, "\tadd%c\t%s, %s\n", arith_suffix, right, left);
+                        snprintf(buffer, sizeof(buffer), "\tadd%c\t%s, %s\n", arith_suffix, right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 }
                 case MINUS:
-                    snprintf(buffer, 50, "\tsub%c\t%s, %s\n", arith_suffix, right, left);
+                    snprintf(buffer, sizeof(buffer), "\tsub%c\t%s, %s\n", arith_suffix, right, left);
                     inst_list = add_inst(inst_list, buffer);
                     break;
                 default:
@@ -1019,12 +1109,18 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
         case EXPR_MULOP:
             type = expr->expr_data.mulop_data.mulop_type;
+            if (expr->resolved_type == BOOL && type == AND)
+            {
+                snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right, left);
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            }
             if (expr->resolved_type == SET_TYPE)
             {
                 switch(type)
                 {
                     case STAR:
-                        snprintf(buffer, 50, "\tandl\t%s, %s\n", right, left);
+                        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right, left);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     default:
@@ -1060,22 +1156,22 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
             if(type == STAR)
             {
-                snprintf(buffer, 50, "\timul%c\t%s, %s\n", arith_suffix, right, left);
+                snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)
             {
                 if (use_qword_op)
                 {
-                    snprintf(buffer, 50, "\tmovq\t%s, %%rax\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, 50, "\tmovq\t%s, %%r10\n", right);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", right);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                    snprintf(buffer, 50, "\tmovq\t%%rdx, %s\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdx, %s\n", left);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 else
@@ -1084,15 +1180,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     char right32[16];
                     const char *mod_left = reg64_to_reg32(left, left32, sizeof(left32));
                     const char *mod_right = reg64_to_reg32(right, right32, sizeof(right32));
-                    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", mod_left);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", mod_left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcdq\n");
 
-                    snprintf(buffer, 50, "\tmovl\t%s, %%r10d\n", mod_right);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", mod_right);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
 
-                    snprintf(buffer, 50, "\tmovl\t%%edx, %s\n", mod_left);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%%edx, %s\n", mod_left);
                     inst_list = add_inst(inst_list, buffer);
                 }
             }
@@ -1103,21 +1199,21 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
                 #endif
                 // left is the dividend, right is the divisor
-                snprintf(buffer, 50, "\tpushq\t%%rdx\n");
+                snprintf(buffer, sizeof(buffer), "\tpushq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
 
 
                 if (use_qword_op)
                 {
-                    snprintf(buffer, 50, "\tmovq\t%s, %%rax\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, 50, "\tmovq\t%s, %%r10\n", right);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", right);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                    snprintf(buffer, 50, "\tmovq\t%%rax, %s\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 else
@@ -1126,19 +1222,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     char right32[16];
                     const char *div_left = reg64_to_reg32(left, left32, sizeof(left32));
                     const char *div_right = reg64_to_reg32(right, right32, sizeof(right32));
-                    snprintf(buffer, 50, "\tmovl\t%s, %%eax\n", div_left);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", div_left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcdq\n");
 
-                    snprintf(buffer, 50, "\tmovl\t%s, %%r10d\n", div_right);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", div_right);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivl\t%r10d\n");
 
-                    snprintf(buffer, 50, "\tmovl\t%%eax, %s\n", div_left);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", div_left);
                     inst_list = add_inst(inst_list, buffer);
                 }
 
-                snprintf(buffer, 50, "\tpopq\t%%rdx\n");
+                snprintf(buffer, sizeof(buffer), "\tpopq\t%%rdx\n");
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)
@@ -1147,43 +1243,43 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
             else if(type == XOR)
             {
-                snprintf(buffer, 50, "\txor%c\t%s, %s\n", arith_suffix, right, left);
+                snprintf(buffer, sizeof(buffer), "\txor%c\t%s, %s\n", arith_suffix, right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHL)
             {
                 char right32[16];
                 const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tshl%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\tshl%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == SHR)
             {
                 char right32[16];
                 const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tsar%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\tsar%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROL)
             {
                 char right32[16];
                 const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\trol%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\trol%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == ROR)
             {
                 char right32[16];
                 const char *count = use_qword_op ? reg64_to_reg32(right, right32, sizeof(right32)) : right;
-                snprintf(buffer, 50, "\tmovl\t%s, %%ecx\n", count);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", count);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, 50, "\tror%c\t%%cl, %s\n", arith_suffix, left);
+                snprintf(buffer, sizeof(buffer), "\tror%c\t%%cl, %s\n", arith_suffix, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
@@ -1196,10 +1292,258 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             }
 
         case EXPR_RELOP:
-            snprintf(buffer, 50, "\tcmpl\t%s, %s\n", left, right);
-            inst_list = add_inst(inst_list, buffer);
+        {
+            int relop_kind = expr->expr_data.relop_data.type;
+            struct Expression *left_expr = expr->expr_data.relop_data.left;
+            struct Expression *right_expr = expr->expr_data.relop_data.right;
+
+            if (relop_kind == NOT)
+            {
+                char left32_buf[16];
+                char left8_buf[16];
+                const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                if (left32 != NULL && left8 != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left32, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tsete\t%s\n", left8);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                break;
+            }
+
+            if (relop_kind == IN)
+            {
+                char left32_buf[16];
+                char right32_buf[16];
+                char left8_buf[16];
+                const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                if (left32 != NULL && right32 != NULL && left8 != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left32, right32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tsetne\t%s\n", left8);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                break;
+            }
+
+            if (left_expr != NULL && left_expr->resolved_type == REAL_TYPE)
+            {
+                char left32_buf[16];
+                char right32_buf[16];
+                const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                if (left32 != NULL)
+                {
+                    char true_label[32];
+                    char done_label[32];
+                    gen_label(true_label, sizeof(true_label), ctx);
+                    gen_label(done_label, sizeof(done_label), ctx);
+
+                    char left64_buf[16];
+                    const char *left_candidate = (left32 != NULL) ? left32 : left;
+                    const char *left64 = left_candidate;
+                    if (left_candidate != NULL && left_candidate[0] == '%')
+                    {
+                        const char *converted = reg32_to_reg64(left_candidate, left64_buf, sizeof(left64_buf));
+                        if (converted != NULL)
+                            left64 = converted;
+                    }
+
+                    StackNode_t *lhs_spill = NULL;
+                    if (left64 != NULL && left64[0] == '%')
+                    {
+                        lhs_spill = add_l_t("relop_real_lhs");
+                        if (lhs_spill != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", left64, lhs_spill->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm1\n", lhs_spill->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+
+                    if (lhs_spill == NULL && left != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, %%xmm1\n", left);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    int rhs_loaded = 0;
+                    StackNode_t *rhs_spill = NULL;
+                    if (right != NULL && right[0] == '$')
+                    {
+                        char label[32];
+                        snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+
+                        const char *readonly_section = codegen_readonly_section_directive();
+                        char rodata_buffer[192];
+                        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
+                            readonly_section, label, right + 1);
+                        inst_list = add_inst(inst_list, rodata_buffer);
+
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);
+                        inst_list = add_inst(inst_list, buffer);
+                        rhs_loaded = 1;
+                    }
+
+                    if (!rhs_loaded)
+                    {
+                        if (right != NULL && right[0] == '%')
+                        {
+                            char right64_buf[16];
+                            const char *right_candidate = right;
+                            if (right32 != NULL)
+                                right_candidate = right32;
+                            const char *right64 = right_candidate;
+                            const char *converted = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
+                            if (converted != NULL)
+                                right64 = converted;
+                            if (right64 != NULL && right64[0] == '%')
+                            {
+                                if (rhs_spill == NULL)
+                                    rhs_spill = add_l_t("relop_real_rhs_reg");
+                                if (rhs_spill != NULL)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    rhs_loaded = 1;
+                                }
+                            }
+                        }
+                        if (!rhs_loaded && right != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, %%xmm0\n", right);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+
+                    snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", left32, left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tucomisd\t%xmm0, %xmm1\n");
+
+                    switch (relop_kind)
+                    {
+                        case EQ:
+                            snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            break;
+                        case NE:
+                            snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            break;
+                        case LT:
+                            snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjb\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            break;
+                        case LE:
+                            snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjbe\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            break;
+                        case GT:
+                            snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tja\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            break;
+                        case GE:
+                            snprintf(buffer, sizeof(buffer), "\tjp\t%s\n", done_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tjae\t%s\n", true_label);
+                            inst_list = add_inst(inst_list, buffer);
+                            break;
+                        default:
+                            break;
+                    }
+
+                    snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", done_label);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "%s:\n", true_label);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left32);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "%s:\n", done_label);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                break;
+            }
+
+            {
+                int left_type = (left_expr != NULL) ? left_expr->resolved_type : UNKNOWN_TYPE;
+                int right_type = (right_expr != NULL) ? right_expr->resolved_type : UNKNOWN_TYPE;
+                int use_qword = codegen_type_uses_qword(left_type) || codegen_type_uses_qword(right_type);
+                char cmp_suffix = use_qword ? 'q' : 'l';
+
+                snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", cmp_suffix, right, left);
+                inst_list = add_inst(inst_list, buffer);
+
+                const char *set_instr = NULL;
+                switch (relop_kind)
+                {
+                    case EQ:
+                        set_instr = "sete";
+                        break;
+                    case NE:
+                        set_instr = "setne";
+                        break;
+                    case LT:
+                        set_instr = "setl";
+                        break;
+                    case LE:
+                        set_instr = "setle";
+                        break;
+                    case GT:
+                        set_instr = "setg";
+                        break;
+                    case GE:
+                        set_instr = "setge";
+                        break;
+                    default:
+                        break;
+                }
+
+                if (set_instr != NULL)
+                {
+                    char left32_buf[16];
+                    char left8_buf[16];
+                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
+                    if (left32 != NULL && left8 != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+            }
 
             break;
+        }
 
         default:
             assert(0 && "Unsupported expr type in gencode!");

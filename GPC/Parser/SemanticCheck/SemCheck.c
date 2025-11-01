@@ -502,6 +502,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType(symtab, single_name, HASHVAR_REAL);
         free(single_name);
     }
+    char *double_name = strdup("double");
+    if (double_name != NULL) {
+        AddBuiltinType(symtab, double_name, HASHVAR_REAL);
+        free(double_name);
+    }
     char *string_name = strdup("string");
     if (string_name != NULL) {
         AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
@@ -550,6 +555,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (move_name != NULL) {
         AddBuiltinProc(symtab, move_name, NULL);
         free(move_name);
+    }
+    char *val_name = strdup("Val");
+    if (val_name != NULL) {
+        AddBuiltinProc(symtab, val_name, NULL);
+        free(val_name);
     }
 
     char *inc_name = strdup("Inc");

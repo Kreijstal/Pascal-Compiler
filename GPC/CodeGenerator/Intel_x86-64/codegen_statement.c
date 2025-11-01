@@ -1032,6 +1032,133 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL ||
+        args_expr->next->next->next != NULL)
+    {
+        fprintf(stderr, "ERROR: Val expects three arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *source_expr = (struct Expression *)args_expr->cur;
+    struct Expression *value_expr = (struct Expression *)args_expr->next->cur;
+    struct Expression *code_expr = (struct Expression *)args_expr->next->next->cur;
+
+    Register_t *source_reg = NULL;
+    inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    if (codegen_had_error(ctx) || source_reg == NULL)
+        goto cleanup;
+
+    Register_t *value_addr = NULL;
+    inst_list = codegen_address_for_expr(value_expr, inst_list, ctx, &value_addr);
+    if (codegen_had_error(ctx) || value_addr == NULL)
+        goto cleanup;
+
+    Register_t *code_addr = NULL;
+    StackNode_t *code_spill = NULL;
+    StackNode_t *code_result_spill = NULL;
+    inst_list = codegen_address_for_expr(code_expr, inst_list, ctx, &code_addr);
+    if (codegen_had_error(ctx) || code_addr == NULL)
+        goto cleanup;
+
+    const char *call_target = NULL;
+    switch (value_expr != NULL ? value_expr->resolved_type : UNKNOWN_TYPE)
+    {
+        case INT_TYPE:
+            call_target = "gpc_val_integer";
+            break;
+        case LONGINT_TYPE:
+            call_target = "gpc_val_longint";
+            break;
+        case REAL_TYPE:
+            call_target = "gpc_val_real";
+            break;
+        default:
+            call_target = NULL;
+            break;
+    }
+
+    if (call_target == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Val target must be integer, longint, or real.");
+        goto cleanup;
+    }
+
+    code_spill = add_l_t("val_code_ptr");
+    if (code_spill == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val code argument.");
+        goto cleanup;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", code_addr->bit_64, code_spill->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", source_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_addr->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", source_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_addr->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (code_expr != NULL)
+    {
+        code_result_spill = add_l_t("val_code_result");
+        if (code_result_spill == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val result.");
+            goto cleanup;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", code_result_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+        if (codegen_type_uses_qword(code_expr->resolved_type))
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", code_result_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", code_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovq\t%rdx, (%rax)\n");
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%edx\n", code_result_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", code_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t%edx, (%rax)\n");
+        }
+    }
+
+cleanup:
+    if (source_reg != NULL)
+        free_reg(get_reg_stack(), source_reg);
+    if (value_addr != NULL)
+        free_reg(get_reg_stack(), value_addr);
+    if (code_addr != NULL)
+        free_reg(get_reg_stack(), code_addr);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -1495,6 +1622,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
     {
         inst_list = codegen_builtin_move(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
+    {
+        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
