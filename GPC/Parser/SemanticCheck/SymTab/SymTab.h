@@ -65,6 +65,24 @@ int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, List
 int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     struct RecordType *record_type, struct TypeAlias *type_alias);
 
+/* NEW: Type system functions using GpcType */
+/* These are the future API - use these for new code */
+
+/* Pushes a new variable with a GpcType onto the current scope */
+int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Pushes a new array with a GpcType onto the current scope */
+int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Pushes a new procedure with a GpcType onto the current scope */
+int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, GpcType *type);
+
+/* Pushes a new function with a GpcType onto the current scope */
+int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, GpcType *type);
+
+/* Pushes a new type declaration with a GpcType onto the current scope */
+int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */

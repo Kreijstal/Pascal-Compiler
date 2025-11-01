@@ -39,6 +39,7 @@ gpc_cparser_sources = [
   'Parser/ParseTree/from_cparser.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
+  'Parser/ParseTree/GpcType.c',
   'Parser/parser_error.c',
   'Parser/pascal_frontend.c',
   'Parser/SemanticCheck/SemCheck.c',
