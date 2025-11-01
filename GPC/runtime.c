@@ -16,6 +16,27 @@
 #include <unistd.h>
 #endif
 
+typedef struct GPCTextFile
+{
+    FILE *handle;
+    char *path;
+    int mode;
+} GPCTextFile;
+
+static FILE *gpc_text_output_stream(GPCTextFile *file)
+{
+    if (file != NULL && file->handle != NULL)
+        return file->handle;
+    return stdout;
+}
+
+static FILE *gpc_text_input_stream(GPCTextFile *file)
+{
+    if (file != NULL)
+        return file->handle;
+    return stdin;
+}
+
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }
@@ -263,62 +284,84 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
     descriptor->length = new_length;
 }
 
-void gpc_write_integer(int width, int64_t value)
+void gpc_write_integer(GPCTextFile *file, int width, int64_t value)
 {
+    FILE *dest = gpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
     if (width > 1024 || width < -1024)
         width = 0;
 
     if (width > 0)
-        printf("%*lld", width, (long long)value);
+        fprintf(dest, "%*lld", width, (long long)value);
     else if (width < 0)
-        printf("%-*lld", -width, (long long)value);
+        fprintf(dest, "%-*lld", -width, (long long)value);
     else
-        printf("%lld", (long long)value);
+        fprintf(dest, "%lld", (long long)value);
 }
 
-void gpc_write_string(int width, const char *value)
+void gpc_write_string(GPCTextFile *file, int width, const char *value)
 {
+    FILE *dest = gpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
     if (value == NULL)
         value = "";
     if (width > 1024 || width < -1024)
         width = 0;
     if (width > 0)
-        printf("%*s", width, value);
+        fprintf(dest, "%*s", width, value);
     else if (width < 0)
-        printf("%-*s", -width, value);
+        fprintf(dest, "%-*s", -width, value);
     else
-        printf("%s", value);
+        fprintf(dest, "%s", value);
 }
 
-void gpc_write_newline(void)
+void gpc_write_newline(GPCTextFile *file)
 {
-    putchar('\n');
+    FILE *dest = gpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
+    fputc('\n', dest);
+    if (dest != stdout)
+        fflush(dest);
 }
 
-void gpc_write_char(int width, int value)
+void gpc_write_char(GPCTextFile *file, int width, int value)
 {
     unsigned char ch = (unsigned char)value;
     char buffer[2];
     buffer[0] = (char)ch;
     buffer[1] = '\0';
-    gpc_write_string(width, buffer);
+    gpc_write_string(file, width, buffer);
 }
 
-void gpc_write_boolean(int width, int value)
+void gpc_write_boolean(GPCTextFile *file, int width, int value)
 {
+    FILE *dest = gpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
     const char *text = value ? "TRUE" : "FALSE";
     if (width > 1024 || width < -1024)
         width = 0;
     if (width > 0)
-        printf("%*s", width, text);
+        fprintf(dest, "%*s", width, text);
     else if (width < 0)
-        printf("%-*s", -width, text);
+        fprintf(dest, "%-*s", -width, text);
     else
-        printf("%s", text);
+        fprintf(dest, "%s", text);
 }
 
-void gpc_write_real(int width, int precision, int64_t value_bits)
+void gpc_write_real(GPCTextFile *file, int width, int precision, int64_t value_bits)
 {
+    FILE *dest = gpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
     if (width < -1024 || width > 1024)
         width = 0;
     if (precision < -1)
@@ -334,20 +377,20 @@ void gpc_write_real(int width, int precision, int64_t value_bits)
     if (precision < 0)
     {
         if (width > 0)
-            printf("%*g", width, value);
+            fprintf(dest, "%*g", width, value);
         else if (width < 0)
-            printf("%-*g", -width, value);
+            fprintf(dest, "%-*g", -width, value);
         else
-            printf("%g", value);
+            fprintf(dest, "%g", value);
     }
     else
     {
         if (width > 0)
-            printf("%*.*f", width, precision, value);
+            fprintf(dest, "%*.*f", width, precision, value);
         else if (width < 0)
-            printf("%-*.*f", -width, precision, value);
+            fprintf(dest, "%-*.*f", -width, precision, value);
         else
-            printf("%.*f", precision, value);
+            fprintf(dest, "%.*f", precision, value);
     }
 }
 
@@ -473,6 +516,241 @@ void gpc_string_assign(char **target, const char *value)
 
     char *copy = gpc_string_duplicate(value);
     *target = copy;
+}
+
+
+static char *gpc_textfile_duplicate_path(const char *path)
+{
+    if (path == NULL)
+        return NULL;
+
+    size_t len = strlen(path);
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL)
+        return NULL;
+
+    memcpy(copy, path, len + 1);
+    return copy;
+}
+
+static void gpc_textfile_free_path(GPCTextFile *file)
+{
+    if (file == NULL || file->path == NULL)
+        return;
+
+    free(file->path);
+    file->path = NULL;
+}
+
+static void gpc_textfile_close_handle(GPCTextFile *file)
+{
+    if (file == NULL)
+        return;
+
+    if (file->handle != NULL)
+    {
+        fclose(file->handle);
+        file->handle = NULL;
+    }
+    file->mode = 0;
+}
+
+static GPCTextFile *gpc_textfile_prepare(GPCTextFile **slot)
+{
+    if (slot == NULL)
+        return NULL;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL)
+    {
+        file = (GPCTextFile *)calloc(1, sizeof(GPCTextFile));
+        if (file == NULL)
+            return NULL;
+        *slot = file;
+    }
+
+    return file;
+}
+
+static char *gpc_text_read_line_from_stream(FILE *stream)
+{
+    if (stream == NULL)
+        return NULL;
+
+    size_t capacity = 64;
+    size_t length = 0;
+    char *buffer = (char *)malloc(capacity);
+    if (buffer == NULL)
+        return NULL;
+
+    int ch = 0;
+    int read_any = 0;
+    while (1)
+    {
+        ch = fgetc(stream);
+        if (ch == EOF)
+            break;
+
+        read_any = 1;
+        if (ch == '\r')
+        {
+            int next = fgetc(stream);
+            if (next != '\n' && next != EOF)
+                ungetc(next, stream);
+            break;
+        }
+        if (ch == '\n')
+            break;
+
+        if (length + 1 >= capacity)
+        {
+            size_t new_capacity = capacity < 128 ? capacity * 2 : capacity + 64;
+            if (new_capacity <= capacity)
+                new_capacity = capacity + 64;
+            char *new_buffer = (char *)realloc(buffer, new_capacity);
+            if (new_buffer == NULL)
+            {
+                free(buffer);
+                return NULL;
+            }
+            buffer = new_buffer;
+            capacity = new_capacity;
+        }
+
+        buffer[length++] = (char)ch;
+    }
+
+    if (!read_any && ch == EOF)
+    {
+        free(buffer);
+        return NULL;
+    }
+
+    buffer[length] = '\0';
+    return buffer;
+}
+
+void gpc_text_assign(GPCTextFile **slot, const char *path)
+{
+    if (slot == NULL)
+        return;
+
+    GPCTextFile *file = gpc_textfile_prepare(slot);
+    if (file == NULL)
+        return;
+
+    gpc_textfile_close_handle(file);
+    gpc_textfile_free_path(file);
+
+    if (path != NULL)
+        file->path = gpc_textfile_duplicate_path(path);
+}
+
+void gpc_text_rewrite(GPCTextFile **slot)
+{
+    GPCTextFile *file = gpc_textfile_prepare(slot);
+    if (file == NULL || file->path == NULL)
+        return;
+
+    gpc_textfile_close_handle(file);
+
+    file->handle = fopen(file->path, "w");
+    if (file->handle != NULL)
+        file->mode = 1;
+    else
+        file->mode = 0;
+}
+
+void gpc_text_reset(GPCTextFile **slot)
+{
+    GPCTextFile *file = gpc_textfile_prepare(slot);
+    if (file == NULL || file->path == NULL)
+        return;
+
+    gpc_textfile_close_handle(file);
+
+    file->handle = fopen(file->path, "r");
+    if (file->handle != NULL)
+        file->mode = 2;
+    else
+        file->mode = 0;
+}
+
+void gpc_text_close(GPCTextFile **slot)
+{
+    if (slot == NULL)
+        return;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL)
+        return;
+
+    gpc_textfile_close_handle(file);
+}
+
+int gpc_text_eof(GPCTextFile *file)
+{
+    FILE *stream = gpc_text_input_stream(file);
+    if (stream == NULL)
+        return 1;
+
+    int ch = fgetc(stream);
+    if (ch == EOF)
+        return 1;
+
+    if (ungetc(ch, stream) == EOF)
+        return 1;
+
+    return 0;
+}
+
+int gpc_text_eof_default(void)
+{
+    return gpc_text_eof(NULL);
+}
+
+void gpc_text_readln_into(GPCTextFile *file, char **target)
+{
+    if (target == NULL)
+        return;
+
+    FILE *stream = gpc_text_input_stream(file);
+    if (stream == NULL)
+    {
+        gpc_string_assign(target, "");
+        return;
+    }
+
+    char *line = gpc_text_read_line_from_stream(stream);
+    if (line == NULL)
+    {
+        gpc_string_assign(target, "");
+        return;
+    }
+
+    gpc_string_assign(target, line);
+    free(line);
+}
+
+void gpc_text_readln_discard(GPCTextFile *file)
+{
+    FILE *stream = gpc_text_input_stream(file);
+    if (stream == NULL)
+        return;
+
+    int ch;
+    while ((ch = fgetc(stream)) != EOF)
+    {
+        if (ch == '\r')
+        {
+            int next = fgetc(stream);
+            if (next != '\n' && next != EOF)
+                ungetc(next, stream);
+            break;
+        }
+        if (ch == '\n')
+            break;
+    }
 }
 
 

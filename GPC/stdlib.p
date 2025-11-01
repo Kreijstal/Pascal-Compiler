@@ -58,5 +58,88 @@ begin
 end;
 
 
+procedure assign(var f: text; filename: string);
+begin
+    assembler;
+    asm
+        call gpc_text_assign
+    end
+end;
+
+procedure rewrite(var f: text);
+begin
+    assembler;
+    asm
+        call gpc_text_rewrite
+    end
+end;
+
+procedure reset(var f: text);
+begin
+    assembler;
+    asm
+        call gpc_text_reset
+    end
+end;
+
+procedure close(var f: text);
+begin
+    assembler;
+    asm
+        call gpc_text_close
+    end
+end;
+
+procedure readln(var value: string);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lreadln_str_sysv
+        movq %rcx, %rdx
+        xorq %rcx, %rcx
+        jmp .Lreadln_str_call
+.Lreadln_str_sysv:
+        movq %rdi, %rsi
+        xorq %rdi, %rdi
+.Lreadln_str_call:
+        call gpc_text_readln_into
+    end
+end;
+
+procedure readln(f: text; var value: string);
+begin
+    assembler;
+    asm
+        call gpc_text_readln_into
+    end
+end;
+
+procedure readln;
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lreadln_nofile_sysv
+        xorq %rcx, %rcx
+        jmp .Lreadln_nofile_call
+.Lreadln_nofile_sysv:
+        xorq %rdi, %rdi
+.Lreadln_nofile_call:
+        call gpc_text_readln_discard
+    end
+end;
+
+procedure readln(f: text);
+begin
+    assembler;
+    asm
+        call gpc_text_readln_discard
+    end
+end;
+
+
 begin
 end.

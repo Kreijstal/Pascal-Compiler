@@ -971,6 +971,127 @@ class TestCompiler(unittest.TestCase):
         expected_output = "3.75\n3.375\nless\nmore\n-0.75\n1.5\n"
         self.assertEqual(result.stdout, expected_output)
 
+    def test_text_file_roundtrip(self):
+        """Exercises text file assignment, IO, EOF, and console readln."""
+
+        input_file = os.path.join(TEST_CASES_DIR, "text_file_roundtrip.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "text_file_roundtrip.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "text_file_roundtrip")
+        output_path = os.path.join(TEST_OUTPUT_DIR, "text_roundtrip.txt")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+        input_data = "Alpha\nBeta\n\n"
+        result = subprocess.run(
+            [executable_file],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+
+        self.assertEqual(result.stdout, "FILE1:Alpha\nFILE2:Beta\n")
+
+        with open(output_path, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "Alpha\nBeta\n")
+
+    def test_email_address_book_programs(self):
+        """Ensure the email address book samples compile and manipulate text files."""
+
+        book_input = os.path.join(TEST_CASES_DIR, "email_address_book.p")
+        book_asm = os.path.join(TEST_OUTPUT_DIR, "email_address_book.s")
+        book_exe = os.path.join(TEST_OUTPUT_DIR, "email_address_book")
+        output_path = os.path.join(TEST_OUTPUT_DIR, "email_address_book.txt")
+
+        run_compiler(book_input, book_asm)
+        self.compile_executable(book_asm, book_exe)
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+        address_input = (
+            "Alice\n"
+            "alice@example.com\n"
+            "Bob\n"
+            "bob@example.com\n"
+            "Carol\n"
+            "carol@example.com\n"
+        )
+
+        result = subprocess.run(
+            [book_exe],
+            input=address_input,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+
+        expected_prompt = (
+            "\033[2J\033[H"
+            "Enter name 1 out of 3\n"
+            "Enter that person's email.\n"
+            "Enter name 2 out of 3\n"
+            "Enter that person's email.\n"
+            "Enter name 3 out of 3\n"
+            "Enter that person's email.\n"
+        )
+        self.assertEqual(result.stdout, expected_prompt)
+
+        with open(output_path, "r", encoding="utf-8") as handle:
+            self.assertEqual(
+                handle.read(),
+                "Alice\nalice@example.com\nBob\nbob@example.com\nCarol\ncarol@example.com\n",
+            )
+
+        read_input = os.path.join(TEST_CASES_DIR, "email_address_book_read.p")
+        read_asm = os.path.join(TEST_OUTPUT_DIR, "email_address_book_read.s")
+        read_exe = os.path.join(TEST_OUTPUT_DIR, "email_address_book_read")
+
+        run_compiler(read_input, read_asm)
+        self.compile_executable(read_asm, read_exe)
+
+        result_read = subprocess.run(
+            [read_exe],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+
+        expected_read = (
+            "Name  1: Alice\n"
+            "Email 1: alice@example.com\n\n"
+            "Name  2: Bob\n"
+            "Email 2: bob@example.com\n\n"
+            "Name  3: Carol\n"
+            "Email 3: carol@example.com\n\n"
+        )
+        self.assertEqual(result_read.stdout, expected_read)
+
+        eof_input = os.path.join(TEST_CASES_DIR, "email_address_book_read_eof.p")
+        eof_asm = os.path.join(TEST_OUTPUT_DIR, "email_address_book_read_eof.s")
+        eof_exe = os.path.join(TEST_OUTPUT_DIR, "email_address_book_read_eof")
+
+        run_compiler(eof_input, eof_asm)
+        self.compile_executable(eof_asm, eof_exe)
+
+        result_eof = subprocess.run(
+            [eof_exe],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+
+        expected_eof = expected_read
+        self.assertEqual(result_eof.stdout, expected_eof)
+
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
