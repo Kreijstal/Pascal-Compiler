@@ -1223,7 +1223,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
     }
 
-    int base_is_string = (array_expr->resolved_type == STRING_TYPE);
+    int base_is_string = (array_expr->resolved_type == STRING_TYPE && !array_expr->is_array_expr);
 
     if (!array_expr->is_array_expr && !base_is_string)
     {
@@ -1264,37 +1264,23 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         inst_list = add_inst(inst_list, buffer);
     }
 
-    if (base_is_string)
+    int lower_bound = base_is_string ? 1 : array_expr->array_lower_bound;
+    if (lower_bound > 0)
     {
-        snprintf(buffer, sizeof(buffer), "\tsubl\t$1, %s\n", index_reg->bit_32);
+        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
     }
-    else
+    else if (lower_bound < 0)
     {
-        int lower_bound = array_expr->array_lower_bound;
-        if (lower_bound > 0)
-        {
-            snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (lower_bound < 0)
-        {
-            snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-        }
+        snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
-    if (base_is_string)
+    long long element_size_ll = base_is_string ? 1 : array_expr->array_element_size;
+    if (!base_is_string)
     {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s), %s\n",
-            base_reg->bit_64, index_reg->bit_64, index_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        long long element_size_ll = array_expr->array_element_size;
         int need_element_size = 0;
         if (element_size_ll <= 0)
             need_element_size = 1;
@@ -1319,36 +1305,36 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                 return inst_list;
             }
         }
+    }
 
-        int element_size = (int)element_size_ll;
-        static const int scaled_sizes[] = {1, 2, 4, 8};
-        int can_scale = 0;
-        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+    int element_size = (int)element_size_ll;
+    static const int scaled_sizes[] = {1, 2, 4, 8};
+    int can_scale = 0;
+    for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+    {
+        if (element_size == scaled_sizes[i])
         {
-            if (element_size == scaled_sizes[i])
-            {
-                can_scale = 1;
-                break;
-            }
+            can_scale = 1;
+            break;
         }
+    }
 
-        if (can_scale)
+    if (can_scale)
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n",
+            base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        if (element_size != 1)
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n",
-                base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+            snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
         }
-        else
-        {
-            if (element_size != 1)
-            {
-                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-            }
 
-            snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
+        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     free_reg(get_reg_stack(), base_reg);

@@ -738,6 +738,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 element_size = 8;
                             else if (var_type == HASHVAR_LONGINT)
                                 element_size = 8;
+                            else if (var_type == HASHVAR_PCHAR)
+                                element_size = 8;
+                            else if (var_type == HASHVAR_CHAR)
+                                element_size = 1;
                             else
                                 element_size = 4;
                             int start = alias->array_start;
@@ -782,6 +786,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_SET;
                 else if(tree->tree_data.var_decl_data.type == ENUM_TYPE)
                     var_type = HASHVAR_ENUM;
+                else if(tree->tree_data.var_decl_data.type == STRING_TYPE)
+                    var_type = HASHVAR_PCHAR;
                 else
                     var_type = HASHVAR_REAL;
                 func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
@@ -811,6 +817,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_LONGINT;
                 else if(tree->tree_data.arr_decl_data.type == BOOL)
                     var_type = HASHVAR_BOOLEAN;
+                else if(tree->tree_data.arr_decl_data.type == STRING_TYPE)
+                    var_type = HASHVAR_PCHAR;
                 else
                     var_type = HASHVAR_REAL;
 
@@ -819,6 +827,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     element_size = 8;
                 else if (var_type == HASHVAR_LONGINT)
                     element_size = 8;
+                else if (var_type == HASHVAR_PCHAR)
+                    element_size = 8;
+                else if (var_type == HASHVAR_CHAR)
+                    element_size = 1;
                 else if (var_type == HASHVAR_BOOLEAN)
                     element_size = 1;
                 else
