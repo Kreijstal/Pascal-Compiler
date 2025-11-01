@@ -69,24 +69,51 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
     return add_inst(inst_list, buffer);
 }
 
-static ListNode_t *gencode_real_binary_op(const char *left_operand,
-    const char *right_operand, const char *dest, ListNode_t *inst_list,
-    const char *sse_mnemonic)
+static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
+    const char *operand, const char *xmm_reg, ListNode_t *inst_list)
 {
-    if (left_operand == NULL || right_operand == NULL || dest == NULL || sse_mnemonic == NULL)
+    if (ctx == NULL || operand == NULL || xmm_reg == NULL)
         return inst_list;
 
-    char buffer[80];
+    char buffer[128];
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", left_operand);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", right_operand);
-    inst_list = add_inst(inst_list, buffer);
+    if (operand[0] == '$')
+    {
+        char label[32];
+        snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+
+        const char *readonly_section = codegen_readonly_section_directive();
+        char rodata_buffer[192];
+        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
+            readonly_section, label, operand + 1);
+        inst_list = add_inst(inst_list, rodata_buffer);
+
+        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %s\n", label, xmm_reg);
+        return add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", operand, xmm_reg);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *gencode_real_binary_op(CodeGenContext *ctx,
+    const char *left_operand, const char *right_operand, const char *dest,
+    ListNode_t *inst_list, const char *sse_mnemonic)
+{
+    if (ctx == NULL || left_operand == NULL || right_operand == NULL ||
+        dest == NULL || sse_mnemonic == NULL)
+    {
+        return inst_list;
+    }
+
+    inst_list = load_real_operand_into_xmm(ctx, left_operand, "%xmm0", inst_list);
+    inst_list = load_real_operand_into_xmm(ctx, right_operand, "%xmm1", inst_list);
+
+    char buffer[80];
     snprintf(buffer, sizeof(buffer), "\t%s\t%%xmm1, %%xmm0\n", sse_mnemonic);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", dest);
-    inst_list = add_inst(inst_list, buffer);
-    return inst_list;
+    return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *gencode_real_negate(const char *value_operand,
@@ -166,9 +193,9 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
 ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
-    ListNode_t *inst_list);
+    ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
-    char *buffer, int buf_len);
+    char *buffer, int buf_len, CodeGenContext *ctx);
 
 ListNode_t *gencode_divide_const_no_optimize(char *left, char *right, ListNode_t *inst_list);
 ListNode_t *gencode_divide_no_const(char *left, char *right, ListNode_t *inst_list);
@@ -685,7 +712,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
             const char *target_name = select_register_name(target_reg, expr->resolved_type);
-            inst_list = gencode_op(expr, target_name, name_buf, inst_list);
+            inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
         }
         else
         {
@@ -696,7 +723,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list = emit_load_from_stack(inst_list, target_reg, expr->resolved_type, lhs_spill->offset);
             const char *target_name = select_register_name(target_reg, expr->resolved_type);
             const char *rhs_name = select_register_name(rhs_reg, expr->resolved_type);
-            inst_list = gencode_op(expr, target_name, rhs_name, inst_list);
+            inst_list = gencode_op(expr, target_name, rhs_name, inst_list, ctx);
             free_reg(get_reg_stack(), rhs_reg);
         }
         return inst_list;
@@ -707,7 +734,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
 
     const char *target_name = select_register_name(target_reg, expr->resolved_type);
-    inst_list = gencode_op(expr, target_name, name_buf, inst_list);
+    inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
 
     return inst_list;
 }
@@ -740,7 +767,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
         const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
-        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list);
+        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list, ctx);
     }
     else
     {
@@ -751,7 +778,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = emit_load_from_stack(inst_list, temp_reg, node->expr->resolved_type, rhs_spill->offset);
         const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
         const char *temp_name = select_register_name(temp_reg, node->expr->resolved_type);
-        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list);
+        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -785,7 +812,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
         const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
-        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list);
+        inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list, ctx);
     }
     else
     {
@@ -795,7 +822,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = emit_load_from_stack(inst_list, target_reg, node->expr->resolved_type, lhs_spill->offset);
         const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
         const char *temp_name = select_register_name(temp_reg, node->expr->resolved_type);
-        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list);
+        inst_list = gencode_op(node->expr, target_name, temp_name, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -907,7 +934,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
 /* TODO: Assumes eax and edx registers are free for division */
 ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
-    ListNode_t *inst_list)
+    ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(expr != NULL);
     assert(left != NULL);
@@ -950,7 +977,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         break;
                 }
                 if (sse_op != NULL)
-                    inst_list = gencode_real_binary_op(left, right, left, inst_list, sse_op);
+                    inst_list = gencode_real_binary_op(ctx, left, right, left, inst_list, sse_op);
                 break;
             }
             {
@@ -1018,7 +1045,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         break;
                 }
                 if (sse_op != NULL)
-                    inst_list = gencode_real_binary_op(left, right, left, inst_list, sse_op);
+                    inst_list = gencode_real_binary_op(ctx, left, right, left, inst_list, sse_op);
                 break;
             }
             {
@@ -1179,8 +1206,9 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 /* Gets simple operation of a node */
 /* DEPRECATED */
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
-    char *buffer, int buf_len)
+    char *buffer, int buf_len, CodeGenContext *ctx)
 {
+    (void)ctx;
     assert(expr != NULL);
     int type;
 
