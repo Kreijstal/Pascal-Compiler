@@ -2337,7 +2337,7 @@ int semcheck_arrayaccess(int *type_return,
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
-    int base_is_string = (base_type == STRING_TYPE);
+    int base_is_string = (base_type == STRING_TYPE && !array_expr->is_array_expr);
     if (!array_expr->is_array_expr && !base_is_string)
     {
         fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
