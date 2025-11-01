@@ -278,8 +278,14 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
+    // Pascal allows empty statements represented by standalone semicolons.
+    // Consume any leading semicolons so constructs like "begin; stmt; end" parse
+    // correctly as a block with an initial empty statement.
+    combinator_t* leading_semicolons = many(token(match(";")));
+
     combinator_t* non_empty_begin_end = seq(new_combinator(), PASCAL_T_BEGIN_BLOCK,
         token(keyword_ci("begin")),              // begin keyword
+        leading_semicolons,                      // allow optional empty statements at the start
         stmt_list,                             // statements each terminated by semicolon
         token(keyword_ci("end")),                // end keyword
         NULL

@@ -54,9 +54,11 @@ struct input_t {
 typedef struct ParseError {
     int line;
     int col;
+    int index;
     char* message;
     char* parser_name;
     char* unexpected;
+    char* context;
     struct ParseError* cause;
     ast_t* partial_ast;
 } ParseError;

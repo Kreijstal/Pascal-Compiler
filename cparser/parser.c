@@ -59,13 +59,138 @@ ParseResult make_success(ast_t* ast) {
     return (ParseResult){ .is_success = true, .value.ast = ast };
 }
 
+static void append_buffer(char** dest, size_t* length, const char* text, size_t text_len) {
+    if (text_len == 0) {
+        return;
+    }
+
+    size_t new_length = *length + text_len;
+    char* resized = (char*)realloc(*dest, new_length + 1);
+    if (resized == NULL) {
+        return;
+    }
+
+    memcpy(resized + *length, text, text_len);
+    resized[new_length] = '\0';
+    *dest = resized;
+    *length = new_length;
+}
+
+static void append_format(char** dest, size_t* length, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    char* formatted = NULL;
+    int written = vasprintf(&formatted, fmt, args);
+    va_end(args);
+
+    if (written < 0 || formatted == NULL) {
+        return;
+    }
+
+    append_buffer(dest, length, formatted, (size_t)written);
+    free(formatted);
+}
+
+#define ERROR_CONTEXT_RADIUS 3
+
+static char* create_error_context(input_t* in, int line, int col, int index) {
+    if (in == NULL || in->buffer == NULL || line <= 0) {
+        return NULL;
+    }
+
+    (void)index;
+
+    int length = in->length;
+    if (length <= 0 && in->buffer != NULL) {
+        length = (int)strlen(in->buffer);
+    }
+
+    if (length <= 0) {
+        return NULL;
+    }
+
+    int start_line = line - ERROR_CONTEXT_RADIUS;
+    if (start_line < 1) {
+        start_line = 1;
+    }
+    int end_line = line + ERROR_CONTEXT_RADIUS;
+    if (end_line < line) {
+        end_line = line;
+    }
+
+    int width = 1;
+    int max_line_for_width = end_line;
+    while (max_line_for_width >= 10) {
+        width++;
+        max_line_for_width /= 10;
+    }
+
+    char* context = NULL;
+    size_t context_len = 0;
+    append_format(&context, &context_len, "Context (lines %d-%d):\n", start_line, end_line);
+
+    const char* buffer = in->buffer;
+    int pos = 0;
+    int current_line = 1;
+
+    while (pos < length && current_line <= end_line) {
+        int line_start_pos = pos;
+        int line_end_pos = pos;
+        while (line_end_pos < length && buffer[line_end_pos] != '\n' && buffer[line_end_pos] != '\r') {
+            line_end_pos++;
+        }
+
+        size_t line_len = (size_t)(line_end_pos - line_start_pos);
+
+        if (current_line >= start_line && current_line <= end_line) {
+            char* line_text = (char*)safe_malloc(line_len + 1);
+            memcpy(line_text, buffer + line_start_pos, line_len);
+            line_text[line_len] = '\0';
+
+            append_format(&context, &context_len, "%*d | %s\n", width, current_line, line_text);
+
+            if (current_line == line) {
+                int caret_col = col;
+                if (caret_col < 1) caret_col = 1;
+                if ((size_t)(caret_col - 1) > line_len) {
+                    caret_col = (int)line_len + 1;
+                }
+
+                append_format(&context, &context_len, "%*s | ", width, "");
+                for (int i = 1; i < caret_col; i++) {
+                    append_buffer(&context, &context_len, " ", 1);
+                }
+                append_buffer(&context, &context_len, "^\n", 2);
+            }
+
+            free(line_text);
+        }
+
+        if (line_end_pos >= length) {
+            break;
+        }
+
+        int newline_len = 1;
+        if (buffer[line_end_pos] == '\r' && line_end_pos + 1 < length && buffer[line_end_pos + 1] == '\n') {
+            newline_len = 2;
+        }
+
+        pos = line_end_pos + newline_len;
+        current_line++;
+    }
+
+    return context;
+}
+
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    err->line = in ? in->line : 0;
+    err->col = in ? in->col : 0;
+    err->index = in ? in->start : -1;
     err->message = message;
     err->parser_name = parser_name ? strdup(parser_name) : NULL;
     err->unexpected = unexpected;
+    err->context = create_error_context(in, err->line, err->col, err->index);
     err->cause = NULL;
     err->partial_ast = NULL;
     return (ParseResult){ .is_success = false, .value.error = err };
@@ -77,11 +202,15 @@ ParseResult make_failure(input_t* in, char* message) {
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    err->line = in ? in->line : 0;
+    err->col = in ? in->col : 0;
+    err->index = in ? in->start : -1;
     err->message = message;
     err->cause = NULL;
+    err->context = create_error_context(in, err->line, err->col, err->index);
     err->partial_ast = partial_ast;
+    err->parser_name = NULL;
+    err->unexpected = NULL;
     return (ParseResult){ .is_success = false, .value.error = err };
 }
 
@@ -105,8 +234,9 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
         return make_failure(in, "Memory allocation failed for error wrapper");
     }
     
-    new_err->line = in->line;
-    new_err->col = in->col;
+    new_err->line = original_error->line;
+    new_err->col = original_error->col;
+    new_err->index = original_error->index;
     new_err->message = strdup(message);
     if (new_err->message == NULL) {
         free(new_err);
@@ -116,14 +246,25 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     new_err->partial_ast = partial_ast;
     new_err->parser_name = NULL;
     new_err->unexpected = NULL;
-    
+    new_err->context = original_error->context ? strdup(original_error->context) : NULL;
+
     return (ParseResult){ .is_success = false, .value.error = new_err };
 }
 
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    ParseError* cause_error = cause.value.error;
+    if (cause_error) {
+        err->line = cause_error->line;
+        err->col = cause_error->col;
+        err->index = cause_error->index;
+        err->context = cause_error->context ? strdup(cause_error->context) : NULL;
+    } else {
+        err->line = in ? in->line : 0;
+        err->col = in ? in->col : 0;
+        err->index = in ? in->start : -1;
+        err->context = create_error_context(in, err->line, err->col, err->index);
+    }
     err->message = message;
     err->cause = cause.value.error;
     err->partial_ast = NULL;
@@ -697,6 +838,7 @@ void free_error(ParseError* err) {
     if (err == NULL) return;
     if (err->parser_name) free(err->parser_name);
     if (err->unexpected) free(err->unexpected);
+    if (err->context) free(err->context);
     free(err->message);
     free_error(err->cause);
     if (err->partial_ast != NULL) {
