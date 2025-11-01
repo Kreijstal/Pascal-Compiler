@@ -219,12 +219,39 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
             return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
         }
+        int treat_as_reference = 0;
+        if (ctx->symtab != NULL)
+        {
+            HashNode_t *symbol = NULL;
+            if (FindIdent(&symbol, ctx->symtab, expr->expr_data.id) >= 0 && symbol != NULL)
+                treat_as_reference = symbol->is_var_parameter;
+        }
+        if (var_node->is_reference)
+            treat_as_reference = 1;
+
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
             return codegen_fail_register(ctx, inst_list, out_reg,
                 "ERROR: Unable to allocate register for address expression.");
 
         char buffer[96];
+        if (treat_as_reference)
+        {
+            if (var_node->is_static)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                    var_node->static_label != NULL ? var_node->static_label : var_node->label,
+                    addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            return inst_list;
+        }
         if (var_node->is_static)
         {
             const char *label = var_node->static_label != NULL ?
