@@ -344,6 +344,11 @@ expr_node_t *build_expr_tree(struct Expression *expr)
 
         case EXPR_RELOP:
             new_node->left_expr = build_expr_tree(expr->expr_data.relop_data.left);
+            if (expr->expr_data.relop_data.type == NOT)
+            {
+                new_node->right_expr = NULL;
+                break;
+            }
             assert(expr->expr_data.relop_data.right != NULL);
             new_node->right_expr = build_expr_tree(expr->expr_data.relop_data.right);
             break;
@@ -461,7 +466,14 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
         node->reg = target_reg;
     }
     /* CASE 1 */
-    else if(expr_tree_is_leaf(node->right_expr))
+    else if (node->right_expr == NULL)
+    {
+        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        const char *target_name = select_register_name(target_reg, node->expr->resolved_type);
+        if (target_name != NULL)
+            inst_list = gencode_op(node->expr, target_name, target_name, inst_list, ctx);
+    }
+    else if(node->right_expr != NULL && expr_tree_is_leaf(node->right_expr))
     {
         inst_list = gencode_case1(node, inst_list, ctx, target_reg);
     }
@@ -1086,6 +1098,23 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", right, left);
                         inst_list = add_inst(inst_list, buffer);
                         break;
+                    case MINUS:
+                        if (right[0] == '$')
+                        {
+                            unsigned long mask = strtoul(right + 1, NULL, 0);
+                            unsigned int complement = ~((unsigned int)mask);
+                            snprintf(buffer, sizeof(buffer), "\tandl\t$%u, %s\n", complement, left);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", right);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = add_inst(inst_list, "\tnotl\t%r10d\n");
+                            snprintf(buffer, sizeof(buffer), "\tandl\t%%r10d, %s\n", left);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        break;
                     default:
                         assert(0 && "Unsupported set addop type!");
                         break;
@@ -1161,6 +1190,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 {
                     case STAR:
                         snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", right, left);
+                        inst_list = add_inst(inst_list, buffer);
+                        break;
+                    case XOR:
+                        snprintf(buffer, sizeof(buffer), "\txorl\t%s, %s\n", right, left);
                         inst_list = add_inst(inst_list, buffer);
                         break;
                     default:
@@ -1363,17 +1396,22 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
                 const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
                 const char *left8 = reg32_to_reg8(left32, left8_buf, sizeof(left8_buf));
-                if (left32 != NULL && right32 != NULL && left8 != NULL)
+
+                const char *bit_index = left32;
+                const char *bit_base = right32;
+
+                if (right != NULL && right[0] == '$')
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", left32);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r10d\n", right);
                     inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", left32);
+                    bit_base = "%r10d";
+                }
+
+                if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", bit_index, bit_base);
                     inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", left32);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left32, right32);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tsetne\t%s\n", left8);
+                    snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
                     inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
                     inst_list = add_inst(inst_list, buffer);
@@ -1544,7 +1582,33 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 int use_qword = codegen_type_uses_qword(left_type) || codegen_type_uses_qword(right_type);
                 char cmp_suffix = use_qword ? 'q' : 'l';
 
-                snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", cmp_suffix, right, left);
+                const char *cmp_left = left;
+                const char *cmp_right = right;
+                char left32_buf[16];
+                char right32_buf[16];
+                char left64_buf[16];
+                char right64_buf[16];
+
+                if (use_qword)
+                {
+                    const char *left_candidate = left;
+                    const char *left32 = reg_to_reg32(left, left32_buf, sizeof(left32_buf));
+                    if (left32 != NULL)
+                        left_candidate = left32;
+                    const char *left64 = reg32_to_reg64(left_candidate, left64_buf, sizeof(left64_buf));
+                    if (left64 != NULL)
+                        cmp_left = left64;
+
+                    const char *right_candidate = right;
+                    const char *right32 = reg_to_reg32(right, right32_buf, sizeof(right32_buf));
+                    if (right32 != NULL)
+                        right_candidate = right32;
+                    const char *right64 = reg32_to_reg64(right_candidate, right64_buf, sizeof(right64_buf));
+                    if (right64 != NULL)
+                        cmp_right = right64;
+                }
+
+                snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", cmp_suffix, cmp_right, cmp_left);
                 inst_list = add_inst(inst_list, buffer);
 
                 const char *set_instr = NULL;

@@ -2305,7 +2305,7 @@ int semcheck_addop(int *type_return,
 
     if (type_first == SET_TYPE && type_second == SET_TYPE)
     {
-        if (op_type == PLUS)
+        if (op_type == PLUS || op_type == MINUS)
         {
             *type_return = SET_TYPE;
         }
@@ -2387,7 +2387,7 @@ int semcheck_mulop(int *type_return,
 
     if (type_first == SET_TYPE && type_second == SET_TYPE)
     {
-        if (op_type == STAR)
+        if (op_type == STAR || op_type == XOR)
         {
             *type_return = SET_TYPE;
         }
