@@ -426,6 +426,9 @@ static struct Expression *clone_expression(const struct Expression *expr)
                 return NULL;
             }
             break;
+        case EXPR_CHAR_CODE:
+            clone->expr_data.char_code = expr->expr_data.char_code;
+            break;
         case EXPR_BOOL:
             clone->expr_data.bool_value = expr->expr_data.bool_value;
             break;
@@ -2120,9 +2123,13 @@ int semcheck_expr_main(int *type_return,
         case EXPR_RNUM:
             *type_return = REAL_TYPE;
             break;
-        
+
         case EXPR_STRING:
             *type_return = STRING_TYPE;
+            break;
+
+        case EXPR_CHAR_CODE:
+            *type_return = CHAR_TYPE;
             break;
 
         case EXPR_BOOL:
