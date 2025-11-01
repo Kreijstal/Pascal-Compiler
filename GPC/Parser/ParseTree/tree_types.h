@@ -48,6 +48,12 @@ struct RecordField
     int type;
     char *type_id;
     struct RecordType *nested_record;
+    int is_array;
+    int array_start;
+    int array_end;
+    int array_element_type;
+    char *array_element_type_id;
+    int array_is_open;
 };
 
 struct RecordType
@@ -238,8 +244,8 @@ struct Expression
         /* An indexed array */
         struct ArrayAccess
         {
-            char *id;
             struct Expression *array_expr;
+            struct Expression *index_expr;
         } array_access_data;
 
         /* Record field access */
@@ -305,6 +311,14 @@ struct Expression
     int pointer_subtype;
     char *pointer_subtype_id;
     struct RecordType *record_type;
+    int is_array_expr;
+    int array_element_type;
+    char *array_element_type_id;
+    int array_lower_bound;
+    int array_upper_bound;
+    int array_element_size;
+    int array_is_dynamic;
+    struct RecordType *array_element_record_type;
 };
 
 struct SetElement

@@ -444,9 +444,10 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
 
         char *field_type_id = NULL;
         struct RecordType *nested_record = NULL;
+        TypeInfo field_info = {0};
         int field_type = UNKNOWN_TYPE;
         if (cursor != NULL)
-            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, NULL);
+            field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
         else if (names != NULL)
         {
             char *candidate = pop_last_identifier(&names);
@@ -490,6 +491,13 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
                 field_desc->type = field_type;
                 field_desc->type_id = type_id_copy;
                 field_desc->nested_record = nested_copy;
+                field_desc->is_array = field_info.is_array;
+                field_desc->array_start = field_info.start;
+                field_desc->array_end = field_info.end;
+                field_desc->array_element_type = field_info.element_type;
+                field_desc->array_element_type_id = field_info.element_type_id;
+                field_desc->array_is_open = field_info.is_open_array;
+                field_info.element_type_id = NULL;
                 list_builder_append(&fields_builder, field_desc, LIST_RECORD_FIELD);
             } else {
                 if (field_name != NULL)
@@ -508,6 +516,7 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
             free(field_type_id);
         if (nested_record != NULL)
             destroy_record_type(nested_record);
+        destroy_type_info_contents(&field_info);
     }
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
@@ -809,7 +818,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
 
         struct Expression *index_expr = mk_inum(element->line, index);
-        struct Expression *lhs = mk_arrayaccess(element->line, strdup(*id_ptr), index_expr);
+        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+        struct Expression *lhs = mk_arrayaccess(element->line, base_expr, index_expr);
         struct Statement *assign = mk_varassign(element->line, lhs, rhs);
         list_builder_append(&stmt_builder, assign, LIST_STMT);
 
@@ -1364,10 +1374,11 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         return mk_functioncall(expr_node->line, id, args);
     }
     case PASCAL_T_ARRAY_ACCESS: {
-        ast_t *array_id = expr_node->child;
-        ast_t *index_expr = array_id != NULL ? array_id->next : NULL;
-        struct Expression *index = convert_expression(index_expr);
-        return mk_arrayaccess(expr_node->line, dup_symbol(array_id), index);
+        ast_t *array_node = expr_node->child;
+        ast_t *index_expr_node = array_node != NULL ? array_node->next : NULL;
+        struct Expression *base = convert_expression(array_node);
+        struct Expression *index = convert_expression(index_expr_node);
+        return mk_arrayaccess(expr_node->line, base, index);
     }
     default:
         return NULL;
