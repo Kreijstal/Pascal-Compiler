@@ -183,6 +183,7 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
 
     err->line = 0;
     err->col = 0;
+    err->index = -1;
 
     const char *detail_text = detail != NULL ? detail : "unknown error";
     const char *template = path != NULL ? "Preprocessing failed for '%s': %s"
@@ -223,6 +224,7 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
     }
 
     err->unexpected = NULL;
+    err->context = NULL;
     err->cause = NULL;
     err->partial_ast = NULL;
 
@@ -400,4 +402,6 @@ void pascal_print_parse_error(const char *path, const ParseError *err)
             err->message ? err->message : "unknown error");
     if (err->unexpected)
         fprintf(stderr, "  Unexpected: %s\n", err->unexpected);
+    if (err->context)
+        fprintf(stderr, "  %s", err->context);
 }
