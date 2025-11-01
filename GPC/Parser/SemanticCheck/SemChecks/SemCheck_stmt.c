@@ -387,9 +387,9 @@ int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 }
 
 /* Semantic check on a function statement (no side effects allowed) */
-int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt)
+int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_stmt_main(symtab, stmt, 0);
+    return semcheck_stmt_main(symtab, stmt, max_scope_lev);
 }
 
 static int semcheck_break_stmt(struct Statement *stmt)

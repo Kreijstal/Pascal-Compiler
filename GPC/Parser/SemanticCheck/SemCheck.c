@@ -1065,7 +1065,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
             var_type, subprogram->tree_data.subprogram_data.args_var);
 
-        new_max_scope = 0;
+        new_max_scope = max_scope_lev+1;
     }
 
     /**** Check the subprogram internals now ****/
@@ -1110,7 +1110,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         ResetHashNodeStatus(hash_return);
         return_val += semcheck_func_stmt(symtab,
-                body);
+                body, new_max_scope);
         if(hash_return->mutated == NO_MUTATE)
         {
             fprintf(stderr,
