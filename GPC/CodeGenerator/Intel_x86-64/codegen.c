@@ -1223,7 +1223,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             case TREE_VAR_DECL:
                 arg_ids = arg_decl->tree_data.var_decl_data.ids;
                 type = arg_decl->tree_data.var_decl_data.type;
-                
+                HashNode_t *resolved_type_node = NULL;
+
                 // Resolve type aliases if needed
                 if (type == UNKNOWN_TYPE && arg_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
                 {
@@ -1232,14 +1233,112 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (type_node != NULL && type_node->type_alias != NULL)
                     {
                         type = type_node->type_alias->base_type;
+                        resolved_type_node = type_node;
+                    }
+                    else if (type_node != NULL)
+                    {
+                        resolved_type_node = type_node;
                     }
                 }
-                
+
                 while(arg_ids != NULL)
                 {
+                    int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    HashNode_t *arg_symbol = NULL;
+                    if (symtab != NULL)
+                        FindIdent(&arg_symbol, symtab, (char *)arg_ids->cur);
+
+                    int symbol_is_var_param = tree_is_var_param;
+                    if (arg_symbol != NULL && arg_symbol->is_var_parameter)
+                        symbol_is_var_param = 1;
+                    struct RecordType *record_type_info = NULL;
+                    if (!symbol_is_var_param)
+                    {
+                        if (arg_symbol != NULL && arg_symbol->record_type != NULL)
+                            record_type_info = arg_symbol->record_type;
+                        else if (resolved_type_node != NULL && resolved_type_node->record_type != NULL)
+                            record_type_info = resolved_type_node->record_type;
+                    }
+
+                    if (record_type_info != NULL)
+                    {
+                        long long record_size = 0;
+                        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                                record_type_info, &record_size) != 0 || record_size <= 0)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to determine size for record parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        if (record_size > INT_MAX)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Record parameter %s exceeds supported size limits.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        StackNode_t *record_slot = add_l_x((char *)arg_ids->cur, (int)record_size);
+                        if (record_slot == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Failed to allocate storage for record parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        arg_reg = get_arg_reg64_num(arg_num);
+                        if (arg_reg == NULL)
+                        {
+                            fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
+                            exit(1);
+                        }
+
+                        Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (size_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for record parameter size.");
+                            return inst_list;
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        if (codegen_target_is_windows())
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", record_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", record_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+                        free_arg_regs();
+                        free_reg(get_reg_stack(), size_reg);
+
+                        arg_ids = arg_ids->next;
+                        ++arg_num;
+                        continue;
+                    }
+
                     // Var parameters are passed by reference (as pointers), so always use 64-bit
                     // Also use 64-bit for strings and explicit pointers
-                    int is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    int is_var_param = symbol_is_var_param;
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE);
@@ -1250,6 +1349,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         exit(1);
                     }
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (arg_stack != NULL && symbol_is_var_param)
+                        arg_stack->is_reference = 1;
                     if (use_64bit)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
                     else

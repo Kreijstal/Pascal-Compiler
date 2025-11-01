@@ -898,6 +898,7 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->element_size = size;
     new_node->is_dynamic = 0;
     new_node->is_static = 0;
+    new_node->is_reference = 0;
     new_node->static_label = NULL;
 
     return new_node;
