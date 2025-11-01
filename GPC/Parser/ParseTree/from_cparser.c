@@ -277,6 +277,8 @@ static int map_type_name(const char *name, char **type_id_out) {
 static struct RecordType *convert_record_type(ast_t *record_node);
 static struct Expression *convert_expression(ast_t *expr_node);
 static struct Expression *convert_member_access(ast_t *node);
+static int bind_record_field_expression(struct Expression **expr_ptr,
+    struct Expression *record_expr, int line_num);
 static struct Expression *convert_field_width_expr(ast_t *field_width_node);
 static ListNode_t *convert_expression_list(ast_t *arg_node);
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
@@ -1980,6 +1982,69 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
     return base_expr;
 }
 
+static int bind_record_field_expression(struct Expression **expr_ptr,
+    struct Expression *record_expr, int line_num)
+{
+    if (expr_ptr == NULL || *expr_ptr == NULL || record_expr == NULL)
+        return 0;
+
+    struct Expression *expr = *expr_ptr;
+
+    switch (expr->type) {
+    case EXPR_VAR_ID: {
+        char *field_id = expr->expr_data.id;
+        struct Expression *field_width = expr->field_width;
+        struct Expression *field_precision = expr->field_precision;
+
+        expr->expr_data.id = NULL;
+        expr->field_width = NULL;
+        expr->field_precision = NULL;
+
+        struct Expression *record_access = mk_recordaccess(line_num, record_expr, field_id);
+        record_access->field_width = field_width;
+        record_access->field_precision = field_precision;
+
+        free(expr);
+        *expr_ptr = record_access;
+        return 1;
+    }
+
+    case EXPR_ARRAY_ACCESS:
+        if (bind_record_field_expression(&expr->expr_data.array_access_data.array_expr,
+                record_expr, line_num))
+            return 1;
+        break;
+
+    case EXPR_RECORD_ACCESS:
+        if (bind_record_field_expression(&expr->expr_data.record_access_data.record_expr,
+                record_expr, line_num))
+            return 1;
+        break;
+
+    case EXPR_POINTER_DEREF:
+        if (bind_record_field_expression(&expr->expr_data.pointer_deref_data.pointer_expr,
+                record_expr, line_num))
+            return 1;
+        break;
+
+    case EXPR_SIGN_TERM:
+        if (bind_record_field_expression(&expr->expr_data.sign_term, record_expr, line_num))
+            return 1;
+        break;
+
+    case EXPR_TYPECAST:
+        if (bind_record_field_expression(&expr->expr_data.typecast_data.expr,
+                record_expr, line_num))
+            return 1;
+        break;
+
+    default:
+        break;
+    }
+
+    return 0;
+}
+
 static struct Expression *convert_member_access(ast_t *node) {
     if (node == NULL)
         return NULL;
@@ -1988,18 +2053,26 @@ static struct Expression *convert_member_access(ast_t *node) {
     ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
 
     struct Expression *record_expr = convert_expression(base_node);
-
-    char *field_id = NULL;
     ast_t *unwrapped = unwrap_pascal_node(field_node);
     if (unwrapped == NULL)
         unwrapped = field_node;
 
     if (unwrapped != NULL) {
-        if (unwrapped->typ == PASCAL_T_IDENTIFIER) {
-            field_id = dup_symbol(unwrapped);
-        } else if (unwrapped->child != NULL && unwrapped->child->typ == PASCAL_T_IDENTIFIER) {
-            field_id = dup_symbol(unwrapped->child);
+        struct Expression *field_expr = convert_expression(unwrapped);
+        if (field_expr != NULL) {
+            if (bind_record_field_expression(&field_expr, record_expr, node->line))
+                return field_expr;
+
+            destroy_expr(field_expr);
         }
+    }
+
+    char *field_id = NULL;
+    if (unwrapped != NULL) {
+        if (unwrapped->typ == PASCAL_T_IDENTIFIER)
+            field_id = dup_symbol(unwrapped);
+        else if (unwrapped->child != NULL && unwrapped->child->typ == PASCAL_T_IDENTIFIER)
+            field_id = dup_symbol(unwrapped->child);
     }
 
     return mk_recordaccess(node->line, record_expr, field_id);
