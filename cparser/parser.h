@@ -159,6 +159,8 @@ void free_error(ParseError* err);
 ast_t* ast1(tag_t typ, ast_t* a1);
 ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2);
 ast_t* copy_ast(ast_t* orig);
+void parser_calculate_line_col(input_t* in, int index, int* out_line, int* out_col);
+char* parser_format_context(input_t* in, int line, int col, int index);
 
 // --- Combinator Helpers ---
 combinator_t* new_combinator();

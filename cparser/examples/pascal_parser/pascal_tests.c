@@ -1860,17 +1860,35 @@ void test_pascal_procedure_with_params(void) {
 
     TEST_ASSERT(res.is_success);
     TEST_ASSERT(res.value.ast->typ == PASCAL_T_PROCEDURE_DECL);
-    
+
     // Check procedure name
     ast_t* proc_name = res.value.ast->child;
     TEST_ASSERT(proc_name->typ == PASCAL_T_IDENTIFIER);
     TEST_ASSERT(strcmp(proc_name->sym->name, "MyProcedure") == 0);
-    
+
     // Check parameters exist
     ast_t* params = proc_name->next;
     TEST_ASSERT(params != NULL); // parameter list should exist
 
     free_ast(res.value.ast);    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_procedure_with_trailing_semicolon(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("procedure MyProcedure; begin; writeln('hi'); end;");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    free_ast(res.value.ast);
+    free(input->buffer);
     free(input);
 }
 
@@ -1893,6 +1911,24 @@ void test_pascal_simple_function(void) {
     TEST_ASSERT(strcmp(func_name->sym->name, "Square") == 0);
 
     free_ast(res.value.ast);    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_function_with_trailing_semicolon(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_procedure_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("function Multiply(x, y: integer): integer; begin; Multiply := x * y; end;");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(input->start == input->length);
+
+    free_ast(res.value.ast);
+    free(input->buffer);
     free(input);
 }
 
@@ -3052,6 +3088,42 @@ void test_pascal_dialog_program(void) {
     free(input);
 }
 
+void test_pascal_multiply_program(void) {
+    combinator_t* parser = new_combinator();
+    init_pascal_complete_program_parser(&parser);
+
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("multiply_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        free_combinator(parser);
+        return;
+    }
+
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, parser);
+    if (!res.is_success) {
+        fprintf(stderr, "Failed to parse multiply program: %s\n",
+                res.value.error && res.value.error->message ? res.value.error->message : "<no message>");
+        if (res.value.error && res.value.error->context) {
+            fprintf(stderr, "%s", res.value.error->context);
+        }
+    }
+    TEST_ASSERT(res.is_success);
+
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else if (res.value.error) {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free(input);
+}
+
 void test_pascal_pointer_operations_program(void) {
     combinator_t* p = new_combinator();
     init_pascal_expression_parser(&p);
@@ -3981,7 +4053,9 @@ TEST_LIST = {
     // Procedure/Function Declaration tests
     { "test_pascal_simple_procedure", test_pascal_simple_procedure },
     { "test_pascal_procedure_with_params", test_pascal_procedure_with_params },
+    { "test_pascal_procedure_with_trailing_semicolon", test_pascal_procedure_with_trailing_semicolon },
     { "test_pascal_simple_function", test_pascal_simple_function },
+    { "test_pascal_function_with_trailing_semicolon", test_pascal_function_with_trailing_semicolon },
     { "test_pascal_function_no_params", test_pascal_function_no_params },
     { "test_pascal_function_multiple_params", test_pascal_function_multiple_params },
     // Failing tests for missing features
@@ -4015,6 +4089,7 @@ TEST_LIST = {
     { "test_pascal_complex_const_declaration", test_pascal_complex_const_declaration },
     { "test_pascal_set_operations_program", test_pascal_set_operations_program },
     { "test_pascal_dialog_program", test_pascal_dialog_program },
+    { "test_pascal_multiply_program", test_pascal_multiply_program },
     { "test_pascal_pointer_operations_program", test_pascal_pointer_operations_program },
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
     { "test_pascal_record_member_access_complete_program", test_pascal_record_member_access_complete_program },
