@@ -1240,9 +1240,24 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     // Var parameters are passed by reference (as pointers), so always use 64-bit
                     // Also use 64-bit for strings and explicit pointers
                     int is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    HashNode_t *param_node = NULL;
+                    if (symtab != NULL)
+                        FindIdent(&param_node, symtab, (char *)arg_ids->cur);
+
+                    int is_record_value_param = 0;
+                    if (!is_var_param && param_node != NULL)
+                    {
+                        if (param_node->var_type == HASHVAR_RECORD || param_node->record_type != NULL)
+                        {
+                            is_record_value_param = 1;
+                            param_node->is_record_value_param = 1;
+                        }
+                    }
+
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
-                         type == REAL_TYPE || type == LONGINT_TYPE);
+                         type == REAL_TYPE || type == LONGINT_TYPE ||
+                         is_record_value_param);
                     arg_reg = use_64bit ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
                     if(arg_reg == NULL)
                     {
@@ -1250,6 +1265,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         exit(1);
                     }
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (use_64bit && arg_stack != NULL && (is_var_param || is_record_value_param))
+                        arg_stack->holds_pointer = 1;
                     if (use_64bit)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
                     else

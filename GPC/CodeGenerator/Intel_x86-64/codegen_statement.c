@@ -200,6 +200,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     if (expr->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(expr->expr_data.id);
+        int treat_as_reference = (var_node != NULL && var_node->holds_pointer);
         if (var_node == NULL)
         {
             if (nonlocal_flag() == 1)
@@ -229,13 +230,25 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         {
             const char *label = var_node->static_label != NULL ?
                 var_node->static_label : var_node->label;
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
-                addr_reg->bit_64);
+            if (treat_as_reference)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n", label,
+                    addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+                    addr_reg->bit_64);
+            }
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                var_node->offset, addr_reg->bit_64);
+            if (treat_as_reference)
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
         }
         inst_list = add_inst(inst_list, buffer);
         *out_reg = addr_reg;

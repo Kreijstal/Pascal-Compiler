@@ -51,6 +51,9 @@ typedef struct HashNode
     int referenced;
     int mutated;
 
+    int is_var_param;
+    int is_record_value_param;
+
     int is_constant;
     long long const_int_value;
 

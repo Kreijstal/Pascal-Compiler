@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 
 #include "codegen_expression.h"
 #include "register_types.h"
@@ -1575,7 +1576,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
     #endif
     int arg_num;
     Register_t *top_reg;
-    char buffer[50];
+    char buffer[128];
     const char *arg_reg_char;
     expr_node_t *expr_tree;
 
@@ -1618,7 +1619,38 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_args != NULL)
             formal_arg_decl = (Tree_t *)formal_args->cur;
 
-        if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
+        int is_var_param = (formal_arg_decl != NULL &&
+            formal_arg_decl->tree_data.var_decl_data.is_var_param);
+
+        long long record_copy_size = 0;
+        int pass_record_by_value = 0;
+        if (!is_var_param && arg_expr != NULL)
+        {
+            if (arg_expr->resolved_type == RECORD_TYPE || arg_expr->record_type != NULL)
+            {
+                if (codegen_get_record_size(ctx, arg_expr, &record_copy_size) == 0 &&
+                    record_copy_size > 0)
+                {
+                    pass_record_by_value = 1;
+                }
+            }
+            else if (arg_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *arg_node = NULL;
+                if (FindIdent(&arg_node, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
+                    arg_node != NULL && arg_node->var_type == HASHVAR_RECORD &&
+                    arg_node->record_type != NULL)
+                {
+                    if (codegen_get_record_size(ctx, arg_expr, &record_copy_size) == 0 &&
+                        record_copy_size > 0)
+                    {
+                        pass_record_by_value = 1;
+                    }
+                }
+            }
+        }
+
+        if(is_var_param)
         {
             // Pass by reference
             if (!codegen_expr_is_addressable(arg_expr))
@@ -1638,6 +1670,103 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
                 arg_infos[arg_num].reg = addr_reg;
                 arg_infos[arg_num].spill = NULL;
                 arg_infos[arg_num].expr = arg_expr;
+            }
+        }
+        else if (pass_record_by_value)
+        {
+            if (!codegen_expr_is_addressable(arg_expr))
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unsupported record-valued argument expression.");
+                return inst_list;
+            }
+
+            if (record_copy_size > INT_MAX)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Record argument size exceeds supported limit.");
+                return inst_list;
+            }
+
+            StackNode_t *copy_slot = add_l_x("__record_arg_temp", (int)record_copy_size);
+            if (copy_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to allocate stack space for record argument copy.");
+                return inst_list;
+            }
+
+            Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (dest_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for record argument destination.");
+                return inst_list;
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", copy_slot->offset,
+                dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            Register_t *src_reg = NULL;
+            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+
+            Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (count_reg == NULL)
+            {
+                free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for record argument size.");
+                return inst_list;
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_copy_size,
+                count_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+
+            free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), count_reg);
+            free_arg_regs();
+
+            if (arg_infos != NULL)
+            {
+                arg_infos[arg_num].reg = dest_reg;
+                arg_infos[arg_num].spill = NULL;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else
+            {
+                free_reg(get_reg_stack(), dest_reg);
             }
         }
         else

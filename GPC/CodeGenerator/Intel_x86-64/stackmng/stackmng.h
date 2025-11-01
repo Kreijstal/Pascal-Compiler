@@ -127,6 +127,7 @@ typedef struct StackNode
     int is_dynamic;
     int is_static;
     char *static_label;
+    int holds_pointer;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */
