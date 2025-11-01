@@ -550,38 +550,39 @@ static char *pop_last_identifier(ListNode_t **ids) {
 }
 
 static ListNode_t *convert_param(ast_t *param_node) {
-    ast_t *cur = param_node->child;
-    int is_var_param = 0;
+    if (param_node == NULL || param_node->typ != PASCAL_T_PARAM)
+        return NULL;
 
-    if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER && cur->sym != NULL) {
-        if (strcasecmp(cur->sym->name, "var") == 0) {
+    ast_t *modifier_node = param_node->child;
+    ast_t *ids_cursor = modifier_node != NULL ? modifier_node->next : NULL;
+
+    int is_var_param = 0;
+    if (modifier_node != NULL && modifier_node->sym != NULL && modifier_node->sym->name != NULL) {
+        if (strcasecmp(modifier_node->sym->name, "var") == 0)
             is_var_param = 1;
-            cur = cur->next;
-        } else if (strcasecmp(cur->sym->name, "const") == 0) {
-            cur = cur->next;
-        }
     }
 
-    ListNode_t *ids = convert_identifier_list(&cur);
+    ast_t *cursor = ids_cursor;
+    ListNode_t *ids = convert_identifier_list(&cursor);
     if (ids == NULL) {
         fprintf(stderr, "ERROR: parameter missing identifier list.\n");
         return NULL;
     }
 
+    ast_t *type_node = cursor;
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
-    if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(cur, &type_id, NULL, NULL);
-        cur = cur->next;
+
+    if (type_node != NULL && type_node->typ == PASCAL_T_TYPE_SPEC) {
+        var_type = convert_type_spec(type_node, &type_id, NULL, NULL);
     } else {
         char *type_name = pop_last_identifier(&ids);
         if (type_name != NULL) {
             var_type = map_type_name(type_name, &type_id);
-            if (var_type == UNKNOWN_TYPE && type_id == NULL) {
+            if (var_type == UNKNOWN_TYPE && type_id == NULL)
                 type_id = type_name;
-            } else {
+            else
                 free(type_name);
-            }
         }
     }
 
