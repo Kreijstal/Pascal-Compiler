@@ -241,6 +241,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_RNUM:
         case EXPR_FUNCTION_CALL:
         case EXPR_STRING:
+        case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
         case EXPR_SET:
@@ -313,6 +314,7 @@ static int leaf_expr_is_simple(const struct Expression *expr)
         case EXPR_VAR_ID:
         case EXPR_INUM:
         case EXPR_RNUM:
+        case EXPR_CHAR_CODE:
         case EXPR_BOOL:
         case EXPR_NIL:
         case EXPR_SET:
@@ -901,6 +903,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
         case EXPR_INUM:
             snprintf(buffer, buf_len, "$%lld", expr->expr_data.i_num);
+            break;
+
+        case EXPR_CHAR_CODE:
+            snprintf(buffer, buf_len, "$%u", expr->expr_data.char_code);
             break;
 
         case EXPR_RNUM:
