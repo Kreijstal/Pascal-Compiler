@@ -78,7 +78,7 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num);
 static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int line_num);
+    int line_num, int silent);
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num);
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
@@ -509,7 +509,7 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
         struct RecordField *field_desc = NULL;
         long long offset = 0;
         if (resolve_record_field(symtab, entry->record_type, field_id,
-                &field_desc, &offset, line_num) == 0 && field_desc != NULL)
+                &field_desc, &offset, line_num, 1) == 0 && field_desc != NULL)
         {
             struct Expression *clone = clone_expression(entry->context_expr);
             if (clone == NULL)
@@ -524,7 +524,7 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
 
 static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int line_num)
+    int line_num, int silent)
 {
     if (record == NULL || field_name == NULL)
         return 1;
@@ -537,7 +537,8 @@ static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
 
     if (!found)
     {
-        fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
+        if (!silent)
+            fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
         return 1;
     }
 
@@ -1825,7 +1826,7 @@ static int semcheck_recordaccess(int *type_return,
     struct RecordField *field_desc = NULL;
     long long field_offset = 0;
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
-            &field_offset, expr->line_num) != 0 || field_desc == NULL)
+            &field_offset, expr->line_num, 0) != 0 || field_desc == NULL)
     {
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
