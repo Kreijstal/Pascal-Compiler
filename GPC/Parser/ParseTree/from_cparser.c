@@ -1602,6 +1602,9 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
     case EXPR_INUM:
         *out_value = expr->expr_data.i_num;
         return 0;
+    case EXPR_CHAR_CODE:
+        *out_value = expr->expr_data.char_code;
+        return 0;
     case EXPR_SIGN_TERM:
         if (extract_constant_int(expr->expr_data.sign_term, out_value) != 0)
             return 1;
@@ -1728,6 +1731,55 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
+    case PASCAL_T_CHAR_CODE:
+    {
+        unsigned int char_value = 0;
+        const char *literal = (expr_node->sym != NULL) ? expr_node->sym->name : NULL;
+        if (literal != NULL)
+        {
+            const char *digits = literal;
+            if (*digits == '#')
+                ++digits;
+
+            int base = 10;
+            if (*digits == '$')
+            {
+                base = 16;
+                ++digits;
+            }
+
+            if (*digits != '\0')
+            {
+                char *endptr = NULL;
+                long parsed = strtol(digits, &endptr, base);
+                if (endptr != NULL && *endptr == '\0')
+                {
+                    if (parsed < 0)
+                        parsed = 0;
+                    char_value = (unsigned int)parsed;
+                }
+                else
+                {
+                    fprintf(stderr,
+                        "ERROR: invalid character code literal %s at line %d.\n",
+                        literal, expr_node->line);
+                }
+            }
+            else
+            {
+                fprintf(stderr,
+                    "ERROR: invalid character code literal %s at line %d.\n",
+                    literal, expr_node->line);
+            }
+        }
+        else
+        {
+            fprintf(stderr,
+                "ERROR: invalid character code literal at line %d.\n",
+                expr_node->line);
+        }
+        return mk_charcode(expr_node->line, char_value);
+    }
     case PASCAL_T_BOOLEAN:
         if (expr_node->sym != NULL && expr_node->sym->name != NULL) {
             const char *value = expr_node->sym->name;
@@ -1827,6 +1879,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_REAL:
     case PASCAL_T_STRING:
     case PASCAL_T_CHAR:
+    case PASCAL_T_CHAR_CODE:
     case PASCAL_T_BOOLEAN:
     case PASCAL_T_IDENTIFIER:
     case PASCAL_T_FUNC_CALL:

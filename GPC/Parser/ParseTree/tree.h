@@ -256,6 +256,7 @@ struct Expression *mk_addressof(int line_num, struct Expression *expr);
 struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args);
 
 struct Expression *mk_inum(int line_num, long long i_num);
+struct Expression *mk_charcode(int line_num, unsigned int char_code);
 struct Expression *mk_rnum(int line_num, float r_num);
 
 struct Expression *mk_string(int line_num, char *string);
