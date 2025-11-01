@@ -46,7 +46,25 @@ __attribute__((unused)) static void print_error_with_partial_ast(ParseError* err
     
     for (int i = 0; i < depth; i++) printf("  ");
     printf("Error at line %d, col %d: %s\n", error->line, error->col, error->message);
-    
+
+    if (error->context) {
+        for (int i = 0; i < depth; i++) printf("  ");
+        printf("Context:\n");
+        const char* ctx = error->context;
+        while (*ctx) {
+            const char* newline = strchr(ctx, '\n');
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf("  ");
+            if (newline) {
+                printf("%.*s\n", (int)(newline - ctx), ctx);
+                ctx = newline + 1;
+            } else {
+                printf("%s\n", ctx);
+                break;
+            }
+        }
+    }
+
     if (error->partial_ast != NULL) {
         for (int i = 0; i < depth; i++) printf("  ");
         printf("Partial AST:\n");
@@ -281,13 +299,48 @@ void test_map_combinator(void) {
     free(input);
 }
 
+void test_multi_prefers_furthest_error(void) {
+    input_t* input = new_input();
+    input->buffer = strdup("helloX");
+    input->length = strlen("helloX");
+
+    combinator_t* deep_failure = seq(new_combinator(), TEST_T_NONE,
+        match("hello"),
+        expect(match("world"), "expected world"),
+        NULL
+    );
+
+    combinator_t* shallow_failure = match("hi");
+
+    combinator_t* parser = multi(new_combinator(), TEST_T_NONE,
+        deep_failure,
+        shallow_failure,
+        NULL
+    );
+
+    ParseResult res = parse(input, parser);
+
+    TEST_ASSERT(!res.is_success);
+    TEST_ASSERT(res.value.error != NULL);
+    TEST_ASSERT(res.value.error->context != NULL);
+    TEST_ASSERT(res.value.error->index >= 5);
+    TEST_ASSERT(strstr(res.value.error->message, "expected world") != NULL);
+
+    free_error(res.value.error);
+    free_combinator(parser);
+    free(input->buffer);
+    free(input);
+}
+
 static ParseError* add_context_to_error(ParseError* err) {
     ParseError* new_err = (ParseError*)safe_malloc(sizeof(ParseError));
     new_err->line = err->line;
     new_err->col = err->col;
+    new_err->index = err->index;
     new_err->message = strdup("In custom context");
     new_err->parser_name = NULL;
     new_err->unexpected = NULL;
+    new_err->context = err->context ? strdup(err->context) : NULL;
     new_err->cause = err;
     new_err->partial_ast = NULL;
     return new_err;
@@ -518,6 +571,7 @@ TEST_LIST = {
     { "chainl1_combinator", test_chainl1_combinator },
     { "any_char_combinator", test_any_char_combinator },
     { "map_combinator", test_map_combinator },
+    { "multi_prefers_furthest_error", test_multi_prefers_furthest_error },
     { "errmap_combinator", test_errmap_combinator },
     { "satisfy_combinator", test_satisfy_combinator },
     { "partial_ast_functionality", test_partial_ast_functionality },

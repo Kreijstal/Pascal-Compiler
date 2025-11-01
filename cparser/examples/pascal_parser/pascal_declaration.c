@@ -6,7 +6,11 @@
 #include "pascal_keywords.h"
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
+#include <stdbool.h>
+
+extern ast_t* ast_nil;
 
 // Helper to create simple keyword AST nodes for modifiers
 static void set_combinator_name(combinator_t* comb, const char* name) {
@@ -20,14 +24,12 @@ static void set_combinator_name(combinator_t* comb, const char* name) {
 }
 
 static ast_t* make_modifier_node(ast_t* original, const char* keyword) {
-    if (original == NULL)
-        return NULL;
-
-    original->typ = PASCAL_T_IDENTIFIER;
-    original->sym = sym_lookup(keyword);
-    original->child = NULL;
-    original->next = NULL;
-    return original;
+    ast_t* modifier = (original != NULL && original != ast_nil) ? original : new_ast();
+    modifier->typ = PASCAL_T_IDENTIFIER;
+    modifier->sym = sym_lookup(keyword);
+    modifier->child = NULL;
+    modifier->next = NULL;
+    return modifier;
 }
 
 static ast_t* map_const_modifier(ast_t* ast) {
@@ -43,15 +45,120 @@ static ast_t* map_out_modifier(ast_t* ast) {
     return make_modifier_node(ast, "out");
 }
 
-static ast_t* identity_map(ast_t* ast) {
-    return ast;
-}
-
 static ast_t* discard_ast(ast_t* ast) {
     if (ast != NULL && ast != ast_nil) {
         free_ast(ast);
     }
     return ast_nil;
+}
+
+static bool is_modifier_keyword(ast_t* node) {
+    if (node == NULL || node->sym == NULL || node->sym->name == NULL)
+        return false;
+
+    const char* name = node->sym->name;
+    return strcasecmp(name, "var") == 0 ||
+           strcasecmp(name, "const") == 0 ||
+           strcasecmp(name, "out") == 0;
+}
+
+static ast_t* create_placeholder_modifier(ast_t* reference) {
+    ast_t* placeholder = new_ast();
+    placeholder->typ = PASCAL_T_NONE;
+    placeholder->child = NULL;
+    placeholder->next = NULL;
+    placeholder->sym = NULL;
+    if (reference != NULL) {
+        placeholder->line = reference->line;
+        placeholder->col = reference->col;
+    }
+    return placeholder;
+}
+
+static combinator_t* create_optional_modifier(void) {
+    combinator_t* modifier_choice = multi(new_combinator(), PASCAL_T_NONE,
+        map(token(keyword_ci("const")), map_const_modifier),
+        map(token(keyword_ci("var")), map_var_modifier),
+        map(token(keyword_ci("out")), map_out_modifier),
+        NULL
+    );
+
+    return optional(modifier_choice);
+}
+
+static ast_t* detach_type_spec(ast_t* identifier_start, ast_t** out_type_spec) {
+    ast_t* prev = NULL;
+    ast_t* cursor = identifier_start;
+    while (cursor != NULL) {
+        if (cursor->typ == PASCAL_T_TYPE_SPEC) {
+            if (prev != NULL) {
+                prev->next = NULL;
+            } else {
+                identifier_start = NULL;
+            }
+            *out_type_spec = cursor;
+            cursor->next = NULL;
+            return identifier_start;
+        }
+        prev = cursor;
+        cursor = cursor->next;
+    }
+
+    *out_type_spec = NULL;
+    return identifier_start;
+}
+
+static ast_t* find_tail(ast_t* node) {
+    ast_t* tail = node;
+    while (tail != NULL && tail->next != NULL)
+        tail = tail->next;
+    return tail;
+}
+
+// This function takes a flat list of nodes from a 'seq' combinator
+// and structures them into a single, hierarchical PASCAL_T_PARAM node.
+static ast_t* structure_param_node(ast_t* ast) {
+    if (ast == NULL || ast == ast_nil)
+        return ast_nil;
+
+    ast_t* modifier = NULL;
+    ast_t* identifier_start = ast;
+    ast_t* type_spec = NULL;
+
+    if (is_modifier_keyword(ast)) {
+        modifier = ast;
+        identifier_start = ast->next;
+        modifier->next = NULL;
+    }
+
+    identifier_start = detach_type_spec(identifier_start, &type_spec);
+
+    if (modifier == NULL)
+        modifier = create_placeholder_modifier(identifier_start != NULL ? identifier_start : type_spec);
+
+    ast_t* param_node = new_ast();
+    param_node->typ = PASCAL_T_PARAM;
+    param_node->child = modifier;
+    param_node->line = modifier ? modifier->line : 0;
+    param_node->col = modifier ? modifier->col : 0;
+
+    ast_t* tail = modifier;
+    tail->next = identifier_start;
+
+    if (identifier_start != NULL) {
+        ast_t* identifiers_tail = find_tail(identifier_start);
+        tail = identifiers_tail != NULL ? identifiers_tail : tail;
+    }
+
+    if (type_spec != NULL) {
+        tail->next = type_spec;
+        tail = type_spec;
+    }
+
+    if (tail != NULL)
+        tail->next = NULL;
+
+    return param_node;
 }
 
 static combinator_t* create_param_name_list(void) {
@@ -77,45 +184,36 @@ static combinator_t* create_param_type_spec(void) {
     );
 }
 
-static combinator_t* create_modifier_param(const char* keyword, ast_t* (*mapper)(ast_t*), const char* name) {
-    map_func transform = mapper != NULL ? mapper : identity_map;
-    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
-        map(token(match((char*)keyword)), transform),
-        create_param_name_list(),
+static combinator_t* create_simple_param_list(void) {
+    combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
+        create_optional_modifier(),
+        param_name_list,
         create_param_type_spec(),
         NULL
     );
-    set_combinator_name(param, name);
-    return param;
-}
-
-static combinator_t* create_value_param(void) {
-    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
-        create_param_name_list(),
-        create_param_type_spec(),
-        NULL
-    );
-    set_combinator_name(param, "value_param");
-    return param;
+    combinator_t* param = map(param_seq, structure_param_node);
+    return optional(between(
+        token(match("(")),
+        token(match(")")),
+        sep_by(param, token(match(";")))
+    ));
 }
 
 // Helper function to create parameter parser (reduces code duplication)
 combinator_t* create_pascal_param_parser(void) {
-    combinator_t* param = multi(new_combinator(), PASCAL_T_NONE,
-        create_modifier_param("var", map_var_modifier, "var_param"),
-        create_modifier_param("const", map_const_modifier, "const_param"),
-        create_modifier_param("out", map_out_modifier, "out_param"),
-        create_value_param(),
+    combinator_t* param_seq = seq(new_combinator(), PASCAL_T_NONE,
+        create_optional_modifier(),
+        create_param_name_list(),
+        create_param_type_spec(),
         NULL
     );
+    combinator_t* param = map(param_seq, structure_param_node);
     set_combinator_name(param, "param");
 
     return optional(between(
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
 }
-
-// Bring in the global sentinel value for an empty AST node
-extern ast_t* ast_nil;
 
 static ast_t* wrap_program_params(ast_t* params) {
     ast_t* params_node = new_ast();
@@ -141,7 +239,10 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     // compound statement: statements are separated by semicolons with an optional
     // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
     // the statement parser so complex statements (like CASE) remain available.
+    combinator_t* leading_semicolons = many(token(match(";")));
+
     combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
+        leading_semicolons,
         sep_by(lazy_owned(stmt_parser_ref), token(match(";"))),
         optional(token(match(";"))),
         NULL
@@ -692,24 +793,6 @@ void init_pascal_procedure_parser(combinator_t** p) {
     *stmt_parser = new_combinator();
     init_pascal_statement_parser(stmt_parser);
 
-    // Parameter: [const|var] identifier1,identifier2,... : type
-    combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
-        optional(token(keyword_ci("const"))),        // optional const modifier
-        optional(token(keyword_ci("var"))),          // optional var modifier
-        param_name_list,                             // parameter name(s) - can be multiple comma-separated
-        token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // type name (simplified)
-        NULL
-    );
-
-    // Parameter list: optional ( param ; param ; ... )
-    combinator_t* param_list = optional(between(
-        token(match("(")),
-        token(match(")")),
-        sep_by(param, token(match(";")))
-    ));
-
     // Return type: : type (for functions)
     combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         token(match(":")),                       // colon
@@ -718,23 +801,27 @@ void init_pascal_procedure_parser(combinator_t** p) {
     );
 
     // Procedure declaration: procedure name [(params)] ; body
+    combinator_t* procedure_param_list = create_simple_param_list();
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(match("procedure")),               // procedure keyword
         token(cident(PASCAL_T_IDENTIFIER)),      // procedure name
-        param_list,                              // optional parameter list
+        procedure_param_list,                    // optional parameter list
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // procedure body
+        optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
 
     // Function declaration: function name [(params)] : return_type ; body
+    combinator_t* function_param_list = create_simple_param_list();
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         token(match("function")),                // function keyword
         token(cident(PASCAL_T_IDENTIFIER)),      // function name
-        param_list,                              // optional parameter list
+        function_param_list,                     // optional parameter list
         return_type,                             // return type
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // function body
+        optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
 
@@ -755,24 +842,6 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     *stmt_parser = new_combinator();
     init_pascal_statement_parser(stmt_parser);
 
-    // Parameter: [const|var] identifier1,identifier2,... : type
-    combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
-        optional(token(keyword_ci("const"))),        // optional const modifier
-        optional(token(keyword_ci("var"))),          // optional var modifier
-        param_name_list,                             // parameter name(s) - can be multiple comma-separated
-        token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // type name (simplified)
-        NULL
-    );
-
-    // Parameter list: optional ( param ; param ; ... )
-    combinator_t* param_list = optional(between(
-        token(match("(")),
-        token(match(")")),
-        sep_by(param, token(match(";")))
-    ));
-
     // Method name with class: ClassName.MethodName
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),      // class name
@@ -785,7 +854,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
         token(keyword_ci("constructor")),        // constructor keyword
         method_name_with_class,                  // ClassName.MethodName
-        param_list,                              // optional parameter list
+        create_simple_param_list(),              // optional parameter list
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // method body
         optional(token(match(";"))),             // optional terminating semicolon
@@ -796,7 +865,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
         token(keyword_ci("destructor")),         // destructor keyword
         method_name_with_class,                  // ClassName.MethodName
-        param_list,                              // optional parameter list
+        create_simple_param_list(),              // optional parameter list
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // method body
         optional(token(match(";"))),             // optional terminating semicolon
@@ -807,7 +876,7 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(keyword_ci("procedure")),          // procedure keyword
         method_name_with_class,                  // ClassName.MethodName
-        param_list,                              // optional parameter list
+        create_simple_param_list(),              // optional parameter list
         token(match(";")),                       // semicolon
         lazy(stmt_parser),                       // method body
         optional(token(match(";"))),             // optional terminating semicolon
@@ -956,24 +1025,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     *stmt_parser = new_combinator();
     init_pascal_statement_parser(stmt_parser);
 
-    // Enhanced parameter: [const|var] identifier1,identifier2,... : type
-    combinator_t* param_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
-    combinator_t* param = seq(new_combinator(), PASCAL_T_PARAM,
-        optional(token(keyword_ci("const"))),        // optional const modifier
-        optional(token(keyword_ci("var"))),          // optional var modifier
-        param_name_list,                             // parameter name(s) - can be multiple comma-separated
-        token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // type name (simplified)
-        NULL
-    );
-
-    // Parameter list: optional ( param ; param ; ... )
-    combinator_t* param_list = optional(between(
-        token(match("(")),
-        token(match(")")),
-        sep_by(param, token(match(";")))
-    ));
-
     // Return type: : type (for functions)
     combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         token(match(":")),                           // colon
@@ -1020,10 +1071,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // These work because they use the recursive statement parser for bodies
 
     // Working function parser: function name [(params)] : return_type ; body ;
+    combinator_t* working_function_param_list = create_simple_param_list();
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         token(keyword_ci("function")),               // function keyword (with word boundary check)
         token(cident(PASCAL_T_IDENTIFIER)),          // function name
-        param_list,                                  // optional parameter list
+        working_function_param_list,                 // optional parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon after signature
         program_function_body,                       // function body with VAR section support
@@ -1032,10 +1084,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Working procedure parser: procedure name [(params)] ; body ;
+    combinator_t* working_procedure_param_list = create_simple_param_list();
     combinator_t* working_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(keyword_ci("procedure")),                // procedure keyword (case-insensitive)
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
-        param_list,                                  // optional parameter list
+        working_procedure_param_list,               // optional parameter list
         token(match(";")),                           // semicolon after signature
         program_function_body,                       // procedure body with VAR section support
         optional(token(match(";"))),                 // optional terminating semicolon after procedure body
@@ -1051,30 +1104,33 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* constructor_param_list = create_simple_param_list();
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         token(keyword_ci("constructor")),              // constructor keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
-        param_list,                                  // optional parameter list
+        constructor_param_list,                      // optional parameter list
         token(match(";")),                           // semicolon
         lazy(stmt_parser),                           // use statement parser for method body
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
 
+    combinator_t* destructor_param_list = create_simple_param_list();
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         token(keyword_ci("destructor")),               // destructor keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
-        param_list,                                  // optional parameter list
+        destructor_param_list,                       // optional parameter list
         token(match(";")),                           // semicolon
         lazy(stmt_parser),                           // use statement parser for method body
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
 
+    combinator_t* method_procedure_param_list = create_simple_param_list();
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         token(keyword_ci("procedure")),              // procedure keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
-        param_list,                                  // optional parameter list
+        method_procedure_param_list,                 // optional parameter list
         token(match(";")),                           // semicolon
         lazy(stmt_parser),                           // use statement parser for method body
         optional(token(match(";"))),                 // optional terminating semicolon

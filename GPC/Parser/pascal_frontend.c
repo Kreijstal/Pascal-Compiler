@@ -183,6 +183,7 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
 
     err->line = 0;
     err->col = 0;
+    err->index = -1;
 
     const char *detail_text = detail != NULL ? detail : "unknown error";
     const char *template = path != NULL ? "Preprocessing failed for '%s': %s"
@@ -223,6 +224,7 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
     }
 
     err->unexpected = NULL;
+    err->context = NULL;
     err->cause = NULL;
     err->partial_ast = NULL;
 
@@ -250,16 +252,8 @@ static void report_preprocessor_error(ParseError **error_out, const char *path, 
 
 void pascal_frontend_cleanup(void)
 {
-    if (cached_unit_parser != NULL)
-    {
-        free_combinator(cached_unit_parser);
-        cached_unit_parser = NULL;
-    }
-    if (cached_program_parser != NULL)
-    {
-        free_combinator(cached_program_parser);
-        cached_program_parser = NULL;
-    }
+    cached_unit_parser = NULL;
+    cached_program_parser = NULL;
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
@@ -408,4 +402,6 @@ void pascal_print_parse_error(const char *path, const ParseError *err)
             err->message ? err->message : "unknown error");
     if (err->unexpected)
         fprintf(stderr, "  Unexpected: %s\n", err->unexpected);
+    if (err->context)
+        fprintf(stderr, "  %s", err->context);
 }

@@ -115,6 +115,28 @@ static void print_error_chain(ParseError* error, int depth) {
         printf("Unexpected input: \"%s\"\n", error->unexpected);
     }
 
+    if (error->context) {
+        for (int i = 0; i < depth; i++) {
+            printf("  ");
+        }
+        printf("Context:\n");
+        const char* ctx = error->context;
+        while (*ctx) {
+            const char* newline = strchr(ctx, '\n');
+            for (int i = 0; i < depth; i++) {
+                printf("  ");
+            }
+            printf("  ");
+            if (newline) {
+                printf("%.*s\n", (int)(newline - ctx), ctx);
+                ctx = newline + 1;
+            } else {
+                printf("%s\n", ctx);
+                break;
+            }
+        }
+    }
+
     if (error->partial_ast != NULL) {
         for (int i = 0; i < depth; i++) {
             printf("  ");
@@ -159,18 +181,21 @@ static void print_ast_indented(ast_t* ast, int depth) {
 
 int main(int argc, char *argv[]) {
     bool print_ast = false;
+    bool parse_procedure = false;
     char *filename = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--print-ast") == 0) {
             print_ast = true;
+        } else if (strcmp(argv[i], "--parse-procedure") == 0) {
+            parse_procedure = true;
         } else {
             filename = argv[i];
         }
     }
 
     if (filename == NULL) {
-        fprintf(stderr, "Usage: %s [--print-ast] <filename>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--print-ast] [--parse-procedure] <filename>\n", argv[0]);
         return 1;
     }
 
@@ -248,11 +273,18 @@ int main(int argc, char *argv[]) {
 
     printf("Preprocessed size: %zu bytes\n", preprocessed_length);
 
-    bool parse_as_unit = buffer_starts_with_keyword(preprocessed_content, preprocessed_length, "unit");
-    printf("Detected top-level form: %s\n", parse_as_unit ? "unit" : "program");
+    bool parse_as_unit = !parse_procedure &&
+        buffer_starts_with_keyword(preprocessed_content, preprocessed_length, "unit");
+    if (parse_procedure) {
+        printf("Detected top-level form: procedure (forced by flag)\n");
+    } else {
+        printf("Detected top-level form: %s\n", parse_as_unit ? "unit" : "program");
+    }
 
     combinator_t *parser = new_combinator();
-    if (parse_as_unit) {
+    if (parse_procedure) {
+        init_pascal_procedure_parser(&parser);
+    } else if (parse_as_unit) {
         init_pascal_unit_parser(&parser);
     } else {
         init_pascal_complete_program_parser(&parser);
@@ -276,7 +308,25 @@ int main(int argc, char *argv[]) {
 
     if (result.is_success) {
         if (in->start < in->length) {
-            fprintf(stderr, "Error: Parser did not consume entire input. Trailing characters: '%s'\n", in->buffer + in->start);
+            int trailing_index = in->start;
+            int trailing_line = 1;
+            int trailing_col = 1;
+            parser_calculate_line_col(in, trailing_index, &trailing_line, &trailing_col);
+
+            fprintf(stderr,
+                    "Error: Parser did not consume entire input. Trailing input begins at line %d, column %d.\n",
+                    trailing_line, trailing_col);
+
+            char* context = parser_format_context(in, trailing_line, trailing_col, trailing_index);
+            if (context != NULL) {
+                fprintf(stderr, "%s", context);
+                free(context);
+            }
+
+            const char* remaining = in->buffer + in->start;
+            fprintf(stderr, "Remaining characters: '%.*s'%s\n",
+                    80, remaining, strlen(remaining) > 80 ? "..." : "");
+
             free_ast(result.value.ast);
             free(preprocessed_content);
             free(file_content);

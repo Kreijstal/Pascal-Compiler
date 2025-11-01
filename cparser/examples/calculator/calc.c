@@ -24,6 +24,10 @@ static void print_error_with_partial_ast(ParseError* error) {
         printf("Unexpected input: \"%s\"\n", error->unexpected);
     }
 
+    if (error->context) {
+        printf("%s", error->context);
+    }
+
     if (error->partial_ast != NULL) {
         printf("Partial AST:\n");
         print_ast_indented(error->partial_ast, 1);
