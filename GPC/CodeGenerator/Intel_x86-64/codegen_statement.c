@@ -335,17 +335,79 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     char buffer[128];
     if (codegen_target_is_windows())
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Windows x64 ABI: first arg in %rcx, second in %rdx */
+        /* Handle register conflicts by checking if value_reg is already in %rcx */
+        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
+        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+
+        if (value_in_rcx && addr_in_rdx)
+        {
+            /* Both registers conflict - swap them */
+            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+        }
+        else if (value_in_rcx)
+        {
+            /* value is in %rcx but needs to go to %rdx, addr needs to go to %rcx */
+            /* Move value to %rdx first to avoid overwriting */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rdx)
+        {
+            /* addr is in %rdx but needs to go to %rcx, value needs to go to %rdx */
+            /* Move addr to %rcx first to avoid overwriting */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* No conflicts - standard order */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        /* System V ABI: first arg in %rdi, second in %rsi */
+        /* Handle register conflicts similarly */
+        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
+        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+
+        if (value_in_rdi && addr_in_rsi)
+        {
+            /* Both registers conflict - swap them */
+            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+        }
+        else if (value_in_rdi)
+        {
+            /* value is in %rdi but needs to go to %rsi, addr needs to go to %rdi */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rsi)
+        {
+            /* addr is in %rsi but needs to go to %rdi, value needs to go to %rsi */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* No conflicts - standard order */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
