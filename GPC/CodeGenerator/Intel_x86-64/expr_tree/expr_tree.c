@@ -21,6 +21,56 @@
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/type_tags.h"
 
+/* Function to escape string literals for assembly .string directive */
+static char *escape_string_for_assembly(const char *input)
+{
+    if (input == NULL)
+        return NULL;
+
+    /* Calculate maximum possible escaped length */
+    size_t len = strlen(input);
+    char *escaped = (char *)malloc(len * 2 + 1); /* Worst case: every char needs escaping */
+    if (escaped == NULL)
+        return NULL;
+
+    char *dest = escaped;
+    const char *src = input;
+
+    while (*src != '\0')
+    {
+        switch (*src)
+        {
+            case '"':
+                *dest++ = '\\';
+                *dest++ = '"';
+                break;
+            case '\\':
+                *dest++ = '\\';
+                *dest++ = '\\';
+                break;
+            case '\n':
+                *dest++ = '\\';
+                *dest++ = 'n';
+                break;
+            case '\t':
+                *dest++ = '\\';
+                *dest++ = 't';
+                break;
+            case '\r':
+                *dest++ = '\\';
+                *dest++ = 'r';
+                break;
+            default:
+                *dest++ = *src;
+                break;
+        }
+        src++;
+    }
+    *dest = '\0';
+
+    return escaped;
+}
+
 static inline const char *select_register_name(const Register_t *reg, int type_tag)
 {
     if (reg == NULL)
@@ -789,8 +839,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
         char add_rodata[1024];
         const char *readonly_section = codegen_readonly_section_directive();
-        snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-            readonly_section, label, expr->expr_data.string);
+        
+        /* Escape the string for assembly */
+        char *escaped_string = escape_string_for_assembly(expr->expr_data.string);
+        if (escaped_string != NULL)
+        {
+            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                readonly_section, label, escaped_string);
+            free(escaped_string);
+        }
+        else
+        {
+            /* Fallback: use original string if escaping fails */
+            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                readonly_section, label, expr->expr_data.string);
+        }
+        
         inst_list = add_inst(inst_list, add_rodata);
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         return add_inst(inst_list, buffer);
