@@ -652,7 +652,12 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     if (codegen_type_uses_qword(expr->resolved_type))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
-        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    {
+        if (expr->resolved_type == CHAR_TYPE)
+            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    }
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), addr_reg);
@@ -789,7 +794,12 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     if (codegen_type_uses_qword(expr->resolved_type))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
-        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    {
+        if (expr->resolved_type == CHAR_TYPE)
+            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    }
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), addr_reg);
@@ -1213,104 +1223,132 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
     }
 
-    if (!array_expr->is_array_expr)
+    int base_is_string = (array_expr->resolved_type == STRING_TYPE);
+
+    if (!array_expr->is_array_expr && !base_is_string)
     {
         codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
         return inst_list;
     }
 
-    inst_list = codegen_expr(index_expr, inst_list, ctx);
-    if (codegen_had_error(ctx))
-        return inst_list;
-
-    Register_t *index_reg = codegen_try_get_reg(&inst_list, ctx, "array index");
-    if (index_reg == NULL)
+    Register_t *index_reg = NULL;
+    inst_list = codegen_expr_with_result(index_expr, inst_list, ctx, &index_reg);
+    if (codegen_had_error(ctx) || index_reg == NULL)
         return inst_list;
 
     Register_t *base_reg = NULL;
-    inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &base_reg);
-    if (codegen_had_error(ctx) || base_reg == NULL)
+    if (base_is_string)
     {
-        free_reg(get_reg_stack(), index_reg);
-        return inst_list;
-    }
-
-    char buffer[128];
-
-    if (array_expr->array_is_dynamic)
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", base_reg->bit_64, base_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    int lower_bound = array_expr->array_lower_bound;
-    if (lower_bound > 0)
-    {
-        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else if (lower_bound < 0)
-    {
-        snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
-
-    long long element_size_ll = array_expr->array_element_size;
-    int need_element_size = 0;
-    if (element_size_ll <= 0)
-        need_element_size = 1;
-    else if (array_expr->array_element_record_type != NULL)
-        need_element_size = 1;
-    else if (array_expr->array_element_type == RECORD_TYPE)
-        need_element_size = 1;
-    else if (array_expr->array_element_type == UNKNOWN_TYPE &&
-        array_expr->array_element_type_id != NULL)
-        need_element_size = 1;
-
-    if (need_element_size)
-    {
-        if (codegen_sizeof_type(ctx, array_expr->array_element_type,
-                array_expr->array_element_type_id,
-                array_expr->array_element_record_type,
-                &element_size_ll, 0) != 0 || element_size_ll <= 0)
+        inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
+        if (codegen_had_error(ctx) || base_reg == NULL)
         {
-            codegen_report_error(ctx, "ERROR: Unable to determine element size for array access.");
-            free_reg(get_reg_stack(), base_reg);
+            free_reg(get_reg_stack(), index_reg);
+            return inst_list;
+        }
+    }
+    else
+    {
+        inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &base_reg);
+        if (codegen_had_error(ctx) || base_reg == NULL)
+        {
             free_reg(get_reg_stack(), index_reg);
             return inst_list;
         }
     }
 
-    int element_size = (int)element_size_ll;
-    static const int scaled_sizes[] = {1, 2, 4, 8};
-    int can_scale = 0;
-    for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+    char buffer[128];
+
+    if (!base_is_string && array_expr->array_is_dynamic)
     {
-        if (element_size == scaled_sizes[i])
-        {
-            can_scale = 1;
-            break;
-        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", base_reg->bit_64, base_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
     }
 
-    if (can_scale)
+    if (base_is_string)
     {
-        snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n",
-            base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tsubl\t$1, %s\n", index_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        if (element_size != 1)
+        int lower_bound = array_expr->array_lower_bound;
+        if (lower_bound > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+            snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
             inst_list = add_inst(inst_list, buffer);
         }
+        else if (lower_bound < 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\taddl\t$%d, %s\n", -lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
-        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
+    inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+
+    if (base_is_string)
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s), %s\n",
+            base_reg->bit_64, index_reg->bit_64, index_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        long long element_size_ll = array_expr->array_element_size;
+        int need_element_size = 0;
+        if (element_size_ll <= 0)
+            need_element_size = 1;
+        else if (array_expr->array_element_record_type != NULL)
+            need_element_size = 1;
+        else if (array_expr->array_element_type == RECORD_TYPE)
+            need_element_size = 1;
+        else if (array_expr->array_element_type == UNKNOWN_TYPE &&
+            array_expr->array_element_type_id != NULL)
+            need_element_size = 1;
+
+        if (need_element_size)
+        {
+            if (codegen_sizeof_type(ctx, array_expr->array_element_type,
+                    array_expr->array_element_type_id,
+                    array_expr->array_element_record_type,
+                    &element_size_ll, 0) != 0 || element_size_ll <= 0)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to determine element size for array access.");
+                free_reg(get_reg_stack(), base_reg);
+                free_reg(get_reg_stack(), index_reg);
+                return inst_list;
+            }
+        }
+
+        int element_size = (int)element_size_ll;
+        static const int scaled_sizes[] = {1, 2, 4, 8};
+        int can_scale = 0;
+        for (size_t i = 0; i < sizeof(scaled_sizes) / sizeof(scaled_sizes[0]); ++i)
+        {
+            if (element_size == scaled_sizes[i])
+            {
+                can_scale = 1;
+                break;
+            }
+        }
+
+        if (can_scale)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n",
+                base_reg->bit_64, index_reg->bit_64, element_size, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            if (element_size != 1)
+            {
+                snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, index_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", base_reg->bit_64, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     free_reg(get_reg_stack(), base_reg);
@@ -1336,7 +1374,14 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        if (expr->resolved_type == CHAR_TYPE)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        }
         inst_list = add_inst(inst_list, buffer);
         if (expr->resolved_type == LONGINT_TYPE)
             inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);

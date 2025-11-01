@@ -48,6 +48,33 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
+static const char *register_name8(const Register_t *reg)
+{
+    if (reg == NULL || reg->bit_64 == NULL)
+        return NULL;
+
+    if (strcmp(reg->bit_64, "%rax") == 0)
+        return "%al";
+    if (strcmp(reg->bit_64, "%rcx") == 0)
+        return "%cl";
+    if (strcmp(reg->bit_64, "%rdx") == 0)
+        return "%dl";
+    if (strcmp(reg->bit_64, "%rsi") == 0)
+        return "%sil";
+    if (strcmp(reg->bit_64, "%rdi") == 0)
+        return "%dil";
+    if (strcmp(reg->bit_64, "%r8") == 0)
+        return "%r8b";
+    if (strcmp(reg->bit_64, "%r9") == 0)
+        return "%r9b";
+    if (strcmp(reg->bit_64, "%r10") == 0)
+        return "%r10b";
+    if (strcmp(reg->bit_64, "%r11") == 0)
+        return "%r11b";
+
+    return NULL;
+}
+
 static unsigned long codegen_next_temp_suffix(void)
 {
     static unsigned long counter = 0;
@@ -285,6 +312,34 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tgpc_gmp_mpint_assign\n");
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_assign\n");
+    free_arg_regs();
     return inst_list;
 }
 
@@ -1344,6 +1399,83 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 free_reg(get_reg_stack(), value_reg);
             return inst_list;
         }
+
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            Register_t *addr_reg = NULL;
+            if (var != NULL)
+            {
+                addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for string assignment address.");
+                }
+
+                if (var->is_static)
+                {
+                    const char *label = (var->static_label != NULL) ?
+                        var->static_label : var->label;
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else if (scope_depth == 0)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        var->offset, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    codegen_begin_expression(ctx);
+                    Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                    if (frame_reg != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                            var->offset, frame_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                            var->offset, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    codegen_end_expression(ctx);
+                }
+            }
+            else if (nonlocal_flag() == 1)
+            {
+                int nonlocal_offset = 0;
+                inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &nonlocal_offset);
+                addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for non-local string assignment.");
+                }
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                    nonlocal_offset, current_non_local_reg64(), addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Non-local codegen support disabled (buggy)! Enable with flag '-non-local' after required flags");
+                free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
+            free_reg(get_reg_stack(), value_reg);
+            if (addr_reg != NULL)
+                free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
         reg = value_reg;
 
         if(var != NULL)
@@ -1432,16 +1564,40 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
-        if (use_qword)
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if (use_qword)
         {
             int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
-            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            if (var_expr->resolved_type == CHAR_TYPE)
+            {
+                const char *value_reg8 = register_name8(value_reg);
+                if (value_reg8 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+                    snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                }
+            }
+            else
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);
@@ -1480,18 +1636,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
-        if (use_qword)
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if (use_qword)
         {
             int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
             snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
-        inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);
@@ -1543,11 +1704,37 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        if (codegen_type_uses_qword(var_expr->resolved_type))
+        if (var_expr->resolved_type == STRING_TYPE)
+        {
+            inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
+        }
+        else if (codegen_type_uses_qword(var_expr->resolved_type))
+        {
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
         else
-            snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            if (var_expr->resolved_type == CHAR_TYPE)
+            {
+                const char *value_reg8 = register_name8(value_reg);
+                if (value_reg8 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+                    snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                }
+            }
+            else
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);

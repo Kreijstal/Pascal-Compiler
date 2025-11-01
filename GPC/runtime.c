@@ -335,6 +335,31 @@ static char *gpc_alloc_empty_string(void)
     return empty;
 }
 
+static char *gpc_string_duplicate(const char *value)
+{
+    if (value == NULL)
+        return gpc_alloc_empty_string();
+
+    size_t len = strlen(value);
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL)
+        return gpc_alloc_empty_string();
+
+    if (len > 0)
+        memcpy(copy, value, len);
+    copy[len] = '\0';
+    return copy;
+}
+
+void gpc_string_assign(char **target, const char *value)
+{
+    if (target == NULL)
+        return;
+
+    char *copy = gpc_string_duplicate(value);
+    *target = copy;
+}
+
 
 void gpc_move(void *dest, const void *src, size_t count)
 {
