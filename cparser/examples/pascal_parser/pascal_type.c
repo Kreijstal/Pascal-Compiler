@@ -852,3 +852,136 @@ combinator_t* set_type(tag_t tag) {
     comb->fn = set_type_fn;
     return comb;
 }
+
+// --- Procedure and Function Type Parsers ---
+
+// Helper to wrap parameter list in a PASCAL_T_PARAM_LIST node
+static ast_t* wrap_in_param_list_node(ast_t* params) {
+    if (params == NULL || params == ast_nil)
+        return ast_nil;
+    
+    ast_t* param_list_node = new_ast();
+    param_list_node->typ = PASCAL_T_PARAM_LIST;
+    param_list_node->child = params;
+    return param_list_node;
+}
+
+// Arguments for subroutine type parser
+typedef struct {
+    tag_t tag;
+    int is_function;  // 1 for function, 0 for procedure
+} SubroutineTypeArgs;
+
+// Core parser function for both procedure and function types
+static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name) {
+    SubroutineTypeArgs* pargs = (SubroutineTypeArgs*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    // 1. Parse 'procedure' or 'function' keyword
+    const char* keyword = pargs->is_function ? "function" : "procedure";
+    combinator_t* keyword_parser = token(keyword_ci(keyword));
+    ParseResult keyword_res = parse(in, keyword_parser);
+    free_combinator(keyword_parser);
+    
+    if (!keyword_res.is_success) {
+        discard_failure(keyword_res);
+        return fail_with_message(pargs->is_function ? "Expected 'function'" : "Expected 'procedure'", 
+                                in, &state, parser_name);
+    }
+    free_ast(keyword_res.value.ast);
+
+    // 2. Parse optional parameter list
+    combinator_t* params_parser = create_pascal_param_parser();
+    ParseResult params_res = parse(in, params_parser);
+    free_combinator(params_parser);
+    
+    ast_t* params_ast = NULL;
+    if (params_res.is_success) {
+        ast_t* raw_params = params_res.value.ast;
+        if (raw_params != NULL && raw_params != ast_nil) {
+            params_ast = wrap_in_param_list_node(raw_params);
+        }
+    } else {
+        discard_failure(params_res);
+    }
+
+    // 3. If it's a function, parse the required return type
+    ast_t* return_ast = NULL;
+    if (pargs->is_function) {
+        // Parse ': TypeSpec'
+        combinator_t* colon_parser = token(match(":"));
+        ParseResult colon_res = parse(in, colon_parser);
+        free_combinator(colon_parser);
+        
+        if (!colon_res.is_success) {
+            if (params_ast != NULL) free_ast(params_ast);
+            discard_failure(colon_res);
+            return fail_with_message("Expected ':' for function return type", in, &state, parser_name);
+        }
+        free_ast(colon_res.value.ast);
+
+        // Parse the return type
+        combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+            array_type(PASCAL_T_ARRAY_TYPE),
+            set_type(PASCAL_T_SET),
+            range_type(PASCAL_T_RANGE_TYPE),
+            pointer_type(PASCAL_T_POINTER_TYPE),
+            enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+            record_type(PASCAL_T_RECORD_TYPE),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        );
+        
+        ParseResult type_res = parse(in, type_spec);
+        free_combinator(type_spec);
+        
+        if (!type_res.is_success) {
+            if (params_ast != NULL) free_ast(params_ast);
+            discard_failure(type_res);
+            return fail_with_message("Expected return type specification", in, &state, parser_name);
+        }
+        
+        // Wrap return type in PASCAL_T_RETURN_TYPE node
+        return_ast = new_ast();
+        return_ast->typ = PASCAL_T_RETURN_TYPE;
+        return_ast->child = type_res.value.ast;
+        set_ast_position(return_ast, in);
+    }
+
+    // 4. Assemble the final AST node
+    ast_t* type_ast = new_ast();
+    type_ast->typ = pargs->tag;
+    type_ast->child = params_ast;
+    
+    if (params_ast != NULL) {
+        params_ast->next = return_ast;
+    } else {
+        type_ast->child = return_ast;
+    }
+    
+    set_ast_position(type_ast, in);
+    return make_success(type_ast);
+}
+
+// Public constructor for the procedure type parser
+combinator_t* procedure_type(tag_t tag) {
+    combinator_t* comb = new_combinator();
+    SubroutineTypeArgs* args = safe_malloc(sizeof(SubroutineTypeArgs));
+    args->tag = tag;
+    args->is_function = 0;
+    comb->args = args;
+    comb->fn = subroutine_type_fn;
+    return comb;
+}
+
+// Public constructor for the function type parser
+combinator_t* function_type(tag_t tag) {
+    combinator_t* comb = new_combinator();
+    SubroutineTypeArgs* args = safe_malloc(sizeof(SubroutineTypeArgs));
+    args->tag = tag;
+    args->is_function = 1;
+    comb->args = args;
+    comb->fn = subroutine_type_fn;
+    return comb;
+}
