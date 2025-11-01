@@ -848,16 +848,16 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
         {
             struct Array *arr = &tree->tree_data.arr_decl_data;
             id_list = arr->ids;
-            int length = arr->e_range - arr->s_range + 1;
-            if (length < 0)
-                length = 0;
+
+            int is_dynamic = (arr->e_range < arr->s_range);
+
+            HashNode_t *type_node = NULL;
+            if (arr->type_id != NULL && symtab != NULL)
+                FindIdent(&type_node, symtab, arr->type_id);
+
             enum VarType arr_var_type = HASHVAR_REAL;
-            if (arr->type_id != NULL)
-            {
-                HashNode_t *type_node = NULL;
-                if (symtab != NULL && FindIdent(&type_node, symtab, arr->type_id) >= 0 && type_node != NULL)
-                    arr_var_type = type_node->var_type;
-            }
+            if (type_node != NULL)
+                arr_var_type = type_node->var_type;
             else if (arr->type == INT_TYPE)
                 arr_var_type = HASHVAR_INTEGER;
             else if (arr->type == LONGINT_TYPE)
@@ -869,45 +869,94 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             else if (arr->type == CHAR_TYPE)
                 arr_var_type = HASHVAR_CHAR;
 
-            int element_size = DOUBLEWORD;
-            if (arr_var_type == HASHVAR_REAL || arr_var_type == HASHVAR_LONGINT ||
-                arr_var_type == HASHVAR_PCHAR || arr_var_type == HASHVAR_POINTER ||
-                arr_var_type == HASHVAR_PROCEDURE || arr_var_type == HASHVAR_FILE)
+            struct RecordType *record_desc = NULL;
+            if (type_node != NULL)
             {
-                element_size = 8;
-            }
-            else if (arr_var_type == HASHVAR_BOOLEAN || arr_var_type == HASHVAR_CHAR)
-            {
-                element_size = 1;
-            }
-
-            int total_size = length * element_size;
-            if (total_size <= 0)
-                total_size = element_size;
-
-            if (arr->has_static_storage)
-            {
-                if (!arr->static_storage_emitted)
+                if (type_node->record_type != NULL)
+                    record_desc = type_node->record_type;
+                else if (type_node->type_alias != NULL &&
+                    type_node->type_alias->target_type_id != NULL)
                 {
-                     if (arr->static_label != NULL)
-                         fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n", arr->static_label, total_size, DOUBLEWORD);
-                     if (arr->init_guard_label != NULL)
-                         fprintf(ctx->output_file, "\t.comm\t%s,1,1\n", arr->init_guard_label);
-                     arr->static_storage_emitted = 1;
-                 }
+                    HashNode_t *target_node = NULL;
+                    if (FindIdent(&target_node, symtab,
+                            type_node->type_alias->target_type_id) >= 0 &&
+                        target_node != NULL && target_node->record_type != NULL)
+                        record_desc = target_node->record_type;
+                }
+            }
 
+            long long computed_size = 0;
+            int element_size = 0;
+            if (codegen_sizeof_type_reference(ctx, arr->type, arr->type_id,
+                    record_desc, &computed_size) == 0 && computed_size > 0 &&
+                computed_size <= INT_MAX)
+            {
+                element_size = (int)computed_size;
+            }
+            else if (record_desc != NULL &&
+                codegen_sizeof_record_type(ctx, record_desc, &computed_size) == 0 &&
+                computed_size > 0 && computed_size <= INT_MAX)
+            {
+                element_size = (int)computed_size;
+            }
+
+            if (element_size <= 0)
+            {
+                if (arr_var_type == HASHVAR_REAL || arr_var_type == HASHVAR_LONGINT ||
+                    arr_var_type == HASHVAR_PCHAR || arr_var_type == HASHVAR_POINTER ||
+                    arr_var_type == HASHVAR_PROCEDURE || arr_var_type == HASHVAR_FILE)
+                    element_size = 8;
+                else if (arr_var_type == HASHVAR_BOOLEAN || arr_var_type == HASHVAR_CHAR)
+                    element_size = 1;
+                else
+                    element_size = DOUBLEWORD;
+            }
+
+            if (is_dynamic)
+            {
                 while (id_list != NULL)
                 {
-                    add_static_array((char *)id_list->cur, total_size, element_size, arr->s_range, arr->static_label);
+                    add_dynamic_array((char *)id_list->cur, element_size, arr->s_range);
                     id_list = id_list->next;
                 }
             }
             else
             {
-                while (id_list != NULL)
+                int length = arr->e_range - arr->s_range + 1;
+                if (length < 0)
+                    length = 0;
+                int total_size = length * element_size;
+                if (total_size <= 0)
+                    total_size = element_size;
+
+                if (arr->has_static_storage)
                 {
-                    add_array((char *)id_list->cur, total_size, element_size, arr->s_range);
-                    id_list = id_list->next;
+                    if (!arr->static_storage_emitted)
+                    {
+                        if (arr->static_label != NULL)
+                            fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                arr->static_label, total_size, DOUBLEWORD);
+                        if (arr->init_guard_label != NULL)
+                            fprintf(ctx->output_file, "\t.comm\t%s,1,1\n",
+                                arr->init_guard_label);
+                        arr->static_storage_emitted = 1;
+                    }
+
+                    while (id_list != NULL)
+                    {
+                        add_static_array((char *)id_list->cur, total_size, element_size,
+                            arr->s_range, arr->static_label);
+                        id_list = id_list->next;
+                    }
+                }
+                else
+                {
+                    while (id_list != NULL)
+                    {
+                        add_array((char *)id_list->cur, total_size, element_size,
+                            arr->s_range);
+                        id_list = id_list->next;
+                    }
                 }
             }
         }
@@ -1276,6 +1325,30 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
         else if (decl->type == TREE_ARR_DECL)
         {
             struct Array *arr = &decl->tree_data.arr_decl_data;
+            if (arr->e_range < arr->s_range)
+            {
+                ListNode_t *ids = arr->ids;
+                while (ids != NULL)
+                {
+                    char *var_name = (char *)ids->cur;
+                    StackNode_t *array_node = find_label(var_name);
+                    if (array_node != NULL && array_node->is_dynamic)
+                    {
+                        char buffer[128];
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
+                            array_node->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        int length_offset = array_node->offset - 2 * DOUBLEWORD;
+                        if (length_offset < array_node->offset)
+                        {
+                            snprintf(buffer, sizeof(buffer),
+                                "\tmovq\t$0, -%d(%%rbp)\n", length_offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    ids = ids->next;
+                }
+            }
             struct Statement *init_stmt = arr->initializer;
             if (init_stmt != NULL)
             {
