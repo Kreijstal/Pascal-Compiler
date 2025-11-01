@@ -154,6 +154,66 @@ void gpc_sleep_ms(int milliseconds) {
 #endif
 }
 
+static int gpc_normalize_crt_color(int color)
+{
+    int normalized = color % 16;
+    if (normalized < 0)
+        normalized += 16;
+    return normalized;
+}
+
+static const char *const gpc_crt_ansi_codes[16] = {
+    "\033[0;30m", "\033[0;34m", "\033[0;32m", "\033[0;36m",
+    "\033[0;31m", "\033[0;35m", "\033[0;33m", "\033[0;37m",
+    "\033[0;90m", "\033[0;94m", "\033[0;92m", "\033[0;96m",
+    "\033[0;91m", "\033[0;95m", "\033[0;93m", "\033[0;97m"
+};
+
+void gpc_clrscr(void)
+{
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (GetConsoleScreenBufferInfo(handle, &csbi))
+        {
+            DWORD cell_count = (DWORD)csbi.dwSize.X * (DWORD)csbi.dwSize.Y;
+            DWORD written = 0;
+            COORD origin = {0, 0};
+
+            FillConsoleOutputCharacterA(handle, ' ', cell_count, origin, &written);
+            FillConsoleOutputAttribute(handle, csbi.wAttributes, cell_count, origin, &written);
+            SetConsoleCursorPosition(handle, origin);
+            return;
+        }
+    }
+#endif
+    fputs("\033[2J\033[H", stdout);
+    fflush(stdout);
+}
+
+void gpc_textcolor(int color)
+{
+    int normalized = gpc_normalize_crt_color(color);
+
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        WORD attributes = (WORD)normalized;
+        if (GetConsoleScreenBufferInfo(handle, &csbi))
+            attributes = (csbi.wAttributes & ~(WORD)0x000F) | (WORD)normalized;
+
+        if (SetConsoleTextAttribute(handle, attributes))
+            return;
+    }
+#endif
+    fputs(gpc_crt_ansi_codes[normalized], stdout);
+    fflush(stdout);
+}
+
 typedef struct {
     void *data;
     int64_t length;
