@@ -2219,12 +2219,31 @@ int semcheck_relop(int *type_return,
             }
             else if (relop_type == EQ || relop_type == NE)
             {
+                if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
+                    expr2 != NULL && expr2->type == EXPR_STRING &&
+                    expr2->expr_data.string != NULL &&
+                    strlen(expr2->expr_data.string) == 1)
+                {
+                    type_second = CHAR_TYPE;
+                    expr2->resolved_type = CHAR_TYPE;
+                }
+                else if (type_first == STRING_TYPE && type_second == CHAR_TYPE &&
+                    expr1 != NULL && expr1->type == EXPR_STRING &&
+                    expr1->expr_data.string != NULL &&
+                    strlen(expr1->expr_data.string) == 1)
+                {
+                    type_first = CHAR_TYPE;
+                    expr1->resolved_type = CHAR_TYPE;
+                }
+
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
-                if (!numeric_ok && !boolean_ok)
+                int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
+                int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok)
                 {
-                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric or boolean types!\n\n",
+                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, or character types!\n\n",
                         expr->line_num);
                     ++return_val;
                 }

@@ -826,6 +826,17 @@ char *gpc_string_copy(const char *value, int64_t index, int64_t count)
     return result;
 }
 
+int64_t gpc_string_compare(const char *lhs, const char *rhs)
+{
+    if (lhs == NULL)
+        lhs = "";
+    if (rhs == NULL)
+        rhs = "";
+
+    int cmp = strcmp(lhs, rhs);
+    return (int64_t)cmp;
+}
+
 static long long gpc_val_error_position(const char *text, const char *error_ptr)
 {
     if (text == NULL || error_ptr == NULL)
