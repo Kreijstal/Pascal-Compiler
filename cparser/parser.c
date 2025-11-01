@@ -12,10 +12,6 @@
 #include "parser.h"
 #include "combinator_internals.h"
 
-// Debug: track parse calls to detect infinite loops
-static unsigned long global_parse_call_count = 0;
-static unsigned long last_reported_count = 0;
-
 #ifdef _WIN32
 static char* strndup(const char* s, size_t n)
 {
@@ -856,12 +852,6 @@ void expr_altern(combinator_t * exp, int prec, tag_t tag, combinator_t * comb) {
 // THE UNIVERSAL PARSE FUNCTION
 //=============================================================================
 ParseResult parse(input_t * in, combinator_t * comb) {
-    global_parse_call_count++;
-    if (global_parse_call_count > last_reported_count + 100000) {
-        fprintf(stderr, "[DEBUG PARSER] parse() calls: %lu (x100k), position: %d\n",
-                global_parse_call_count / 100000, in->start);
-        last_reported_count = global_parse_call_count;
-    }
     if (!comb || !comb->fn) exception("Attempted to parse with a NULL or uninitialized combinator.");
     return comb->fn(in, (void *)comb->args, comb->name);
 }
