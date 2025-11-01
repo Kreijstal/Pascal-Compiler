@@ -453,7 +453,8 @@ combinator_t * expect(combinator_t * c, char * msg) {
     expect_args * args = (expect_args*)safe_malloc(sizeof(expect_args));
     args->msg = msg; args->comb = c;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "expect %s", c->name ? c->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "expect %s", c->name ? c->name : "unnamed_parser");
+    (void)ret; // Suppress unused variable warning
     comb->type = COMB_EXPECT; comb->fn = expect_fn; comb->args = (void *) args; return comb;
 }
 
@@ -557,7 +558,8 @@ combinator_t * flatMap(combinator_t * p, flatMap_func func) {
     flatMap_args * args = (flatMap_args*)safe_malloc(sizeof(flatMap_args));
     args->parser = p; args->func = func;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "flatMap over %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "flatMap over %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_FLATMAP; comb->fn = flatMap_fn; comb->args = args; return comb;
 }
 
@@ -565,7 +567,8 @@ combinator_t * left(combinator_t* p1, combinator_t* p2) {
     pair_args* args = (pair_args*)safe_malloc(sizeof(pair_args));
     args->p1 = p1; args->p2 = p2;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "left of %s and %s", p1->name ? p1->name : "unnamed_parser", p2->name ? p2->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "left of %s and %s", p1->name ? p1->name : "unnamed_parser", p2->name ? p2->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_LEFT; comb->fn = left_fn; comb->args = (void *) args; return comb;
 }
 
@@ -573,7 +576,8 @@ combinator_t * right(combinator_t* p1, combinator_t* p2) {
     pair_args* args = (pair_args*)safe_malloc(sizeof(pair_args));
     args->p1 = p1; args->p2 = p2;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "right of %s and %s", p1->name ? p1->name : "unnamed_parser", p2->name ? p2->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "right of %s and %s", p1->name ? p1->name : "unnamed_parser", p2->name ? p2->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_RIGHT; comb->fn = right_fn; comb->args = (void *) args; return comb;
 }
 
@@ -581,7 +585,8 @@ combinator_t * pnot(combinator_t* p) {
     not_args* args = (not_args*)safe_malloc(sizeof(not_args));
     args->p = p;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "not %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "not %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_NOT; comb->fn = pnot_fn; comb->args = (void *) args; return comb;
 }
 
@@ -589,7 +594,8 @@ combinator_t * peek(combinator_t* p) {
     peek_args* args = (peek_args*)safe_malloc(sizeof(peek_args));
     args->p = p;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "peek %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "peek %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_PEEK; comb->fn = peek_fn; comb->args = (void *) args; return comb;
 }
 
@@ -647,7 +653,8 @@ combinator_t * between(combinator_t* open, combinator_t* close, combinator_t* p)
     args->close = close;
     args->p = p;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "between %s and %s", open->name ? open->name : "unnamed_parser", close->name ? close->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "between %s and %s", open->name ? open->name : "unnamed_parser", close->name ? close->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_BETWEEN;
     comb->fn = between_fn;
     comb->args = (void *) args;
@@ -659,7 +666,8 @@ combinator_t * errmap(combinator_t* p, err_map_func func) {
     args->parser = p;
     args->func = func;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "errmap over %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "errmap over %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_ERRMAP;
     comb->fn = errmap_fn;
     comb->args = (void *) args;
@@ -671,7 +679,8 @@ combinator_t * map(combinator_t* p, map_func func) {
     args->parser = p;
     args->func = func;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "map over %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "map over %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_MAP;
     comb->fn = map_fn;
     comb->args = (void *) args;
@@ -683,7 +692,8 @@ combinator_t * sep_by(combinator_t* p, combinator_t* sep) {
     args->p = p;
     args->sep = sep;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "%s separated by %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "%s separated by %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_SEP_BY;
     comb->fn = sep_by_fn;
     comb->args = (void *) args;
@@ -695,7 +705,8 @@ combinator_t * sep_by1(combinator_t* p, combinator_t* sep) {
     args->p = p;
     args->sep = sep;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "%s separated by1 %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "%s separated by1 %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_SEP_BY1;
     comb->fn = sep_by1_fn;
     comb->args = (void *) args;
@@ -707,7 +718,8 @@ combinator_t * sep_end_by(combinator_t* p, combinator_t* sep) {
     args->p = p;
     args->sep = sep;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "%s separated and ended by %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "%s separated and ended by %s", p->name ? p->name : "unnamed_parser", sep->name ? sep->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_SEP_END_BY;
     comb->fn = sep_end_by_fn;
     comb->args = (void *) args;
@@ -719,7 +731,8 @@ combinator_t * chainl1(combinator_t* p, combinator_t* op) {
     args->p = p;
     args->op = op;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "chainl1 of %s with %s", p->name ? p->name : "unnamed_parser", op->name ? op->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "chainl1 of %s with %s", p->name ? p->name : "unnamed_parser", op->name ? op->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_CHAINL1;
     comb->fn = chainl1_fn;
     comb->args = (void *) args;
@@ -738,7 +751,8 @@ combinator_t * succeed(ast_t* ast) {
 
 combinator_t * many(combinator_t* p) {
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "many %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "many %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_MANY;
     comb->fn = many_fn;
     comb->args = (void *) p;
@@ -749,7 +763,8 @@ combinator_t * optional(combinator_t* p) {
     optional_args* args = (optional_args*)safe_malloc(sizeof(optional_args));
     args->p = p;
     combinator_t * comb = new_combinator();
-    asprintf(&comb->name, "optional %s", p->name ? p->name : "unnamed_parser");
+    int ret = asprintf(&comb->name, "optional %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
     comb->type = COMB_OPTIONAL;
     comb->fn = optional_fn;
     comb->args = (void *) args;
