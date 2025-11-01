@@ -1252,20 +1252,22 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
             if (codegen_target_is_windows())
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                /* Move in reverse order to avoid register conflicts when temp regs overlap with arg regs */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
             }
             else
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                /* Move in reverse order to avoid register conflicts when temp regs overlap with arg regs */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
             }
 
