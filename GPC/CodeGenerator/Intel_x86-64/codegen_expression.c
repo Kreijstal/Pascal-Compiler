@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 
 #include "codegen_expression.h"
 #include "register_types.h"
@@ -23,6 +24,22 @@
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
+
+static unsigned long codegen_next_record_temp_id(void)
+{
+    static unsigned long counter = 0;
+    return ++counter;
+}
+
+static StackNode_t *codegen_alloc_record_temp(long long size)
+{
+    if (size <= 0 || size > INT_MAX)
+        return NULL;
+
+    char label[32];
+    snprintf(label, sizeof(label), "record_arg_%lu", codegen_next_record_temp_id());
+    return add_l_x(label, (int)size);
+}
 
 
 int codegen_type_uses_qword(int type_tag)
@@ -1618,7 +1635,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         if(formal_args != NULL)
             formal_arg_decl = (Tree_t *)formal_args->cur;
 
-        if(formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param)
+        int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
+
+        if(is_var_param)
         {
             // Pass by reference
             if (!codegen_expr_is_addressable(arg_expr))
@@ -1636,6 +1655,100 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             if (arg_infos != NULL)
             {
                 arg_infos[arg_num].reg = addr_reg;
+                arg_infos[arg_num].spill = NULL;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+        }
+        else if (arg_expr != NULL && arg_expr->resolved_type == RECORD_TYPE)
+        {
+            if (!codegen_expr_is_addressable(arg_expr))
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unsupported record argument expression.");
+                return inst_list;
+            }
+
+            long long record_size = 0;
+            if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size <= 0)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine record size for argument.");
+                return inst_list;
+            }
+
+            if (record_size > INT_MAX)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Record argument size exceeds supported limits.");
+                return inst_list;
+            }
+
+            StackNode_t *temp_slot = codegen_alloc_record_temp(record_size);
+            if (temp_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to allocate temporary storage for record argument.");
+                return inst_list;
+            }
+
+            Register_t *src_reg = NULL;
+            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+                return inst_list;
+
+            Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (size_reg == NULL)
+            {
+                free_reg(get_reg_stack(), src_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for record copy size.");
+                return inst_list;
+            }
+
+            char copy_buffer[128];
+            snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t$%lld, %s\n", record_size, size_reg->bit_64);
+            inst_list = add_inst(inst_list, copy_buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", temp_slot->offset);
+                inst_list = add_inst(inst_list, copy_buffer);
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+            }
+            else
+            {
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", temp_slot->offset);
+                inst_list = add_inst(inst_list, copy_buffer);
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+            free_arg_regs();
+
+            free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), size_reg);
+
+            Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (result_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for record argument pointer.");
+                return inst_list;
+            }
+
+            snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
+            inst_list = add_inst(inst_list, copy_buffer);
+
+            if (arg_infos != NULL)
+            {
+                arg_infos[arg_num].reg = result_reg;
                 arg_infos[arg_num].spill = NULL;
                 arg_infos[arg_num].expr = arg_expr;
             }
