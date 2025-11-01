@@ -17,7 +17,7 @@ static combinator_t* shared_statement_parser = NULL;
 static combinator_t* shared_unit_parser = NULL;
 static combinator_t* shared_program_parser = NULL;
 
-static combinator_t* get_expression_parser(void) {
+__attribute__((unused)) static combinator_t* get_expression_parser(void) {
     if (shared_expression_parser == NULL) {
         shared_expression_parser = new_combinator();
         init_pascal_expression_parser(&shared_expression_parser);
