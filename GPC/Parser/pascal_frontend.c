@@ -250,16 +250,8 @@ static void report_preprocessor_error(ParseError **error_out, const char *path, 
 
 void pascal_frontend_cleanup(void)
 {
-    if (cached_unit_parser != NULL)
-    {
-        free_combinator(cached_unit_parser);
-        cached_unit_parser = NULL;
-    }
-    if (cached_program_parser != NULL)
-    {
-        free_combinator(cached_program_parser);
-        cached_program_parser = NULL;
-    }
+    cached_unit_parser = NULL;
+    cached_program_parser = NULL;
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
