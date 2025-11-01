@@ -522,6 +522,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType(symtab, file_name, HASHVAR_FILE);
         free(file_name);
     }
+    char *text_name = strdup("text");
+    if (text_name != NULL) {
+        AddBuiltinType(symtab, text_name, HASHVAR_FILE);
+        free(text_name);
+    }
 
     char *setlength_name = strdup("SetLength");
     if (setlength_name != NULL) {
@@ -575,6 +580,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (copy_name != NULL) {
         AddBuiltinFunction(symtab, copy_name, HASHVAR_PCHAR);
         free(copy_name);
+    }
+    char *eof_name = strdup("EOF");
+    if (eof_name != NULL) {
+        AddBuiltinFunction(symtab, eof_name, HASHVAR_BOOLEAN);
+        free(eof_name);
     }
 
     char *sizeof_name = strdup("SizeOf");

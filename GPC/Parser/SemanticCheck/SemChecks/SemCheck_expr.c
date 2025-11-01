@@ -78,7 +78,7 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num);
 static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int line_num);
+    int line_num, int silent);
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num);
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
@@ -509,7 +509,7 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
         struct RecordField *field_desc = NULL;
         long long offset = 0;
         if (resolve_record_field(symtab, entry->record_type, field_id,
-                &field_desc, &offset, line_num) == 0 && field_desc != NULL)
+                &field_desc, &offset, line_num, 1) == 0 && field_desc != NULL)
         {
             struct Expression *clone = clone_expression(entry->context_expr);
             if (clone == NULL)
@@ -524,7 +524,7 @@ int semcheck_with_try_resolve(const char *field_id, SymTab_t *symtab,
 
 static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int line_num)
+    int line_num, int silent)
 {
     if (record == NULL || field_name == NULL)
         return 1;
@@ -537,7 +537,8 @@ static int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
 
     if (!found)
     {
-        fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
+        if (!silent)
+            fprintf(stderr, "Error on line %d, record field %s not found.\n", line_num, field_name);
         return 1;
     }
 
@@ -820,6 +821,67 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         expr->expr_data.function_call_data.resolved_func = NULL;
         expr->resolved_type = STRING_TYPE;
         *type_return = STRING_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int error_count = 0;
+    const char *mangled_name = NULL;
+
+    if (args == NULL)
+    {
+        mangled_name = "gpc_text_eof_default";
+    }
+    else if (args->next == NULL)
+    {
+        struct Expression *file_expr = (struct Expression *)args->cur;
+        int file_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
+        if (file_type != FILE_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, EOF expects a text file argument.\n", expr->line_num);
+            error_count++;
+        }
+        else
+        {
+            mangled_name = "gpc_text_eof";
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Error on line %d, EOF expects zero or one argument.\n", expr->line_num);
+        error_count++;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for EOF.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        expr->expr_data.function_call_data.resolved_func = NULL;
+        expr->resolved_type = BOOL;
+        *type_return = BOOL;
         return 0;
     }
 
@@ -1764,7 +1826,7 @@ static int semcheck_recordaccess(int *type_return,
     struct RecordField *field_desc = NULL;
     long long field_offset = 0;
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
-            &field_offset, expr->line_num) != 0 || field_desc == NULL)
+            &field_offset, expr->line_num, 0) != 0 || field_desc == NULL)
     {
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -2090,7 +2152,8 @@ int semcheck_relop(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
     int return_val;
-    int type_first, type_second;
+    int type_first;
+    int type_second = UNKNOWN_TYPE;
     struct Expression *expr1, *expr2;
     assert(symtab != NULL);
     assert(expr != NULL);
@@ -2107,11 +2170,14 @@ int semcheck_relop(int *type_return,
     /* Verifying types */
 
     /* Type must be a bool (this only happens with a NOT operator) */
-    if(expr2 == NULL && type_first != BOOL)
+    if (expr2 == NULL)
     {
-        fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
-            expr->line_num);
-        ++return_val;
+        if (type_first != BOOL)
+        {
+            fprintf(stderr, "Error on line %d, expected relational type after \"NOT\"!\n\n",
+                expr->line_num);
+            ++return_val;
+        }
     }
     else
     {
@@ -2618,6 +2684,9 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "Copy"))
         return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "EOF"))
+        return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 

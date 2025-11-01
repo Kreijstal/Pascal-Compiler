@@ -45,7 +45,8 @@ static StackNode_t *codegen_alloc_record_temp(long long size)
 int codegen_type_uses_qword(int type_tag)
 {
     return (type_tag == LONGINT_TYPE || type_tag == REAL_TYPE ||
-        type_tag == POINTER_TYPE || type_tag == STRING_TYPE);
+        type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
+        type_tag == FILE_TYPE);
 }
 
 int codegen_type_is_signed(int type_tag)
@@ -1395,6 +1396,27 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
 }
 
 
+static int invert_relop_type(int relop_kind)
+{
+    switch (relop_kind)
+    {
+        case EQ:
+            return NE;
+        case NE:
+            return EQ;
+        case LT:
+            return GE;
+        case LE:
+            return GT;
+        case GT:
+            return LE;
+        case GE:
+            return LT;
+        default:
+            return relop_kind;
+    }
+}
+
 /* Code generation for simple relops */
 ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                                 CodeGenContext *ctx, int *relop_type)
@@ -1414,6 +1436,15 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     if (relop_type != NULL)
         *relop_type = relop_kind;
+
+    if (relop_kind == NOT)
+    {
+        int inner_type = NE;
+        inst_list = codegen_condition_expr(left_expr, inst_list, ctx, &inner_type);
+        if (relop_type != NULL)
+            *relop_type = invert_relop_type(inner_type);
+        return inst_list;
+    }
 
     inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
     Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
