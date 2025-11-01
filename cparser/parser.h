@@ -54,9 +54,11 @@ struct input_t {
 typedef struct ParseError {
     int line;
     int col;
+    int offset;
     char* message;
     char* parser_name;
     char* unexpected;
+    char* context;
     struct ParseError* cause;
     ast_t* partial_ast;
 } ParseError;
@@ -168,6 +170,7 @@ void restore_input_state(input_t* in, InputState* state);
 ParseResult make_success(ast_t* ast);
 ParseResult make_failure(input_t* in, char* message);
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected);
+ParseResult make_failure_with_state(input_t* in, InputState* state, char* parser_name, char* message, char* unexpected);
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause);
 
 // --- Helper Function Prototypes ---

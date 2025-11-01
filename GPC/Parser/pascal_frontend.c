@@ -400,4 +400,23 @@ void pascal_print_parse_error(const char *path, const ParseError *err)
             err->message ? err->message : "unknown error");
     if (err->unexpected)
         fprintf(stderr, "  Unexpected: %s\n", err->unexpected);
+    if (err->context && err->context[0] != '\0')
+    {
+        fprintf(stderr, "  Context:\n");
+        const char *cursor = err->context;
+        while (*cursor != '\0')
+        {
+            const char *newline = strchr(cursor, '\n');
+            if (newline != NULL)
+            {
+                fprintf(stderr, "    %.*s\n", (int)(newline - cursor), cursor);
+                cursor = newline + 1;
+            }
+            else
+            {
+                fprintf(stderr, "    %s\n", cursor);
+                break;
+            }
+        }
+    }
 }

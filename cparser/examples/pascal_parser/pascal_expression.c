@@ -307,6 +307,19 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
         return make_failure_v2(in, parser_name, strdup("Expected closing single quote"), NULL);
     }
 
+    // If the next character is another single quote, this is part of a
+    // Pascal string literal that uses doubled quotes for escaping. Treat this
+    // as a failure so the string parser can consume the complete literal.
+    InputState peek_state;
+    save_input_state(in, &peek_state);
+    char next_char = read1(in);
+    restore_input_state(in, &peek_state);
+    if (next_char == '\'') {
+        restore_input_state(in, &state);
+        return make_failure_with_state(in, &state, parser_name,
+            strdup("Character literal cannot contain doubled quotes"), NULL);
+    }
+
     // Create AST node with the character value
     char text[2];
     text[0] = char_value;

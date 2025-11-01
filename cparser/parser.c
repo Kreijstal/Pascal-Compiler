@@ -45,7 +45,21 @@ static ParseResult until_fn(input_t * in, void * args, char* parser_name);
 static ParseResult any_char_fn(input_t * in, void * args, char* parser_name);
 static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name);
 static ParseResult expr_fn(input_t * in, void * args, char* parser_name);
+static char* create_error_context(input_t* in, InputState* state, int before, int after);
+static void populate_error_location(ParseError* err, input_t* in, InputState* state);
 static ast_t* ensure_ast_nil_initialized();
+
+typedef struct {
+    char* data;
+    size_t length;
+    size_t capacity;
+} context_builder_t;
+
+static void context_builder_init(context_builder_t* builder);
+static void context_builder_dispose(context_builder_t* builder);
+static bool context_builder_appendf(context_builder_t* builder, const char* fmt, ...);
+static bool context_builder_append_char(context_builder_t* builder, char ch);
+static char* context_builder_finalize(context_builder_t* builder);
 
 
 //=============================================================================
@@ -59,13 +73,29 @@ ParseResult make_success(ast_t* ast) {
     return (ParseResult){ .is_success = true, .value.ast = ast };
 }
 
-ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
+static void populate_error_location(ParseError* err, input_t* in, InputState* state) {
+    if (state != NULL) {
+        err->line = state->line;
+        err->col = state->col;
+        err->offset = state->start;
+    } else if (in != NULL) {
+        err->line = in->line;
+        err->col = in->col;
+        err->offset = in->start;
+    } else {
+        err->line = 0;
+        err->col = 0;
+        err->offset = 0;
+    }
+}
+
+ParseResult make_failure_with_state(input_t* in, InputState* state, char* parser_name, char* message, char* unexpected) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    populate_error_location(err, in, state);
     err->message = message;
     err->parser_name = parser_name ? strdup(parser_name) : NULL;
     err->unexpected = unexpected;
+    err->context = create_error_context(in, state, 3, 3);
     err->cause = NULL;
     err->partial_ast = NULL;
     return (ParseResult){ .is_success = false, .value.error = err };
@@ -77,11 +107,14 @@ ParseResult make_failure(input_t* in, char* message) {
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    populate_error_location(err, in, NULL);
+    err->offset = in ? in->start : 0;
     err->message = message;
     err->cause = NULL;
     err->partial_ast = partial_ast;
+    err->parser_name = NULL;
+    err->unexpected = NULL;
+    err->context = create_error_context(in, NULL, 3, 3);
     return (ParseResult){ .is_success = false, .value.error = err };
 }
 
@@ -105,8 +138,13 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
         return make_failure(in, "Memory allocation failed for error wrapper");
     }
     
-    new_err->line = in->line;
-    new_err->col = in->col;
+    if (original_error != NULL) {
+        new_err->line = original_error->line;
+        new_err->col = original_error->col;
+        new_err->offset = original_error->offset;
+    } else {
+        populate_error_location(new_err, in, NULL);
+    }
     new_err->message = strdup(message);
     if (new_err->message == NULL) {
         free(new_err);
@@ -116,20 +154,39 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     new_err->partial_ast = partial_ast;
     new_err->parser_name = NULL;
     new_err->unexpected = NULL;
-    
+    if (original_error && original_error->context) {
+        new_err->context = strdup(original_error->context);
+    } else {
+        new_err->context = create_error_context(in, NULL, 3, 3);
+    }
+
     return (ParseResult){ .is_success = false, .value.error = new_err };
 }
 
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    if (cause.value.error != NULL) {
+        err->line = cause.value.error->line;
+        err->col = cause.value.error->col;
+        err->offset = cause.value.error->offset;
+    } else {
+        populate_error_location(err, in, NULL);
+    }
     err->message = message;
     err->cause = cause.value.error;
     err->partial_ast = NULL;
     err->parser_name = parser_name ? strdup(parser_name) : NULL;
     err->unexpected = NULL; // The unexpected token is now part of the message in expect_fn
+    if (cause.value.error && cause.value.error->context) {
+        err->context = strdup(cause.value.error->context);
+    } else {
+        err->context = create_error_context(in, NULL, 3, 3);
+    }
     return (ParseResult){ .is_success = false, .value.error = err };
+}
+
+ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
+    return make_failure_with_state(in, NULL, parser_name, message, unexpected);
 }
 
 // --- Input State Management ---
@@ -139,6 +196,199 @@ void save_input_state(input_t* in, InputState* state) {
 
 void restore_input_state(input_t* in, InputState* state) {
     in->start = state->start; in->line = state->line; in->col = state->col;
+}
+
+static void context_builder_init(context_builder_t* builder) {
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+}
+
+static void context_builder_dispose(context_builder_t* builder) {
+    if (builder->data) {
+        free(builder->data);
+    }
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+}
+
+static bool context_builder_reserve(context_builder_t* builder, size_t additional) {
+    size_t required = builder->length + additional + 1;
+    if (required <= builder->capacity) {
+        return true;
+    }
+    size_t new_capacity = builder->capacity == 0 ? 128 : builder->capacity;
+    while (new_capacity < required) {
+        new_capacity *= 2;
+    }
+    char* new_data = (char*)realloc(builder->data, new_capacity);
+    if (new_data == NULL) {
+        return false;
+    }
+    builder->data = new_data;
+    builder->capacity = new_capacity;
+    return true;
+}
+
+static bool context_builder_appendf(context_builder_t* builder, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0) {
+        return false;
+    }
+    if (!context_builder_reserve(builder, (size_t)needed)) {
+        return false;
+    }
+    va_start(args, fmt);
+    int written = vsnprintf(builder->data + builder->length, builder->capacity - builder->length, fmt, args);
+    va_end(args);
+    if (written < 0) {
+        return false;
+    }
+    builder->length += (size_t)written;
+    return true;
+}
+
+static bool context_builder_append_char(context_builder_t* builder, char ch) {
+    if (!context_builder_reserve(builder, 1)) {
+        return false;
+    }
+    builder->data[builder->length++] = ch;
+    builder->data[builder->length] = '\0';
+    return true;
+}
+
+static char* context_builder_finalize(context_builder_t* builder) {
+    if (!context_builder_reserve(builder, 0)) {
+        context_builder_dispose(builder);
+        return NULL;
+    }
+    builder->data[builder->length] = '\0';
+    char* result = builder->data;
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+    return result;
+}
+
+static char* create_error_context(input_t* in, InputState* state, int before, int after) {
+    if (in == NULL || in->buffer == NULL || in->length <= 0) {
+        return NULL;
+    }
+
+    InputState local_state;
+    if (state == NULL) {
+        save_input_state(in, &local_state);
+        state = &local_state;
+    }
+
+    int target_line = state->line > 0 ? state->line : 1;
+    int target_col = state->col > 0 ? state->col : 1;
+
+    int start_line = target_line - before;
+    if (start_line < 1) {
+        start_line = 1;
+    }
+    int end_line = target_line + after;
+    if (end_line < target_line) {
+        end_line = target_line;
+    }
+
+    int max_line_number = end_line;
+    if (max_line_number < target_line) {
+        max_line_number = target_line;
+    }
+    if (max_line_number < start_line) {
+        max_line_number = start_line;
+    }
+    int width = 1;
+    int tmp = max_line_number;
+    while (tmp >= 10) {
+        tmp /= 10;
+        width++;
+    }
+
+    int idx = 0;
+    int current_line = 1;
+    while (idx < in->length && current_line < start_line) {
+        if (in->buffer[idx++] == '\n') {
+            current_line++;
+        }
+    }
+
+    context_builder_t builder;
+    context_builder_init(&builder);
+
+    current_line = start_line;
+    while (idx <= in->length && current_line <= end_line) {
+        int line_start = idx;
+        while (idx < in->length && in->buffer[idx] != '\n') {
+            idx++;
+        }
+        int line_end = idx;
+        size_t line_len = (size_t)(line_end - line_start);
+        char* line_text = (char*)safe_malloc(line_len + 1);
+        memcpy(line_text, in->buffer + line_start, line_len);
+        line_text[line_len] = '\0';
+        for (size_t i = 0; i < line_len; ++i) {
+            if (line_text[i] == '\r') {
+                line_text[i] = ' ';
+            }
+        }
+
+        if (!context_builder_appendf(&builder, "%*d | %s\n", width, current_line, line_text)) {
+            free(line_text);
+            context_builder_dispose(&builder);
+            return NULL;
+        }
+        if (current_line == target_line) {
+            if (!context_builder_appendf(&builder, "%*s | ", width, "")) {
+                free(line_text);
+                context_builder_dispose(&builder);
+                return NULL;
+            }
+            int caret_column = target_col;
+            if (caret_column < 1) {
+                caret_column = 1;
+            }
+            int printable_len = (int)strlen(line_text);
+            if (caret_column > printable_len + 1) {
+                caret_column = printable_len + 1;
+            }
+            for (int c = 1; c < caret_column; ++c) {
+                char ch = (c - 1 < printable_len) ? line_text[c - 1] : ' ';
+                char to_write = (ch == '\t') ? '\t' : ' ';
+                if (!context_builder_append_char(&builder, to_write)) {
+                    free(line_text);
+                    context_builder_dispose(&builder);
+                    return NULL;
+                }
+            }
+            if (!context_builder_append_char(&builder, '^') ||
+                !context_builder_append_char(&builder, '\n')) {
+                free(line_text);
+                context_builder_dispose(&builder);
+                return NULL;
+            }
+        }
+
+        free(line_text);
+
+        if (idx < in->length && in->buffer[idx] == '\n') {
+            idx++;
+        } else {
+            if (idx >= in->length) {
+                break;
+            }
+        }
+        current_line++;
+    }
+
+    char* context = context_builder_finalize(&builder);
+    return context;
 }
 
 // --- Public Helpers ---
@@ -266,15 +516,16 @@ static ParseResult match_ci_fn(input_t * in, void * args, char* parser_name) {
     char * str = ((match_args *) args)->str;
     InputState state; save_input_state(in, &state);
     for (int i = 0, len = strlen(str); i < len; i++) {
+        InputState failure_state; save_input_state(in, &failure_state);
         char c = read1(in);
         if (tolower(c) != tolower(str[i])) {
             restore_input_state(in, &state);
-            char* unexpected = strndup(in->buffer + state.start, 10);
+            char* unexpected = strndup(in->buffer + failure_state.start, 10);
             char* err_msg;
             if (asprintf(&err_msg, "Parser '%s' Expected '%s' (case-insensitive) but found '%.10s...'", parser_name ? parser_name : "N/A", str, unexpected) < 0) {
                 err_msg = strdup("Expected token (case-insensitive)");
             }
-            return make_failure_v2(in, parser_name, err_msg, unexpected);
+            return make_failure_with_state(in, &failure_state, parser_name, err_msg, unexpected);
         }
     }
     return make_success(ensure_ast_nil_initialized());
@@ -284,15 +535,16 @@ static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
     char * str = ((match_args *) args)->str;
     InputState state; save_input_state(in, &state);
     for (int i = 0, len = strlen(str); i < len; i++) {
+        InputState failure_state; save_input_state(in, &failure_state);
         char c = read1(in);
         if (c != str[i]) {
             restore_input_state(in, &state);
-            char* unexpected = strndup(in->buffer + state.start, 10);
+            char* unexpected = strndup(in->buffer + failure_state.start, 10);
             char* err_msg;
             if (asprintf(&err_msg, "Parser '%s' Expected '%s' but found '%.10s...'", parser_name ? parser_name : "N/A", str, unexpected) < 0) {
                 err_msg = strdup("Expected token");
             }
-            return make_failure_v2(in, parser_name, err_msg, unexpected);
+            return make_failure_with_state(in, &failure_state, parser_name, err_msg, unexpected);
         }
     }
     return make_success(ensure_ast_nil_initialized());
@@ -306,7 +558,7 @@ static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
    if (!isdigit(c)) {
        restore_input_state(in, &state);
        char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected a digit."), unexpected);
+       return make_failure_with_state(in, &state, parser_name, strdup("Expected a digit."), unexpected);
    }
    while (isdigit(c = read1(in))) ;
    if (c != EOF) in->start--;
@@ -329,7 +581,7 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    if (c != '_' && !isalpha(c)) {
        restore_input_state(in, &state);
        char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected identifier."), unexpected);
+       return make_failure_with_state(in, &state, parser_name, strdup("Expected identifier."), unexpected);
    }
    while (isalnum(c = read1(in)) || c == '_') ;
    if (c != EOF) in->start--;
@@ -347,24 +599,33 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult string_fn(input_t * in, void * args, char* parser_name) {
    prim_args* pargs = (prim_args*)args;
    InputState state; save_input_state(in, &state);
+   InputState quote_state; save_input_state(in, &quote_state);
    if (read1(in) != '"') {
        restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected '\"'."), unexpected);
+       char* unexpected = strndup(in->buffer + quote_state.start, 10);
+       return make_failure_with_state(in, &quote_state, parser_name, strdup("Expected '\"'."), unexpected);
    }
    int capacity = 64;
    char * str_val = (char *) safe_malloc(capacity);
-   int len = 0; char c;
-   while ((c = read1(in)) != '"') {
+   int len = 0;
+   while (1) {
+      InputState char_state; save_input_state(in, &char_state);
+      char c = read1(in);
+      if (c == '"') {
+         break;
+      }
       if (c == EOF) {
           free(str_val);
-          return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+          restore_input_state(in, &state);
+          return make_failure_with_state(in, &char_state, parser_name, strdup("Unterminated string."), NULL);
       }
       if (c == '\\') {
+         InputState escape_state; save_input_state(in, &escape_state);
          c = read1(in);
          if (c == EOF) {
              free(str_val);
-             return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+             restore_input_state(in, &state);
+             return make_failure_with_state(in, &escape_state, parser_name, strdup("Unterminated string."), NULL);
          }
          switch (c) {
             case 'n': c = '\n'; break; case 't': c = '\t'; break;
@@ -393,7 +654,7 @@ static ParseResult any_char_fn(input_t * in, void * args, char* parser_name) {
     char c = read1(in);
     if (c == EOF) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected any character, but found EOF."), NULL);
+        return make_failure_with_state(in, &state, parser_name, strdup("Expected any character, but found EOF."), NULL);
     }
     char str[2] = {c, '\0'};
     ast_t* ast = new_ast();
@@ -412,7 +673,7 @@ static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     if (c == EOF || !sargs->pred(c)) {
         restore_input_state(in, &state);
         char* unexpected = strndup(in->buffer + state.start, 10);
-        return make_failure_v2(in, parser_name, strdup("Predicate not satisfied."), unexpected);
+        return make_failure_with_state(in, &state, parser_name, strdup("Predicate not satisfied."), unexpected);
     }
     char str[2] = {c, '\0'};
     ast_t* ast = new_ast();
@@ -697,6 +958,7 @@ void free_error(ParseError* err) {
     if (err == NULL) return;
     if (err->parser_name) free(err->parser_name);
     if (err->unexpected) free(err->unexpected);
+    if (err->context) free(err->context);
     free(err->message);
     free_error(err->cause);
     if (err->partial_ast != NULL) {

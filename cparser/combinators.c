@@ -378,7 +378,8 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
 
-    ParseResult last_res;
+    ParseResult best_res = { .is_success = false, .value.error = NULL };
+    int best_offset = -1;
     for (seq_list *current = seq; current != NULL; current = current->next) {
         restore_input_state(in, &state);
         ParseResult res = parse(in, current->comb);
@@ -388,14 +389,23 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
             }
             return res;
         }
-        if (current->next == NULL) {
-            last_res = res;
+        int current_offset = -1;
+        if (!res.is_success && res.value.error != NULL) {
+            current_offset = res.value.error->offset;
+        }
+        if (current_offset >= best_offset) {
+            if (best_res.value.error != NULL) {
+                free_error(best_res.value.error);
+            }
+            best_res = res;
+            best_offset = current_offset;
         } else {
             free_error(res.value.error);
         }
     }
 
-    return last_res;
+    restore_input_state(in, &state);
+    return best_res;
 }
 
 static ParseResult flatMap_fn(input_t * in, void * args, char* parser_name) {

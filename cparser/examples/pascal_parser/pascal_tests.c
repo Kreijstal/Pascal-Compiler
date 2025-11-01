@@ -563,6 +563,24 @@ void test_pascal_string_literal(void) {
     free(input);
 }
 
+void test_pascal_string_literal_with_quote(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_expression_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("'I''m'");
+    input->length = strlen("'I''m'");
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    TEST_ASSERT(res.value.ast->typ == PASCAL_T_STRING);
+    TEST_ASSERT(strcmp(res.value.ast->sym->name, "I'm") == 0);
+
+    free_ast(res.value.ast);    free(input->buffer);
+    free(input);
+}
+
 void test_pascal_function_call_no_args(void) {
     combinator_t* p = new_combinator();
     init_pascal_expression_parser(&p);
@@ -3113,6 +3131,31 @@ void test_pascal_unitless_program(void) {
     free(input);
 }
 
+void test_pascal_dialogue_program(void) {
+    combinator_t* parser = get_program_parser();
+
+    input_t* input = new_input();
+    char* program = load_pascal_snippet("dialogue_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+
+    ParseResult res = parse(input, parser);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else if (res.value.error != NULL) {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free(input);
+}
+
 void test_fpc_style_unit_parsing(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
@@ -3851,6 +3894,7 @@ TEST_LIST = {
     { "test_pascal_preprocessor_comment_mixing", test_pascal_preprocessor_comment_mixing },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_string_literal", test_pascal_string_literal },
+    { "test_pascal_string_literal_with_quote", test_pascal_string_literal_with_quote },
     { "test_pascal_function_call_no_args", test_pascal_function_call_no_args },
     { "test_pascal_function_call_with_args", test_pascal_function_call_with_args },
     { "test_pascal_mod_operator", test_pascal_mod_operator },
@@ -3931,6 +3975,7 @@ TEST_LIST = {
     { "test_pascal_record_member_access_program", test_pascal_record_member_access_program },
     { "test_pascal_record_member_access_complete_program", test_pascal_record_member_access_complete_program },
     { "test_pascal_unitless_program", test_pascal_unitless_program },
+    { "test_pascal_dialogue_program", test_pascal_dialogue_program },
     { "test_pascal_var_section", test_pascal_var_section },
     { "test_pascal_unit_with_dotted_name", test_pascal_unit_with_dotted_name },
     { "test_pascal_uses_with_dotted_unit", test_pascal_uses_with_dotted_unit },
