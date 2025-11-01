@@ -11,6 +11,7 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 #include "register_types.h"
 #include "codegen.h"
 #include "codegen_statement.h"
@@ -752,23 +753,48 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
                 {
                     struct TypeAlias *alias = type_node->type_alias;
-                     int element_size = 4;  // Default to 4 bytes (integer)
-                     if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
-                         element_size = 8;
-                     if (alias->is_open_array)
-                     {
-                         add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
-                     }
-                     else
-                     {
-                         int length = alias->array_end - alias->array_start + 1;
-                         if (length < 0)
-                             length = 0;
-                         int total_size = length * element_size;
-                         if (total_size <= 0)
-                             total_size = element_size;
-                         add_array((char *)id_list->cur, total_size, element_size, alias->array_start);
-                     }
+                    long long computed_size = 0;
+                    int element_size = 0;
+                    struct RecordType *element_record = NULL;
+
+                    if (alias->array_element_type == RECORD_TYPE && ctx != NULL && ctx->symtab != NULL &&
+                        alias->array_element_type_id != NULL)
+                    {
+                        HashNode_t *element_node = NULL;
+                        if (FindIdent(&element_node, ctx->symtab, alias->array_element_type_id) >= 0 &&
+                            element_node != NULL)
+                            element_record = element_node->record_type;
+                    }
+
+                    if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
+                            alias->array_element_type_id, element_record, &computed_size) == 0 &&
+                        computed_size > 0 && computed_size <= INT_MAX)
+                    {
+                        element_size = (int)computed_size;
+                    }
+
+                    if (element_size <= 0)
+                    {
+                        if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
+                            element_size = 8;
+                        else
+                            element_size = 4;
+                    }
+
+                    if (alias->is_open_array)
+                    {
+                        add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
+                    }
+                    else
+                    {
+                        int length = alias->array_end - alias->array_start + 1;
+                        if (length < 0)
+                            length = 0;
+                        long long total_size = (long long)length * (long long)element_size;
+                        if (total_size <= 0)
+                            total_size = element_size;
+                        add_array((char *)id_list->cur, (int)total_size, element_size, alias->array_start);
+                    }
                 }
                 else
                 {

@@ -1135,6 +1135,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             call_target = "gpc_write_boolean";
         else if (expr_is_real)
             call_target = "gpc_write_real";
+        else if (expr_type == CHAR_TYPE)
+            call_target = "gpc_write_char";
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 

@@ -610,6 +610,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     }
     else if (expr->type == EXPR_STRING)
     {
+        if (expr->resolved_type == CHAR_TYPE)
+        {
+            unsigned char value = 0;
+            if (expr->expr_data.string != NULL && expr->expr_data.string[0] != '\0')
+                value = (unsigned char)expr->expr_data.string[0];
+            snprintf(buffer, 50, "\tmovl\t$%u, %s\n", (unsigned)value, target_reg->bit_32);
+            return add_inst(inst_list, buffer);
+        }
+
         char label[20];
         snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
         char add_rodata[1024];
