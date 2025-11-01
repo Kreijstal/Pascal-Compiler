@@ -1368,13 +1368,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                     if (left64 != NULL && left64[0] == '%')
                     {
                         lhs_spill = add_l_t("relop_real_lhs");
-                        if (lhs_spill != NULL)
+                        if (lhs_spill == NULL)
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", left64, lhs_spill->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm1\n", lhs_spill->offset);
-                            inst_list = add_inst(inst_list, buffer);
+                            codegen_report_error(ctx, "ERROR: Unable to allocate temporary for real comparison.");
+                            break;
                         }
+
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", left64, lhs_spill->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm1\n", lhs_spill->offset);
+                        inst_list = add_inst(inst_list, buffer);
                     }
 
                     if (lhs_spill == NULL && left != NULL)
@@ -1417,14 +1420,17 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                             {
                                 if (rhs_spill == NULL)
                                     rhs_spill = add_l_t("relop_real_rhs_reg");
-                                if (rhs_spill != NULL)
+                                if (rhs_spill == NULL)
                                 {
-                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
-                                    inst_list = add_inst(inst_list, buffer);
-                                    snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
-                                    inst_list = add_inst(inst_list, buffer);
-                                    rhs_loaded = 1;
+                                    codegen_report_error(ctx, "ERROR: Unable to allocate temporary for real comparison.");
+                                    break;
                                 }
+
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", right64, rhs_spill->offset);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", rhs_spill->offset);
+                                inst_list = add_inst(inst_list, buffer);
+                                rhs_loaded = 1;
                             }
                         }
                         if (!rhs_loaded && right != NULL)
