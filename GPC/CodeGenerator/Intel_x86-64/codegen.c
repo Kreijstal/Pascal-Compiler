@@ -810,7 +810,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         var_kind = type_node->var_type;
 
                     if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
-                        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER)
+                        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
+                        var_kind == HASHVAR_FILE)
                     {
                         alloc_size = 8;
                     }
@@ -1414,6 +1415,24 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                             snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", length_offset);
                             inst_list = add_inst(inst_list, buffer);
                         }
+                    }
+                    ids = ids->next;
+                }
+            }
+
+            /* Initialize FILE variables to NULL */
+            if (type_node != NULL && type_node->var_type == HASHVAR_FILE)
+            {
+                ListNode_t *ids = decl->tree_data.var_decl_data.ids;
+                while (ids != NULL)
+                {
+                    char *var_name = (char *)ids->cur;
+                    StackNode_t *file_node = find_label(var_name);
+                    if (file_node != NULL)
+                    {
+                        char buffer[128];
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
+                        inst_list = add_inst(inst_list, buffer);
                     }
                     ids = ids->next;
                 }
