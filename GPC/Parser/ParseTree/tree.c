@@ -70,6 +70,18 @@ static void print_record_field(struct RecordField *field, FILE *f, int num_inden
         fprintf(f, " type=%d", field->type);
     fprintf(f, "]\n");
 
+    if (field->is_array)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[ARRAY_FIELD start=%d end=%d open=%d]", field->array_start,
+            field->array_end, field->array_is_open);
+        if (field->array_element_type_id != NULL)
+            fprintf(f, " element_type=%s", field->array_element_type_id);
+        else
+            fprintf(f, " element_type=%d", field->array_element_type);
+        fprintf(f, "\n");
+    }
+
     if (field->nested_record != NULL)
     {
         print_indent(f, num_indent + 1);
@@ -87,6 +99,8 @@ static void destroy_record_field(struct RecordField *field)
         free(field->name);
     if (field->type_id != NULL)
         free(field->type_id);
+    if (field->array_element_type_id != NULL)
+        free(field->array_element_type_id);
     destroy_record_type(field->nested_record);
     free(field);
 }
@@ -560,12 +574,16 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           break;
 
         case EXPR_ARRAY_ACCESS:
-          fprintf(f, "[ARRAY_ACC:%s]\n", expr->expr_data.array_access_data.id);
+          fprintf(f, "[ARRAY_ACC]\n");
           ++num_indent;
 
           print_indent(f, num_indent);
-          fprintf(f, "[INDEX]:\n");
+          fprintf(f, "[ARRAY]:\n");
           expr_print(expr->expr_data.array_access_data.array_expr, f, num_indent+1);
+
+          print_indent(f, num_indent);
+          fprintf(f, "[INDEX]:\n");
+          expr_print(expr->expr_data.array_access_data.index_expr, f, num_indent+1);
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -970,8 +988,10 @@ void destroy_expr(struct Expression *expr)
           break;
 
         case EXPR_ARRAY_ACCESS:
-          free(expr->expr_data.array_access_data.id);
-          destroy_expr(expr->expr_data.array_access_data.array_expr);
+          if (expr->expr_data.array_access_data.array_expr != NULL)
+              destroy_expr(expr->expr_data.array_access_data.array_expr);
+          if (expr->expr_data.array_access_data.index_expr != NULL)
+              destroy_expr(expr->expr_data.array_access_data.index_expr);
           break;
 
         case EXPR_RECORD_ACCESS:
@@ -1044,6 +1064,11 @@ void destroy_expr(struct Expression *expr)
         free(expr->pointer_subtype_id);
         expr->pointer_subtype_id = NULL;
     }
+    if (expr->array_element_type_id != NULL)
+    {
+        free(expr->array_element_type_id);
+        expr->array_element_type_id = NULL;
+    }
     free(expr);
 }
 
@@ -1077,6 +1102,13 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
         field_clone->type = field->type;
         field_clone->type_id = field->type_id != NULL ? strdup(field->type_id) : NULL;
         field_clone->nested_record = clone_record_type(field->nested_record);
+        field_clone->is_array = field->is_array;
+        field_clone->array_start = field->array_start;
+        field_clone->array_end = field->array_end;
+        field_clone->array_element_type = field->array_element_type;
+        field_clone->array_element_type_id = field->array_element_type_id != NULL ?
+            strdup(field->array_element_type_id) : NULL;
+        field_clone->array_is_open = field->array_is_open;
 
         ListNode_t *node = CreateListNode(field_clone, LIST_RECORD_FIELD);
         if (clone->fields == NULL)
@@ -1592,6 +1624,14 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
     expr->record_type = NULL;
+    expr->is_array_expr = 0;
+    expr->array_element_type = UNKNOWN_TYPE;
+    expr->array_element_type_id = NULL;
+    expr->array_lower_bound = 0;
+    expr->array_upper_bound = -1;
+    expr->array_element_size = 0;
+    expr->array_is_dynamic = 0;
+    expr->array_element_record_type = NULL;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,
@@ -1663,15 +1703,15 @@ struct Expression *mk_varid(int line_num, char *id)
     return new_expr;
 }
 
-struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *index_expr)
+struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, struct Expression *index_expr)
 {
     struct Expression *new_expr;
     new_expr = (struct Expression *)malloc(sizeof(struct Expression));
     assert(new_expr != NULL);
 
     init_expression(new_expr, line_num, EXPR_ARRAY_ACCESS);
-    new_expr->expr_data.array_access_data.id = id;
-    new_expr->expr_data.array_access_data.array_expr = index_expr;
+    new_expr->expr_data.array_access_data.array_expr = array_expr;
+    new_expr->expr_data.array_access_data.index_expr = index_expr;
 
     return new_expr;
 }

@@ -245,7 +245,7 @@ struct Expression *mk_mulop(int line_num, int type, struct Expression *left, str
 
 struct Expression *mk_varid(int line_num, char *id);
 
-struct Expression *mk_arrayaccess(int line_num, char *id, struct Expression *index_expr);
+struct Expression *mk_arrayaccess(int line_num, struct Expression *array_expr, struct Expression *index_expr);
 
 struct Expression *mk_recordaccess(int line_num, struct Expression *record_expr, char *field_id);
 

@@ -113,7 +113,7 @@ env.set('GPC_CTYPES_HELPER_LINK', ctypes_helper_link)
 
 test('Compiler tests', python,
   args: [
-    meson.project_source_root() / 'tests/test_runner.py',
+    meson.project_source_root() / 'tests/do_not_run_me_directly_but_through_meson.py',
     '--tap',
   ],
   workdir: meson.project_source_root(),
