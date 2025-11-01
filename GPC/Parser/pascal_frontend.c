@@ -326,7 +326,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     file_to_parse = (char *)path;
 
+    fprintf(stderr, "[DEBUG] Starting to parse %s (%d bytes)\n", path, input->length);
     ParseResult result = parse(input, parser);
+    fprintf(stderr, "[DEBUG] Parse complete for %s\n", path);
     Tree_t *tree = NULL;
     bool success = false;
     if (!result.is_success)

@@ -159,6 +159,14 @@ static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
             break;
         }
 
+        // Check if we consumed any input
+        if (in->start == state.start) {
+            // No input consumed - restore and break to prevent infinite loop
+            restore_input_state(in, &state);
+            free_ast(next_res.value.ast);
+            break;
+        }
+
         tail->next = next_res.value.ast;
         tail = tail->next;
     }
@@ -220,6 +228,15 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
             free_error(p_res.value.error);
             break;
         }
+
+        // Check if we consumed any input
+        if (in->start == state.start) {
+            // No input consumed - restore and break to prevent infinite loop
+            restore_input_state(in, &state);
+            free_ast(p_res.value.ast);
+            break;
+        }
+
         tail->next = p_res.value.ast;
         tail = tail->next;
     }
@@ -265,6 +282,15 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name) {
             return wrap_failure(in, strdup("Expected operand after operator in chainl1"), parser_name, right_res);
         }
         ast_t* right = right_res.value.ast;
+
+        // Check if we consumed any input
+        if (in->start == state.start) {
+            // No input consumed - restore and break to prevent infinite loop
+            restore_input_state(in, &state);
+            free_ast(right);
+            break;
+        }
+
         left = ast2(op_tag, left, right);
     }
 
@@ -290,7 +316,14 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
     combinator_t* p = (combinator_t*)args;
     ast_t* head = NULL;
     ast_t* tail = NULL;
+    int iteration_count = 0;
+    int last_report = 0;
     while (1) {
+        iteration_count++;
+        if (iteration_count > last_report + 100000) {
+            fprintf(stderr, "[DEBUG] many_fn loop: %d iterations, position %d\n", iteration_count, in->start);
+            last_report = iteration_count;
+        }
         InputState state;
         save_input_state(in, &state);
         ParseResult res = parse(in, p);
@@ -299,12 +332,26 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             free_error(res.value.error);
             break;
         }
+        // Check if the parser consumed any input
+        if (in->start == state.start) {
+            // Parser succeeded but didn't consume input - this would cause infinite loop
+            // Restore state and discard the epsilon match
+            restore_input_state(in, &state);
+            free_ast(res.value.ast);
+            if (iteration_count > 1000) {
+                fprintf(stderr, "[DEBUG] many_fn: breaking due to no input consumed at position %d after %d iterations\n", in->start, iteration_count);
+            }
+            break;
+        }
         if (head == NULL) {
             head = tail = res.value.ast;
         } else {
             tail->next = res.value.ast;
             tail = tail->next;
         }
+    }
+    if (iteration_count > 1000) {
+        fprintf(stderr, "[DEBUG] many_fn completed after %d iterations\n", iteration_count);
     }
     return make_success(head ? head : ast_nil);
 }
