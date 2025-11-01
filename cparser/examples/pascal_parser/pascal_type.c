@@ -197,7 +197,7 @@ combinator_t* array_type(tag_t tag) {
 static ast_t* build_class_ast(ast_t* ast) {
     // ast is the result of the seq.
     // children are: class_keyword, class_body, end_keyword
-    ast_t* class_body = ast->child->next;
+    ast_t* class_body = ast->child;
 
     ast_t* class_node = new_ast();
     class_node->typ = ast->typ;
