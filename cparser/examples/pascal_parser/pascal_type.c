@@ -386,11 +386,208 @@ static combinator_t* create_record_field_type_spec(void) {
     );
 }
 
+typedef struct {
+    combinator_t* type_parser;
+} variant_tag_args;
+
+static ParseResult variant_tag_fn(input_t* in, void* args, char* parser_name) {
+    variant_tag_args* vargs = (variant_tag_args*)args;
+    InputState start_state; save_input_state(in, &start_state);
+
+    ast_t* name_ast = NULL;
+    ast_t* type_ast = NULL;
+
+    combinator_t* identifier = token(cident(PASCAL_T_IDENTIFIER));
+    ParseResult ident_res = parse(in, identifier);
+    free_combinator(identifier);
+
+    if (ident_res.is_success) {
+        ast_t* ident_ast = ident_res.value.ast;
+        InputState colon_state; save_input_state(in, &colon_state);
+        combinator_t* colon = token(match(":"));
+        ParseResult colon_res = parse(in, colon);
+        free_combinator(colon);
+        if (colon_res.is_success) {
+            free_ast(colon_res.value.ast);
+            ParseResult type_res = parse(in, vargs->type_parser);
+            if (!type_res.is_success) {
+                discard_failure(type_res);
+                free_ast(ident_ast);
+                restore_input_state(in, &start_state);
+                return fail_with_message("Expected variant tag type", in, &start_state, parser_name);
+            }
+            name_ast = ident_ast;
+            type_ast = type_res.value.ast;
+        } else {
+            discard_failure(colon_res);
+            restore_input_state(in, &colon_state);
+            type_ast = ident_ast;
+        }
+    } else {
+        discard_failure(ident_res);
+        restore_input_state(in, &start_state);
+        ParseResult type_res = parse(in, vargs->type_parser);
+        if (!type_res.is_success) {
+            return type_res;
+        }
+        type_ast = type_res.value.ast;
+    }
+
+    ast_t* tag_ast = new_ast();
+    tag_ast->typ = PASCAL_T_VARIANT_TAG;
+    tag_ast->sym = NULL;
+    tag_ast->child = NULL;
+    tag_ast->next = NULL;
+
+    ast_t* tail = NULL;
+    if (name_ast != NULL) {
+        tag_ast->child = name_ast;
+        tail = name_ast;
+        while (tail->next != NULL)
+            tail = tail->next;
+    }
+    if (type_ast != NULL) {
+        if (tag_ast->child == NULL)
+            tag_ast->child = type_ast;
+        else if (tail != NULL)
+            tail->next = type_ast;
+    }
+
+    set_ast_position(tag_ast, in);
+    return make_success(tag_ast);
+}
+
+static combinator_t* create_variant_tag_parser(combinator_t* type_parser) {
+    combinator_t* comb = new_combinator();
+    variant_tag_args* args = safe_malloc(sizeof(variant_tag_args));
+    args->type_parser = type_parser;
+    comb->fn = variant_tag_fn;
+    comb->args = args;
+    comb->type = COMB_VARIANT_TAG;
+    set_combinator_name(comb, "variant_tag");
+    return comb;
+}
+
+static combinator_t* create_variant_branch_parser(combinator_t** record_item_ref) {
+    combinator_t* label_atom = multi(new_combinator(), PASCAL_T_CASE_LABEL,
+        token(integer(PASCAL_T_INTEGER)),
+        token(char_literal(PASCAL_T_CHAR)),
+        token(char_code_literal(PASCAL_T_CHAR_CODE)),
+        token(pascal_string(PASCAL_T_STRING)),
+        token(pascal_identifier(PASCAL_T_IDENTIFIER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* label_list = seq(new_combinator(), PASCAL_T_CASE_LABEL_LIST,
+        sep_by(label_atom, token(match(","))),
+        NULL
+    );
+
+    combinator_t* inner_items = sep_end_by(lazy(record_item_ref), token(match(";")));
+    combinator_t* branch_fields = between(
+        token(match("(")),
+        token(match(")")),
+        optional(inner_items)
+    );
+
+    combinator_t* branch = seq(new_combinator(), PASCAL_T_VARIANT_BRANCH,
+        label_list,
+        token(match(":")),
+        optional(branch_fields),
+        NULL
+    );
+    set_combinator_name(branch, "variant_branch");
+    return branch;
+}
+
+typedef struct {
+    tag_t tag;
+    combinator_t* tag_parser;
+    combinator_t* branch_parser;
+} variant_part_args;
+
+static ParseResult variant_part_fn(input_t* in, void* args, char* parser_name) {
+    variant_part_args* pargs = (variant_part_args*)args;
+    InputState start_state; save_input_state(in, &start_state);
+
+    combinator_t* case_keyword = token(keyword_ci("case"));
+    ParseResult case_res = parse(in, case_keyword);
+    free_combinator(case_keyword);
+    if (!case_res.is_success) {
+        discard_failure(case_res);
+        restore_input_state(in, &start_state);
+        return make_failure_v2(in, parser_name, strdup("variant part"), NULL);
+    }
+    free_ast(case_res.value.ast);
+
+    ParseResult tag_res = parse(in, pargs->tag_parser);
+    if (!tag_res.is_success) {
+        discard_failure(tag_res);
+        restore_input_state(in, &start_state);
+        return fail_with_message("Expected variant selector", in, &start_state, parser_name);
+    }
+    ast_t* tag_ast = tag_res.value.ast;
+
+    combinator_t* of_keyword = token(keyword_ci("of"));
+    ParseResult of_res = parse(in, of_keyword);
+    free_combinator(of_keyword);
+    if (!of_res.is_success) {
+        discard_failure(of_res);
+        free_ast(tag_ast);
+        restore_input_state(in, &start_state);
+        return fail_with_message("Expected 'of' in variant part", in, &start_state, parser_name);
+    }
+    free_ast(of_res.value.ast);
+
+    combinator_t* branch_list = sep_end_by(lazy(&pargs->branch_parser), token(match(";")));
+    ParseResult branches_res = parse(in, branch_list);
+    free_combinator(branch_list);
+    if (!branches_res.is_success) {
+        discard_failure(branches_res);
+        free_ast(tag_ast);
+        restore_input_state(in, &start_state);
+        return fail_with_message("Expected variant branch", in, &start_state, parser_name);
+    }
+    ast_t* branches_ast = branches_res.value.ast;
+    if (branches_ast == ast_nil) {
+        free_ast(tag_ast);
+        restore_input_state(in, &start_state);
+        return fail_with_message("Variant part requires at least one branch", in, &start_state, parser_name);
+    }
+
+    ast_t* variant_ast = new_ast();
+    variant_ast->typ = pargs->tag;
+    variant_ast->sym = NULL;
+    variant_ast->child = NULL;
+    variant_ast->next = NULL;
+
+    ast_t* tail = NULL;
+    if (tag_ast != NULL && tag_ast != ast_nil) {
+        variant_ast->child = tag_ast;
+        tail = tag_ast;
+        while (tail->next != NULL)
+            tail = tail->next;
+    }
+
+    if (branches_ast == ast_nil)
+        branches_ast = NULL;
+
+    if (branches_ast != NULL) {
+        if (variant_ast->child == NULL)
+            variant_ast->child = branches_ast;
+        else if (tail != NULL)
+            tail->next = branches_ast;
+    }
+
+    set_ast_position(variant_ast, in);
+    return make_success(variant_ast);
+}
+
 // Record type parser: RECORD field1: type1; field2: type2; ... END
 static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
-    InputState state;
-    save_input_state(in, &state);
+    InputState state; save_input_state(in, &state);
 
     bool is_packed = false;
     combinator_t* packed_keyword = token(keyword_ci("packed"));
@@ -403,7 +600,6 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     }
     free_combinator(packed_keyword);
 
-    // Parse "RECORD" keyword (case insensitive)
     combinator_t* record_keyword = token(keyword_ci("record"));
     ParseResult record_res = parse(in, record_keyword);
     if (!record_res.is_success) {
@@ -414,7 +610,6 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(record_res.value.ast);
     free_combinator(record_keyword);
 
-    // Field declaration: field_name[, field_name]* : Type
     combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* field_type = create_record_field_type_spec();
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
@@ -423,65 +618,85 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         field_type,
         NULL
     );
+    set_combinator_name(field_decl, "record_field_decl");
 
-    // Parse field list separated by semicolons (allow trailing semicolon)
-    combinator_t* field_list = sep_end_by(field_decl, token(match(";")));
-    ParseResult fields_res = parse(in, field_list);
+    combinator_t** record_item_ref = safe_malloc(sizeof(combinator_t*));
+    *record_item_ref = new_combinator();
+
+    combinator_t* variant_tag = create_variant_tag_parser(field_type);
+    combinator_t* variant_branch = create_variant_branch_parser(record_item_ref);
+
+    variant_part_args* variant_args = safe_malloc(sizeof(variant_part_args));
+    variant_args->tag = PASCAL_T_VARIANT_PART;
+    variant_args->tag_parser = variant_tag;
+    variant_args->branch_parser = variant_branch;
+
+    combinator_t* variant_part = new_combinator();
+    variant_part->fn = variant_part_fn;
+    variant_part->args = variant_args;
+    variant_part->type = COMB_VARIANT_PART;
+    set_combinator_name(variant_part, "variant_part");
+
+    multi(*record_item_ref, PASCAL_T_NONE,
+        variant_part,
+        field_decl,
+        NULL
+    );
+
+    combinator_t* record_items = sep_end_by(lazy_owned(record_item_ref), token(match(";")));
+    ParseResult items_res = parse(in, record_items);
     ast_t* fields_ast = NULL;
-    if (fields_res.is_success) {
-        fields_ast = fields_res.value.ast;
+    if (items_res.is_success) {
+        fields_ast = (items_res.value.ast == ast_nil) ? NULL : items_res.value.ast;
     } else {
-        discard_failure(fields_res);
+        discard_failure(items_res);
     }
-    // Note: Empty record is allowed in Pascal, so we don't require fields
-    free_combinator(field_list);
 
-    // Skip any additional record content (methods, variant parts, attributes, etc.) until the closing END.
+    free_combinator(record_items);
+    free(record_item_ref);
+
+    // Skip additional content until END (methods, attributes, etc.)
     combinator_t* end_keyword = token(keyword_ci("end"));
     combinator_t* skip_end_delimiter = token(keyword_ci("end"));
     combinator_t* skip_to_end = until(skip_end_delimiter, PASCAL_T_NONE);
     ParseResult skip_res = parse(in, skip_to_end);
     if (skip_res.is_success) {
-        if (skip_res.value.ast != ast_nil) {
+        if (skip_res.value.ast != ast_nil)
             free_ast(skip_res.value.ast);
-        }
     } else {
         discard_failure(skip_res);
-        if (fields_ast) free_ast(fields_ast);
+        if (fields_ast != NULL)
+            free_ast(fields_ast);
         free_combinator(skip_to_end);
         free_combinator(end_keyword);
         return fail_with_message("Failed to parse record body", in, &state, parser_name);
     }
     free_combinator(skip_to_end);
 
-    // Parse "END" keyword
     ParseResult end_res = parse(in, end_keyword);
     if (!end_res.is_success) {
         discard_failure(end_res);
-        if (fields_ast) free_ast(fields_ast);
+        if (fields_ast != NULL)
+            free_ast(fields_ast);
         free_combinator(end_keyword);
         return fail_with_message("Expected 'end' after record fields", in, &state, parser_name);
     }
     free_ast(end_res.value.ast);
     free_combinator(end_keyword);
 
-    // Optional trailing directives such as "deprecated" or "align" before the terminating semicolon.
     InputState directive_state; save_input_state(in, &directive_state);
     combinator_t* skip_semicolon_delim = token(match(";"));
     combinator_t* skip_to_semicolon = until(skip_semicolon_delim, PASCAL_T_NONE);
     ParseResult directive_res = parse(in, skip_to_semicolon);
     if (directive_res.is_success) {
-        if (directive_res.value.ast != ast_nil) {
+        if (directive_res.value.ast != ast_nil)
             free_ast(directive_res.value.ast);
-        }
-        // The parser now sits at the semicolon (if present). Leave it for the caller to consume.
     } else {
         restore_input_state(in, &directive_state);
         discard_failure(directive_res);
     }
     free_combinator(skip_to_semicolon);
 
-    // Build AST
     ast_t* record_ast = new_ast();
     record_ast->typ = pargs->tag;
     record_ast->sym = is_packed ? sym_lookup("packed") : NULL;
