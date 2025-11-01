@@ -244,6 +244,7 @@ ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char*
     err->context = create_error_context(in, err->line, err->col, err->index);
     err->cause = NULL;
     err->partial_ast = NULL;
+    err->committed = false;
     return (ParseResult){ .is_success = false, .value.error = err };
 }
 
@@ -262,6 +263,7 @@ ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast
     err->partial_ast = partial_ast;
     err->parser_name = NULL;
     err->unexpected = NULL;
+    err->committed = false;
     return (ParseResult){ .is_success = false, .value.error = err };
 }
 
@@ -298,6 +300,7 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     new_err->parser_name = NULL;
     new_err->unexpected = NULL;
     new_err->context = original_error->context ? strdup(original_error->context) : NULL;
+    new_err->committed = original_error->committed;  // Preserve commit status
 
     return (ParseResult){ .is_success = false, .value.error = new_err };
 }
@@ -310,11 +313,13 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
         err->col = cause_error->col;
         err->index = cause_error->index;
         err->context = cause_error->context ? strdup(cause_error->context) : NULL;
+        err->committed = cause_error->committed;  // Preserve commit status
     } else {
         err->line = in ? in->line : 0;
         err->col = in ? in->col : 0;
         err->index = in ? in->start : -1;
         err->context = create_error_context(in, err->line, err->col, err->index);
+        err->committed = false;
     }
     err->message = message;
     err->cause = cause.value.error;
