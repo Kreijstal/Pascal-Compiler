@@ -1532,6 +1532,42 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     char buffer[128];
 
+    int left_is_string = (left_expr != NULL && left_expr->resolved_type == STRING_TYPE);
+    int right_is_string = (right_expr != NULL && right_expr->resolved_type == STRING_TYPE);
+    if (left_is_string && right_is_string)
+    {
+        const char *lhs_arg = current_arg_reg64(0);
+        const char *rhs_arg = current_arg_reg64(1);
+        if (lhs_arg == NULL || rhs_arg == NULL)
+        {
+            free_reg(get_reg_stack(), right_reg);
+            free_reg(get_reg_stack(), left_reg);
+            if (relop_type != NULL)
+                *relop_type = relop_kind;
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", right_reg->bit_64, rhs_arg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", left_reg->bit_64, lhs_arg);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tgpc_string_compare\n");
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", RETURN_REG_32, left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        free_arg_regs();
+
+        free_reg(get_reg_stack(), right_reg);
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), left_reg);
+
+        if (relop_type != NULL)
+            *relop_type = relop_kind;
+        return inst_list;
+    }
+
     if (relop_kind == IN)
     {
         if (relop_type != NULL)
