@@ -16,6 +16,8 @@
 #include <unistd.h>
 #endif
 
+int64_t gpc_current_exception = 0;
+
 typedef struct GPCTextFile
 {
     FILE *handle;

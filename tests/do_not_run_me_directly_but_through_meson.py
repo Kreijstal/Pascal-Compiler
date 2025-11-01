@@ -951,6 +951,37 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(result.stdout, "112\n1\n3\n")
 
+    def test_exception_flow(self):
+        """Exercise raise statements with try/except/finally control flow."""
+        input_file = os.path.join(TEST_CASES_DIR, "exception_flow.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "exception_flow.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "exception_flow")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_output = (
+            "outer-try\n"
+            "inner-try\n"
+            "inner-finally\n"
+            "outer-except\n"
+            "rethrow-setup\n"
+            "inner-except\n"
+            "outer-reraise\n"
+            "convert-exception\n"
+            "final-handler\n"
+            "111\n"
+        )
+        self.assertEqual(result.stdout, expected_output)
+
     def test_real_arithmetic_program(self):
         """Compiles and executes a program exercising REAL arithmetic and IO."""
         input_file = os.path.join(TEST_CASES_DIR, "real_arithmetic.p")

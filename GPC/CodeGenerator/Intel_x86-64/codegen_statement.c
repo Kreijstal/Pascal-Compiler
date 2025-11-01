@@ -30,6 +30,8 @@ static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_
 static int codegen_push_except(CodeGenContext *ctx, const char *label);
 static void codegen_pop_except(CodeGenContext *ctx);
 static const char *codegen_current_except_label(const CodeGenContext *ctx);
+static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
+    CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg);
 static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
@@ -138,6 +140,25 @@ static ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, CodeGen
     }
 
     return inst_list;
+}
+
+static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
+    CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg)
+{
+    if (ctx == NULL || exc_expr == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (!codegen_type_uses_qword(exc_expr->resolved_type))
+    {
+        if (codegen_expr_is_signed(exc_expr))
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+        else
+            inst_list = codegen_zero_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_32);
+    }
+
+    char buffer[96];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, gpc_current_exception(%%rip)\n", value_reg->bit_64);
+    return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
@@ -2476,17 +2497,33 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
     struct Expression *exc_expr = stmt->stmt_data.raise_data.exception_expr;
     const char *except_label = codegen_current_except_label(ctx);
 
+    Register_t *value_reg = NULL;
+    int stored_exception = 0;
+
+    if (exc_expr != NULL)
+    {
+        inst_list = codegen_expr_with_result(exc_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+            return inst_list;
+        inst_list = codegen_store_exception_value(inst_list, ctx, exc_expr, value_reg);
+        stored_exception = 1;
+        free_reg(get_reg_stack(), value_reg);
+        value_reg = NULL;
+    }
+
     if (except_label != NULL)
     {
-        if (exc_expr != NULL)
-            inst_list = codegen_expr(exc_expr, inst_list, ctx);
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label);
         return inst_list;
     }
 
-    if (codegen_has_finally(ctx))
+    if (!stored_exception)
+        inst_list = add_inst(inst_list, "\tmovq\t$0, gpc_current_exception(%rip)\n");
+
+    char after_label[18];
+    int need_after_label = codegen_has_finally(ctx);
+    if (need_after_label)
     {
-        char after_label[18];
         gen_label(after_label, sizeof(after_label), ctx);
         inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, after_label);
 
@@ -2495,12 +2532,15 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
         inst_list = add_inst(inst_list, buffer);
     }
 
-    if (exc_expr != NULL)
-        inst_list = codegen_expr(exc_expr, inst_list, ctx);
+    char buffer[96];
+    if (codegen_target_is_windows())
+        snprintf(buffer, sizeof(buffer), "\tmovq\tgpc_current_exception(%%rip), %%rcx\n");
     else
-        inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+        snprintf(buffer, sizeof(buffer), "\tmovq\tgpc_current_exception(%%rip), %%rdi\n");
+    inst_list = add_inst(inst_list, buffer);
 
-    inst_list = add_inst(inst_list, "\tcall\tgpc_raise\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_raise");
+    free_arg_regs();
     inst_list = add_inst(inst_list, "\tud2\n");
     return inst_list;
 }
