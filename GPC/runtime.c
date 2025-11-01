@@ -764,6 +764,18 @@ void gpc_move(void *dest, const void *src, size_t count)
     memmove(dest, src, count);
 }
 
+char *gpc_string_from_char(int value)
+{
+    char *result = (char *)malloc(2);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+
+    result[0] = (char)(unsigned char)value;
+    result[1] = '\0';
+    gpc_string_register_allocation(result);
+    return result;
+}
+
 char *gpc_string_concat(const char *lhs, const char *rhs)
 {
     if (lhs == NULL)

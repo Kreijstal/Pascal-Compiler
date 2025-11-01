@@ -275,6 +275,10 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
+static ListNode_t *gencode_string_from_char(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
+static ListNode_t *gencode_eval_string_operand(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
 ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *right,
     ListNode_t *inst_list, CodeGenContext *ctx);
@@ -481,6 +485,45 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
+static ListNode_t *gencode_string_from_char(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (node == NULL || node->expr == NULL || inst_list == NULL || ctx == NULL || target_reg == NULL)
+        return inst_list;
+
+    inst_list = gencode_expr_tree(node, inst_list, ctx, target_reg);
+
+    const char *source_reg = select_register_name(target_reg, CHAR_TYPE);
+    if (source_reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", source_reg, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_from_char\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, target_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+
+    return inst_list;
+}
+
+static ListNode_t *gencode_eval_string_operand(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (node == NULL || node->expr == NULL)
+        return inst_list;
+
+    if (node->expr->resolved_type == CHAR_TYPE)
+        return gencode_string_from_char(node, inst_list, ctx, target_reg);
+
+    return gencode_expr_tree(node, inst_list, ctx, target_reg);
+}
+
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg)
 {
@@ -490,14 +533,17 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     char buffer[128];
     Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
 
+    int right_is_char = (node->right_expr->expr != NULL &&
+        node->right_expr->expr->resolved_type == CHAR_TYPE);
+
     if (rhs_reg == NULL)
     {
         StackNode_t *spill_loc = add_l_t("str_concat_rhs");
-        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
+        inst_list = gencode_eval_string_operand(node->right_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
-        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = gencode_eval_string_operand(node->left_expr, inst_list, ctx, target_reg);
 
         if (codegen_target_is_windows())
         {
@@ -516,8 +562,23 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     }
     else
     {
-        inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
+        inst_list = gencode_eval_string_operand(node->left_expr, inst_list, ctx, target_reg);
+
+        StackNode_t *lhs_spill = NULL;
+        if (right_is_char)
+        {
+            lhs_spill = add_l_t("str_concat_lhs");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, lhs_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        inst_list = gencode_eval_string_operand(node->right_expr, inst_list, ctx, rhs_reg);
+
+        if (lhs_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", lhs_spill->offset, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         if (codegen_target_is_windows())
         {
