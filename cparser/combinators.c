@@ -34,6 +34,7 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name);
 static ParseResult succeed_fn(input_t * in, void * args, char* parser_name);
 static ParseResult map_fn(input_t * in, void * args, char* parser_name);
 static ParseResult errmap_fn(input_t * in, void * args, char* parser_name);
+static ParseResult commit_fn(input_t * in, void * args, char* parser_name);
 static ParseResult many_fn(input_t * in, void * args, char* parser_name);
 static ParseResult optional_fn(input_t * in, void * args, char* parser_name);
 
@@ -312,6 +313,16 @@ static ParseResult errmap_fn(input_t * in, void * args, char* parser_name) {
     return res;
 }
 
+static ParseResult commit_fn(input_t * in, void * args, char* parser_name) {
+    combinator_t* p = (combinator_t*)args;
+    ParseResult res = parse(in, p);
+    if (!res.is_success) {
+        // Mark the error as committed to prevent backtracking
+        res.value.error->committed = true;
+    }
+    return res;
+}
+
 static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
     combinator_t* p = (combinator_t*)args;
     ast_t* head = NULL;
@@ -449,6 +460,11 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
             if (has_best) {
                 free_error(best_res.value.error);
             }
+            return res;
+        }
+
+        // Check if this error was committed - if so, stop trying alternatives
+        if (res.value.error->committed) {
             return res;
         }
 
@@ -748,6 +764,16 @@ combinator_t * errmap(combinator_t* p, err_map_func func) {
     comb->type = COMB_ERRMAP;
     comb->fn = errmap_fn;
     comb->args = (void *) args;
+    return comb;
+}
+
+combinator_t * commit(combinator_t* p) {
+    combinator_t * comb = new_combinator();
+    int ret = asprintf(&comb->name, "commit(%s)", p->name ? p->name : "unnamed_parser");
+    (void)ret;
+    comb->type = COMB_COMMIT;
+    comb->fn = commit_fn;
+    comb->args = (void *) p;
     return comb;
 }
 
