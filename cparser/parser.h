@@ -18,6 +18,7 @@ typedef struct ast_t ast_t;
 typedef struct combinator_t combinator_t;
 typedef struct input_t input_t;
 typedef struct ParseResult ParseResult;
+typedef struct memo_table memo_table_t;
 
 // AST node types
 typedef unsigned int tag_t;
@@ -48,6 +49,7 @@ struct input_t {
    int start;
    int line;
    int col;
+   memo_table_t* memo;
 };
 
 // --- Parse Result & Error Structs ---
@@ -93,6 +95,7 @@ struct combinator_t {
     void * args;
     void * extra_to_free;
     char* name;
+    size_t memo_id;
 };
 
 // For flatMap
