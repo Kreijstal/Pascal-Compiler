@@ -497,6 +497,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType(symtab, real_name, HASHVAR_REAL);
         free(real_name);
     }
+    char *double_name = strdup("double");
+    if (double_name != NULL) {
+        AddBuiltinType(symtab, double_name, HASHVAR_REAL);
+        free(double_name);
+    }
     char *single_name = strdup("single");
     if (single_name != NULL) {
         AddBuiltinType(symtab, single_name, HASHVAR_REAL);
@@ -568,6 +573,30 @@ void semcheck_add_builtins(SymTab_t *symtab)
     if (dispose_name != NULL) {
         AddBuiltinProc(symtab, dispose_name, NULL);
         free(dispose_name);
+    }
+
+    /* Create parameter list for Val procedure: (str: string; var num: numeric; var code: integer) */
+    ListNode_t *val_args = NULL;
+    
+    /* First parameter: string */
+    ListNode_t *str_id = CreateListNode(strdup("str"), LIST_STRING);
+    Tree_t *str_param = mk_vardecl(0, str_id, STRING_TYPE, NULL, 0, 0, NULL);
+    val_args = CreateListNode(str_param, LIST_TREE);
+    
+    /* Second parameter: var numeric (can be integer, longint, or real) */
+    ListNode_t *num_id = CreateListNode(strdup("num"), LIST_STRING);
+    Tree_t *num_param = mk_vardecl(0, num_id, BUILTIN_ANY_TYPE, NULL, 1, 0, NULL);
+    val_args->next = CreateListNode(num_param, LIST_TREE);
+    
+    /* Third parameter: var integer */
+    ListNode_t *code_id = CreateListNode(strdup("code"), LIST_STRING);
+    Tree_t *code_param = mk_vardecl(0, code_id, INT_TYPE, NULL, 1, 0, NULL);
+    val_args->next->next = CreateListNode(code_param, LIST_TREE);
+    
+    char *val_name = strdup("Val");
+    if (val_name != NULL) {
+        AddBuiltinProc(symtab, val_name, val_args);
+        free(val_name);
     }
 
     char *length_name = strdup("Length");

@@ -1160,6 +1160,17 @@ static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    /* Use standard argument passing for Val procedure */
+    inst_list = codegen_pass_arguments(stmt->stmt_data.procedure_call_data.expr_args, inst_list, ctx, stmt->stmt_data.procedure_call_data.resolved_proc);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    char buffer[50];
+    snprintf(buffer, sizeof(buffer), "\tcall\tVal\n");
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_dispose(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -1493,7 +1504,16 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
+    {
+        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, stmt->stmt_data.procedure_call_data.resolved_proc);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)

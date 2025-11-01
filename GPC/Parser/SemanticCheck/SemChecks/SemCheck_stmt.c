@@ -114,6 +114,9 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         builtin_node->referenced += 1;
         if (handled != NULL)
             *handled = 1;
+        
+
+        
         return handler(symtab, stmt, max_scope_lev);
     }
 
@@ -375,6 +378,51 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
     {
         fprintf(stderr, "Error on line %d, Dispose expects a pointer variable argument.\\n", stmt->line_num);
         return ++return_val;
+    }
+
+    return return_val;
+}
+
+/* Semantic check for Val procedure */
+static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Val expects exactly three arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    struct Expression *str_expr = (struct Expression *)args->cur;
+    struct Expression *num_expr = (struct Expression *)args->next->cur;
+    struct Expression *code_expr = (struct Expression *)args->next->next->cur;
+
+    int str_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&str_type, symtab, str_expr, max_scope_lev, NO_MUTATE);
+    if (str_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Val first argument must be a string.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    int num_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&num_type, symtab, num_expr, max_scope_lev, MUTATE);
+    if (num_type != INT_TYPE && num_type != LONGINT_TYPE && num_type != REAL_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Val second argument must be a numeric variable.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    int code_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
+    if (code_type != INT_TYPE && code_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Val third argument must be an integer variable.\n", stmt->line_num);
+        ++return_val;
     }
 
     return return_val;
@@ -761,6 +809,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Dispose",
         semcheck_builtin_dispose, max_scope_lev, &handled_builtin);
+
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Val",
+        semcheck_builtin_val, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

@@ -14,6 +14,7 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <limits.h>
 #endif
 
 int64_t gpc_current_exception = 0;
@@ -394,6 +395,41 @@ void gpc_write_real(GPCTextFile *file, int width, int precision, int64_t value_b
         else
             fprintf(dest, "%.*f", precision, value);
     }
+}
+
+/* Val procedure implementation */
+void Val(const char *str, void *num_ptr, int *code_ptr)
+{
+    char *endptr;
+    
+    if (str == NULL || num_ptr == NULL || code_ptr == NULL) {
+        if (code_ptr != NULL) *code_ptr = 1;
+        return;
+    }
+    
+    *code_ptr = 0; /* Default to success */
+    
+    /* Try integer conversion first */
+    long long int_val = strtoll(str, &endptr, 10);
+    if (endptr != str && *endptr == '\0') {
+        /* Successfully parsed as integer */
+        if (int_val >= INT_MIN && int_val <= INT_MAX) {
+            *(int *)num_ptr = (int)int_val;
+        } else {
+            *(int64_t *)num_ptr = int_val;
+        }
+        return;
+    }
+    
+    /* Try real conversion */
+    double real_val = strtod(str, &endptr);
+    if (endptr != str && *endptr == '\0') {
+        *(double *)num_ptr = real_val;
+        return;
+    }
+    
+    /* Conversion failed */
+    *code_ptr = 1;
 }
 
 void gpc_raise(int64_t value)

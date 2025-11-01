@@ -14,6 +14,7 @@
 #define REAL_TYPE           2
 #define LONGINT_TYPE        3
 #define STRING_TYPE         4
+#define DOUBLE_TYPE         35
 #define BUILTIN_ANY_TYPE    5
 #define RECORD_TYPE         34
 #define CHAR_TYPE           28
