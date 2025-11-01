@@ -217,13 +217,23 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
+static struct ClassType *convert_class_type(ast_t *class_node);
+static struct ClassMethod *convert_method_decl_node(ast_t *method_node, int is_constructor, int is_destructor);
+static struct ClassProperty *convert_property_decl_node(ast_t *property_node);
+static enum ClassVisibility convert_access_modifier(ast_t *modifier_node, enum ClassVisibility current);
+static void free_class_method(struct ClassMethod *method);
+static void free_class_property(struct ClassProperty *property);
+static void free_class_type(struct ClassType *class_type);
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
-                             struct RecordType **record_out, TypeInfo *type_info) {
+                             struct RecordType **record_out, TypeInfo *type_info,
+                             struct ClassType **class_out) {
     if (type_id_out != NULL)
         *type_id_out = NULL;
     if (record_out != NULL)
         *record_out = NULL;
+    if (class_out != NULL)
+        *class_out = NULL;
     if (type_info != NULL) {
         type_info->is_array = 0;
         type_info->start = 0;
@@ -322,7 +332,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     char *nested_id = NULL;
                     struct RecordType *nested_record = NULL;
                     TypeInfo nested_info = {0};
-                    int mapped = convert_type_spec(element_node, &nested_id, &nested_record, &nested_info);
+                    int mapped = convert_type_spec(element_node, &nested_id, &nested_record, &nested_info, NULL);
                     type_info->element_type = mapped;
                     if (type_info->element_type_id == NULL)
                         type_info->element_type_id = nested_id;
@@ -405,6 +415,12 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return UNKNOWN_TYPE;
     }
 
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
+        if (class_out != NULL)
+            *class_out = convert_class_type(spec_node);
+        return UNKNOWN_TYPE;
+    }
+
     return UNKNOWN_TYPE;
 }
 
@@ -422,6 +438,7 @@ static ListNode_t *convert_identifier_list(ast_t **cursor) {
 }
 
 static ListNode_t *convert_field_decl(ast_t *field_decl_node);
+static ListNode_t *convert_param(ast_t *param_node);
 static void convert_record_members(ast_t *node, ListBuilder *builder);
 static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields);
 static struct VariantBranch *convert_variant_branch(ast_t *branch_node);
@@ -449,7 +466,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     int field_type = UNKNOWN_TYPE;
 
     if (cursor != NULL) {
-        field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+        field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info, NULL);
     } else if (names != NULL) {
         char *candidate = pop_last_identifier(&names);
         if (candidate != NULL) {
@@ -519,6 +536,405 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     destroy_type_info_contents(&field_info);
 
     return list_builder_finish(&result_builder);
+}
+
+static struct ClassMethod *convert_method_decl_node(ast_t *method_node, int is_constructor, int is_destructor)
+{
+    if (method_node == NULL)
+        return NULL;
+
+    ast_t *cursor = method_node->child;
+    int is_class_method = 0;
+
+    if (cursor != NULL && cursor->typ == PASCAL_T_IDENTIFIER && cursor->sym != NULL &&
+        strcasecmp(cursor->sym->name, "class") == 0)
+    {
+        is_class_method = 1;
+        cursor = cursor->next;
+    }
+
+    char *name = dup_symbol(cursor);
+    if (name == NULL)
+        return NULL;
+
+    cursor = cursor != NULL ? cursor->next : NULL;
+
+    ListNode_t *params = NULL;
+    while (cursor != NULL && cursor->typ == PASCAL_T_PARAM)
+    {
+        ListNode_t *param_nodes = convert_param(cursor);
+        extend_list(&params, param_nodes);
+        cursor = cursor->next;
+    }
+
+    int return_type = UNKNOWN_TYPE;
+    char *return_type_id = NULL;
+
+    if (!is_constructor && !is_destructor && cursor != NULL)
+    {
+        if (cursor->typ == PASCAL_T_TYPE_SPEC)
+        {
+            struct RecordType *dummy_record = NULL;
+            TypeInfo info;
+            memset(&info, 0, sizeof(TypeInfo));
+            return_type = convert_type_spec(cursor, &return_type_id, &dummy_record, &info, NULL);
+            destroy_type_info_contents(&info);
+            if (dummy_record != NULL)
+                destroy_record_type(dummy_record);
+        }
+        else if (cursor->typ == PASCAL_T_IDENTIFIER)
+        {
+            char *dup = dup_symbol(cursor);
+            if (dup != NULL)
+            {
+                int mapped = map_type_name(dup, &return_type_id);
+                if (mapped != UNKNOWN_TYPE)
+                {
+                    return_type = mapped;
+                    free(dup);
+                }
+                else if (return_type_id == NULL)
+                {
+                    return_type_id = dup;
+                }
+                else
+                {
+                    free(dup);
+                }
+            }
+        }
+    }
+
+    struct ClassMethod *method = (struct ClassMethod *)malloc(sizeof(struct ClassMethod));
+    if (method == NULL)
+    {
+        free(name);
+        if (return_type_id != NULL)
+            free(return_type_id);
+        if (params != NULL)
+            destroy_list(params);
+        return NULL;
+    }
+
+    method->name = name;
+    method->is_class_method = is_class_method;
+    method->is_constructor = is_constructor;
+    method->is_destructor = is_destructor;
+    method->is_function = (!is_constructor && !is_destructor &&
+                          (return_type != UNKNOWN_TYPE || return_type_id != NULL));
+    method->return_type = return_type;
+    method->return_type_id = return_type_id;
+    method->params = params;
+    method->is_override = 0;
+
+    while (cursor != NULL)
+    {
+        ast_t *node = cursor;
+        if (node->typ == PASCAL_T_NONE && node->child != NULL)
+            node = node->child;
+
+        if (node != NULL && node->typ == PASCAL_T_IDENTIFIER && node->sym != NULL &&
+            strcasecmp(node->sym->name, "override") == 0)
+        {
+            method->is_override = 1;
+        }
+
+        cursor = cursor->next;
+    }
+
+    return method;
+}
+
+static struct ClassProperty *convert_property_decl_node(ast_t *property_node)
+{
+    if (property_node == NULL)
+        return NULL;
+
+    ast_t *cursor = property_node->child;
+    char *name = dup_symbol(cursor);
+    if (name == NULL)
+        return NULL;
+
+    cursor = cursor != NULL ? cursor->next : NULL;
+
+    char *type_id = NULL;
+    if (cursor != NULL)
+    {
+        if (cursor->typ == PASCAL_T_TYPE_SPEC)
+        {
+            struct RecordType *dummy_record = NULL;
+            TypeInfo info;
+            memset(&info, 0, sizeof(TypeInfo));
+            convert_type_spec(cursor, &type_id, &dummy_record, &info, NULL);
+            destroy_type_info_contents(&info);
+            if (dummy_record != NULL)
+                destroy_record_type(dummy_record);
+        }
+        else
+        {
+            type_id = dup_symbol(cursor);
+        }
+        cursor = cursor->next;
+    }
+
+    char *read_accessor = NULL;
+    char *write_accessor = NULL;
+
+    if (cursor != NULL)
+    {
+        read_accessor = dup_symbol(cursor);
+        cursor = cursor->next;
+    }
+    if (cursor != NULL)
+    {
+        write_accessor = dup_symbol(cursor);
+        cursor = cursor->next;
+    }
+
+    struct ClassProperty *property = (struct ClassProperty *)malloc(sizeof(struct ClassProperty));
+    if (property == NULL)
+    {
+        free(name);
+        if (type_id != NULL)
+            free(type_id);
+        if (read_accessor != NULL)
+            free(read_accessor);
+        if (write_accessor != NULL)
+            free(write_accessor);
+        return NULL;
+    }
+
+    property->name = name;
+    property->type_id = type_id;
+    property->read_accessor = read_accessor;
+    property->write_accessor = write_accessor;
+    return property;
+}
+
+static void free_class_method(struct ClassMethod *method)
+{
+    if (method == NULL)
+        return;
+
+    if (method->name != NULL)
+        free(method->name);
+    if (method->return_type_id != NULL)
+        free(method->return_type_id);
+    if (method->params != NULL)
+        destroy_list(method->params);
+    free(method);
+}
+
+static void free_class_property(struct ClassProperty *property)
+{
+    if (property == NULL)
+        return;
+
+    if (property->name != NULL)
+        free(property->name);
+    if (property->type_id != NULL)
+        free(property->type_id);
+    if (property->read_accessor != NULL)
+        free(property->read_accessor);
+    if (property->write_accessor != NULL)
+        free(property->write_accessor);
+    free(property);
+}
+
+static void free_class_type(struct ClassType *class_type)
+{
+    if (class_type == NULL)
+        return;
+
+    if (class_type->ancestor_id != NULL)
+        free(class_type->ancestor_id);
+    if (class_type->members != NULL)
+        destroy_list(class_type->members);
+    if (class_type->record != NULL)
+        destroy_record_type(class_type->record);
+    free(class_type);
+}
+
+static struct ClassType *convert_class_type(ast_t *class_node)
+{
+    if (class_node == NULL)
+        return NULL;
+
+    struct ClassType *class_type = (struct ClassType *)calloc(1, sizeof(struct ClassType));
+    if (class_type == NULL)
+        return NULL;
+
+    struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
+    if (record == NULL)
+    {
+        free(class_type);
+        return NULL;
+    }
+    record->fields = NULL;
+    class_type->record = record;
+
+    ListBuilder field_builder;
+    list_builder_init(&field_builder);
+
+    ListBuilder member_builder;
+    list_builder_init(&member_builder);
+
+    enum ClassVisibility visibility = CLASS_VISIBILITY_PUBLIC;
+
+    ast_t *cursor = class_node->child;
+
+    if (cursor != NULL && cursor->typ == PASCAL_T_IDENTIFIER)
+    {
+        class_type->ancestor_id = dup_symbol(cursor);
+        cursor = cursor->next;
+    }
+
+    while (cursor != NULL)
+    {
+        ast_t *node = cursor;
+        if (node->typ == PASCAL_T_NONE && node->child != NULL)
+            node = node->child;
+
+        if (node == NULL)
+        {
+            cursor = cursor->next;
+            continue;
+        }
+
+        if (node->typ == PASCAL_T_ACCESS_MODIFIER)
+        {
+            ast_t *modifier_token = node->child != NULL ? node->child : node;
+            visibility = convert_access_modifier(modifier_token, visibility);
+        }
+        else if (node->typ == PASCAL_T_CLASS_MEMBER)
+        {
+            ast_t *member_node = node->child;
+            if (member_node == NULL)
+            {
+                cursor = cursor->next;
+                continue;
+            }
+
+            switch (member_node->typ)
+            {
+                case PASCAL_T_FIELD_DECL:
+                {
+                    ListNode_t *fields = convert_field_decl(member_node);
+                    if (fields != NULL)
+                    {
+                        list_builder_extend(&field_builder, fields);
+                        ListNode_t *field_cursor = fields;
+                        while (field_cursor != NULL)
+                        {
+                            struct RecordField *field = (struct RecordField *)field_cursor->cur;
+                            if (field != NULL)
+                            {
+                                struct ClassMember *member = (struct ClassMember *)malloc(sizeof(struct ClassMember));
+                                if (member != NULL)
+                                {
+                                    member->kind = CLASS_MEMBER_FIELD;
+                                    member->visibility = visibility;
+                                    member->info.field = field;
+                                    list_builder_append(&member_builder, member, LIST_CLASS_MEMBER);
+                                }
+                            }
+                            field_cursor = field_cursor->next;
+                        }
+                    }
+                    break;
+                }
+                case PASCAL_T_METHOD_DECL:
+                {
+                    struct ClassMethod *method = convert_method_decl_node(member_node, 0, 0);
+                    if (method != NULL)
+                    {
+                        struct ClassMember *member = (struct ClassMember *)malloc(sizeof(struct ClassMember));
+                        if (member != NULL)
+                        {
+                            member->kind = CLASS_MEMBER_METHOD;
+                            member->visibility = visibility;
+                            member->info.method = method;
+                            list_builder_append(&member_builder, member, LIST_CLASS_MEMBER);
+                        }
+                        else
+                        {
+                            free_class_method(method);
+                        }
+                    }
+                    break;
+                }
+                case PASCAL_T_CONSTRUCTOR_DECL:
+                {
+                    struct ClassMethod *method = convert_method_decl_node(member_node, 1, 0);
+                    if (method != NULL)
+                    {
+                        struct ClassMember *member = (struct ClassMember *)malloc(sizeof(struct ClassMember));
+                        if (member != NULL)
+                        {
+                            member->kind = CLASS_MEMBER_METHOD;
+                            member->visibility = visibility;
+                            member->info.method = method;
+                            list_builder_append(&member_builder, member, LIST_CLASS_MEMBER);
+                        }
+                        else
+                        {
+                            free_class_method(method);
+                        }
+                    }
+                    break;
+                }
+                case PASCAL_T_DESTRUCTOR_DECL:
+                {
+                    struct ClassMethod *method = convert_method_decl_node(member_node, 0, 1);
+                    if (method != NULL)
+                    {
+                        struct ClassMember *member = (struct ClassMember *)malloc(sizeof(struct ClassMember));
+                        if (member != NULL)
+                        {
+                            member->kind = CLASS_MEMBER_METHOD;
+                            member->visibility = visibility;
+                            member->info.method = method;
+                            list_builder_append(&member_builder, member, LIST_CLASS_MEMBER);
+                        }
+                        else
+                        {
+                            free_class_method(method);
+                        }
+                    }
+                    break;
+                }
+                case PASCAL_T_PROPERTY_DECL:
+                {
+                    struct ClassProperty *property = convert_property_decl_node(member_node);
+                    if (property != NULL)
+                    {
+                        struct ClassMember *member = (struct ClassMember *)malloc(sizeof(struct ClassMember));
+                        if (member != NULL)
+                        {
+                            member->kind = CLASS_MEMBER_PROPERTY;
+                            member->visibility = visibility;
+                            member->info.property = property;
+                            list_builder_append(&member_builder, member, LIST_CLASS_MEMBER);
+                        }
+                        else
+                        {
+                            free_class_property(property);
+                        }
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        cursor = cursor->next;
+    }
+
+    class_type->record->fields = list_builder_finish(&field_builder);
+    class_type->members = list_builder_finish(&member_builder);
+
+    return class_type;
 }
 
 static ListNode_t *convert_variant_labels(ast_t *labels_node) {
@@ -599,7 +1015,7 @@ static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t 
         struct RecordType *tag_record = NULL;
         int tag_type = UNKNOWN_TYPE;
         if (type_cursor != NULL)
-            tag_type = convert_type_spec(type_cursor, &tag_type_id, &tag_record, NULL);
+            tag_type = convert_type_spec(type_cursor, &tag_type_id, &tag_record, NULL, NULL);
 
         if (tag_name != NULL) {
             struct RecordField *tag_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
@@ -694,6 +1110,24 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
     return record;
 }
 
+static enum ClassVisibility convert_access_modifier(ast_t *modifier_node, enum ClassVisibility current)
+{
+    if (modifier_node == NULL || modifier_node->sym == NULL || modifier_node->sym->name == NULL)
+        return current;
+
+    const char *name = modifier_node->sym->name;
+    if (strcasecmp(name, "private") == 0)
+        return CLASS_VISIBILITY_PRIVATE;
+    if (strcasecmp(name, "public") == 0)
+        return CLASS_VISIBILITY_PUBLIC;
+    if (strcasecmp(name, "protected") == 0)
+        return CLASS_VISIBILITY_PROTECTED;
+    if (strcasecmp(name, "published") == 0)
+        return CLASS_VISIBILITY_PUBLISHED;
+
+    return current;
+}
+
 static char *pop_last_identifier(ListNode_t **ids) {
     if (ids == NULL || *ids == NULL)
         return NULL;
@@ -746,7 +1180,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         return NULL;
     }
 
-    var_type = convert_type_spec(type_node, &type_id, NULL, NULL);
+    var_type = convert_type_spec(type_node, &type_id, NULL, NULL, NULL);
 
     ListBuilder result_builder;
     list_builder_init(&result_builder);
@@ -797,7 +1231,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     TypeInfo type_info = {0};
     ast_t *type_node = first_non_identifier;
     if (type_node != NULL && type_node->typ == PASCAL_T_TYPE_SPEC) {
-        var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+        var_type = convert_type_spec(type_node, &type_id, NULL, &type_info, NULL);
         cur = type_node->next;
     } else if (type_node != NULL && type_node->typ == PASCAL_T_IDENTIFIER && type_node->next == NULL) {
         char *type_name = dup_symbol(type_node);
@@ -818,7 +1252,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         while (search != NULL && search->typ == PASCAL_T_IDENTIFIER)
             search = search->next;
         if (search != NULL && search->typ == PASCAL_T_TYPE_SPEC) {
-            var_type = convert_type_spec(search, &type_id, NULL, &type_info);
+            var_type = convert_type_spec(search, &type_id, NULL, &type_info, NULL);
         } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
             char *type_name = dup_symbol(search);
             if (type_name != NULL) {
@@ -1038,7 +1472,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     TypeInfo type_info = {0};
 
     if (cur != NULL && cur->typ == PASCAL_T_TYPE_SPEC) {
-        convert_type_spec(cur, &type_id, NULL, &type_info);
+        convert_type_spec(cur, &type_id, NULL, &type_info, NULL);
         cur = cur->next;
     }
 
@@ -1121,13 +1555,16 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
 
     char *type_id = NULL;
     struct RecordType *record_type = NULL;
+    struct ClassType *class_type = NULL;
     TypeInfo type_info = {0};
     int mapped_type = UNKNOWN_TYPE;
     if (spec_node != NULL)
-        mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
+        mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info, &class_type);
 
     Tree_t *decl = NULL;
-    if (record_type != NULL) {
+    if (class_type != NULL) {
+        decl = mk_class_type(type_decl_node->line, id, class_type);
+    } else if (record_type != NULL) {
         decl = mk_record_type(type_decl_node->line, id, record_type);
     } else if (type_info.is_array) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
@@ -1179,6 +1616,7 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     if (decl == NULL) {
         free(id);
         destroy_record_type(record_type);
+        free_class_type(class_type);
     }
 
     return decl;
@@ -1670,7 +2108,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         if (unwrapped_type != NULL)
         {
             target_type = convert_type_spec(unwrapped_type, &target_type_id,
-                &record_type, &type_info);
+                &record_type, &type_info, NULL);
             destroy_type_info_contents(&type_info);
             if (record_type != NULL)
             {
@@ -2230,7 +2668,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int return_type = UNKNOWN_TYPE;
 
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
-        return_type = convert_type_spec(cur->child, &return_type_id, NULL, NULL);
+        return_type = convert_type_spec(cur->child, &return_type_id, NULL, NULL, NULL);
         cur = cur->next;
     }
 

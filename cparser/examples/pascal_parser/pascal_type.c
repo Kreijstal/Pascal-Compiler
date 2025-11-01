@@ -9,6 +9,8 @@
 #include <ctype.h>
 #include <stdbool.h>
 
+static combinator_t* create_record_field_type_spec(void);
+
 static void set_combinator_name(combinator_t* comb, const char* name) {
     if (comb == NULL)
         return;
@@ -194,30 +196,24 @@ combinator_t* array_type(tag_t tag) {
     return comb;
 }
 
-static ast_t* build_class_ast(ast_t* ast) {
-    // ast is the result of the seq.
-    // children are: class_keyword, class_body, end_keyword
-    ast_t* class_body = ast->child->next;
+static ast_t* finalize_access_modifier(ast_t* ast) {
+    if (ast == NULL)
+        return NULL;
 
-    ast_t* class_node = new_ast();
-    class_node->typ = ast->typ;
-    class_node->child = copy_ast(class_body);
-    class_node->line = ast->line;
-    class_node->col = ast->col;
+    if (ast->sym == NULL && ast->child != NULL && ast->child != ast_nil && ast->child->sym != NULL)
+        ast->sym = sym_lookup(ast->child->sym->name);
 
-    free_ast(ast);
-    return class_node;
+    return ast;
 }
 
 combinator_t* class_type(tag_t tag) {
     // Field declaration: field_name: Type;
-    combinator_t* field_name = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* field_type = token(cident(PASCAL_T_IDENTIFIER)); // simplified type for now
+    combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+    combinator_t* field_type = create_record_field_type_spec();
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
-        field_name,
+        field_name_list,
         token(match(":")),
         field_type,
-        token(match(";")),
         NULL
     );
 
@@ -235,47 +231,44 @@ combinator_t* class_type(tag_t tag) {
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),
-            optional(token(match(";"))),
-            NULL
+        optional(left(
+            token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+            optional(token(match(";")))
         )),
         NULL
     );
 
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),
-            optional(token(match(";"))),
-            NULL
+        optional(left(
+            token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+            optional(token(match(";")))
         )),
         NULL
     );
 
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),
-            optional(token(match(";"))),
-            NULL
+        optional(left(
+            token(create_keyword_parser("override", PASCAL_T_IDENTIFIER)),
+            optional(token(match(";")))
         )),
         NULL
     );
 
     // Class operator declaration: operator Name; [override];
     combinator_t* class_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
-        optional(token(keyword_ci("class"))),
+        optional(token(create_keyword_parser("class", PASCAL_T_IDENTIFIER))),
         token(keyword_ci("operator")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
@@ -317,16 +310,19 @@ combinator_t* class_type(tag_t tag) {
     );
     set_combinator_name(class_member, "class_member");
 
-    // Skip comments and whitespace in class body
-    combinator_t* class_element = class_member;
+    // Skip comments, whitespace, and optional semicolons between members
+    combinator_t* class_element = left(class_member, optional(token(match(";"))));
 
     // Access sections: private, public, protected, published
-    combinator_t* access_keyword = multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
-        token(keyword_ci("private")),
-        token(keyword_ci("public")),
-        token(keyword_ci("protected")),
-        token(keyword_ci("published")),
-        NULL
+    combinator_t* access_keyword = map(
+        multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
+            token(create_keyword_parser("private", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("public", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("protected", PASCAL_T_IDENTIFIER)),
+            token(create_keyword_parser("published", PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        finalize_access_modifier
     );
 
     // Access section: just the access keyword (members will be parsed individually)
@@ -354,7 +350,7 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    return map(class_parser, build_class_ast);
+    return class_parser;
 }
 
 combinator_t* type_name(tag_t tag) {

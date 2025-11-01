@@ -14,7 +14,28 @@ enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CASE, STMT_WITH, STMT_TRY_FINALLY,
     STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
 
-enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
+enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DECL_CLASS };
+
+enum ClassVisibility
+{
+    CLASS_VISIBILITY_DEFAULT,
+    CLASS_VISIBILITY_PRIVATE,
+    CLASS_VISIBILITY_PUBLIC,
+    CLASS_VISIBILITY_PROTECTED,
+    CLASS_VISIBILITY_PUBLISHED
+};
+
+enum ClassMemberKind
+{
+    CLASS_MEMBER_FIELD,
+    CLASS_MEMBER_METHOD,
+    CLASS_MEMBER_PROPERTY
+};
+
+struct ClassMethod;
+struct ClassProperty;
+struct ClassMember;
+struct ClassType;
 
 struct TypeAlias
 {
@@ -59,6 +80,46 @@ struct RecordField
 struct RecordType
 {
     ListNode_t *fields;
+};
+
+struct ClassMethod
+{
+    char *name;
+    int is_class_method;
+    int is_constructor;
+    int is_destructor;
+    int is_function;
+    int return_type;
+    char *return_type_id;
+    ListNode_t *params; /* List of Tree_t* variable declarations */
+    int is_override;
+};
+
+struct ClassProperty
+{
+    char *name;
+    char *type_id;
+    char *read_accessor;
+    char *write_accessor;
+};
+
+struct ClassMember
+{
+    enum ClassMemberKind kind;
+    enum ClassVisibility visibility;
+    union
+    {
+        struct RecordField *field;
+        struct ClassMethod *method;
+        struct ClassProperty *property;
+    } info;
+};
+
+struct ClassType
+{
+    char *ancestor_id;
+    ListNode_t *members; /* List of ClassMember */
+    struct RecordType *record; /* Field layout for compatibility with records */
 };
 
 struct VariantBranch

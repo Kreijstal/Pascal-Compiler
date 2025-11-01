@@ -313,6 +313,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 var_type = HASHVAR_RECORD;
                 record_info = tree->tree_data.type_decl_data.info.record;
                 break;
+            case TYPE_DECL_CLASS:
+                var_type = HASHVAR_RECORD;
+                if (tree->tree_data.type_decl_data.info.class_type != NULL)
+                    record_info = tree->tree_data.type_decl_data.info.class_type->record;
+                break;
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;

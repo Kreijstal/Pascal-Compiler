@@ -17,6 +17,9 @@ static void print_variant_part(struct VariantPart *variant, FILE *f, int num_ind
 static void print_variant_branch(struct VariantBranch *branch, FILE *f, int num_indent);
 static void destroy_variant_part(struct VariantPart *variant);
 static void destroy_variant_branch(struct VariantBranch *branch);
+static void print_class_member(struct ClassMember *member, FILE *f, int num_indent);
+static void destroy_class_member(struct ClassMember *member);
+static void destroy_class_type(struct ClassType *class_type);
 static ListNode_t *clone_member_list(const ListNode_t *members);
 static struct RecordField *clone_record_field(const struct RecordField *field);
 static struct VariantBranch *clone_variant_branch_internal(const struct VariantBranch *branch);
@@ -62,6 +65,9 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
                 break;
             case LIST_VARIANT_BRANCH:
                 print_variant_branch((struct VariantBranch *)cur->cur, f, num_indent);
+                break;
+            case LIST_CLASS_MEMBER:
+                print_class_member((struct ClassMember *)cur->cur, f, num_indent);
                 break;
             default:
                 fprintf(stderr, "BAD TYPE IN list_print!\n");
@@ -150,6 +156,95 @@ static void print_variant_part(struct VariantPart *variant, FILE *f, int num_ind
     }
 }
 
+static const char *class_visibility_to_string(enum ClassVisibility visibility)
+{
+    switch (visibility)
+    {
+        case CLASS_VISIBILITY_PRIVATE:   return "private";
+        case CLASS_VISIBILITY_PUBLIC:    return "public";
+        case CLASS_VISIBILITY_PROTECTED: return "protected";
+        case CLASS_VISIBILITY_PUBLISHED: return "published";
+        default:                         return "default";
+    }
+}
+
+static void print_class_method(struct ClassMethod *method, FILE *f, int num_indent)
+{
+    if (method == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[METHOD:%s", method->name != NULL ? method->name : "<unnamed>");
+    if (method->is_constructor)
+        fprintf(f, " constructor");
+    if (method->is_destructor)
+        fprintf(f, " destructor");
+    if (method->is_class_method)
+        fprintf(f, " class");
+    if (method->is_override)
+        fprintf(f, " override");
+    if (method->is_function)
+    {
+        if (method->return_type_id != NULL)
+            fprintf(f, " return=%s", method->return_type_id);
+        else
+            fprintf(f, " return=%d", method->return_type);
+    }
+    fprintf(f, "]\n");
+
+    if (method->params != NULL)
+    {
+        print_indent(f, num_indent + 1);
+        fprintf(f, "[PARAMS]:\n");
+        list_print(method->params, f, num_indent + 2);
+    }
+}
+
+static void print_class_property(struct ClassProperty *property, FILE *f, int num_indent)
+{
+    if (property == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[PROPERTY:%s", property->name != NULL ? property->name : "<unnamed>");
+    if (property->type_id != NULL)
+        fprintf(f, " type=%s", property->type_id);
+    if (property->read_accessor != NULL)
+        fprintf(f, " read=%s", property->read_accessor);
+    if (property->write_accessor != NULL)
+        fprintf(f, " write=%s", property->write_accessor);
+    fprintf(f, "]\n");
+}
+
+static void print_class_member(struct ClassMember *member, FILE *f, int num_indent)
+{
+    if (member == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[CLASS_MEMBER visibility=%s]\n", class_visibility_to_string(member->visibility));
+
+    switch (member->kind)
+    {
+        case CLASS_MEMBER_FIELD:
+            if (member->info.field != NULL)
+            {
+                print_indent(f, num_indent + 1);
+                fprintf(f, "[FIELD]:\n");
+                print_record_field(member->info.field, f, num_indent + 2);
+            }
+            break;
+        case CLASS_MEMBER_METHOD:
+            print_class_method(member->info.method, f, num_indent + 1);
+            break;
+        case CLASS_MEMBER_PROPERTY:
+            print_class_property(member->info.property, f, num_indent + 1);
+            break;
+        default:
+            break;
+    }
+}
+
 static void destroy_record_field(struct RecordField *field)
 {
     if (field == NULL)
@@ -187,6 +282,72 @@ static void destroy_variant_part(struct VariantPart *variant)
     destroy_list(variant->branches);
     /* tag_field is owned by the surrounding field list */
     free(variant);
+}
+
+static void destroy_class_method(struct ClassMethod *method)
+{
+    if (method == NULL)
+        return;
+
+    if (method->name != NULL)
+        free(method->name);
+    if (method->return_type_id != NULL)
+        free(method->return_type_id);
+    if (method->params != NULL)
+        destroy_list(method->params);
+    free(method);
+}
+
+static void destroy_class_property(struct ClassProperty *property)
+{
+    if (property == NULL)
+        return;
+
+    if (property->name != NULL)
+        free(property->name);
+    if (property->type_id != NULL)
+        free(property->type_id);
+    if (property->read_accessor != NULL)
+        free(property->read_accessor);
+    if (property->write_accessor != NULL)
+        free(property->write_accessor);
+    free(property);
+}
+
+static void destroy_class_member(struct ClassMember *member)
+{
+    if (member == NULL)
+        return;
+
+    switch (member->kind)
+    {
+        case CLASS_MEMBER_METHOD:
+            destroy_class_method(member->info.method);
+            break;
+        case CLASS_MEMBER_PROPERTY:
+            destroy_class_property(member->info.property);
+            break;
+        case CLASS_MEMBER_FIELD:
+        default:
+            /* Fields are owned by the associated RecordType */
+            break;
+    }
+
+    free(member);
+}
+
+static void destroy_class_type(struct ClassType *class_type)
+{
+    if (class_type == NULL)
+        return;
+
+    if (class_type->ancestor_id != NULL)
+        free(class_type->ancestor_id);
+    if (class_type->members != NULL)
+        destroy_list(class_type->members);
+    if (class_type->record != NULL)
+        destroy_record_type(class_type->record);
+    free(class_type);
 }
 
 void tree_print(Tree_t *tree, FILE *f, int num_indent)
@@ -396,6 +557,31 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
                 else
                 {
                     fprintf(f, "[ALIASES_TYPE:%d]\n", alias->base_type);
+                }
+            }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_CLASS)
+            {
+                struct ClassType *class_type = tree->tree_data.type_decl_data.info.class_type;
+                fprintf(f, "[TYPEDECL:%s CLASS]\n", tree->tree_data.type_decl_data.id);
+                if (class_type != NULL)
+                {
+                    if (class_type->ancestor_id != NULL)
+                    {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[ANCESTOR:%s]\n", class_type->ancestor_id);
+                    }
+                    if (class_type->record != NULL && class_type->record->fields != NULL)
+                    {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[FIELDS]:\n");
+                        list_print(class_type->record->fields, f, num_indent + 2);
+                    }
+                    if (class_type->members != NULL)
+                    {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[MEMBERS]:\n");
+                        list_print(class_type->members, f, num_indent + 2);
+                    }
                 }
             }
             else
@@ -796,6 +982,9 @@ void destroy_list(ListNode_t *list)
             case LIST_VARIANT_BRANCH:
                 destroy_variant_branch((struct VariantBranch *)cur->cur);
                 break;
+            case LIST_CLASS_MEMBER:
+                destroy_class_member((struct ClassMember *)cur->cur);
+                break;
             default:
                 fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
                 exit(1);
@@ -907,6 +1096,10 @@ void destroy_tree(Tree_t *tree)
                     destroy_list(alias->enum_literals);
                 if (alias->file_type_id != NULL)
                     free(alias->file_type_id);
+            }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_CLASS)
+            {
+                destroy_class_type(tree->tree_data.type_decl_data.info.class_type);
             }
             break;
 
@@ -1386,6 +1579,21 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RECORD;
     new_tree->tree_data.type_decl_data.info.record = record_type;
+
+    return new_tree;
+}
+
+
+Tree_t *mk_class_type(int line_num, char *id, struct ClassType *class_type)
+{
+    Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_TYPE_DECL;
+    new_tree->tree_data.type_decl_data.id = id;
+    new_tree->tree_data.type_decl_data.kind = TYPE_DECL_CLASS;
+    new_tree->tree_data.type_decl_data.info.class_type = class_type;
 
     return new_tree;
 }
