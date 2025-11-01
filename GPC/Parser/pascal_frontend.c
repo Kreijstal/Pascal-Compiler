@@ -151,6 +151,52 @@ static bool buffer_starts_with_unit(const char *buffer, size_t length)
     return true;
 }
 
+static void print_error_context(const char *path, int line, int col)
+{
+    if (path == NULL || line <= 0)
+        return;
+
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL)
+        return;
+
+    const int context_radius = 3;
+    int start_line = line - context_radius;
+    if (start_line < 1)
+        start_line = 1;
+    int end_line = line + context_radius;
+
+    char buffer[512];
+    int current_line = 1;
+    while (current_line <= end_line && fgets(buffer, sizeof(buffer), fp) != NULL)
+    {
+        if (current_line >= start_line)
+        {
+            buffer[strcspn(buffer, "\r\n")] = '\0';
+            fprintf(stderr, "  %5d | %s\n", current_line, buffer);
+            if (current_line == line)
+            {
+                int caret_col = col;
+                if (caret_col < 1)
+                    caret_col = 1;
+                fprintf(stderr, "        | ");
+                for (int i = 1; i < caret_col; ++i)
+                {
+                    if (buffer[i - 1] == '\t')
+                        fputc('\t', stderr);
+                    else
+                        fputc(' ', stderr);
+                }
+                fputc('^', stderr);
+                fputc('\n', stderr);
+            }
+        }
+        ++current_line;
+    }
+
+    fclose(fp);
+}
+
 // Cache for initialized parsers to avoid expensive re-initialization
 static combinator_t *cached_unit_parser = NULL;
 static combinator_t *cached_program_parser = NULL;
@@ -183,6 +229,8 @@ static ParseError *create_preprocessor_error(const char *path, const char *detai
 
     err->line = 0;
     err->col = 0;
+    err->position = 0;
+    err->committed = false;
 
     const char *detail_text = detail != NULL ? detail : "unknown error";
     const char *template = path != NULL ? "Preprocessing failed for '%s': %s"
@@ -400,4 +448,5 @@ void pascal_print_parse_error(const char *path, const ParseError *err)
             err->message ? err->message : "unknown error");
     if (err->unexpected)
         fprintf(stderr, "  Unexpected: %s\n", err->unexpected);
+    print_error_context(path, err->line, err->col);
 }

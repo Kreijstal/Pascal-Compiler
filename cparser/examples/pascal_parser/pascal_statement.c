@@ -271,10 +271,16 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Create custom statement list parser to properly handle Pascal semicolon rules
     // Pascal semicolons are separators, but there can be an optional trailing semicolon
 
-    // Simplified statement list parser - just use sep_by with optional trailing semicolon
+    // Simplified statement list parser that tolerates empty statements between semicolons
+    combinator_t* statement_with_semicolon = seq(new_combinator(), PASCAL_T_NONE,
+        optional(lazy(stmt_parser)),
+        token(match(";")),
+        NULL
+    );
+
     combinator_t* stmt_list = seq(new_combinator(), PASCAL_T_NONE,
-        sep_by(lazy(stmt_parser), token(match(";"))),     // statements separated by semicolons
-        optional(token(match(";"))),                      // optional trailing semicolon
+        many(statement_with_semicolon),
+        optional(lazy(stmt_parser)),
         NULL
     );
 

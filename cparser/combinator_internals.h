@@ -78,6 +78,10 @@ typedef struct {
 } errmap_args;
 
 typedef struct {
+    combinator_t* parser;
+} anchor_args;
+
+typedef struct {
     char_predicate pred;
     tag_t tag;
 } satisfy_args;

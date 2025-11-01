@@ -239,11 +239,18 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     // compound statement: statements are separated by semicolons with an optional
     // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
     // the statement parser so complex statements (like CASE) remain available.
-    combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
-        sep_by(lazy_owned(stmt_parser_ref), token(match(";"))),
-        optional(token(match(";"))),
+    combinator_t* statement_with_semicolon = seq(new_combinator(), PASCAL_T_NONE,
+        optional(lazy(stmt_parser_ref)),
+        token(match(";")),
         NULL
     );
+
+    combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
+        many(statement_with_semicolon),
+        optional(lazy(stmt_parser_ref)),
+        NULL
+    );
+    stmt_sequence->extra_to_free = stmt_parser_ref;
 
     ParseResult stmt_result = parse(in, stmt_sequence);
 
@@ -1061,6 +1068,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Use the nested function body parser for complete programs to support nested functions
     combinator_t* program_function_body = nested_function_body;
+    combinator_t* anchored_program_function_body = anchor(program_function_body);
 
     // Create simple working function and procedure parsers based on the nested version
     // These work because they use the recursive statement parser for bodies
@@ -1073,7 +1081,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         working_function_param_list,                 // optional parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon after signature
-        program_function_body,                       // function body with VAR section support
+        anchored_program_function_body,              // function body with VAR section support
         optional(token(match(";"))),                 // optional terminating semicolon after function body
         NULL
     );
@@ -1085,7 +1093,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
         working_procedure_param_list,               // optional parameter list
         token(match(";")),                           // semicolon after signature
-        program_function_body,                       // procedure body with VAR section support
+        anchored_program_function_body,              // procedure body with VAR section support
         optional(token(match(";"))),                 // optional terminating semicolon after procedure body
         NULL
     );
@@ -1105,7 +1113,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         constructor_param_list,                      // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        anchor(lazy(stmt_parser)),                    // use statement parser for method body
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1116,7 +1124,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         destructor_param_list,                       // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        anchor(lazy(stmt_parser)),                    // use statement parser for method body
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1127,7 +1135,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         method_procedure_param_list,                 // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        anchor(lazy(stmt_parser)),                    // use statement parser for method body
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );

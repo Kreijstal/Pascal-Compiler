@@ -35,6 +35,7 @@ static ParseResult map_fn(input_t * in, void * args, char* parser_name);
 static ParseResult errmap_fn(input_t * in, void * args, char* parser_name);
 static ParseResult many_fn(input_t * in, void * args, char* parser_name);
 static ParseResult optional_fn(input_t * in, void * args, char* parser_name);
+static ParseResult anchor_fn(input_t * in, void * args, char* parser_name);
 
 // --- _fn Implementations ---
 
@@ -46,10 +47,28 @@ static ParseResult optional_fn(input_t * in, void * args, char* parser_name) {
     if (res.is_success) {
         return res;
     }
+    if (res.value.error && res.value.error->committed) {
+        restore_input_state(in, &state);
+        return res;
+    }
     // If it fails, we restore the input and return success with a nil AST.
     restore_input_state(in, &state);
     free_error(res.value.error);
     return make_success(ensure_ast_nil_initialized());
+}
+
+static ParseResult anchor_fn(input_t * in, void * args, char* parser_name) {
+    anchor_args* aargs = (anchor_args*)args;
+    InputState state; save_input_state(in, &state);
+    ParseResult res = parse(in, aargs->parser);
+    if (res.is_success) {
+        return res;
+    }
+    if (res.value.error) {
+        res.value.error->committed = true;
+    }
+    restore_input_state(in, &state);
+    return res;
 }
 
 static ParseResult pnot_fn(input_t * in, void * args, char* parser_name) {
@@ -271,6 +290,10 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
         save_input_state(in, &state);
         ParseResult res = parse(in, p);
         if (!res.is_success) {
+            if (res.value.error && res.value.error->committed) {
+                restore_input_state(in, &state);
+                return res;
+            }
             restore_input_state(in, &state);
             free_error(res.value.error);
             break;
@@ -378,7 +401,9 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
 
-    ParseResult last_res;
+    ParseResult best_failure = {0};
+    bool have_best = false;
+
     for (seq_list *current = seq; current != NULL; current = current->next) {
         restore_input_state(in, &state);
         ParseResult res = parse(in, current->comb);
@@ -388,14 +413,48 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
             }
             return res;
         }
-        if (current->next == NULL) {
-            last_res = res;
+
+        ParseError* err = res.value.error;
+        bool take_new = false;
+        if (!have_best) {
+            take_new = true;
+        } else {
+            ParseError* best_err = best_failure.value.error;
+            int current_pos = err ? err->position : -1;
+            int best_pos = best_err ? best_err->position : -1;
+            if (current_pos > best_pos) {
+                take_new = true;
+            } else if (current_pos == best_pos) {
+                bool current_committed = err && err->committed;
+                bool best_committed = best_err && best_err->committed;
+                if (current_committed && !best_committed) {
+                    take_new = true;
+                }
+            }
+        }
+
+        bool is_committed = err && err->committed;
+        if (take_new) {
+            if (have_best) {
+                free_error(best_failure.value.error);
+            }
+            best_failure = res;
+            have_best = true;
         } else {
             free_error(res.value.error);
         }
+
+        if (is_committed) {
+            restore_input_state(in, &state);
+            return best_failure;
+        }
     }
 
-    return last_res;
+    restore_input_state(in, &state);
+    if (have_best) {
+        return best_failure;
+    }
+    return make_failure_v2(in, parser_name, strdup("No matching alternative in multi."), NULL);
 }
 
 static ParseResult flatMap_fn(input_t * in, void * args, char* parser_name) {
@@ -671,6 +730,18 @@ combinator_t * errmap(combinator_t* p, err_map_func func) {
     comb->type = COMB_ERRMAP;
     comb->fn = errmap_fn;
     comb->args = (void *) args;
+    return comb;
+}
+
+combinator_t * anchor(combinator_t* p) {
+    anchor_args* args = (anchor_args*)safe_malloc(sizeof(anchor_args));
+    args->parser = p;
+    combinator_t* comb = new_combinator();
+    int ret = asprintf(&comb->name, "anchor %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
+    comb->type = COMB_ANCHOR;
+    comb->fn = anchor_fn;
+    comb->args = (void*)args;
     return comb;
 }
 

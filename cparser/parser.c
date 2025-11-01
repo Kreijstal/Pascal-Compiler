@@ -63,6 +63,8 @@ ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char*
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
     err->line = in->line;
     err->col = in->col;
+    err->position = in->start;
+    err->committed = false;
     err->message = message;
     err->parser_name = parser_name ? strdup(parser_name) : NULL;
     err->unexpected = unexpected;
@@ -79,6 +81,8 @@ ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
     err->line = in->line;
     err->col = in->col;
+    err->position = in->start;
+    err->committed = false;
     err->message = message;
     err->cause = NULL;
     err->partial_ast = partial_ast;
@@ -104,9 +108,11 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     if (new_err == NULL) {
         return make_failure(in, "Memory allocation failed for error wrapper");
     }
-    
-    new_err->line = in->line;
-    new_err->col = in->col;
+
+    new_err->line = original_error->line;
+    new_err->col = original_error->col;
+    new_err->position = original_error->position;
+    new_err->committed = original_error->committed;
     new_err->message = strdup(message);
     if (new_err->message == NULL) {
         free(new_err);
@@ -122,8 +128,17 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
 
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause) {
     ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
-    err->line = in->line;
-    err->col = in->col;
+    if (cause.value.error) {
+        err->line = cause.value.error->line;
+        err->col = cause.value.error->col;
+        err->position = cause.value.error->position;
+        err->committed = cause.value.error->committed;
+    } else {
+        err->line = in->line;
+        err->col = in->col;
+        err->position = in->start;
+        err->committed = false;
+    }
     err->message = message;
     err->cause = cause.value.error;
     err->partial_ast = NULL;
@@ -266,15 +281,20 @@ static ParseResult match_ci_fn(input_t * in, void * args, char* parser_name) {
     char * str = ((match_args *) args)->str;
     InputState state; save_input_state(in, &state);
     for (int i = 0, len = strlen(str); i < len; i++) {
+        InputState failure_state; save_input_state(in, &failure_state);
         char c = read1(in);
         if (tolower(c) != tolower(str[i])) {
-            restore_input_state(in, &state);
-            char* unexpected = strndup(in->buffer + state.start, 10);
+            char* unexpected = strndup(in->buffer + failure_state.start, 10);
             char* err_msg;
             if (asprintf(&err_msg, "Parser '%s' Expected '%s' (case-insensitive) but found '%.10s...'", parser_name ? parser_name : "N/A", str, unexpected) < 0) {
                 err_msg = strdup("Expected token (case-insensitive)");
             }
-            return make_failure_v2(in, parser_name, err_msg, unexpected);
+            in->start = failure_state.start;
+            in->line = failure_state.line;
+            in->col = failure_state.col;
+            ParseResult failure = make_failure_v2(in, parser_name, err_msg, unexpected);
+            restore_input_state(in, &state);
+            return failure;
         }
     }
     return make_success(ensure_ast_nil_initialized());
@@ -284,15 +304,20 @@ static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
     char * str = ((match_args *) args)->str;
     InputState state; save_input_state(in, &state);
     for (int i = 0, len = strlen(str); i < len; i++) {
+        InputState failure_state; save_input_state(in, &failure_state);
         char c = read1(in);
         if (c != str[i]) {
-            restore_input_state(in, &state);
-            char* unexpected = strndup(in->buffer + state.start, 10);
+            char* unexpected = strndup(in->buffer + failure_state.start, 10);
             char* err_msg;
             if (asprintf(&err_msg, "Parser '%s' Expected '%s' but found '%.10s...'", parser_name ? parser_name : "N/A", str, unexpected) < 0) {
                 err_msg = strdup("Expected token");
             }
-            return make_failure_v2(in, parser_name, err_msg, unexpected);
+            in->start = failure_state.start;
+            in->line = failure_state.line;
+            in->col = failure_state.col;
+            ParseResult failure = make_failure_v2(in, parser_name, err_msg, unexpected);
+            restore_input_state(in, &state);
+            return failure;
         }
     }
     return make_success(ensure_ast_nil_initialized());
@@ -301,12 +326,17 @@ static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
    prim_args* pargs = (prim_args*)args;
    InputState state; save_input_state(in, &state);
+   InputState failure_state; save_input_state(in, &failure_state);
    int start_pos_ws = in->start;
    char c = read1(in);
    if (!isdigit(c)) {
+       char* unexpected = strndup(in->buffer + failure_state.start, 10);
+       in->start = failure_state.start;
+       in->line = failure_state.line;
+       in->col = failure_state.col;
+       ParseResult failure = make_failure_v2(in, parser_name, strdup("Expected a digit."), unexpected);
        restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected a digit."), unexpected);
+       return failure;
    }
    while (isdigit(c = read1(in))) ;
    if (c != EOF) in->start--;
@@ -324,12 +354,17 @@ static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    prim_args* pargs = (prim_args*)args;
    InputState state; save_input_state(in, &state);
+   InputState failure_state; save_input_state(in, &failure_state);
    int start_pos_ws = in->start;
    char c = read1(in);
    if (c != '_' && !isalpha(c)) {
+       char* unexpected = strndup(in->buffer + failure_state.start, 10);
+       in->start = failure_state.start;
+       in->line = failure_state.line;
+       in->col = failure_state.col;
+       ParseResult failure = make_failure_v2(in, parser_name, strdup("Expected identifier."), unexpected);
        restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected identifier."), unexpected);
+       return failure;
    }
    while (isalnum(c = read1(in)) || c == '_') ;
    if (c != EOF) in->start--;
@@ -347,24 +382,44 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult string_fn(input_t * in, void * args, char* parser_name) {
    prim_args* pargs = (prim_args*)args;
    InputState state; save_input_state(in, &state);
+   InputState failure_state; save_input_state(in, &failure_state);
    if (read1(in) != '"') {
+       char* unexpected = strndup(in->buffer + failure_state.start, 10);
+       in->start = failure_state.start;
+       in->line = failure_state.line;
+       in->col = failure_state.col;
+       ParseResult failure = make_failure_v2(in, parser_name, strdup("Expected '\"'."), unexpected);
        restore_input_state(in, &state);
-       char* unexpected = strndup(in->buffer + state.start, 10);
-       return make_failure_v2(in, parser_name, strdup("Expected '\"'."), unexpected);
+       return failure;
    }
    int capacity = 64;
    char * str_val = (char *) safe_malloc(capacity);
    int len = 0; char c;
-   while ((c = read1(in)) != '"') {
+   while (1) {
+      InputState char_state; save_input_state(in, &char_state);
+      c = read1(in);
+      if (c == '"') {
+         break;
+      }
       if (c == EOF) {
           free(str_val);
-          return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+          in->start = char_state.start;
+          in->line = char_state.line;
+          in->col = char_state.col;
+          ParseResult failure = make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+          restore_input_state(in, &state);
+          return failure;
       }
       if (c == '\\') {
          c = read1(in);
          if (c == EOF) {
              free(str_val);
-             return make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+             in->start = char_state.start;
+             in->line = char_state.line;
+             in->col = char_state.col;
+             ParseResult failure = make_failure_v2(in, parser_name, strdup("Unterminated string."), NULL);
+             restore_input_state(in, &state);
+             return failure;
          }
          switch (c) {
             case 'n': c = '\n'; break; case 't': c = '\t'; break;
@@ -390,10 +445,15 @@ static ParseResult string_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult any_char_fn(input_t * in, void * args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
     InputState state; save_input_state(in, &state);
+    InputState failure_state; save_input_state(in, &failure_state);
     char c = read1(in);
     if (c == EOF) {
+        in->start = failure_state.start;
+        in->line = failure_state.line;
+        in->col = failure_state.col;
+        ParseResult failure = make_failure_v2(in, parser_name, strdup("Expected any character, but found EOF."), NULL);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected any character, but found EOF."), NULL);
+        return failure;
     }
     char str[2] = {c, '\0'};
     ast_t* ast = new_ast();
@@ -408,11 +468,17 @@ static ParseResult any_char_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     satisfy_args* sargs = (satisfy_args*)args;
     InputState state; save_input_state(in, &state);
+    InputState failure_state; save_input_state(in, &failure_state);
     char c = read1(in);
     if (c == EOF || !sargs->pred(c)) {
         restore_input_state(in, &state);
-        char* unexpected = strndup(in->buffer + state.start, 10);
-        return make_failure_v2(in, parser_name, strdup("Predicate not satisfied."), unexpected);
+        char* unexpected = strndup(in->buffer + failure_state.start, 10);
+        in->start = failure_state.start;
+        in->line = failure_state.line;
+        in->col = failure_state.col;
+        ParseResult failure = make_failure_v2(in, parser_name, strdup("Predicate not satisfied."), unexpected);
+        restore_input_state(in, &state);
+        return failure;
     }
     char str[2] = {c, '\0'};
     ast_t* ast = new_ast();

@@ -307,6 +307,16 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
         return make_failure_v2(in, parser_name, strdup("Expected closing single quote"), NULL);
     }
 
+    // Reject character literals that are actually the start of a longer
+    // Pascal string with embedded doubled quotes (e.g. 'I''m').  When the
+    // next character is another single quote we need to backtrack so the
+    // string parser can consume the full literal instead of treating the
+    // leading character as a standalone char literal.
+    if (in->start < in->length && in->buffer[in->start] == '\'') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Character literal too long"), NULL);
+    }
+
     // Create AST node with the character value
     char text[2];
     text[0] = char_value;

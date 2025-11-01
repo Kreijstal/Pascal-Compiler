@@ -3844,6 +3844,56 @@ void test_variant_record_field_attributes(void) {
     free(input);
 }
 
+void test_pascal_dialogue_program(void) {
+    static const char *source =
+        "program dlg;\n"
+        "\n"
+        "uses crt;\n"
+        "\n"
+        "procedure talk(speaker:integer; dialogue:string);\n"
+        "begin;\n"
+        "  textcolor(speaker);\n"
+        "  if (speaker = 1) then\n"
+        "      write('Shopkeeper')\n"
+        "  else if (speaker = 2) then\n"
+        "      write('Joe Black ');\n"
+        "  write(': ');\n"
+        "  textcolor(7);\n"
+        "  writeln(dialogue);\n"
+        "  writeln;\n"
+        "end;\n"
+        "\n"
+        "begin;\n"
+        "  clrscr;\n"
+        "  writeln('Fictional dialogue.');\n"
+        "  writeln;\n"
+        "  writeln('-----');\n"
+        "  writeln;\n"
+        "  talk(1,'Good morning, sir. May I help you?');\n"
+        "  talk(2,'I''m looking for a girl.');\n"
+        "  talk(1,'Aren''t we all?');\n"
+        "  talk(2,'No, I mean she works here. Do you know Sandra?');\n"
+        "  talk(1,'Of course. Let me call her.');\n"
+        "  readln;\n"
+        "end.\n";
+
+    combinator_t* parser = get_program_parser();
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, parser);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free(input);
+}
+
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
@@ -3901,6 +3951,7 @@ TEST_LIST = {
     { "test_pascal_record_type", test_pascal_record_type },
     { "test_pascal_unit_declaration", test_pascal_unit_declaration },
     { "test_pascal_pointer_type_declaration", test_pascal_pointer_type_declaration },
+    { "test_pascal_dialogue_program", test_pascal_dialogue_program },
     { "test_pascal_method_implementation", test_pascal_method_implementation },
     { "test_pascal_with_statement_single_context", test_pascal_with_statement_single_context },
     { "test_pascal_with_statement_multiple_contexts", test_pascal_with_statement_multiple_contexts },
