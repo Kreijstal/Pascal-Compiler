@@ -701,6 +701,9 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
         case EXPR_STRING:
           fprintf(f, "[STRING:%s]\n", expr->expr_data.string);
           break;
+        case EXPR_CHAR_CODE:
+          fprintf(f, "[CHAR_CODE:%u]\n", expr->expr_data.char_code);
+          break;
 
         case EXPR_BOOL:
           fprintf(f, "[BOOL:%s]\n", expr->expr_data.bool_value ? "TRUE" : "FALSE");
@@ -1105,6 +1108,8 @@ void destroy_expr(struct Expression *expr)
 
         case EXPR_STRING:
           free(expr->expr_data.string);
+          break;
+        case EXPR_CHAR_CODE:
           break;
 
         case EXPR_BOOL:
@@ -1969,6 +1974,17 @@ struct Expression *mk_inum(int line_num, long long i_num)
 
     init_expression(new_expr, line_num, EXPR_INUM);
     new_expr->expr_data.i_num = i_num;
+
+    return new_expr;
+}
+
+struct Expression *mk_charcode(int line_num, unsigned int char_code)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_CHAR_CODE);
+    new_expr->expr_data.char_code = char_code & 0xFFu;
 
     return new_expr;
 }
