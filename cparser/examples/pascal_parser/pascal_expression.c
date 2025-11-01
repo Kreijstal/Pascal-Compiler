@@ -307,6 +307,20 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
         return make_failure_v2(in, parser_name, strdup("Expected closing single quote"), NULL);
     }
 
+    // A doubled quote means we're looking at the start of a Pascal string
+    // literal rather than a standalone character literal (e.g. 'I''m ...').
+    // In that situation we should fail here so that the string parser gets a
+    // chance to consume the whole token instead of incorrectly succeeding on
+    // the first character only.
+    char lookahead = read1(in);
+    if (lookahead == '\'') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected single character literal"), NULL);
+    }
+    if (lookahead != EOF) {
+        in->start--;
+    }
+
     // Create AST node with the character value
     char text[2];
     text[0] = char_value;
