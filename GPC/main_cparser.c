@@ -360,8 +360,11 @@ static void mark_stdlib_var_params(ListNode_t *subprograms)
             sub->tree_data.subprogram_data.id == NULL)
             continue;
 
-        if (strcasecmp(sub->tree_data.subprogram_data.id, "read") != 0)
+        if (strcasecmp(sub->tree_data.subprogram_data.id, "read") != 0 &&
+            strcasecmp(sub->tree_data.subprogram_data.id, "readln") != 0)
             continue;
+
+
 
         ListNode_t *params = sub->tree_data.subprogram_data.args_var;
         while (params != NULL)
@@ -370,7 +373,10 @@ static void mark_stdlib_var_params(ListNode_t *subprograms)
             {
                 Tree_t *param_decl = (Tree_t *)params->cur;
                 if (param_decl->type == TREE_VAR_DECL)
+                {
+
                     param_decl->tree_data.var_decl_data.is_var_param = 1;
+                }
             }
             params = params->next;
         }

@@ -1601,6 +1601,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
             CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
+            CODEGEN_DEBUG("DEBUG: Processing value parameter - calling gencode_expr_tree\n");
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 

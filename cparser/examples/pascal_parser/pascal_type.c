@@ -366,6 +366,20 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
 
+    // Parse optional "PACKED" keyword (case insensitive). Packed does not change
+    // the high-level AST shape, but the presence of the keyword is consumed so
+    // callers won't see it. We accept it if present and otherwise continue.
+    combinator_t* packed_keyword = token(keyword_ci("packed"));
+    ParseResult packed_res = parse(in, packed_keyword);
+    if (packed_res.is_success) {
+        /* Successfully consumed 'packed' - free its AST and continue. */
+        free_ast(packed_res.value.ast);
+    } else {
+        /* No 'packed' present - restore any failure state and continue. */
+        discard_failure(packed_res);
+    }
+    free_combinator(packed_keyword);
+
     // Parse "RECORD" keyword (case insensitive)
     combinator_t* record_keyword = token(keyword_ci("record"));
     ParseResult record_res = parse(in, record_keyword);

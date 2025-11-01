@@ -13,6 +13,6 @@ ListNode_t *codegen_while(struct Statement *, ListNode_t *, CodeGenContext *ctx,
 ListNode_t *codegen_repeat(struct Statement *, ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_for(struct Statement *, ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_case(struct Statement *, ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
-ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx);
+ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
 #endif

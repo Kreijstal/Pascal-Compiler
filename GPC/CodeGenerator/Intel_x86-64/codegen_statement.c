@@ -161,7 +161,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
     if (expr->type == EXPR_VAR_ID)
     {
-        StackNode_t *var_node = find_label(expr->expr_data.id);
+        int depth = 0;
+        StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &depth);
         if (var_node == NULL)
         {
             if (nonlocal_flag() == 1)
@@ -181,12 +182,30 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
             return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
         }
+        
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
             return codegen_fail_register(ctx, inst_list, out_reg,
                 "ERROR: Unable to allocate register for address expression.");
+        
         char buffer[64];
-        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+        
+        /* Check if this variable is in the z section (arguments) */
+        StackScope_t *cur_scope = get_cur_scope();
+        StackNode_t *z_node = stackscope_find_z(cur_scope, expr->expr_data.id);
+        
+        if (z_node != NULL && z_node->offset == var_node->offset)
+        {
+            /* Variable is in z section (argument) - load the value directly since 
+               var parameters are stored as addresses in the z section */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+        }
+        else
+        {
+            /* Regular variable - compute its address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, addr_reg->bit_64);
+        }
+        
         inst_list = add_inst(inst_list, buffer);
         *out_reg = addr_reg;
         return inst_list;
@@ -1042,7 +1061,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     return inst_list;
 }
 
-ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1050,6 +1069,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     assert(stmt != NULL);
     assert(stmt->type == STMT_PROCEDURE_CALL);
     assert(ctx != NULL);
+    assert(symtab != NULL);
 
     char *proc_name;
     ListNode_t *args_expr;
@@ -1059,6 +1079,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
 
     const char *proc_id_lookup = stmt->stmt_data.procedure_call_data.id;
+    HashNode_t *proc_node = NULL;
 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetLength"))
     {
@@ -1105,7 +1126,10 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL);
+    if (proc_id_lookup != NULL) {
+        FindIdent(&proc_node, symtab, (char *)proc_id_lookup);
+    }
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -1458,7 +1482,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
-        return codegen_builtin_proc(stmt, inst_list, ctx);
+        return codegen_builtin_proc(stmt, inst_list, ctx, symtab);
     }
     else
     {

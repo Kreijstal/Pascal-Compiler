@@ -38,6 +38,19 @@ begin
     end
 end;
 
+
+
+{ ReadLn overloads forwarding to read for compatibility with programs using ReadLn }
+procedure ReadLn(var i: integer);
+begin
+    read(i);
+end;
+
+procedure ReadLn(var i: longint);
+begin
+    read(i);
+end;
+
 function succ(i: integer): integer;
 begin
     succ := i + 1;
