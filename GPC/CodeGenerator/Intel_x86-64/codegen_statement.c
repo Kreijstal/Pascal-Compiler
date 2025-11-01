@@ -1041,7 +1041,7 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL ||
         args_expr->next->next->next != NULL)
     {
-        fprintf(stderr, "ERROR: Val expects three arguments.\n");
+        codegen_report_error(ctx, "ERROR: Val expects three arguments.");
         return inst_list;
     }
 
