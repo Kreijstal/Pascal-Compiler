@@ -81,7 +81,7 @@ struct VariantPart
 /* Case branch structure */
 struct CaseBranch
 {
-    ListNode_t *labels;  /* List of integer expressions representing case labels */
+    ListNode_t *labels;  /* List of expressions or range elements representing case labels */
     struct Statement *stmt;
 };
 

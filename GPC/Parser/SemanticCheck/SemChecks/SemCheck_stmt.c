@@ -520,9 +520,23 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         /* Check case labels */
                         ListNode_t *label_node = branch->labels;
                         while (label_node != NULL) {
-                            struct Expression *label_expr = (struct Expression *)label_node->cur;
-                            int label_type;
-                            return_val += semcheck_expr(&label_type, symtab, label_expr, max_scope_lev, 0);
+                            if (label_node->type == LIST_EXPR) {
+                                struct Expression *label_expr = (struct Expression *)label_node->cur;
+                                int label_type;
+                                return_val += semcheck_expr(&label_type, symtab, label_expr, max_scope_lev, 0);
+                            } else if (label_node->type == LIST_SET_ELEMENT) {
+                                struct SetElement *range = (struct SetElement *)label_node->cur;
+                                if (range != NULL) {
+                                    if (range->lower != NULL) {
+                                        int lower_type;
+                                        return_val += semcheck_expr(&lower_type, symtab, range->lower, max_scope_lev, 0);
+                                    }
+                                    if (range->upper != NULL) {
+                                        int upper_type;
+                                        return_val += semcheck_expr(&upper_type, symtab, range->upper, max_scope_lev, 0);
+                                    }
+                                }
+                            }
                             label_node = label_node->next;
                         }
                         /* Check the branch statement */
