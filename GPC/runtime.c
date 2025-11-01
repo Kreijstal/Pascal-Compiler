@@ -234,6 +234,15 @@ void gpc_write_newline(void)
     putchar('\n');
 }
 
+void gpc_write_char(int width, int value)
+{
+    unsigned char ch = (unsigned char)value;
+    char buffer[2];
+    buffer[0] = (char)ch;
+    buffer[1] = '\0';
+    gpc_write_string(width, buffer);
+}
+
 void gpc_write_boolean(int width, int value)
 {
     const char *text = value ? "TRUE" : "FALSE";

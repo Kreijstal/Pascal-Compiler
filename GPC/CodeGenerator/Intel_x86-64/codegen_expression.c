@@ -285,6 +285,36 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         struct RecordField *field = (struct RecordField *)cur->cur;
         long long field_size = 0;
 
+        if (field->is_array)
+        {
+            if (field->array_is_open || field->array_end < field->array_start)
+            {
+                field_size = CODEGEN_POINTER_SIZE_BYTES;
+            }
+            else
+            {
+                long long element_size = 0;
+                if (codegen_sizeof_type(ctx, field->array_element_type,
+                        field->array_element_type_id, NULL,
+                        &element_size, depth + 1) != 0)
+                    return 1;
+
+                long long count = (long long)field->array_end - (long long)field->array_start + 1;
+                if (count < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Invalid bounds for array field %s.",
+                        field->name != NULL ? field->name : "");
+                    return 1;
+                }
+
+                field_size = element_size * count;
+            }
+
+            total += field_size;
+            continue;
+        }
+
         if (field->nested_record != NULL)
         {
             if (codegen_sizeof_record(ctx, field->nested_record, &field_size, depth + 1) != 0)
@@ -586,6 +616,12 @@ ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_re
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", src_reg32, dst_reg32);
     return add_inst(inst_list, buffer);
+}
+
+int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
+    struct RecordType *record_type, long long *size_out)
+{
+    return codegen_sizeof_type(ctx, type_tag, type_id, record_type, size_out, 0);
 }
 
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -1222,7 +1258,18 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
     long long element_size_ll = array_expr->array_element_size;
+    int need_element_size = 0;
     if (element_size_ll <= 0)
+        need_element_size = 1;
+    else if (array_expr->array_element_record_type != NULL)
+        need_element_size = 1;
+    else if (array_expr->array_element_type == RECORD_TYPE)
+        need_element_size = 1;
+    else if (array_expr->array_element_type == UNKNOWN_TYPE &&
+        array_expr->array_element_type_id != NULL)
+        need_element_size = 1;
+
+    if (need_element_size)
     {
         if (codegen_sizeof_type(ctx, array_expr->array_element_type,
                 array_expr->array_element_type_id,

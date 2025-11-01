@@ -183,6 +183,19 @@ static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t
     if (expr->array_element_type == RECORD_TYPE || expr->array_element_type == UNKNOWN_TYPE)
         expr->array_element_record_type = semcheck_lookup_record_type(symtab,
             expr->array_element_type_id);
+
+    long long computed_size = 0;
+    int size_status = 1;
+    if (expr->array_element_record_type != NULL)
+        size_status = sizeof_from_record(symtab, expr->array_element_record_type,
+            &computed_size, 0, line_num);
+    else if (expr->array_element_type != UNKNOWN_TYPE ||
+        expr->array_element_type_id != NULL)
+        size_status = sizeof_from_type_ref(symtab, expr->array_element_type,
+            expr->array_element_type_id, &computed_size, 0, line_num);
+
+    if (size_status == 0 && computed_size > 0 && computed_size <= INT_MAX)
+        expr->array_element_size = (int)computed_size;
 }
 
 static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *symtab,
@@ -213,7 +226,7 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     {
         semcheck_set_array_info_from_alias(expr, symtab, node->type_alias, line_num);
 
-        if (node_element_size > 0)
+        if (expr->array_element_size <= 0 && node_element_size > 0)
             expr->array_element_size = node_element_size;
         else if (expr->array_element_size <= 0 &&
             node->type_alias->array_end >= node->type_alias->array_start)
@@ -961,6 +974,43 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         struct RecordField *field = (struct RecordField *)cur->cur;
         long long field_size = 0;
 
+        if (field->is_array)
+        {
+            if (field->array_is_open || field->array_end < field->array_start)
+            {
+                field_size = POINTER_SIZE_BYTES;
+            }
+            else
+            {
+                long long element_size = 0;
+                int elem_status = 1;
+                if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
+                    elem_status = sizeof_from_record(symtab, field->nested_record,
+                        &element_size, depth + 1, line_num);
+                else if (field->array_element_type != UNKNOWN_TYPE ||
+                    field->array_element_type_id != NULL)
+                    elem_status = sizeof_from_type_ref(symtab, field->array_element_type,
+                        field->array_element_type_id, &element_size, depth + 1, line_num);
+
+                if (elem_status != 0)
+                    return 1;
+
+                long long count = (long long)field->array_end - (long long)field->array_start + 1;
+                if (count < 0)
+                {
+                    fprintf(stderr, "Error on line %d, invalid bounds for array field %s.\n",
+                        line_num, field->name != NULL ? field->name : "");
+                    return 1;
+                }
+
+                field_size = element_size * count;
+            }
+
+            total += field_size;
+            cur = cur->next;
+            continue;
+        }
+
         if (field->nested_record != NULL)
         {
             if (sizeof_from_record(symtab, field->nested_record, &field_size,
@@ -1587,6 +1637,18 @@ static int semcheck_recordaccess(int *type_return,
         {
             expr->array_element_record_type = field_record;
         }
+
+        long long computed_size = 0;
+        int size_status = 1;
+        if (expr->array_element_record_type != NULL)
+            size_status = sizeof_from_record(symtab, expr->array_element_record_type,
+                &computed_size, 0, expr->line_num);
+        else if (expr->array_element_type != UNKNOWN_TYPE ||
+            expr->array_element_type_id != NULL)
+            size_status = sizeof_from_type_ref(symtab, expr->array_element_type,
+                expr->array_element_type_id, &computed_size, 0, expr->line_num);
+        if (size_status == 0 && computed_size > 0 && computed_size <= INT_MAX)
+            expr->array_element_size = (int)computed_size;
 
         if (expr->array_element_type != UNKNOWN_TYPE)
             field_type = expr->array_element_type;
