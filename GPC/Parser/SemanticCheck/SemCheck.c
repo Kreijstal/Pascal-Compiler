@@ -1026,6 +1026,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     else // Function
     {
         /* Need to additionally extract the return type */
+        HashNode_t *return_type_node = NULL;
         if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
         {
             HashNode_t *type_node;
@@ -1039,6 +1040,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             else
             {
                 var_type = type_node->var_type;
+                return_type_node = type_node;
             }
         }
         else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)
@@ -1059,11 +1061,45 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                         subprogram->tree_data.subprogram_data.mangled_id,
                         var_type, subprogram->tree_data.subprogram_data.args_var);
 
+        if (return_type_node != NULL && func_return == 0)
+        {
+            HashNode_t *function_symbol = NULL;
+            if (FindIdent(&function_symbol, symtab, id_to_use_for_lookup) != -1 &&
+                function_symbol != NULL && function_symbol->hash_type == HASHTYPE_FUNCTION)
+            {
+                if (return_type_node->type_alias != NULL)
+                    function_symbol->type_alias = return_type_node->type_alias;
+                if (return_type_node->record_type != NULL)
+                {
+                    if (function_symbol->record_type != NULL)
+                        destroy_record_type(function_symbol->record_type);
+                    function_symbol->record_type = clone_record_type(return_type_node->record_type);
+                }
+            }
+        }
+
         PushScope(symtab);
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable.
         PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
             var_type, subprogram->tree_data.subprogram_data.args_var);
+
+        if (return_type_node != NULL)
+        {
+            HashNode_t *return_symbol = NULL;
+            if (FindIdent(&return_symbol, symtab, subprogram->tree_data.subprogram_data.id) != -1 &&
+                return_symbol != NULL && return_symbol->hash_type == HASHTYPE_FUNCTION_RETURN)
+            {
+                if (return_type_node->type_alias != NULL)
+                    return_symbol->type_alias = return_type_node->type_alias;
+                if (return_type_node->record_type != NULL)
+                {
+                    if (return_symbol->record_type != NULL)
+                        destroy_record_type(return_symbol->record_type);
+                    return_symbol->record_type = clone_record_type(return_type_node->record_type);
+                }
+            }
+        }
 
         new_max_scope = max_scope_lev+1;
     }

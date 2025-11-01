@@ -1068,7 +1068,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         codegen_register_static_link_proc(ctx, sub_id, codegen_get_lexical_depth(ctx));
     }
 
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab);
+    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, 0);
     
     if (static_link != NULL)
     {
@@ -1120,6 +1120,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     char buffer[50];
     char *sub_id;
     StackNode_t *return_var;
+    StackNode_t *return_dest_slot = NULL;
+    int has_record_return = 0;
+    long long record_return_size = 0;
 
     func = &func_tree->tree_data.subprogram_data;
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
@@ -1147,29 +1150,69 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         codegen_register_static_link_proc(ctx, sub_id, codegen_get_lexical_depth(ctx));
     }
     
-    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab);
+    HashNode_t *func_node = NULL;
+    if (symtab != NULL)
+        FindIdent(&func_node, symtab, func->id);
+
+    if (func_node != NULL && func_node->var_type == HASHVAR_RECORD && func_node->record_type != NULL)
+    {
+        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, func_node->record_type,
+                &record_return_size) != 0 || record_return_size <= 0 ||
+            record_return_size > INT_MAX)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine size for record return value of %s.", func->id);
+            record_return_size = 0;
+        }
+        else
+        {
+            has_record_return = 1;
+        }
+    }
+
+    inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab,
+        has_record_return ? 1 : 0);
     
     if (static_link != NULL)
     {
         char link_buffer[64];
-        /* No parameters, static link comes in %rdi */
-        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
+        const char *link_reg = current_arg_reg64(has_record_return ? 1 : 0);
+        if (link_reg == NULL)
+            link_reg = "%rdi";
+        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            link_reg, static_link->offset);
         inst_list = add_inst(inst_list, link_buffer);
     }
     
     int return_size = DOUBLEWORD;
-    if (symtab != NULL)
+    if (has_record_return)
+        return_size = (int)record_return_size;
+    else if (func_node != NULL)
     {
-        HashNode_t *func_node = NULL;
-        if (FindIdent(&func_node, symtab, func->id) >= 0 && func_node != NULL)
+        if (func_node->var_type == HASHVAR_LONGINT || func_node->var_type == HASHVAR_REAL ||
+            func_node->var_type == HASHVAR_PCHAR)
+            return_size = 8;
+        else if (func_node->var_type == HASHVAR_BOOLEAN)
+            return_size = DOUBLEWORD;
+    }
+
+    return_var = add_l_x(func->id, return_size);
+
+    if (has_record_return)
+        return_dest_slot = add_l_x("__record_return_dest__", (int)sizeof(void *));
+
+    if (has_record_return && return_dest_slot != NULL)
+    {
+        const char *ret_reg = current_arg_reg64(0);
+        if (ret_reg != NULL)
         {
-            if (func_node->var_type == HASHVAR_LONGINT || func_node->var_type == HASHVAR_REAL || func_node->var_type == HASHVAR_PCHAR)
-                return_size = 8;
-            else if (func_node->var_type == HASHVAR_BOOLEAN)
-                return_size = DOUBLEWORD;
+            char ptr_buffer[64];
+            snprintf(ptr_buffer, sizeof(ptr_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                ret_reg, return_dest_slot->offset);
+            inst_list = add_inst(inst_list, ptr_buffer);
         }
     }
-    return_var = add_l_x(func->id, return_size);
+
     codegen_function_locals(func->declarations, ctx, symtab);
 
     /* Recursively generate nested subprograms */
@@ -1177,11 +1220,76 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
-    if (return_var->size >= 8)
-        snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
+    if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
+    {
+        Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *src_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_reg == NULL || src_reg == NULL || size_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            if (size_reg != NULL)
+                free_reg(get_reg_stack(), size_reg);
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate registers for record return copy.");
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                return_dest_slot->offset, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                return_var->offset, src_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                record_return_size, size_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+            free_arg_regs();
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                return_dest_slot->offset, RETURN_REG_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), dest_reg);
+            free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), size_reg);
+        }
+    }
     else
-        snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
-    inst_list = add_inst(inst_list, buffer);
+    {
+        if (return_var->size >= 8)
+            snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
+        else
+            snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -1201,7 +1309,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 }
 
 /* Code generation for subprogram arguments */
-ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab, int arg_start_index)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1215,6 +1324,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     StackNode_t *arg_stack;
 
     assert(ctx != NULL);
+
+    if (arg_start_index < 0)
+        arg_start_index = 0;
 
     while(args != NULL)
     {
@@ -1290,7 +1402,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             return inst_list;
                         }
 
-                        arg_reg = get_arg_reg64_num(arg_num);
+                        arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
                         if (arg_reg == NULL)
                         {
                             fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
@@ -1343,7 +1455,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE);
-                    arg_reg = use_64bit ? get_arg_reg64_num(arg_num) : get_arg_reg32_num(arg_num);
+                    arg_reg = use_64bit ?
+                        get_arg_reg64_num(arg_start_index + arg_num) :
+                        get_arg_reg32_num(arg_start_index + arg_num);
                     if(arg_reg == NULL)
                     {
                         fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
