@@ -243,6 +243,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("real");
         return REAL_TYPE;
     }
+    if (strcasecmp(name, "double") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("double");
+        return REAL_TYPE;
+    }
     if (strcasecmp(name, "string") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
