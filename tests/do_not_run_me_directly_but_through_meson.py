@@ -949,7 +949,7 @@ class TestCompiler(unittest.TestCase):
             timeout=EXEC_TIMEOUT,
         )
 
-        self.assertEqual(result.stdout, "112\n1\n3\n")
+        self.assertEqual(result.stdout, "122\n2\n3\n")
 
     def test_real_arithmetic_program(self):
         """Compiles and executes a program exercising REAL arithmetic and IO."""

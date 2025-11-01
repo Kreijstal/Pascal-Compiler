@@ -635,6 +635,42 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     {
         return codegen_addressof_leaf(expr, inst_list, ctx, target_reg);
     }
+    else if (expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        if (stack_node != NULL && stack_node->is_reference)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            if (codegen_type_uses_qword(expr->resolved_type))
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                    addr_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                if (expr->resolved_type == CHAR_TYPE)
+                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n",
+                        addr_reg->bit_64, target_reg->bit_32);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n",
+                        addr_reg->bit_64, target_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+    }
     else if (expr->type == EXPR_STRING)
     {
         if (expr->resolved_type == CHAR_TYPE)

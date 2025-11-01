@@ -38,6 +38,8 @@ int codegen_type_is_signed(int type_tag);
 int codegen_expr_is_signed(const struct Expression *expr);
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);
+ListNode_t *codegen_copy_memory_block(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg, long long size);
 
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);

@@ -50,8 +50,10 @@ int get_needed_stack_space();
 void push_stackscope();
 void pop_stackscope();
 StackNode_t *add_l_t(char *);
+StackNode_t *add_block_t(char *label, int size);
 StackNode_t *add_l_x(char *, int size);
 StackNode_t *add_l_z(char *);
+StackNode_t *add_block_z(char *label, int size);
 StackNode_t *add_q_z(char *);
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
 StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound);
@@ -127,6 +129,7 @@ typedef struct StackNode
     int is_dynamic;
     int is_static;
     char *static_label;
+    int is_reference;
 } StackNode_t;
 
 /* WARNING: init_stack_node makes copy of given label */

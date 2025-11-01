@@ -10,6 +10,7 @@
 
 #include "codegen_expression.h"
 #include "register_types.h"
+#include "codegen.h"
 #include "stackmng/stackmng.h"
 #include "expr_tree/expr_tree.h"
 #include "../../flags.h"
@@ -622,6 +623,54 @@ int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char 
     struct RecordType *record_type, long long *size_out)
 {
     return codegen_sizeof_type(ctx, type_tag, type_id, record_type, size_out, 0);
+}
+
+ListNode_t *codegen_copy_memory_block(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg, long long size)
+{
+    if (inst_list == NULL || ctx == NULL || dest_reg == NULL || src_reg == NULL)
+        return inst_list;
+
+    if (size <= 0)
+        return inst_list;
+
+    Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (count_reg == NULL)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to allocate register for record copy size.");
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", size, count_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
+
+    free_reg(get_reg_stack(), count_reg);
+    free_arg_regs();
+    return inst_list;
 }
 
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
@@ -1642,6 +1691,79 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
         }
         else
         {
+            int handled_record = 0;
+            if (arg_expr != NULL && arg_expr->resolved_type == RECORD_TYPE)
+            {
+                long long record_size = 0;
+                if (codegen_get_record_size(ctx, arg_expr, &record_size) != 0 || record_size <= 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine record size for argument.");
+                    free(arg_infos);
+                    return inst_list;
+                }
+
+                if (!codegen_expr_is_addressable(arg_expr))
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unsupported record argument expression.");
+                    free(arg_infos);
+                    return inst_list;
+                }
+
+                StackNode_t *temp_slot = add_block_t("record_arg", (int)record_size);
+                Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (dest_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for record argument.");
+                    free(arg_infos);
+                    return inst_list;
+                }
+
+                char buffer[96];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    temp_slot->offset, dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                Register_t *src_reg = NULL;
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                if (codegen_had_error(ctx) || src_reg == NULL)
+                {
+                    if (src_reg != NULL)
+                        free_reg(get_reg_stack(), src_reg);
+                    free_reg(get_reg_stack(), dest_reg);
+                    free(arg_infos);
+                    return inst_list;
+                }
+
+                inst_list = codegen_copy_memory_block(inst_list, ctx, dest_reg, src_reg,
+                    record_size);
+                free_reg(get_reg_stack(), src_reg);
+
+                if (codegen_had_error(ctx))
+                {
+                    free_reg(get_reg_stack(), dest_reg);
+                    free(arg_infos);
+                    return inst_list;
+                }
+
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = dest_reg;
+                    arg_infos[arg_num].spill = NULL;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
+                else
+                {
+                    free_reg(get_reg_stack(), dest_reg);
+                }
+
+                handled_record = 1;
+            }
+
+            if (!handled_record)
+            {
             // Pass by value
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -1649,11 +1771,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list, Code
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
-            if (arg_infos != NULL)
-            {
-                arg_infos[arg_num].reg = top_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
+                if (arg_infos != NULL)
+                {
+                    arg_infos[arg_num].reg = top_reg;
+                    arg_infos[arg_num].spill = NULL;
+                    arg_infos[arg_num].expr = arg_expr;
+                }
             }
         }
 

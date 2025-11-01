@@ -199,7 +199,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
     if (expr->type == EXPR_VAR_ID)
     {
-        StackNode_t *var_node = find_label(expr->expr_data.id);
+        int scope_depth = 0;
+        StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
         if (var_node == NULL)
         {
             if (nonlocal_flag() == 1)
@@ -224,20 +225,66 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             return codegen_fail_register(ctx, inst_list, out_reg,
                 "ERROR: Unable to allocate register for address expression.");
 
-        char buffer[96];
-        if (var_node->is_static)
+        char buffer[128];
+        if (var_node->is_reference)
+        {
+            if (scope_depth == 0)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                codegen_begin_expression(ctx);
+                Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list,
+                    scope_depth);
+                if (frame_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), addr_reg);
+                    codegen_end_expression(ctx);
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                codegen_end_expression(ctx);
+            }
+        }
+        else if (var_node->is_static)
         {
             const char *label = var_node->static_label != NULL ?
                 var_node->static_label : var_node->label;
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
                 addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
-                var_node->offset, addr_reg->bit_64);
+            if (scope_depth == 0)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                codegen_begin_expression(ctx);
+                Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list,
+                    scope_depth);
+                if (frame_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), addr_reg);
+                    codegen_end_expression(ctx);
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                codegen_end_expression(ctx);
+            }
         }
-        inst_list = add_inst(inst_list, buffer);
+
         *out_reg = addr_reg;
         return inst_list;
     }
@@ -465,45 +512,9 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         return inst_list;
     }
 
-    Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-    if (count_reg == NULL)
-    {
-        free_reg(get_reg_stack(), dest_reg);
-        free_reg(get_reg_stack(), src_reg);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate register for record copy size.");
-    }
-
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, count_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
-
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
-
+    inst_list = codegen_copy_memory_block(inst_list, ctx, dest_reg, src_reg, record_size);
     free_reg(get_reg_stack(), dest_reg);
     free_reg(get_reg_stack(), src_reg);
-    free_reg(get_reg_stack(), count_reg);
-    free_arg_regs();
     return inst_list;
 }
 
@@ -1495,6 +1506,56 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
         if(var != NULL)
         {
+            int value_is_qword = codegen_type_uses_qword(var_expr->resolved_type) ||
+                var_expr->resolved_type == POINTER_TYPE || var_expr->resolved_type == STRING_TYPE;
+
+            if (var->is_reference)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for reference assignment.");
+                }
+
+                if (scope_depth == 0)
+                    snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", var->offset, addr_reg->bit_64);
+                else
+                {
+                    codegen_begin_expression(ctx);
+                    Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+                    if (frame_reg != NULL)
+                        snprintf(buffer, 50, "\tmovq\t-%d(%s), %s\n", var->offset, frame_reg->bit_64, addr_reg->bit_64);
+                    else
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Failed to acquire static link for assignment to %s.",
+                            var_expr->expr_data.id);
+                        snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", var->offset, addr_reg->bit_64);
+                    }
+                    codegen_end_expression(ctx);
+                }
+                inst_list = add_inst(inst_list, buffer);
+
+                if (value_is_qword)
+                    snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", reg->bit_64, addr_reg->bit_64);
+                else if (var_expr->resolved_type == CHAR_TYPE)
+                {
+                    const char *byte_reg = register_name8(reg);
+                    if (byte_reg != NULL)
+                        snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", byte_reg, addr_reg->bit_64);
+                    else
+                        snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", reg->bit_32, addr_reg->bit_64);
+                }
+                else
+                    snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", reg->bit_32, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+                free_reg(get_reg_stack(), reg);
+                return inst_list;
+            }
+
             int use_qword = (var->size >= 8);
             if (scope_depth == 0)
             {

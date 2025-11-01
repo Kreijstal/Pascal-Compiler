@@ -974,7 +974,7 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
-    char buffer[50];
+    char buffer[128];
     snprintf(buffer, 50, "\tmovl\t$%d, %%eax\n", num_vec);
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1116,7 +1116,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     struct Subprogram *func;
     ListNode_t *inst_list;
-    char buffer[50];
+    char buffer[128];
     char *sub_id;
     StackNode_t *return_var;
 
@@ -1223,23 +1223,103 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             case TREE_VAR_DECL:
                 arg_ids = arg_decl->tree_data.var_decl_data.ids;
                 type = arg_decl->tree_data.var_decl_data.type;
-                
-                // Resolve type aliases if needed
-                if (type == UNKNOWN_TYPE && arg_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
-                {
-                    HashNode_t *type_node = NULL;
+
+                HashNode_t *type_node = NULL;
+                if (symtab != NULL && arg_decl->tree_data.var_decl_data.type_id != NULL)
                     FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id);
-                    if (type_node != NULL && type_node->type_alias != NULL)
-                    {
-                        type = type_node->type_alias->base_type;
-                    }
+
+                // Resolve type aliases if needed
+                if (type == UNKNOWN_TYPE && type_node != NULL && type_node->type_alias != NULL)
+                {
+                    type = type_node->type_alias->base_type;
                 }
                 
                 while(arg_ids != NULL)
                 {
-                    // Var parameters are passed by reference (as pointers), so always use 64-bit
-                    // Also use 64-bit for strings and explicit pointers
+                    HashNode_t *var_info = NULL;
+                    if (symtab != NULL)
+                        FindIdent(&var_info, symtab, (char *)arg_ids->cur);
+
                     int is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
+                    int is_record_value_param = 0;
+                    if (!is_var_param)
+                    {
+                        if (var_info != NULL && var_info->var_type == HASHVAR_RECORD)
+                            is_record_value_param = 1;
+                        else if (type == RECORD_TYPE)
+                            is_record_value_param = 1;
+                        else if (type_node != NULL &&
+                            (type_node->var_type == HASHVAR_RECORD || type_node->record_type != NULL))
+                            is_record_value_param = 1;
+                    }
+
+                    if (is_record_value_param)
+                    {
+                        arg_reg = get_arg_reg64_num(arg_num);
+                        if (arg_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Max argument limit: %d", NUM_ARG_REG);
+                            return inst_list;
+                        }
+
+                        struct RecordType *record_desc = NULL;
+                        if (var_info != NULL && var_info->record_type != NULL)
+                            record_desc = var_info->record_type;
+                        else if (type_node != NULL && type_node->record_type != NULL)
+                            record_desc = type_node->record_type;
+
+                        long long record_size = 0;
+                        if (codegen_sizeof_type_reference(ctx, type,
+                                arg_decl->tree_data.var_decl_data.type_id, record_desc,
+                                &record_size) != 0 || record_size <= 0)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to determine record size for parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        StackNode_t *record_slot = add_block_z((char *)arg_ids->cur,
+                            (int)record_size);
+
+                        Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (dest_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for record parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                            record_slot->offset, dest_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        Register_t *src_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (src_reg == NULL)
+                        {
+                            free_reg(get_reg_stack(), dest_reg);
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for incoming record parameter.");
+                            return inst_list;
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg_reg,
+                            src_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        inst_list = codegen_copy_memory_block(inst_list, ctx, dest_reg, src_reg,
+                            record_size);
+
+                        free_reg(get_reg_stack(), dest_reg);
+                        free_reg(get_reg_stack(), src_reg);
+
+                        arg_ids = arg_ids->next;
+                        ++arg_num;
+                        continue;
+                    }
+
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE);
@@ -1250,6 +1330,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         exit(1);
                     }
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (is_var_param && arg_stack != NULL)
+                        arg_stack->is_reference = 1;
                     if (use_64bit)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
                     else

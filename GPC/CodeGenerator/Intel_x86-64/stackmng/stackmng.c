@@ -153,6 +153,44 @@ StackNode_t *add_l_t(char *label)
     return new_node;
 }
 
+StackNode_t *add_block_t(char *label, int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+
+    int alignment = (int)sizeof(void *);
+    if (alignment < DOUBLEWORD)
+        alignment = DOUBLEWORD;
+
+    int block_size = size;
+    if (block_size <= 0)
+        block_size = alignment;
+
+    cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
+    int aligned_size = align_up(block_size, alignment);
+    cur_scope->t_offset += aligned_size;
+
+    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, aligned_size);
+    new_node->element_size = block_size;
+
+    ListNode_t *node = CreateListNode(new_node, LIST_UNSPECIFIED);
+    if (cur_scope->t == NULL)
+        cur_scope->t = node;
+    else
+        cur_scope->t = PushListNodeBack(cur_scope->t, node);
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added %s block to t_offset %d (size %d)\n", label, offset, aligned_size);
+    #endif
+
+    return new_node;
+}
+
 /* Adds storage to x */
 StackNode_t *add_l_x(char *label, int size)
 {
@@ -318,6 +356,44 @@ StackNode_t *add_l_z(char *label)
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d\n", label, offset);
+    #endif
+
+    return new_node;
+}
+
+StackNode_t *add_block_z(char *label, int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+
+    int alignment = (int)sizeof(void *);
+    if (alignment < DOUBLEWORD)
+        alignment = DOUBLEWORD;
+
+    int block_size = size;
+    if (block_size <= 0)
+        block_size = alignment;
+
+    cur_scope->z_offset = align_up(cur_scope->z_offset, alignment);
+    int aligned_size = align_up(block_size, alignment);
+    cur_scope->z_offset += aligned_size;
+
+    int offset = cur_scope->z_offset;
+
+    StackNode_t *new_node = init_stack_node(offset, label, aligned_size);
+    new_node->element_size = block_size;
+
+    ListNode_t *node = CreateListNode(new_node, LIST_UNSPECIFIED);
+    if (cur_scope->z == NULL)
+        cur_scope->z = node;
+    else
+        cur_scope->z = PushListNodeBack(cur_scope->z, node);
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added %s block to z_offset %d (size %d)\n", label, offset, aligned_size);
     #endif
 
     return new_node;
@@ -899,6 +975,7 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->is_dynamic = 0;
     new_node->is_static = 0;
     new_node->static_label = NULL;
+    new_node->is_reference = 0;
 
     return new_node;
 }

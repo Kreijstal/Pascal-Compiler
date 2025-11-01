@@ -1,0 +1,4 @@
+Before calls, myPoint.x = 10
+Inside ModifyCopy, pt.x = 999
+After ModifyCopy, myPoint.x = 10
+After ModifyOriginal, myPoint.x = 11
