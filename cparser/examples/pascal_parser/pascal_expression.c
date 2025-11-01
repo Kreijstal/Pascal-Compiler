@@ -843,6 +843,7 @@ void init_pascal_expression_parser(combinator_t** p) {
     // Precedence 5: Addition and Subtraction (includes string concatenation and set operations)
     expr_insert(*p, 5, PASCAL_T_ADD, EXPR_INFIX, ASSOC_LEFT, token(match("+")));
     expr_altern(*p, 5, PASCAL_T_SUB, token(match("-")));
+    expr_altern(*p, 5, PASCAL_T_SET_SYM_DIFF, token(match("><")));
 
     // Precedence 6: Multiplication, Division, Modulo, and Bitwise shifts
     expr_insert(*p, 6, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
