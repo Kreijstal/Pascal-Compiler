@@ -55,6 +55,38 @@ static ast_t* ensure_ast_nil_initialized();
 //=============================================================================
 
 ast_t * ast_nil = NULL;
+static size_t next_combinator_id = 1;
+
+//=============================================================================
+// PACKRAT MEMOIZATION SUPPORT
+//=============================================================================
+
+typedef struct memo_entry {
+    size_t combinator_id;
+    int position;
+    bool has_result;
+    bool in_progress;
+    ParseResult result;
+    InputState final_state;
+    struct memo_entry* next;
+} memo_entry_t;
+
+struct memo_table {
+    memo_entry_t** buckets;
+    size_t bucket_count;
+    size_t size;
+};
+
+static ParseError* clone_parse_error(const ParseError* original);
+static ParseResult clone_parse_result(const ParseResult* original);
+static void free_parse_result_contents(ParseResult* result);
+static memo_table_t* memo_table_create(void);
+static void memo_table_destroy(memo_table_t* table);
+static memo_entry_t* memo_table_lookup(memo_table_t* table, size_t combinator_id, int position);
+static memo_entry_t* memo_table_insert(memo_table_t* table, size_t combinator_id, int position);
+static void memo_table_store_result(memo_entry_t* entry, const ParseResult* result, const InputState* final_state);
+static ParseResult memo_entry_replay(memo_entry_t* entry, input_t* in);
+
 
 // --- Result & Error Helpers ---
 ParseResult make_success(ast_t* ast) {
@@ -385,6 +417,8 @@ ast_t* copy_ast(ast_t* orig) {
     if (orig == ensure_ast_nil_initialized()) return ensure_ast_nil_initialized();
     ast_t* new = new_ast();
     new->typ = orig->typ;
+    new->line = orig->line;
+    new->col = orig->col;
     new->sym = orig->sym ? sym_lookup(orig->sym->name) : NULL;
     new->child = copy_ast(orig->child);
     new->next = copy_ast(orig->next);
@@ -404,14 +438,203 @@ sym_t * sym_lookup(const char * name) {
    return sym;
 }
 
+static ParseError* clone_parse_error(const ParseError* original) {
+    if (original == NULL) {
+        return NULL;
+    }
+
+    ParseError* copy = (ParseError*)safe_malloc(sizeof(ParseError));
+    copy->line = original->line;
+    copy->col = original->col;
+    copy->index = original->index;
+    copy->message = original->message ? strdup(original->message) : NULL;
+    copy->parser_name = original->parser_name ? strdup(original->parser_name) : NULL;
+    copy->unexpected = original->unexpected ? strdup(original->unexpected) : NULL;
+    copy->context = original->context ? strdup(original->context) : NULL;
+    copy->committed = original->committed;
+    copy->partial_ast = copy_ast(original->partial_ast);
+    copy->cause = clone_parse_error(original->cause);
+    return copy;
+}
+
+static ParseResult clone_parse_result(const ParseResult* original) {
+    if (original == NULL) {
+        return (ParseResult){ .is_success = false, .value.error = NULL };
+    }
+
+    ParseResult copy;
+    copy.is_success = original->is_success;
+    if (original->is_success) {
+        copy.value.ast = copy_ast(original->value.ast);
+    } else {
+        copy.value.error = clone_parse_error(original->value.error);
+    }
+    return copy;
+}
+
+static void free_parse_result_contents(ParseResult* result) {
+    if (result == NULL) {
+        return;
+    }
+
+    if (result->is_success) {
+        if (result->value.ast != NULL) {
+            free_ast(result->value.ast);
+        }
+        result->value.ast = NULL;
+    } else {
+        if (result->value.error != NULL) {
+            free_error(result->value.error);
+        }
+        result->value.error = NULL;
+    }
+
+    result->is_success = false;
+}
+
+static size_t memo_table_bucket_index(size_t bucket_count, size_t combinator_id, int position) {
+    uint64_t key = (uint64_t)combinator_id;
+    uint64_t pos = (uint64_t)(uint32_t)position;
+    key ^= (pos << 32) | pos;
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    return (size_t)(key & (uint64_t)(bucket_count - 1));
+}
+
+static memo_table_t* memo_table_create(void) {
+    memo_table_t* table = (memo_table_t*)safe_malloc(sizeof(memo_table_t));
+    table->bucket_count = 1024;
+    table->size = 0;
+    table->buckets = (memo_entry_t**)safe_malloc(sizeof(memo_entry_t*) * table->bucket_count);
+    memset(table->buckets, 0, sizeof(memo_entry_t*) * table->bucket_count);
+    return table;
+}
+
+static void memo_table_resize(memo_table_t* table) {
+    size_t new_count = table->bucket_count * 2;
+    memo_entry_t** new_buckets = (memo_entry_t**)safe_malloc(sizeof(memo_entry_t*) * new_count);
+    memset(new_buckets, 0, sizeof(memo_entry_t*) * new_count);
+
+    for (size_t i = 0; i < table->bucket_count; ++i) {
+        memo_entry_t* entry = table->buckets[i];
+        while (entry) {
+            memo_entry_t* next = entry->next;
+            size_t index = memo_table_bucket_index(new_count, entry->combinator_id, entry->position);
+            entry->next = new_buckets[index];
+            new_buckets[index] = entry;
+            entry = next;
+        }
+    }
+
+    free(table->buckets);
+    table->buckets = new_buckets;
+    table->bucket_count = new_count;
+}
+
+static void memo_table_destroy(memo_table_t* table) {
+    if (table == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < table->bucket_count; ++i) {
+        memo_entry_t* entry = table->buckets[i];
+        while (entry) {
+            memo_entry_t* next = entry->next;
+            if (entry->has_result) {
+                free_parse_result_contents(&entry->result);
+            }
+            free(entry);
+            entry = next;
+        }
+    }
+
+    free(table->buckets);
+    free(table);
+}
+
+static memo_entry_t* memo_table_lookup(memo_table_t* table, size_t combinator_id, int position) {
+    if (table == NULL) {
+        return NULL;
+    }
+
+    size_t index = memo_table_bucket_index(table->bucket_count, combinator_id, position);
+    memo_entry_t* entry = table->buckets[index];
+    while (entry) {
+        if (entry->combinator_id == combinator_id && entry->position == position) {
+            return entry;
+        }
+        entry = entry->next;
+    }
+    return NULL;
+}
+
+static memo_entry_t* memo_table_insert(memo_table_t* table, size_t combinator_id, int position) {
+    if (table == NULL) {
+        return NULL;
+    }
+
+    if ((table->size + 1) * 4 >= table->bucket_count * 3) {
+        memo_table_resize(table);
+    }
+
+    size_t index = memo_table_bucket_index(table->bucket_count, combinator_id, position);
+    memo_entry_t* entry = (memo_entry_t*)safe_malloc(sizeof(memo_entry_t));
+    entry->combinator_id = combinator_id;
+    entry->position = position;
+    entry->has_result = false;
+    entry->in_progress = false;
+    entry->result.is_success = false;
+    entry->result.value.error = NULL;
+    entry->final_state.start = position;
+    entry->final_state.line = 0;
+    entry->final_state.col = 0;
+    entry->next = table->buckets[index];
+    table->buckets[index] = entry;
+    table->size++;
+    return entry;
+}
+
+static void memo_table_store_result(memo_entry_t* entry, const ParseResult* result, const InputState* final_state) {
+    if (entry == NULL || result == NULL || final_state == NULL) {
+        return;
+    }
+
+    if (entry->has_result) {
+        free_parse_result_contents(&entry->result);
+    }
+
+    entry->result = clone_parse_result(result);
+    entry->final_state = *final_state;
+    entry->has_result = true;
+}
+
+static ParseResult memo_entry_replay(memo_entry_t* entry, input_t* in) {
+    if (entry == NULL || !entry->has_result) {
+        return (ParseResult){ .is_success = false, .value.error = NULL };
+    }
+
+    if (in != NULL) {
+        in->start = entry->final_state.start;
+        in->line = entry->final_state.line;
+        in->col = entry->final_state.col;
+    }
+
+    return clone_parse_result(&entry->result);
+}
+
 input_t * new_input() {
     input_t * in = (input_t *) safe_malloc(sizeof(input_t));
-    in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1;
+    in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1; in->memo = NULL;
     return in;
 }
 
 // Initialize input buffer with proper line/column tracking
 void init_input_buffer(input_t *in, char *buffer, int length) {
+    if (in->memo) {
+        memo_table_destroy(in->memo);
+        in->memo = NULL;
+    }
     in->buffer = buffer;
     in->length = length;
     in->start = 0;
@@ -456,6 +679,7 @@ combinator_t * new_combinator() {
     memset(comb, 0, sizeof(combinator_t));
     comb->type = P_MATCH; // Default value, will be overridden
     comb->extra_to_free = NULL;
+    comb->memo_id = next_combinator_id++;
     return comb;
 }
 
@@ -858,7 +1082,35 @@ void expr_altern(combinator_t * exp, int prec, tag_t tag, combinator_t * comb) {
 //=============================================================================
 ParseResult parse(input_t * in, combinator_t * comb) {
     if (!comb || !comb->fn) exception("Attempted to parse with a NULL or uninitialized combinator.");
-    return comb->fn(in, (void *)comb->args, comb->name);
+    if (in == NULL) exception("Attempted to parse with NULL input.");
+
+    if (in->memo == NULL) {
+        in->memo = memo_table_create();
+    }
+
+    int position = in->start;
+    size_t combinator_id = comb->memo_id;
+    memo_entry_t* entry = memo_table_lookup(in->memo, combinator_id, position);
+    if (entry && entry->has_result) {
+        return memo_entry_replay(entry, in);
+    }
+
+    if (entry && entry->in_progress) {
+        char* message = strdup("Left recursion detected.");
+        return make_failure_v2(in, comb->name, message, NULL);
+    }
+
+    if (!entry) {
+        entry = memo_table_insert(in->memo, combinator_id, position);
+    }
+
+    entry->in_progress = true;
+    ParseResult result = comb->fn(in, (void *)comb->args, comb->name);
+    InputState final_state;
+    save_input_state(in, &final_state);
+    entry->in_progress = false;
+    memo_table_store_result(entry, &result, &final_state);
+    return result;
 }
 
 static combinator_t* create_lazy(combinator_t** parser_ptr, bool owns_parser) {
