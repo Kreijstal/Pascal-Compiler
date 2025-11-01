@@ -1610,6 +1610,12 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
     case EXPR_CHAR_CODE:
         *out_value = expr->expr_data.char_code;
         return 0;
+    case EXPR_STRING:
+        if (expr->expr_data.string == NULL || expr->expr_data.string[0] == '\0' ||
+            expr->expr_data.string[1] != '\0')
+            return 1;
+        *out_value = (unsigned char)expr->expr_data.string[0];
+        return 0;
     case EXPR_SIGN_TERM:
         if (extract_constant_int(expr->expr_data.sign_term, out_value) != 0)
             return 1;
@@ -1648,6 +1654,80 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
     }
 
     return 1;
+}
+
+static int append_case_label_range(ListBuilder *builder, ast_t *range_node) {
+    if (builder == NULL || range_node == NULL)
+        return 1;
+
+    ast_t *start_node = unwrap_pascal_node(range_node->child);
+    ast_t *end_node = NULL;
+    if (start_node != NULL)
+        end_node = unwrap_pascal_node(start_node->next);
+
+    struct Expression *start_expr = convert_expression(start_node);
+    struct Expression *end_expr = convert_expression(end_node);
+    if (start_expr == NULL || end_expr == NULL) {
+        if (start_expr != NULL)
+            destroy_expr(start_expr);
+        if (end_expr != NULL)
+            destroy_expr(end_expr);
+        return 1;
+    }
+
+    long long start_value = 0;
+    long long end_value = 0;
+    if (extract_constant_int(start_expr, &start_value) != 0 ||
+        extract_constant_int(end_expr, &end_value) != 0) {
+        fprintf(stderr, "ERROR: case label range must use constant bounds at line %d.\n",
+                range_node->line);
+        destroy_expr(start_expr);
+        destroy_expr(end_expr);
+        return 1;
+    }
+
+    if (start_value > end_value) {
+        long long tmp = start_value;
+        start_value = end_value;
+        end_value = tmp;
+    }
+
+    enum ExprType start_type = start_expr->type;
+    enum ExprType end_type = end_expr->type;
+
+    for (long long value = start_value; value <= end_value; ++value) {
+        struct Expression *label_expr = NULL;
+        if (start_type == EXPR_STRING && end_type == EXPR_STRING) {
+            label_expr = mk_charcode(range_node->line, (unsigned int)(value & 0xFFu));
+        } else if (start_type == EXPR_CHAR_CODE && end_type == EXPR_CHAR_CODE) {
+            label_expr = mk_charcode(range_node->line, (unsigned int)value);
+        } else {
+            label_expr = mk_inum(range_node->line, value);
+        }
+
+        if (label_expr != NULL)
+            list_builder_append(builder, label_expr, LIST_EXPR);
+    }
+
+    destroy_expr(start_expr);
+    destroy_expr(end_expr);
+    return 0;
+}
+
+static void normalize_case_label_expression(struct Expression *expr) {
+    if (expr == NULL)
+        return;
+
+    if (expr->type == EXPR_STRING && expr->expr_data.string != NULL) {
+        if (expr->expr_data.string[0] != '\0' && expr->expr_data.string[1] == '\0') {
+            unsigned char ch = (unsigned char)expr->expr_data.string[0];
+            free(expr->expr_data.string);
+            expr->expr_data.string = NULL;
+            expr->type = EXPR_CHAR_CODE;
+            expr->expr_data.char_code = ch;
+            expr->resolved_type = CHAR_TYPE;
+        }
+    }
 }
 
 static ListNode_t *append_set_element(ListNode_t *elements, struct SetElement *element)
@@ -2432,15 +2512,33 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                         ast_t *label_node = child->child;
                         while (label_node != NULL) {
                             if (label_node->typ == PASCAL_T_CASE_LABEL && label_node->child != NULL) {
-                                struct Expression *label_expr = convert_expression(label_node->child);
-                                if (label_expr != NULL) {
-                                    list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+                                ast_t *label_value = unwrap_pascal_node(label_node->child);
+                                if (label_value != NULL && label_value->typ == PASCAL_T_RANGE) {
+                                    if (append_case_label_range(&labels_builder, label_value) != 0) {
+                                        struct Expression *label_expr = convert_expression(label_value);
+                                        if (label_expr != NULL) {
+                                            normalize_case_label_expression(label_expr);
+                                            list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+                                        }
+                                    }
+                                } else {
+                                    struct Expression *label_expr = convert_expression(label_node->child);
+                                    if (label_expr != NULL) {
+                                        normalize_case_label_expression(label_expr);
+                                        list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+                                    }
                                 }
-                            } else if (label_node->typ == PASCAL_T_INTEGER || 
-                                       label_node->typ == PASCAL_T_IDENTIFIER) {
+                            } else if (label_node->typ == PASCAL_T_RANGE) {
+                                append_case_label_range(&labels_builder, label_node);
+                            } else if (label_node->typ == PASCAL_T_INTEGER ||
+                                       label_node->typ == PASCAL_T_IDENTIFIER ||
+                                       label_node->typ == PASCAL_T_CHAR ||
+                                       label_node->typ == PASCAL_T_CHAR_CODE ||
+                                       label_node->typ == PASCAL_T_STRING) {
                                 /* Direct value */
                                 struct Expression *label_expr = convert_expression(label_node);
                                 if (label_expr != NULL) {
+                                    normalize_case_label_expression(label_expr);
                                     list_builder_append(&labels_builder, label_expr, LIST_EXPR);
                                 }
                             }
@@ -2449,14 +2547,29 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                     } else if (child->typ == PASCAL_T_CASE_LABEL) {
                         /* Single CASE_LABEL (not in a list) */
                         if (child->child != NULL) {
-                            struct Expression *label_expr = convert_expression(child->child);
-                            if (label_expr != NULL) {
-                                list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+                            ast_t *label_value = unwrap_pascal_node(child->child);
+                            if (label_value != NULL && label_value->typ == PASCAL_T_RANGE) {
+                                if (append_case_label_range(&labels_builder, label_value) != 0) {
+                                    struct Expression *label_expr = convert_expression(label_value);
+                                    if (label_expr != NULL) {
+                                        normalize_case_label_expression(label_expr);
+                                        list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+                                    }
+                                }
+                            } else {
+                                struct Expression *label_expr = convert_expression(child->child);
+                                if (label_expr != NULL) {
+                                    normalize_case_label_expression(label_expr);
+                                    list_builder_append(&labels_builder, label_expr, LIST_EXPR);
+                                }
                             }
                         }
-                    } else if (child->typ == PASCAL_T_STATEMENT || 
+                    } else if (child->typ == PASCAL_T_RANGE) {
+                        append_case_label_range(&labels_builder, child);
+                    } else if (child->typ == PASCAL_T_STATEMENT ||
                                child->typ == PASCAL_T_FUNC_CALL ||
-                               child->typ == PASCAL_T_BEGIN_BLOCK) {
+                               child->typ == PASCAL_T_BEGIN_BLOCK ||
+                               child->typ == PASCAL_T_ASSIGNMENT) {
                         /* This is the statement for this branch */
                         branch_stmt = convert_statement(child);
                         break; /* Statement is last */
