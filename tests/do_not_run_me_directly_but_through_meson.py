@@ -1078,6 +1078,30 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("Parse-only mode enabled.", stderr_output)
         self.assertNotIn("Parse error", stderr_output)
 
+    def test_variant_record_minimal_program(self):
+        """Compiles and runs a minimal variant record example."""
+        input_file = os.path.join(TEST_CASES_DIR, "variant_record_minimal.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "variant_record_minimal.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "variant_record_minimal")
+        expected_output_file = os.path.join(
+            TEST_CASES_DIR, "variant_record_minimal.expected"
+        )
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        expected_output = read_file_content(expected_output_file).strip().splitlines()
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout.strip().splitlines(), expected_output)
+        self.assertEqual(result.returncode, 0)
+
     def test_with_nested_multi_context_program(self):
         """Ensures nested and multi-context with statements compile and run."""
         input_file = os.path.join(
