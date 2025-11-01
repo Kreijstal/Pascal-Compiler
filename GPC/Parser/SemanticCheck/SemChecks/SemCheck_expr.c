@@ -26,6 +26,8 @@
 
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
+static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
+    int *type_second, struct Expression *expr2);
 int is_and_or(int *type);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 int semcheck_arrayaccess(int *type_return,
@@ -1577,6 +1579,28 @@ static int types_numeric_compatible(int lhs, int rhs)
     return 0;
 }
 
+static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
+    int *type_second, struct Expression *expr2)
+{
+    if (type_first == NULL || type_second == NULL)
+        return;
+
+    if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
+        (*type_first == STRING_TYPE && *type_second == CHAR_TYPE))
+    {
+        struct Expression *string_expr = (*type_first == STRING_TYPE) ? expr1 : expr2;
+        int *string_type_ptr = (*type_first == STRING_TYPE) ? type_first : type_second;
+
+        if (string_expr != NULL && string_expr->type == EXPR_STRING &&
+            string_expr->expr_data.string != NULL &&
+            strlen(string_expr->expr_data.string) == 1)
+        {
+            *string_type_ptr = CHAR_TYPE;
+            string_expr->resolved_type = CHAR_TYPE;
+        }
+    }
+}
+
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
     const char *type_id, int line_num)
 {
@@ -2219,22 +2243,7 @@ int semcheck_relop(int *type_return,
             }
             else if (relop_type == EQ || relop_type == NE)
             {
-                if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
-                    expr2 != NULL && expr2->type == EXPR_STRING &&
-                    expr2->expr_data.string != NULL &&
-                    strlen(expr2->expr_data.string) == 1)
-                {
-                    type_second = CHAR_TYPE;
-                    expr2->resolved_type = CHAR_TYPE;
-                }
-                else if (type_first == STRING_TYPE && type_second == CHAR_TYPE &&
-                    expr1 != NULL && expr1->type == EXPR_STRING &&
-                    expr1->expr_data.string != NULL &&
-                    strlen(expr1->expr_data.string) == 1)
-                {
-                    type_first = CHAR_TYPE;
-                    expr1->resolved_type = CHAR_TYPE;
-                }
+                semcheck_coerce_char_string_operands(&type_first, expr1, &type_second, expr2);
 
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
@@ -2250,10 +2259,17 @@ int semcheck_relop(int *type_return,
             }
             else
             {
-                if(!types_numeric_compatible(type_first, type_second) ||
-                   !is_type_ir(&type_first) || !is_type_ir(&type_second))
+                semcheck_coerce_char_string_operands(&type_first, expr1, &type_second, expr2);
+
+                int numeric_ok = types_numeric_compatible(type_first, type_second) &&
+                                 is_type_ir(&type_first) && is_type_ir(&type_second);
+                int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
+                int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
+
+                if(!numeric_ok && !string_ok && !char_ok)
                 {
-                    fprintf(stderr, "Error on line %d, expected compatible numeric types between relational op!\n\n",
+                    fprintf(stderr,
+                        "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
