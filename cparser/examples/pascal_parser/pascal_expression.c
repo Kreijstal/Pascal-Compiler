@@ -17,6 +17,7 @@ static ast_t* wrap_array_suffix(ast_t* parsed);
 static ast_t* build_array_or_pointer_chain(ast_t* parsed);
 static ast_t* wrap_nil_literal(ast_t* parsed);
 static combinator_t* create_suffix_choice(combinator_t** expr_parser_ref);
+static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name);
 
 // Pascal identifier parser that excludes reserved keywords
 static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_name) {
@@ -895,9 +896,13 @@ static combinator_t* create_suffix_choice(combinator_t** expr_parser_ref) {
     );
     combinator_t* array_suffix = map(index_list, wrap_array_suffix);
 
+    combinator_t* member_suffix = new_combinator();
+    member_suffix->fn = member_suffix_fn;
+
     combinator_t* choice = multi(new_combinator(), PASCAL_T_NONE,
         array_suffix,
         pointer_suffix,
+        member_suffix,
         NULL
     );
 
@@ -969,6 +974,25 @@ static ast_t* build_array_or_pointer_chain(ast_t* parsed) {
                 current = suffix;
                 break;
             }
+            case PASCAL_T_MEMBER_ACCESS: {
+                ast_t* field = suffix->child;
+                suffix->child = current;
+
+                if (field == ast_nil) {
+                    field = NULL;
+                }
+
+                if (field != NULL) {
+                    ast_t* tail = suffix->child;
+                    while (tail->next != NULL) {
+                        tail = tail->next;
+                    }
+                    tail->next = field;
+                }
+
+                current = suffix;
+                break;
+            }
             default: {
                 suffix->child = current;
                 current = suffix;
@@ -980,6 +1004,45 @@ static ast_t* build_array_or_pointer_chain(ast_t* parsed) {
     }
 
     return current;
+}
+
+static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+
+    InputState state;
+    save_input_state(in, &state);
+
+    combinator_t* dot = token(match("."));
+    ParseResult dot_res = parse(in, dot);
+    free_combinator(dot);
+    if (!dot_res.is_success) {
+        if (dot_res.value.error != NULL) {
+            free_error(dot_res.value.error);
+        }
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '.' in member access"), NULL);
+    }
+    free_ast(dot_res.value.ast);
+
+    combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult ident_res = parse(in, identifier);
+    free_combinator(identifier);
+    if (!ident_res.is_success) {
+        if (ident_res.value.error != NULL) {
+            free_error(ident_res.value.error);
+        }
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected identifier after '.'"), NULL);
+    }
+
+    ast_t* ident_ast = ident_res.value.ast;
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_MEMBER_ACCESS;
+    node->child = (ident_ast == ast_nil) ? NULL : ident_ast;
+    node->next = NULL;
+    set_ast_position(node, in);
+
+    return make_success(node);
 }
 
 static ast_t* wrap_nil_literal(ast_t* parsed) {
