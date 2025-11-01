@@ -34,6 +34,7 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name);
 static ParseResult succeed_fn(input_t * in, void * args, char* parser_name);
 static ParseResult map_fn(input_t * in, void * args, char* parser_name);
 static ParseResult errmap_fn(input_t * in, void * args, char* parser_name);
+static ParseResult commit_fn(input_t * in, void * args, char* parser_name);
 static ParseResult many_fn(input_t * in, void * args, char* parser_name);
 static ParseResult optional_fn(input_t * in, void * args, char* parser_name);
 
@@ -159,6 +160,14 @@ static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
             break;
         }
 
+        // Check if we consumed any input - prevents infinite loop on epsilon matches
+        if (in->start == state.start) {
+            // No input consumed - restore and break
+            restore_input_state(in, &state);
+            free_ast(next_res.value.ast);
+            break;
+        }
+
         tail->next = next_res.value.ast;
         tail = tail->next;
     }
@@ -220,6 +229,15 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
             free_error(p_res.value.error);
             break;
         }
+
+        // Check if we consumed any input - prevents infinite loop on epsilon matches
+        if (in->start == state.start) {
+            // No input consumed - restore and break
+            restore_input_state(in, &state);
+            free_ast(p_res.value.ast);
+            break;
+        }
+
         tail->next = p_res.value.ast;
         tail = tail->next;
     }
@@ -265,6 +283,15 @@ static ParseResult chainl1_fn(input_t * in, void * args, char* parser_name) {
             return wrap_failure(in, strdup("Expected operand after operator in chainl1"), parser_name, right_res);
         }
         ast_t* right = right_res.value.ast;
+
+        // Check if we consumed any input - prevents infinite loop on epsilon matches
+        if (in->start == state.start) {
+            // No input consumed - restore and break
+            restore_input_state(in, &state);
+            free_ast(right);
+            break;
+        }
+
         left = ast2(op_tag, left, right);
     }
 
@@ -286,6 +313,16 @@ static ParseResult errmap_fn(input_t * in, void * args, char* parser_name) {
     return res;
 }
 
+static ParseResult commit_fn(input_t * in, void * args, char* parser_name) {
+    combinator_t* p = (combinator_t*)args;
+    ParseResult res = parse(in, p);
+    if (!res.is_success) {
+        // Mark the error as committed to prevent backtracking
+        res.value.error->committed = true;
+    }
+    return res;
+}
+
 static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
     combinator_t* p = (combinator_t*)args;
     ast_t* head = NULL;
@@ -297,6 +334,13 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
         if (!res.is_success) {
             restore_input_state(in, &state);
             free_error(res.value.error);
+            break;
+        }
+        // Check if the parser consumed any input - prevents infinite loop on epsilon matches
+        if (in->start == state.start) {
+            // Parser succeeded but didn't consume input - restore state and break
+            restore_input_state(in, &state);
+            free_ast(res.value.ast);
             break;
         }
         if (head == NULL) {
@@ -416,6 +460,11 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
             if (has_best) {
                 free_error(best_res.value.error);
             }
+            return res;
+        }
+
+        // Check if this error was committed - if so, stop trying alternatives
+        if (res.value.error->committed) {
             return res;
         }
 
@@ -715,6 +764,16 @@ combinator_t * errmap(combinator_t* p, err_map_func func) {
     comb->type = COMB_ERRMAP;
     comb->fn = errmap_fn;
     comb->args = (void *) args;
+    return comb;
+}
+
+combinator_t * commit(combinator_t* p) {
+    combinator_t * comb = new_combinator();
+    int ret = asprintf(&comb->name, "commit(%s)", p->name ? p->name : "unnamed_parser");
+    (void)ret;
+    comb->type = COMB_COMMIT;
+    comb->fn = commit_fn;
+    comb->args = (void *) p;
     return comb;
 }
 
