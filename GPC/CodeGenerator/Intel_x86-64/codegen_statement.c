@@ -39,7 +39,7 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
+ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type);
 static int record_type_is_mp_integer(const struct RecordType *record_type);
 static int codegen_expr_is_mp_integer(struct Expression *expr);
@@ -167,7 +167,7 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     return inst_list;
 }
 
-static ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
+ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type)
 {
     if (expr == NULL)
@@ -1159,15 +1159,50 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
 
     char buffer[128];
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    Register_t *file_reg = NULL;
+    StackNode_t *file_spill = NULL;
+    int has_file_arg = 0;
+
+    if (args != NULL)
+    {
+        struct Expression *first_expr = (struct Expression *)args->cur;
+        if (first_expr != NULL && first_expr->resolved_type == FILE_TYPE)
+        {
+            expr_node_t *file_tree = build_expr_tree(first_expr);
+            file_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (file_reg != NULL)
+            {
+                inst_list = gencode_expr_tree(file_tree, inst_list, ctx, file_reg);
+                has_file_arg = 1;
+                file_spill = add_l_t("write_file");
+                if (file_spill != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", file_reg->bit_64, file_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), file_reg);
+                    file_reg = NULL;
+                }
+            }
+            else
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for write file argument.");
+            }
+            free_expr_tree(file_tree);
+            args = args->next;
+        }
+    }
+
     while (args != NULL)
     {
         struct Expression *expr = (struct Expression *)args->cur;
 
         int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
         const int expr_is_real = (expr_type == REAL_TYPE);
-        const char *width_dest64 = current_arg_reg64(0);
-        const char *precision_dest64 = current_arg_reg64(1);
-        const char *value_dest64 = current_arg_reg64(expr_is_real ? 2 : 1);
+        const char *file_dest64 = current_arg_reg64(0);
+        const char *width_dest64 = current_arg_reg64(1);
+        const char *precision_dest64 = current_arg_reg64(2);
+        const char *value_dest64 = current_arg_reg64(expr_is_real ? 3 : 2);
 
         Register_t *width_reg = NULL;
         Register_t *precision_reg = NULL;
@@ -1254,8 +1289,6 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             free_reg(get_reg_stack(), precision_reg);
         }
 
-        inst_list = codegen_vect_reg(inst_list, 0);
-
         const char *call_target = "gpc_write_integer";
         if (expr_type == STRING_TYPE)
             call_target = "gpc_write_string";
@@ -1268,6 +1301,27 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         else if (expr_type == POINTER_TYPE)
             call_target = "gpc_write_integer";  // Print pointers as integers (addresses)
 
+        if (has_file_arg && (file_spill != NULL || file_reg != NULL))
+        {
+            if (file_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", file_spill->offset, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", file_reg->bit_64, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+
         inst_list = codegen_call_with_shadow_space(inst_list, ctx, call_target);
 
         free_arg_regs();
@@ -1277,12 +1331,35 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
 
     if (append_newline)
     {
+        const char *file_dest64 = current_arg_reg64(0);
+        if (has_file_arg && (file_spill != NULL || file_reg != NULL))
+        {
+            if (file_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", file_spill->offset, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", file_reg->bit_64, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
         inst_list = codegen_vect_reg(inst_list, 0);
 
         inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_write_newline");
 
         free_arg_regs();
     }
+
+    if (file_reg != NULL)
+        free_reg(get_reg_stack(), file_reg);
 
     return inst_list;
 }

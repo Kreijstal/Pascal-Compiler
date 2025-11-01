@@ -810,7 +810,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         var_kind = type_node->var_type;
 
                     if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
-                        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER)
+                        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
+                        var_kind == HASHVAR_FILE)
                     {
                         alloc_size = 8;
                     }

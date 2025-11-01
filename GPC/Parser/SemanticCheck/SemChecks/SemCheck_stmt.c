@@ -263,11 +263,19 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     int arg_index = 1;
+    int saw_file_arg = 0;
     while (args != NULL)
     {
         struct Expression *expr = (struct Expression *)args->cur;
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
+
+        if (!saw_file_arg && expr_type == FILE_TYPE)
+        {
+            saw_file_arg = 1;
+            args = args->next;
+            continue;
+        }
 
         if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && expr_type != CHAR_TYPE)
         {

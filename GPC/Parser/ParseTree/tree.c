@@ -1055,8 +1055,10 @@ void destroy_expr(struct Expression *expr)
     switch(expr->type)
     {
         case EXPR_RELOP:
-          destroy_expr(expr->expr_data.relop_data.left);
-          destroy_expr(expr->expr_data.relop_data.right);
+          if (expr->expr_data.relop_data.left != NULL)
+              destroy_expr(expr->expr_data.relop_data.left);
+          if (expr->expr_data.relop_data.right != NULL)
+              destroy_expr(expr->expr_data.relop_data.right);
           break;
 
         case EXPR_SIGN_TERM:
