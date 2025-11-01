@@ -1980,6 +1980,9 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
     return base_expr;
 }
 
+static struct Expression *convert_member_access_chain(int line,
+    struct Expression *base_expr, ast_t *field_node);
+
 static struct Expression *convert_member_access(ast_t *node) {
     if (node == NULL)
         return NULL;
@@ -1988,21 +1991,90 @@ static struct Expression *convert_member_access(ast_t *node) {
     ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
 
     struct Expression *record_expr = convert_expression(base_node);
+    if (record_expr == NULL)
+        return NULL;
 
-    char *field_id = NULL;
+    return convert_member_access_chain(node->line, record_expr, field_node);
+}
+
+static struct Expression *convert_member_access_chain(int line,
+    struct Expression *base_expr, ast_t *field_node) {
+    if (base_expr == NULL)
+        return NULL;
+
+    if (field_node == NULL) {
+        destroy_expr(base_expr);
+        return NULL;
+    }
+
     ast_t *unwrapped = unwrap_pascal_node(field_node);
     if (unwrapped == NULL)
         unwrapped = field_node;
 
-    if (unwrapped != NULL) {
-        if (unwrapped->typ == PASCAL_T_IDENTIFIER) {
-            field_id = dup_symbol(unwrapped);
-        } else if (unwrapped->child != NULL && unwrapped->child->typ == PASCAL_T_IDENTIFIER) {
-            field_id = dup_symbol(unwrapped->child);
+    if (unwrapped == NULL) {
+        destroy_expr(base_expr);
+        return NULL;
+    }
+
+    int node_line = (unwrapped->line != 0) ? unwrapped->line : line;
+
+    switch (unwrapped->typ) {
+    case PASCAL_T_IDENTIFIER: {
+        char *field_id = dup_symbol(unwrapped);
+        if (field_id == NULL) {
+            destroy_expr(base_expr);
+            return NULL;
+        }
+        return mk_recordaccess(node_line, base_expr, field_id);
+    }
+    case PASCAL_T_ARRAY_ACCESS: {
+        ast_t *array_base = unwrapped->child;
+        ast_t *index_node = (array_base != NULL) ? array_base->next : NULL;
+        struct Expression *field_expr = convert_member_access_chain(node_line, base_expr, array_base);
+        if (field_expr == NULL)
+            return NULL;
+
+        struct Expression *index_expr = convert_expression(index_node);
+        if (index_expr == NULL) {
+            destroy_expr(field_expr);
+            return NULL;
+        }
+
+        return mk_arrayaccess(node_line, field_expr, index_expr);
+    }
+    case PASCAL_T_MEMBER_ACCESS: {
+        ast_t *inner_base = unwrapped->child;
+        ast_t *inner_field = (inner_base != NULL) ? inner_base->next : NULL;
+        struct Expression *next_base = convert_member_access_chain(node_line, base_expr, inner_base);
+        if (next_base == NULL)
+            return NULL;
+        return convert_member_access_chain(node_line, next_base, inner_field);
+    }
+    case PASCAL_T_DEREF: {
+        ast_t *inner = unwrapped->child;
+        struct Expression *target = convert_member_access_chain(node_line, base_expr, inner);
+        if (target == NULL)
+            return NULL;
+        return mk_pointer_deref(node_line, target);
+    }
+    default:
+        break;
+    }
+
+    if (unwrapped->child != NULL) {
+        ast_t *child_id = unwrap_pascal_node(unwrapped->child);
+        if (child_id != NULL && child_id->typ == PASCAL_T_IDENTIFIER) {
+            char *field_id = dup_symbol(child_id);
+            if (field_id == NULL) {
+                destroy_expr(base_expr);
+                return NULL;
+            }
+            return mk_recordaccess(node_line, base_expr, field_id);
         }
     }
 
-    return mk_recordaccess(node->line, record_expr, field_id);
+    destroy_expr(base_expr);
+    return NULL;
 }
 
 static struct Statement *convert_assignment(ast_t *assign_node) {
