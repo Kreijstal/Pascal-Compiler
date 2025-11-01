@@ -34,6 +34,8 @@ typedef struct { char * str; } match_args;
 typedef struct { combinator_t* delimiter; tag_t tag; } until_args;
 typedef struct op_t { tag_t tag; combinator_t * comb; struct op_t * next; } op_t;
 typedef struct expr_list { op_t * op; expr_fix fix; expr_assoc assoc; combinator_t * comb; struct expr_list * next; } expr_list;
+typedef struct { combinator_t* type_parser; } variant_tag_args;
+typedef struct { tag_t tag; combinator_t* tag_parser; combinator_t* branch_parser; } variant_part_args;
 
 // --- Static Function Forward Declarations ---
 static ParseResult lazy_fn(input_t * in, void * args, char* parser_name);
@@ -1232,6 +1234,24 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             }
             case COMB_MANY: {
                 free_combinator_recursive((combinator_t*)comb->args, visited, extras);
+                break;
+            }
+            case COMB_VARIANT_TAG: {
+                variant_tag_args* args = (variant_tag_args*)comb->args;
+                if (args != NULL) {
+                    free(args);
+                }
+                break;
+            }
+            case COMB_VARIANT_PART: {
+                variant_part_args* args = (variant_part_args*)comb->args;
+                if (args != NULL) {
+                    if (args->tag_parser != NULL)
+                        free_combinator_recursive(args->tag_parser, visited, extras);
+                    if (args->branch_parser != NULL)
+                        free_combinator_recursive(args->branch_parser, visited, extras);
+                    free(args);
+                }
                 break;
             }
             case P_INTEGER:
