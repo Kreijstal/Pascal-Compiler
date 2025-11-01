@@ -209,6 +209,7 @@ enum ExprType {
     EXPR_INUM,
     EXPR_RNUM,
     EXPR_STRING,
+    EXPR_CHAR_CODE,
     EXPR_BOOL,
     EXPR_NIL,
     EXPR_SET,
@@ -290,6 +291,9 @@ struct Expression
 
         /* String literal */
         char *string;
+
+        /* Character code literal */
+        unsigned int char_code;
 
         /* Boolean literal */
         int bool_value;
