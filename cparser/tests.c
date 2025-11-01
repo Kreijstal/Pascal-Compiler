@@ -41,7 +41,7 @@ static void print_ast_indented(ast_t* ast, int depth) {
 }
 
 // Helper function to print ParseError with partial AST
-static void print_error_with_partial_ast(ParseError* error, int depth) {
+__attribute__((unused)) static void print_error_with_partial_ast(ParseError* error, int depth) {
     if (error == NULL) return;
     
     for (int i = 0; i < depth; i++) printf("  ");
