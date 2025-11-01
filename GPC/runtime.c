@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stddef.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -327,12 +328,91 @@ void gpc_dispose(void **target)
     }
 }
 
+typedef struct GpcStringNode
+{
+    char *ptr;
+    struct GpcStringNode *next;
+} GpcStringNode;
+
+static GpcStringNode *gpc_string_allocations = NULL;
+
+static void gpc_string_register_allocation(char *ptr)
+{
+    if (ptr == NULL)
+        return;
+
+    GpcStringNode *node = (GpcStringNode *)malloc(sizeof(GpcStringNode));
+    if (node == NULL)
+        return;
+
+    node->ptr = ptr;
+    node->next = gpc_string_allocations;
+    gpc_string_allocations = node;
+}
+
+static int gpc_string_release_allocation(char *ptr)
+{
+    if (ptr == NULL)
+        return 0;
+
+    GpcStringNode **link = &gpc_string_allocations;
+    while (*link != NULL)
+    {
+        if ((*link)->ptr == ptr)
+        {
+            GpcStringNode *victim = *link;
+            *link = victim->next;
+            free(victim);
+            return 1;
+        }
+        link = &(*link)->next;
+    }
+
+    return 0;
+}
+
 static char *gpc_alloc_empty_string(void)
 {
     char *empty = (char *)malloc(1);
     if (empty != NULL)
+    {
         empty[0] = '\0';
+        gpc_string_register_allocation(empty);
+    }
     return empty;
+}
+
+static char *gpc_string_duplicate(const char *value)
+{
+    if (value == NULL)
+        return gpc_alloc_empty_string();
+
+    size_t len = strlen(value);
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL)
+        return gpc_alloc_empty_string();
+
+    if (len > 0)
+        memcpy(copy, value, len);
+    copy[len] = '\0';
+    gpc_string_register_allocation(copy);
+    return copy;
+}
+
+void gpc_string_assign(char **target, const char *value)
+{
+    if (target == NULL)
+        return;
+
+    char *existing = *target;
+    if (gpc_string_release_allocation(existing))
+    {
+        free(existing);
+        *target = NULL;
+    }
+
+    char *copy = gpc_string_duplicate(value);
+    *target = copy;
 }
 
 
@@ -364,6 +444,7 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     if (rhs_len > 0)
         memcpy(result + lhs_len, rhs, rhs_len);
     result[total] = '\0';
+    gpc_string_register_allocation(result);
     return result;
 }
 
@@ -401,6 +482,7 @@ char *gpc_string_copy(const char *value, int64_t index, int64_t count)
     if (to_copy > 0)
         memcpy(result, value + start, to_copy);
     result[to_copy] = '\0';
+    gpc_string_register_allocation(result);
     return result;
 }
 
@@ -417,6 +499,7 @@ char *gpc_chr(int64_t value)
 
     result[0] = (char)(value & 0xFF);
     result[1] = '\0';
+    gpc_string_register_allocation(result);
     return result;
 }
 
@@ -445,6 +528,7 @@ char *gpc_int_to_str(int64_t value)
         return gpc_alloc_empty_string();
 
     memcpy(result, buffer, (size_t)written + 1);
+    gpc_string_register_allocation(result);
     return result;
 }
 

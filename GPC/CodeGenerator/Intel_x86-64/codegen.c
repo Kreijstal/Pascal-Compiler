@@ -844,21 +844,51 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 id_list = id_list->next;
             };
         }
-         else if (tree->type == TREE_ARR_DECL)
-         {
-             struct Array *arr = &tree->tree_data.arr_decl_data;
-             id_list = arr->ids;
-             int length = arr->e_range - arr->s_range + 1;
-             if (length < 0)
-                 length = 0;
-             int total_size = length * DOUBLEWORD;
-             if (total_size <= 0)
-                 total_size = DOUBLEWORD;
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            struct Array *arr = &tree->tree_data.arr_decl_data;
+            id_list = arr->ids;
+            int length = arr->e_range - arr->s_range + 1;
+            if (length < 0)
+                length = 0;
+            enum VarType arr_var_type = HASHVAR_REAL;
+            if (arr->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (symtab != NULL && FindIdent(&type_node, symtab, arr->type_id) >= 0 && type_node != NULL)
+                    arr_var_type = type_node->var_type;
+            }
+            else if (arr->type == INT_TYPE)
+                arr_var_type = HASHVAR_INTEGER;
+            else if (arr->type == LONGINT_TYPE)
+                arr_var_type = HASHVAR_LONGINT;
+            else if (arr->type == BOOL)
+                arr_var_type = HASHVAR_BOOLEAN;
+            else if (arr->type == STRING_TYPE)
+                arr_var_type = HASHVAR_PCHAR;
+            else if (arr->type == CHAR_TYPE)
+                arr_var_type = HASHVAR_CHAR;
 
-             if (arr->has_static_storage)
-             {
-                 if (!arr->static_storage_emitted)
-                 {
+            int element_size = DOUBLEWORD;
+            if (arr_var_type == HASHVAR_REAL || arr_var_type == HASHVAR_LONGINT ||
+                arr_var_type == HASHVAR_PCHAR || arr_var_type == HASHVAR_POINTER ||
+                arr_var_type == HASHVAR_PROCEDURE || arr_var_type == HASHVAR_FILE)
+            {
+                element_size = 8;
+            }
+            else if (arr_var_type == HASHVAR_BOOLEAN || arr_var_type == HASHVAR_CHAR)
+            {
+                element_size = 1;
+            }
+
+            int total_size = length * element_size;
+            if (total_size <= 0)
+                total_size = element_size;
+
+            if (arr->has_static_storage)
+            {
+                if (!arr->static_storage_emitted)
+                {
                      if (arr->static_label != NULL)
                          fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n", arr->static_label, total_size, DOUBLEWORD);
                      if (arr->init_guard_label != NULL)
@@ -866,21 +896,21 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                      arr->static_storage_emitted = 1;
                  }
 
-                 while (id_list != NULL)
-                 {
-                     add_static_array((char *)id_list->cur, total_size, DOUBLEWORD, arr->s_range, arr->static_label);
-                     id_list = id_list->next;
-                 }
-             }
-             else
-             {
-                 while (id_list != NULL)
-                 {
-                     add_array((char *)id_list->cur, total_size, DOUBLEWORD, arr->s_range);
-                     id_list = id_list->next;
-                 }
-             }
-         }
+                while (id_list != NULL)
+                {
+                    add_static_array((char *)id_list->cur, total_size, element_size, arr->s_range, arr->static_label);
+                    id_list = id_list->next;
+                }
+            }
+            else
+            {
+                while (id_list != NULL)
+                {
+                    add_array((char *)id_list->cur, total_size, element_size, arr->s_range);
+                    id_list = id_list->next;
+                }
+            }
+        }
 
          cur = cur->next;
      }
