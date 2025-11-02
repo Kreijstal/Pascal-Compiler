@@ -18,6 +18,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/ParseTree/GpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
@@ -1744,7 +1745,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
     ListNode_t *formal_args = NULL;
     if(proc_node != NULL)
-        formal_args = proc_node->args;
+    {
+        /* For direct calls, proc_node->args contains the formal parameter list.
+         * For indirect calls through procedure variables, we need to get the
+         * parameter list from the procedure type information. */
+        if (proc_node->hash_type == HASHTYPE_VAR && proc_node->type != NULL &&
+            proc_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            /* This is an indirect call through a procedure variable.
+             * Get formal parameters from the type information. */
+            formal_args = proc_node->type->info.proc_info.params;
+        }
+        else
+        {
+            /* Direct call to a procedure - use the args field directly. */
+            formal_args = proc_node->args;
+        }
+    }
 
     typedef struct ArgInfo
     {
