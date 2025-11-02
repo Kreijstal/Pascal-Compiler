@@ -353,6 +353,37 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
     return make_success(head ? head : ast_nil);
 }
 
+static ParseResult many1_fn(input_t * in, void * args, char* parser_name) {
+    combinator_t* p = (combinator_t*)args;
+    ParseResult first = parse(in, p);
+    if (!first.is_success) {
+        return first;
+    }
+
+    ast_t* head = first.value.ast;
+    ast_t* tail = head;
+    while (1) {
+        InputState state;
+        save_input_state(in, &state);
+        ParseResult res = parse(in, p);
+        if (!res.is_success) {
+            restore_input_state(in, &state);
+            free_error(res.value.error);
+            break;
+        }
+        // Check if the parser consumed any input - prevents infinite loop on epsilon matches
+        if (in->start == state.start) {
+            // Parser succeeded but didn't consume input - restore state and break
+            restore_input_state(in, &state);
+            free_ast(res.value.ast);
+            break;
+        }
+        tail->next = res.value.ast;
+        tail = tail->next;
+    }
+    return make_success(head);
+}
+
 static ParseResult map_fn(input_t * in, void * args, char* parser_name) {
     map_args* margs = (map_args*)args;
     ParseResult res = parse(in, margs->parser);
@@ -773,6 +804,16 @@ combinator_t * commit(combinator_t* p) {
     (void)ret;
     comb->type = COMB_COMMIT;
     comb->fn = commit_fn;
+    comb->args = (void *) p;
+    return comb;
+}
+
+combinator_t * many1(combinator_t* p) {
+    combinator_t * comb = new_combinator();
+    int ret = asprintf(&comb->name, "many1 %s", p->name ? p->name : "unnamed_parser");
+    (void)ret;
+    comb->type = COMB_MANY1;
+    comb->fn = many1_fn;
     comb->args = (void *) p;
     return comb;
 }

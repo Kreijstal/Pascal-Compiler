@@ -2,6 +2,7 @@
 #include "pascal_parser.h"
 #include "pascal_keywords.h"
 #include "pascal_type.h"
+#include "combinators.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -685,6 +686,60 @@ combinator_t* pascal_double_quoted_content(tag_t tag) {
     return comb;
 }
 
+// Helper to convert a list of char_code_literal AST nodes to a single string
+static ast_t* string_from_char_codes(ast_t* ast) {
+    if (ast == NULL || ast == ast_nil) {
+        return ast_nil;
+    }
+
+    size_t total_len = 0;
+    for (ast_t* current = ast; current != NULL && current != ast_nil; current = current->next) {
+        total_len++;
+    }
+
+    char* result_str = (char*)safe_malloc(total_len + 1);
+    size_t current_pos = 0;
+
+    for (ast_t* current = ast; current != NULL && current != ast_nil; current = current->next) {
+        const char* code_str = current->sym->name;
+        long val = 0;
+        if (code_str[0] == '#') {
+            if (code_str[1] == '$') {
+                val = strtol(code_str + 2, NULL, 16);
+            } else {
+                val = strtol(code_str + 1, NULL, 10);
+            }
+        }
+        result_str[current_pos++] = (char)(val & 0xFF);
+    }
+    result_str[current_pos] = '\0';
+
+    ast_t* string_node = new_ast();
+    string_node->typ = PASCAL_T_STRING;
+    string_node->sym = sym_lookup(result_str);
+    string_node->child = NULL;
+    string_node->next = NULL;
+
+    free(result_str);
+    free_ast(ast); // Free the intermediate list of char codes
+    return string_node;
+}
+
+// Helper to decide whether to convert char codes to a string or keep them as-is
+static ast_t* smart_char_code_converter(ast_t* ast) {
+    if (ast == NULL || ast == ast_nil) {
+        return ast_nil;
+    }
+
+    // If there's only one char code in the sequence, return it as a CHAR_CODE node
+    if (ast->next == NULL || ast->next == ast_nil) {
+        return ast;
+    }
+
+    // If there are multiple char codes, convert them to a single STRING node
+    return string_from_char_codes(ast);
+}
+
 // Pascal string parser using the between combinator for safety
 
 combinator_t* pascal_string(tag_t tag) {
@@ -792,12 +847,14 @@ void init_pascal_expression_parser(combinator_t** p) {
     // Use standard factor parser - defer complex pointer dereference for now
     combinator_t* nil_literal = map(token(keyword_ci("nil")), wrap_nil_literal);
 
+    combinator_t* char_codes = map(many1(token(char_code_literal(PASCAL_T_CHAR_CODE))), smart_char_code_converter);
+
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(real_number(PASCAL_T_REAL)),        // Real numbers (3.14) - try first
         token(hex_integer(PASCAL_T_INTEGER)),     // Hex integers ($FF) - try before decimal
         token(integer(PASCAL_T_INTEGER)),         // Integers (123)
         token(char_literal(PASCAL_T_CHAR)),       // Characters ('A')
-        token(char_code_literal(PASCAL_T_CHAR_CODE)), // Character codes (#13, #$0D)
+        char_codes,                               // Character code strings (#77#90)
         token(pascal_string(PASCAL_T_STRING)),    // Strings ("hello" or 'hello')
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]
         token(boolean_true),                      // Boolean true
