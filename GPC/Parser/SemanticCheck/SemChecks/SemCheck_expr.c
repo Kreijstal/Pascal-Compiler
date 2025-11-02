@@ -2150,6 +2150,53 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
             break;
         }
         
+        case EXPR_RECORD_ACCESS:
+        {
+            /* For record field access, we need to resolve the type of the record,
+             * then look up the field's type within that record.
+             * This is complex and requires the record type information.
+             * For now, we'll fall back to semcheck_expr_main for this case.
+             * In a full implementation, we would:
+             * 1. Resolve the record expression's type
+             * 2. Get the RecordType from that GpcType
+             * 3. Look up the field in the RecordType
+             * 4. Return the field's GpcType
+             */
+            break;
+        }
+        
+        case EXPR_POINTER_DEREF:
+        {
+            /* For pointer dereference, resolve the pointer expression's type,
+             * then return what it points to.
+             */
+            struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+            if (pointer_expr != NULL)
+            {
+                int ptr_type_owned = 0;
+                GpcType *ptr_type = semcheck_resolve_expression_gpc_type(symtab, pointer_expr, 
+                                                                          max_scope_lev, mutating, &ptr_type_owned);
+                if (ptr_type != NULL && ptr_type->kind == TYPE_KIND_POINTER)
+                {
+                    GpcType *deref_type = ptr_type->info.points_to;
+                    
+                    /* Clean up the pointer type if we owned it */
+                    if (ptr_type_owned)
+                        destroy_gpc_type(ptr_type);
+                    
+                    /* Return what the pointer points to - caller doesn't own it (it's part of the pointer type) */
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return deref_type;
+                }
+                
+                /* Clean up if we failed */
+                if (ptr_type_owned && ptr_type != NULL)
+                    destroy_gpc_type(ptr_type);
+            }
+            break;
+        }
+        
         default:
             break;
     }

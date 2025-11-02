@@ -11,6 +11,10 @@
 #include "type_tags.h"
 #include "tree_types.h"
 
+/* Include symbol table headers for type resolution */
+#include "../SemanticCheck/HashTable/HashTable.h"
+#include "../SemanticCheck/SymTab/SymTab.h"
+
 // --- Constructor Implementations ---
 
 GpcType* create_primitive_type(int primitive_tag) {
@@ -117,21 +121,32 @@ GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int 
     if (owns_type != NULL)
         *owns_type = 0;
 
-    /* For now, we create a primitive type from the type field
-     * In a fully migrated system, the type would be stored directly */
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
 
-    /* Handle special cases */
-    if (var_type_tag == UNKNOWN_TYPE && var_decl->tree_data.var_decl_data.type_id != NULL) {
-        /* This is a named type reference - for now we can't fully resolve it without symtab */
-        /* We'll do a simple check based on the type_id string matching */
-        (void)symtab;
+    /* Handle named type references using the symbol table */
+    if ((var_type_tag == UNKNOWN_TYPE || var_type_tag == -1) && 
+        var_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL) {
+        /* Look up the named type in the symbol table */
+        struct HashNode *type_node = NULL;
+        if (FindIdent(&type_node, symtab, var_decl->tree_data.var_decl_data.type_id) != -1 && 
+            type_node != NULL && type_node->type != NULL) {
+            /* Return a shared reference from the symbol table - caller doesn't own it */
+            if (owns_type != NULL)
+                *owns_type = 0;
+            return type_node->type;
+        }
+        /* If we couldn't resolve the named type, return NULL */
         return NULL;
     }
 
-    if (owns_type != NULL)
-        *owns_type = 1;
-    return create_primitive_type(var_type_tag);
+    /* For primitive types, create a GpcType - caller owns this */
+    if (var_type_tag != UNKNOWN_TYPE && var_type_tag != -1) {
+        if (owns_type != NULL)
+            *owns_type = 1;
+        return create_primitive_type(var_type_tag);
+    }
+
+    return NULL;
 }
 
 int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab) {

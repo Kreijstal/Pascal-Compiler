@@ -111,7 +111,7 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         Tree_t *param_decl = (Tree_t *)formal_params->cur;
         struct Expression *arg_expr = (struct Expression *)args_given->cur;
 
-        /* Phase 3 Step 4: Use GpcType for type checking instead of legacy integer tags */
+        /* Phase 3: Use GpcType for comprehensive type checking */
         
         /* Resolve GpcType for the argument expression */
         int arg_type_owned = 0;
@@ -125,9 +125,19 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
             param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
         }
 
-        /* Use are_types_compatible_for_assignment to compare */
-        if (arg_type != NULL && param_type != NULL)
+        /* Both types must be resolved for proper type checking */
+        if (arg_type == NULL || param_type == NULL)
         {
+            fprintf(stderr,
+                "Error on line %d, on procedure call %s, argument %d: Unable to resolve type!\n\n",
+                stmt->line_num,
+                stmt->stmt_data.procedure_call_data.id,
+                arg_index);
+            ++return_val;
+        }
+        else
+        {
+            /* Use comprehensive GpcType-based type compatibility checking */
             if (!are_types_compatible_for_assignment(param_type, arg_type, symtab))
             {
                 fprintf(stderr,
@@ -137,33 +147,6 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
                     arg_index,
                     gpc_type_to_string(param_type),
                     gpc_type_to_string(arg_type));
-                ++return_val;
-            }
-        }
-        else if (param_type == NULL || arg_type == NULL)
-        {
-            /* Fallback to legacy type checking if GpcType resolution failed */
-            int arg_type_tag = UNKNOWN_TYPE;
-            semcheck_expr_main(&arg_type_tag, symtab, arg_expr, INT_MAX, NO_MUTATE);
-            
-            int expected_type = param_decl->tree_data.var_decl_data.type;
-            if ((expected_type == -1 || expected_type == UNKNOWN_TYPE) &&
-                param_decl->tree_data.var_decl_data.type_id != NULL)
-            {
-                HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, param_decl->tree_data.var_decl_data.type_id) != -1 && type_node != NULL)
-                    expected_type = var_type_to_expr_type(type_node->var_type);
-            }
-
-            if (expected_type != BUILTIN_ANY_TYPE &&
-                arg_type_tag != expected_type &&
-                !types_numeric_compatible(expected_type, arg_type_tag))
-            {
-                fprintf(stderr,
-                    "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
-                    stmt->line_num,
-                    stmt->stmt_data.procedure_call_data.id,
-                    arg_index);
                 ++return_val;
             }
         }
