@@ -2119,18 +2119,26 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     /* Check if this is an indirect call through a procedure variable */
     /* The semantic checker sets resolved_proc for both direct and indirect calls.
      * For indirect calls (procedure variables/parameters), we need to generate an indirect call.
-     * We detect this by checking if the type is a procedure type. */
+     * 
+     * IMPORTANT: We must check hash_type FIRST, before checking type information.
+     * On some platforms (e.g., Cygwin), type information may not be properly set,
+     * but hash_type is always reliable for distinguishing variables from procedures.
+     */
     int is_indirect_call = 0;
-    if (proc_node != NULL && proc_node->type != NULL && proc_node->type->kind == TYPE_KIND_PROCEDURE)
+    if (proc_node != NULL)
     {
-        /* If hash_type is VAR, it's definitely an indirect call (variable/parameter with procedure type) */
+        /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
+         * It MUST be an indirect call, regardless of whether type info is present. */
         if (proc_node->hash_type == HASHTYPE_VAR)
         {
             is_indirect_call = 1;
         }
-        /* If hash_type is PROCEDURE but proc_name is NULL or doesn't match the mangled_id,
-         * it's likely a parameter that was incorrectly set up, so treat as indirect call */
+        /* Case 2: If hash_type is PROCEDURE but type info indicates it's a procedure type,
+         * and either proc_name is NULL or doesn't match, treat as indirect call.
+         * This handles corrupted or improperly resolved procedure nodes. */
         else if (proc_node->hash_type == HASHTYPE_PROCEDURE &&
+                 proc_node->type != NULL && 
+                 proc_node->type->kind == TYPE_KIND_PROCEDURE &&
                  (proc_name == NULL || proc_node->mangled_id == NULL || strcmp(proc_name, proc_node->mangled_id) != 0))
         {
             is_indirect_call = 1;
@@ -2253,10 +2261,40 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         return inst_list;
     }
     
-    /* Fallback: if we reach here, something is wrong but return inst_list to avoid compiler warning */
+    /* If we reach here, it's a compiler bug - this should never happen.
+     * In semantic checking, we should have caught any invalid procedure calls.
+     * If we get here, it means:
+     * 1. proc_node is NULL (semantic checker failed to resolve the symbol), OR
+     * 2. proc_node has an unexpected hash_type (not VAR, PROCEDURE, or BUILTIN)
+     * 
+     * This indicates a serious internal error, so we assert in debug builds
+     * and report a fatal error in release builds. */
+    
     #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: LEAVING %s (fallback)\n", __func__);
+    CODEGEN_DEBUG("FATAL: Reached unreachable code in %s - this is a compiler bug!\n", __func__);
+    if (proc_node != NULL) {
+        CODEGEN_DEBUG("  proc_name: %s\n", proc_name ? proc_name : "(null)");
+        CODEGEN_DEBUG("  unmangled_name: %s\n", unmangled_name ? unmangled_name : "(null)");
+        CODEGEN_DEBUG("  hash_type: %d (expected VAR=%d, PROCEDURE=%d, or BUILTIN=%d)\n", 
+                     proc_node->hash_type, HASHTYPE_VAR, HASHTYPE_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE);
+        CODEGEN_DEBUG("  type: %p\n", (void*)proc_node->type);
+        if (proc_node->type != NULL) {
+            CODEGEN_DEBUG("  type->kind: %d\n", proc_node->type->kind);
+        }
+    } else {
+        CODEGEN_DEBUG("  proc_node is NULL - semantic checker should have caught this!\n");
+    }
     #endif
+    
+    /* In debug builds, assert to catch this bug during development */
+    assert(0 && "Unreachable: procedure call with unexpected hash_type or NULL proc_node");
+    
+    /* In release builds, report a fatal error and stop code generation */
+    codegen_report_error(ctx,
+        "FATAL: Internal compiler error in procedure call code generation for '%s'. "
+        "Please report this bug with your source code.",
+        unmangled_name ? unmangled_name : "(unknown)");
+    
     return inst_list;
 }
 
