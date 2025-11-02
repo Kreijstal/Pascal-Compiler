@@ -69,6 +69,8 @@ static int var_type_to_expr_type(enum VarType var_type)
             return FILE_TYPE;
         case HASHVAR_RECORD:
             return RECORD_TYPE;
+        case HASHVAR_PROCEDURE:
+            return PROCEDURE;
         default:
             return UNKNOWN_TYPE;
     }
@@ -1094,20 +1096,60 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = arg_decl->tree_data.var_decl_data.type;
+                GpcType *expected_gpc_type = NULL;
+                GpcType *arg_gpc_type = NULL;
+                HashNode_t *expected_type_node = NULL;
+                
                 if ((expected_type == -1 || expected_type == UNKNOWN_TYPE) &&
                     arg_decl->tree_data.var_decl_data.type_id != NULL)
                 {
-                    HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1 &&
-                        type_node != NULL)
+                    if (FindIdent(&expected_type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1 &&
+                        expected_type_node != NULL)
                     {
-                        expected_type = var_type_to_expr_type(type_node->var_type);
+                        expected_type = var_type_to_expr_type(expected_type_node->var_type);
+                        expected_gpc_type = expected_type_node->type;
                     }
                 }
 
-                if (expected_type != BUILTIN_ANY_TYPE &&
-                    arg_type != expected_type &&
-                    !types_numeric_compatible(expected_type, arg_type))
+                /* For procedure types, we need to use GpcType comparison */
+                int types_match = 0;
+                if (expected_type == PROCEDURE && arg_type == PROCEDURE)
+                {
+                    /* Both are procedures - need to check signatures using GpcType */
+                    /* Get the GpcType for the actual argument */
+                    struct Expression *arg_expr = (struct Expression *)args_given->cur;
+                    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+                    {
+                        HashNode_t *arg_node = NULL;
+                        if (FindIdent(&arg_node, symtab, arg_expr->expr_data.id) != -1 &&
+                            arg_node != NULL)
+                        {
+                            arg_gpc_type = arg_node->type;
+                        }
+                    }
+                    
+                    /* If we have GpcTypes for both, compare them */
+                    if (expected_gpc_type != NULL && arg_gpc_type != NULL)
+                    {
+                        types_match = are_types_compatible_for_assignment(expected_gpc_type, arg_gpc_type, symtab);
+                    }
+                    else
+                    {
+                        /* Fallback to tag comparison if no GpcType */
+                        types_match = (expected_type == arg_type);
+                    }
+                }
+                else if (expected_type != BUILTIN_ANY_TYPE &&
+                         (arg_type == expected_type || types_numeric_compatible(expected_type, arg_type)))
+                {
+                    types_match = 1;
+                }
+                else if (expected_type == BUILTIN_ANY_TYPE)
+                {
+                    types_match = 1;
+                }
+
+                if (!types_match)
                 {
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, proc_id, cur_arg);

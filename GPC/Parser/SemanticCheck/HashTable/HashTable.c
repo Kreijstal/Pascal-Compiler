@@ -10,6 +10,7 @@
 #include <string.h>
 #include "../../List/List.h"
 #include "../../ParseTree/tree.h"
+#include "../../ParseTree/type_tags.h"
 #include "../../../identifier_utils.h"
 #include "HashTable.h"
 
@@ -24,6 +25,39 @@ HashTable_t *InitHashTable()
         new_table->table[i] = NULL;
 
     return new_table;
+}
+
+/* Helper function to convert primitive type tag to VarType */
+static enum VarType primitive_tag_to_var_type(int primitive_tag)
+{
+    switch (primitive_tag) {
+        case INT_TYPE:
+            return HASHVAR_INTEGER;
+        case LONGINT_TYPE:
+            return HASHVAR_LONGINT;
+        case REAL_TYPE:
+            return HASHVAR_REAL;
+        case BOOL:
+            return HASHVAR_BOOLEAN;
+        case CHAR_TYPE:
+            return HASHVAR_CHAR;
+        case STRING_TYPE:
+            return HASHVAR_PCHAR;
+        case POINTER_TYPE:
+            return HASHVAR_POINTER;
+        case SET_TYPE:
+            return HASHVAR_SET;
+        case ENUM_TYPE:
+            return HASHVAR_ENUM;
+        case FILE_TYPE:
+            return HASHVAR_FILE;
+        case RECORD_TYPE:
+            return HASHVAR_RECORD;
+        case PROCEDURE:
+            return HASHVAR_PROCEDURE;
+        default:
+            return HASHVAR_UNTYPED;
+    }
 }
 
 /* Adds an identifier to the table - NEW VERSION with GpcType */
@@ -70,12 +104,35 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
         hash_node->var_type = HASHVAR_UNTYPED;
         
         // Set var_type based on GpcType if available
-        // For procedure types, only set HASHVAR_PROCEDURE if it's actually a procedure (no return type)
-        // Functions (which have return types) should not be set to HASHVAR_PROCEDURE
-        if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
-            if (type->info.proc_info.return_type == NULL) {
-                // It's a procedure, not a function
-                hash_node->var_type = HASHVAR_PROCEDURE;
+        if (type != NULL) {
+            if (type->kind == TYPE_KIND_PROCEDURE) {
+                if (type->info.proc_info.return_type == NULL) {
+                    // It's a procedure (no return type)
+                    hash_node->var_type = HASHVAR_PROCEDURE;
+                } else {
+                    // It's a function (has return type)
+                    // Extract the return type and set var_type accordingly
+                    GpcType *return_type = type->info.proc_info.return_type;
+                    if (return_type->kind == TYPE_KIND_PRIMITIVE) {
+                        hash_node->var_type = primitive_tag_to_var_type(return_type->info.primitive_type_tag);
+                    } else if (return_type->kind == TYPE_KIND_POINTER) {
+                        hash_node->var_type = HASHVAR_POINTER;
+                    } else if (return_type->kind == TYPE_KIND_RECORD) {
+                        hash_node->var_type = HASHVAR_RECORD;
+                    } else if (return_type->kind == TYPE_KIND_ARRAY) {
+                        hash_node->var_type = HASHVAR_ARRAY;
+                    }
+                    // Note: var_type remains HASHVAR_UNTYPED if we can't determine it
+                }
+            } else if (type->kind == TYPE_KIND_PRIMITIVE) {
+                // For non-procedure types, set var_type directly
+                hash_node->var_type = primitive_tag_to_var_type(type->info.primitive_type_tag);
+            } else if (type->kind == TYPE_KIND_POINTER) {
+                hash_node->var_type = HASHVAR_POINTER;
+            } else if (type->kind == TYPE_KIND_RECORD) {
+                hash_node->var_type = HASHVAR_RECORD;
+            } else if (type->kind == TYPE_KIND_ARRAY) {
+                hash_node->var_type = HASHVAR_ARRAY;
             }
         }
         
@@ -136,12 +193,35 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
         hash_node->var_type = HASHVAR_UNTYPED;
         
         // Set var_type based on GpcType if available
-        // For procedure types, only set HASHVAR_PROCEDURE if it's actually a procedure (no return type)
-        // Functions (which have return types) should not be set to HASHVAR_PROCEDURE
-        if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
-            if (type->info.proc_info.return_type == NULL) {
-                // It's a procedure, not a function
-                hash_node->var_type = HASHVAR_PROCEDURE;
+        if (type != NULL) {
+            if (type->kind == TYPE_KIND_PROCEDURE) {
+                if (type->info.proc_info.return_type == NULL) {
+                    // It's a procedure (no return type)
+                    hash_node->var_type = HASHVAR_PROCEDURE;
+                } else {
+                    // It's a function (has return type)
+                    // Extract the return type and set var_type accordingly
+                    GpcType *return_type = type->info.proc_info.return_type;
+                    if (return_type->kind == TYPE_KIND_PRIMITIVE) {
+                        hash_node->var_type = primitive_tag_to_var_type(return_type->info.primitive_type_tag);
+                    } else if (return_type->kind == TYPE_KIND_POINTER) {
+                        hash_node->var_type = HASHVAR_POINTER;
+                    } else if (return_type->kind == TYPE_KIND_RECORD) {
+                        hash_node->var_type = HASHVAR_RECORD;
+                    } else if (return_type->kind == TYPE_KIND_ARRAY) {
+                        hash_node->var_type = HASHVAR_ARRAY;
+                    }
+                    // Note: var_type remains HASHVAR_UNTYPED if we can't determine it
+                }
+            } else if (type->kind == TYPE_KIND_PRIMITIVE) {
+                // For non-procedure types, set var_type directly
+                hash_node->var_type = primitive_tag_to_var_type(type->info.primitive_type_tag);
+            } else if (type->kind == TYPE_KIND_POINTER) {
+                hash_node->var_type = HASHVAR_POINTER;
+            } else if (type->kind == TYPE_KIND_RECORD) {
+                hash_node->var_type = HASHVAR_RECORD;
+            } else if (type->kind == TYPE_KIND_ARRAY) {
+                hash_node->var_type = HASHVAR_ARRAY;
             }
         }
         

@@ -1118,6 +1118,38 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     /* Use existing GpcType (don't own it) */
                     return_gpc_type = type_node->type;
                 }
+                else if (type_node->var_type != HASHVAR_UNTYPED)
+                {
+                    /* Create a GpcType from the var_type if we don't have one */
+                    int primitive_tag = -1;
+                    switch (type_node->var_type)
+                    {
+                        case HASHVAR_INTEGER:
+                            primitive_tag = INT_TYPE;
+                            break;
+                        case HASHVAR_LONGINT:
+                            primitive_tag = LONGINT_TYPE;
+                            break;
+                        case HASHVAR_REAL:
+                            primitive_tag = REAL_TYPE;
+                            break;
+                        case HASHVAR_PCHAR:
+                            primitive_tag = STRING_TYPE;
+                            break;
+                        case HASHVAR_BOOLEAN:
+                            primitive_tag = BOOL;
+                            break;
+                        case HASHVAR_CHAR:
+                            primitive_tag = CHAR_TYPE;
+                            break;
+                        default:
+                            break;
+                    }
+                    if (primitive_tag != -1)
+                    {
+                        return_gpc_type = create_primitive_type(primitive_tag);
+                    }
+                }
             }
         }
         else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)
