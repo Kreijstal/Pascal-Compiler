@@ -19,6 +19,9 @@ typedef struct GpcType GpcType;
 // Forward declaration for symbol table (avoid circular dependency)
 struct SymTab;
 
+// Forward declaration for VarType enum (defined in HashTable.h)
+enum VarType;
+
 // Defines what kind of type we are dealing with.
 typedef enum {
     TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
@@ -135,5 +138,13 @@ int gpc_type_is_dynamic_array(GpcType *type);
 /* Get element size in bytes for an array type.
  * Returns the element size, or -1 if not an array or size cannot be determined. */
 long long gpc_type_get_array_element_size(GpcType *type);
+
+/* Create a GpcType from a VarType enum value.
+ * This is a helper for migrating from the legacy type system.
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE require
+ * additional information beyond VarType and will return NULL - caller must use
+ * appropriate create_*_type() function instead.
+ * Returns a new GpcType that caller owns, or NULL for complex types. */
+GpcType* gpc_type_from_var_type(enum VarType var_type);
 
 #endif // GPC_TYPE_H

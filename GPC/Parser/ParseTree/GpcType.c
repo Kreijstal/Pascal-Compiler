@@ -495,3 +495,68 @@ long long gpc_type_get_array_element_size(GpcType *type)
     
     return gpc_type_sizeof(element_type);
 }
+
+/* Helper function to convert VarType enum to primitive type tag */
+static int var_type_to_primitive_tag(enum VarType var_type)
+{
+    switch(var_type)
+    {
+        case HASHVAR_INTEGER:
+            return INT_TYPE;
+        case HASHVAR_LONGINT:
+            return LONGINT_TYPE;
+        case HASHVAR_REAL:
+            return REAL_TYPE;
+        case HASHVAR_BOOLEAN:
+            return BOOL;
+        case HASHVAR_CHAR:
+            return CHAR_TYPE;
+        case HASHVAR_PCHAR:
+            return STRING_TYPE;
+        case HASHVAR_SET:
+            return SET_TYPE;
+        case HASHVAR_FILE:
+            return FILE_TYPE;
+        case HASHVAR_ENUM:
+            return ENUM_TYPE;
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
+
+/* Create a GpcType from a VarType enum value.
+ * This is a helper for migrating from legacy type system.
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE
+ * require additional information and cannot be created from VarType alone.
+ * Returns NULL for these types - caller must use appropriate create_*_type() function.
+ */
+GpcType* gpc_type_from_var_type(enum VarType var_type)
+{
+    switch(var_type)
+    {
+        case HASHVAR_INTEGER:
+        case HASHVAR_LONGINT:
+        case HASHVAR_REAL:
+        case HASHVAR_BOOLEAN:
+        case HASHVAR_CHAR:
+        case HASHVAR_PCHAR:
+        case HASHVAR_SET:
+        case HASHVAR_FILE:
+        case HASHVAR_ENUM:
+        {
+            int tag = var_type_to_primitive_tag(var_type);
+            return create_primitive_type(tag);
+        }
+        
+        case HASHVAR_ARRAY:
+        case HASHVAR_RECORD:
+        case HASHVAR_POINTER:
+        case HASHVAR_PROCEDURE:
+        case HASHVAR_UNTYPED:
+            /* These require additional information beyond VarType */
+            return NULL;
+            
+        default:
+            return NULL;
+    }
+}
