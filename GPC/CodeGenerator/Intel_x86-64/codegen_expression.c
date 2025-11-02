@@ -18,6 +18,7 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/ParseTree/GpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
@@ -1744,7 +1745,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
     ListNode_t *formal_args = NULL;
     if(proc_node != NULL)
+    {
+        /* With the fix in PushVarOntoScope_Typed, proc_node->args is now properly
+         * populated for all cases (procedures, functions, and procedure variables).
+         * We can safely use it directly. */
         formal_args = proc_node->args;
+    }
 
     typedef struct ArgInfo
     {
@@ -1776,6 +1782,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     {
         CODEGEN_DEBUG("DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
         struct Expression *arg_expr = (struct Expression *)args->cur;
+        
+        /* Validate argument expression */
+        if (arg_expr == NULL)
+        {
+            const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
+            codegen_report_error(ctx,
+                "ERROR: NULL argument expression in call to %s at argument position %d",
+                proc_name, arg_num);
+            if (arg_infos != NULL)
+                free(arg_infos);
+            return inst_list;
+        }
+        
         CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
 
         Tree_t *formal_arg_decl = NULL;
