@@ -2106,6 +2106,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* proc_node already resolved, but we still need the scope level */
         HashNode_t *temp_node = NULL;
         FindIdent(&temp_node, symtab, unmangled_name);
+        /* BUG FIX: Use the symbol from semantic checker, not from FindIdent!
+         * The semantic checker has already resolved the correct symbol.
+         * FindIdent might find a different symbol in a different scope. */
     }
 
     if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
@@ -2114,8 +2117,25 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
     
     /* Check if this is an indirect call through a procedure variable */
-    int is_indirect_call = (proc_node != NULL && proc_node->hash_type == HASHTYPE_VAR &&
-                            proc_node->type != NULL && proc_node->type->kind == TYPE_KIND_PROCEDURE);
+    /* The semantic checker sets resolved_proc for both direct and indirect calls.
+     * For indirect calls (procedure variables/parameters), we need to generate an indirect call.
+     * We detect this by checking if the type is a procedure type. */
+    int is_indirect_call = 0;
+    if (proc_node != NULL && proc_node->type != NULL && proc_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        /* If hash_type is VAR, it's definitely an indirect call (variable/parameter with procedure type) */
+        if (proc_node->hash_type == HASHTYPE_VAR)
+        {
+            is_indirect_call = 1;
+        }
+        /* If hash_type is PROCEDURE but proc_name is NULL or doesn't match the mangled_id,
+         * it's likely a parameter that was incorrectly set up, so treat as indirect call */
+        else if (proc_node->hash_type == HASHTYPE_PROCEDURE &&
+                 (proc_name == NULL || proc_node->mangled_id == NULL || strcmp(proc_name, proc_node->mangled_id) != 0))
+        {
+            is_indirect_call = 1;
+        }
+    }
     
     if (is_indirect_call)
     {
