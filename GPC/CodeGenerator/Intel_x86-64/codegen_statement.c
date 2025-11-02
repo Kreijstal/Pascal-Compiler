@@ -1760,6 +1760,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     {
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
+
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
         if (codegen_had_error(ctx) || value_reg == NULL)
@@ -1826,6 +1827,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else if(nonlocal_flag() == 1)
         {
+
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
             snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
         }
@@ -2119,6 +2121,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         /* INDIRECT CALL LOGIC */
         
+
         /* 1. Create a temporary expression to evaluate the procedure variable */
         struct Expression *callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
         callee_expr->resolved_type = PROCEDURE;
@@ -2164,6 +2167,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     else if (proc_node != NULL && proc_node->hash_type == HASHTYPE_PROCEDURE)
     {
         /* DIRECT CALL LOGIC */
+
         int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
         int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
         int callee_depth = 0;

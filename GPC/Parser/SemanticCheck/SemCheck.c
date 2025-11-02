@@ -307,6 +307,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
+        
+
 
         switch (tree->tree_data.type_decl_data.kind)
         {
@@ -317,6 +319,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
+
                 if (alias_info->is_array)
                 {
                     int element_type = alias_info->array_element_type;
@@ -364,6 +367,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_FILE;
                     else if (base_type == INT_TYPE)
                         var_type = HASHVAR_INTEGER;
+                    else if (base_type == PROCEDURE)
+                        var_type = HASHVAR_PROCEDURE;
                     else
                         var_type = HASHVAR_UNTYPED;
 
@@ -380,7 +385,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         HashNode_t *target_node = NULL;
                         if (FindIdent(&target_node, symtab, alias_info->target_type_id) != -1 && target_node != NULL)
+                        {
                             var_type = target_node->var_type;
+                        }
                     }
                 }
                 break;
@@ -391,6 +398,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
 
         GpcType *gpc_type = tree->tree_data.type_decl_data.gpc_type;
+
+
 
         if (gpc_type != NULL) {
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);

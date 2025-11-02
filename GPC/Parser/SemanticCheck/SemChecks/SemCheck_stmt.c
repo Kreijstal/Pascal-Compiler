@@ -127,6 +127,8 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
             param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
         }
 
+
+
         /* Both types must be resolved for proper type checking */
         if (arg_type == NULL || param_type == NULL)
         {
@@ -1088,6 +1090,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             assert(true_args->type == LIST_TREE);
             return_val += semcheck_expr_main(&arg_type,
                 symtab, (struct Expression *)args_given->cur, INT_MAX, NO_MUTATE);
+            
+
 
             arg_decl = (Tree_t *)true_args->cur;
             assert(arg_decl->type == TREE_VAR_DECL);
@@ -1096,6 +1100,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = arg_decl->tree_data.var_decl_data.type;
+
                 GpcType *expected_gpc_type = NULL;
                 GpcType *arg_gpc_type = NULL;
                 HashNode_t *expected_type_node = NULL;
@@ -1103,11 +1108,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 if ((expected_type == -1 || expected_type == UNKNOWN_TYPE) &&
                     arg_decl->tree_data.var_decl_data.type_id != NULL)
                 {
+
                     if (FindIdent(&expected_type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1 &&
                         expected_type_node != NULL)
                     {
+
                         expected_type = var_type_to_expr_type(expected_type_node->var_type);
                         expected_gpc_type = expected_type_node->type;
+
+                    }
+                    else
+                    {
+
                     }
                 }
 
@@ -1118,6 +1130,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     /* Both are procedures - need to check signatures using GpcType */
                     /* Get the GpcType for the actual argument */
                     struct Expression *arg_expr = (struct Expression *)args_given->cur;
+
                     if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
                     {
                         HashNode_t *arg_node = NULL;
@@ -1125,18 +1138,37 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             arg_node != NULL)
                         {
                             arg_gpc_type = arg_node->type;
+
+                            /* AST TRANSFORMATION: Convert procedure identifiers to procedure addresses
+                             * when passed as arguments to procedure parameters */
+                            if (arg_node->hash_type == HASHTYPE_PROCEDURE)
+                            {
+                                /* Transform the expression to EXPR_ADDR_OF_PROC */
+                                arg_expr->type = EXPR_ADDR_OF_PROC;
+                                arg_expr->expr_data.addr_of_proc_data.procedure_symbol = arg_node;
+                            }
                         }
+                        else
+                        {
+
+                        }
+                    }
+                    else
+                    {
+
                     }
                     
                     /* If we have GpcTypes for both, compare them */
                     if (expected_gpc_type != NULL && arg_gpc_type != NULL)
                     {
                         types_match = are_types_compatible_for_assignment(expected_gpc_type, arg_gpc_type, symtab);
+
                     }
                     else
                     {
                         /* Fallback to tag comparison if no GpcType */
                         types_match = (expected_type == arg_type);
+
                     }
                 }
                 else if (expected_type != BUILTIN_ANY_TYPE &&
@@ -1151,6 +1183,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
                 if (!types_match)
                 {
+
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, proc_id, cur_arg);
                     ++return_val;

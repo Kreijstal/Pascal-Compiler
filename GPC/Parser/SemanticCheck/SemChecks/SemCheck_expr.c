@@ -2662,6 +2662,16 @@ int semcheck_varid(int *type_return,
             return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
         }
         
+        /* Don't convert procedure identifiers to function calls when used as values
+         * This allows procedure variables to work correctly */
+        if(hash_return->hash_type == HASHTYPE_PROCEDURE && mutating == NO_MUTATE)
+        {
+            /* Keep as EXPR_VAR_ID so it can be used as a procedure value */
+            set_hash_meta(hash_return, mutating);
+            set_type_from_hashtype(type_return, hash_return);
+            return 0;
+        }
+        
         set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
