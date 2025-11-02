@@ -1176,6 +1176,10 @@ void destroy_expr(struct Expression *expr)
           }
           break;
 
+        case EXPR_ADDR_OF_PROC:
+          /* Nothing to free - procedure_symbol is a reference, not owned */
+          break;
+
         default:
           fprintf(stderr, "BAD TYPE IN destroy_expr!\n");
           exit(1);

@@ -842,7 +842,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         else if (type_first == PROCEDURE && type_second == PROCEDURE)
         {
             /* AST TRANSFORMATION: Mark RHS as procedure address if it's a direct procedure reference */
-            if (expr != NULL && expr->type == EXPR_VAR_ID)
+            /* Only transform if BOTH LHS and RHS are actual procedures (not functions) */
+            /* Functions should be called, not have their address taken */
+            int lhs_is_procedure = (lhs_gpctype->kind == TYPE_KIND_PROCEDURE && 
+                                    lhs_gpctype->info.proc_info.return_type == NULL);
+            int rhs_is_procedure = (rhs_gpctype->kind == TYPE_KIND_PROCEDURE && 
+                                    rhs_gpctype->info.proc_info.return_type == NULL);
+            
+            if (lhs_is_procedure && rhs_is_procedure && expr != NULL && expr->type == EXPR_VAR_ID)
             {
                 HashNode_t *rhs_symbol = NULL;
                 if (FindIdent(&rhs_symbol, symtab, expr->expr_data.id) >= 0 &&

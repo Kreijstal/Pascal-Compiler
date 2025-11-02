@@ -46,7 +46,7 @@ int codegen_type_uses_qword(int type_tag)
 {
     return (type_tag == LONGINT_TYPE || type_tag == REAL_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
-        type_tag == FILE_TYPE);
+        type_tag == FILE_TYPE || type_tag == PROCEDURE);
 }
 
 int codegen_type_is_signed(int type_tag)

@@ -68,6 +68,17 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
         
         // Initialize legacy fields to defaults for backward compatibility
         hash_node->var_type = HASHVAR_UNTYPED;
+        
+        // Set var_type based on GpcType if available
+        // For procedure types, only set HASHVAR_PROCEDURE if it's actually a procedure (no return type)
+        // Functions (which have return types) should not be set to HASHVAR_PROCEDURE
+        if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
+            if (type->info.proc_info.return_type == NULL) {
+                // It's a procedure, not a function
+                hash_node->var_type = HASHVAR_PROCEDURE;
+            }
+        }
+        
         hash_node->record_type = NULL;
         hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
         hash_node->array_start = 0;
@@ -123,6 +134,17 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
         
         // Initialize legacy fields to defaults for backward compatibility
         hash_node->var_type = HASHVAR_UNTYPED;
+        
+        // Set var_type based on GpcType if available
+        // For procedure types, only set HASHVAR_PROCEDURE if it's actually a procedure (no return type)
+        // Functions (which have return types) should not be set to HASHVAR_PROCEDURE
+        if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
+            if (type->info.proc_info.return_type == NULL) {
+                // It's a procedure, not a function
+                hash_node->var_type = HASHVAR_PROCEDURE;
+            }
+        }
+        
         hash_node->record_type = NULL;
         hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
         hash_node->array_start = 0;

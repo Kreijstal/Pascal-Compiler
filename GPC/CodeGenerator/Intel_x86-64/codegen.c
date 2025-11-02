@@ -806,12 +806,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         if (FindIdent(&var_info, symtab, (char *)id_list->cur) >= 0 && var_info != NULL)
                             var_kind = var_info->var_type;
                     }
-                    if (type_node != NULL)
+                    /* Only use type_node var_type if we don't already have a specific type from var_info */
+                    if (type_node != NULL && var_kind == HASHVAR_INTEGER)
                         var_kind = type_node->var_type;
 
                     if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
                         var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
-                        var_kind == HASHVAR_FILE)
+                        var_kind == HASHVAR_FILE || var_kind == HASHVAR_PROCEDURE)
                     {
                         alloc_size = 8;
                     }
@@ -1456,7 +1457,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
-                         type == REAL_TYPE || type == LONGINT_TYPE);
+                         type == REAL_TYPE || type == LONGINT_TYPE || type == PROCEDURE);
                     arg_reg = use_64bit ?
                         get_arg_reg64_num(arg_start_index + arg_num) :
                         get_arg_reg32_num(arg_start_index + arg_num);
