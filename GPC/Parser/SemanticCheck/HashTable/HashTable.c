@@ -506,7 +506,18 @@ static void set_var_type_from_gpctype(HashNode_t* hash_node, GpcType* type)
     }
     else if (type->kind == TYPE_KIND_ARRAY)
     {
-        hash_node->var_type = HASHVAR_ARRAY;
+        /* For arrays, set var_type to the element type for backward compatibility
+         * with code that queries var_type to determine element type */
+        GpcType *element_type = type->info.array_info.element_type;
+        if (element_type != NULL && element_type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            hash_node->var_type = primitive_tag_to_var_type(element_type->info.primitive_type_tag);
+        }
+        else
+        {
+            /* For non-primitive element types, keep HASHVAR_ARRAY */
+            hash_node->var_type = HASHVAR_ARRAY;
+        }
     }
 }
 

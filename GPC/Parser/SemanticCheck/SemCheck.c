@@ -862,17 +862,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (type_node->type_alias != NULL && type_node->type_alias->is_array)
                         {
                             struct TypeAlias *alias = type_node->type_alias;
-                            int element_size;
-                            if (var_type == HASHVAR_REAL)
-                                element_size = 8;
-                            else if (var_type == HASHVAR_LONGINT)
-                                element_size = 8;
-                            else if (var_type == HASHVAR_PCHAR)
-                                element_size = 8;
-                            else if (var_type == HASHVAR_CHAR)
-                                element_size = 1;
-                            else
-                                element_size = 4;
                             int start = alias->array_start;
                             int end = alias->array_end;
                             if (alias->is_open_array)
@@ -881,26 +870,47 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 end = -1;
                             }
 
-                            func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
-                                start, end, element_size);
+                            /* Create GpcType for the array element */
+                            GpcType *element_type = gpc_type_from_var_type(var_type);
+                            assert(element_type != NULL && "Array element type must be createable");
+                            
+                            /* Create array GpcType */
+                            GpcType *array_type = create_array_type(element_type, start, end);
+                            assert(array_type != NULL && "Failed to create array type");
+                            
+                            func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
 
                             if (func_return == 0)
                             {
                                 HashNode_t *array_node = NULL;
                                 if (FindIdent(&array_node, symtab, (char *)ids->cur) != -1 && array_node != NULL)
                                 {
-                                    array_node->is_dynamic_array = alias->is_open_array;
                                     array_node->type_alias = alias;
-                                    if (alias->is_open_array)
-                                    {
-                                        array_node->array_start = start;
-                                        array_node->array_end = end;
-                                    }
                                 }
                             }
 
                             goto next_identifier;
                         }
+                        
+                        /* For non-array type references (e.g., enum, set, file), use legacy API to preserve type_alias */
+                        func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                        if (func_return == 0)
+                        {
+                            HashNode_t *var_node = NULL;
+                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            {
+                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                if (type_node->type_alias != NULL)
+                                    var_node->type_alias = type_node->type_alias;
+                                if (type_node->record_type != NULL)
+                                {
+                                    if (var_node->record_type != NULL)
+                                        destroy_record_type(var_node->record_type);
+                                    var_node->record_type = clone_record_type(type_node->record_type);
+                                }
+                            }
+                        }
+                        goto next_identifier;
                     }
                 }
                 else if (tree->tree_data.var_decl_data.inferred_type)
@@ -919,7 +929,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_PCHAR;
                 else
                     var_type = HASHVAR_REAL;
-                func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                
+                /* Create GpcType for typed variables */
+                GpcType *var_gpc_type = gpc_type_from_var_type(var_type);
+                if (var_gpc_type != NULL) {
+                    func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                } else {
+                    /* For UNTYPED variables, use legacy API */
+                    func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                }
                 if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
@@ -965,21 +983,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                     var_type = HASHVAR_REAL;
 
-                int element_size;
-                if (var_type == HASHVAR_REAL)
-                    element_size = 8;
-                else if (var_type == HASHVAR_LONGINT)
-                    element_size = 8;
-                else if (var_type == HASHVAR_PCHAR)
-                    element_size = 8;
-                else if (var_type == HASHVAR_CHAR)
-                    element_size = 1;
-                else if (var_type == HASHVAR_BOOLEAN)
-                    element_size = 1;
-                else
-                    element_size = 4;
-                func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
-                    tree->tree_data.arr_decl_data.s_range, tree->tree_data.arr_decl_data.e_range, element_size);
+                /* Create GpcType for the array */
+                GpcType *element_type = gpc_type_from_var_type(var_type);
+                assert(element_type != NULL && "Array element type must be createable from VarType");
+                
+                GpcType *array_type = create_array_type(
+                    element_type,
+                    tree->tree_data.arr_decl_data.s_range,
+                    tree->tree_data.arr_decl_data.e_range
+                );
+                assert(array_type != NULL && "Failed to create array type");
+                
+                func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
             }
 
             /* Greater than 0 signifies an error */
