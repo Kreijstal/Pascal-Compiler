@@ -287,133 +287,6 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
     return errors;
 }
 
-/* Helper function to create a GpcType from a type declaration Tree_t node.
- * This bridges the legacy type system to the new GpcType system.
- * Returns NULL if the type cannot be converted.
- */
-static GpcType *gpctype_from_type_decl(Tree_t *type_decl, SymTab_t *symtab) {
-    if (type_decl == NULL || type_decl->type != TREE_TYPE_DECL)
-        return NULL;
-
-    switch (type_decl->tree_data.type_decl_data.kind) {
-        case TYPE_DECL_RECORD:
-        {
-            struct RecordType *record_info = type_decl->tree_data.type_decl_data.info.record;
-            if (record_info != NULL) {
-                return create_record_type(record_info);
-            }
-            return NULL;
-        }
-
-        case TYPE_DECL_ALIAS:
-        {
-            struct TypeAlias *alias_info = &type_decl->tree_data.type_decl_data.info.alias;
-            if (alias_info == NULL)
-                return NULL;
-
-            /* Handle array types */
-            if (alias_info->is_array) {
-                int start = alias_info->array_start;
-                int end = alias_info->array_end;
-                int element_tag = alias_info->array_element_type;
-
-                /* Create element type */
-                GpcType *element_type = NULL;
-                if (element_tag != UNKNOWN_TYPE) {
-                    element_type = create_primitive_type(element_tag);
-                } else if (alias_info->array_element_type_id != NULL) {
-                    /* Named element type - look it up in symbol table */
-                    HashNode_t *elem_type_node = NULL;
-                    if (FindIdent(&elem_type_node, symtab, alias_info->array_element_type_id) != -1 && 
-                        elem_type_node != NULL && elem_type_node->type != NULL) {
-                        /* Use the type from the symbol table (not owned by us, so copy) */
-                        /* For now, we'll just create a primitive type from var_type */
-                        /* Full implementation would deep-copy the GpcType */
-                        if (elem_type_node->var_type != HASHVAR_UNTYPED) {
-                            int elem_prim_tag = INT_TYPE;
-                            if (elem_type_node->var_type == HASHVAR_REAL) elem_prim_tag = REAL_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_LONGINT) elem_prim_tag = LONGINT_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_PCHAR) elem_prim_tag = STRING_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_BOOLEAN) elem_prim_tag = BOOL;
-                            else if (elem_type_node->var_type == HASHVAR_CHAR) elem_prim_tag = CHAR_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_POINTER) elem_prim_tag = POINTER_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_SET) elem_prim_tag = SET_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_ENUM) elem_prim_tag = ENUM_TYPE;
-                            else if (elem_type_node->var_type == HASHVAR_FILE) elem_prim_tag = FILE_TYPE;
-                            element_type = create_primitive_type(elem_prim_tag);
-                        }
-                    }
-                }
-
-                if (element_type == NULL) {
-                    element_type = create_primitive_type(INT_TYPE); /* Default fallback */
-                }
-
-                return create_array_type(element_type, start, end);
-            }
-
-            /* Handle pointer types */
-            if (alias_info->is_pointer) {
-                int target_tag = alias_info->pointer_type;
-                GpcType *points_to = NULL;
-                
-                if (target_tag != UNKNOWN_TYPE) {
-                    points_to = create_primitive_type(target_tag);
-                } else if (alias_info->pointer_type_id != NULL) {
-                    /* Named pointer target - for forward references, we might not be able to resolve yet */
-                    /* For now, just create a pointer to integer as placeholder */
-                    points_to = create_primitive_type(INT_TYPE);
-                }
-
-                if (points_to == NULL) {
-                    points_to = create_primitive_type(INT_TYPE);
-                }
-
-                return create_pointer_type(points_to);
-            }
-
-            /* Handle set types */
-            if (alias_info->is_set) {
-                return create_primitive_type(SET_TYPE);
-            }
-
-            /* Handle enum types */
-            if (alias_info->is_enum) {
-                return create_primitive_type(ENUM_TYPE);
-            }
-
-            /* Handle file types */
-            if (alias_info->is_file) {
-                return create_primitive_type(FILE_TYPE);
-            }
-
-            /* Handle simple type aliases (base type) */
-            int base_tag = alias_info->base_type;
-            if (base_tag != UNKNOWN_TYPE) {
-                return create_primitive_type(base_tag);
-            }
-
-            /* Named type reference */
-            if (alias_info->target_type_id != NULL) {
-                /* Look up the target type */
-                HashNode_t *target_node = NULL;
-                if (FindIdent(&target_node, symtab, alias_info->target_type_id) != -1 && 
-                    target_node != NULL && target_node->type != NULL) {
-                    /* Return a reference to the existing type 
-                     * NOTE: We should not deep-copy here as that would duplicate memory
-                     * Instead, the caller should handle type sharing appropriately */
-                    return target_node->type;
-                }
-            }
-
-            return NULL;
-        }
-
-        default:
-            return NULL;
-    }
-}
-
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -517,23 +390,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 break;
         }
 
-        /* Phase 3: Create GpcType for this type declaration and store it in the symbol table
-         * Only do this for types that we can safely convert (not all types are supported yet) */
-        GpcType *gpc_type = NULL;
-        
-        /* Only try to create GpcType for certain safe cases */
-        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL) {
-            /* Check if this is a procedure type by looking at the base_type */
-            if (alias_info->base_type == PROCEDURE) {
-                /* For now, we don't have enough info to create procedure type from alias */
-                /* This will be handled when we integrate with from_cparser better */
-                gpc_type = NULL;
-            }
-        }
-        
-        /* Use the typed API if we successfully created a GpcType, otherwise fall back to legacy */
+        GpcType *gpc_type = tree->tree_data.type_decl_data.gpc_type;
+
         if (gpc_type != NULL) {
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
+            if (func_return == 0)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
+                {
+                    type_node->var_type = var_type;
+                    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                        type_node->type_alias = alias_info;
+                    else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                        type_node->record_type = record_info;
+                }
+                tree->tree_data.type_decl_data.gpc_type = NULL;
+            }
         } else {
             /* Fall back to legacy API for types we can't convert yet */
             func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
@@ -897,6 +770,21 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                     else
                     {
+                        if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PROCEDURE)
+                        {
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
+                            if (func_return == 0)
+                            {
+                                HashNode_t *var_node = NULL;
+                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                {
+                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    if (type_node->type_alias != NULL)
+                                        var_node->type_alias = type_node->type_alias;
+                                }
+                            }
+                            goto next_identifier;
+                        }
                         var_type = type_node->var_type;
                         if (type_node->type_alias != NULL && type_node->type_alias->is_array)
                         {
