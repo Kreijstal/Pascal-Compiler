@@ -59,15 +59,16 @@ use-after-free bug and taking the first step toward complete GpcType migration.
 
 The next phases will migrate the remaining legacy fields from HashNode:
 
-### Priority 1: High Usage Fields
-- [ ] `enum VarType var_type` (~57 usages) → Use `gpc_type_get_primitive_tag()`
-- [ ] `struct RecordType *record_type` (~122 usages) → Use `gpc_type_get_record()`
-- [ ] `struct TypeAlias *type_alias` (~62 usages) → Use GpcType queries
+### Priority 1: Array Fields (COMPLETED ✅)
+- [x] `int is_array` (2 reader usages) → Use `gpc_type_is_array()`
+- [x] `int array_start, array_end` (4 reader usages) → Use `gpc_type_get_array_bounds()`
+- [x] `int element_size` (3 reader usages) → Use `gpc_type_get_array_element_size()`
+- [x] `int is_dynamic_array` (3 reader usages) → Use `gpc_type_is_dynamic_array()`
 
-### Priority 2: Array Fields
-- [ ] `int is_array` (~47 usages) → Use `gpc_type_is_array()`
-- [ ] `int array_start, array_end` → Use `gpc_type_get_array_bounds()`
-- [ ] `int element_size, is_dynamic_array` → Calculate from GpcType
+### Priority 2: High Usage Fields (IN PROGRESS)
+- [ ] `enum VarType var_type` (~46 usages) → Use `gpc_type_get_primitive_tag()`
+- [ ] `struct RecordType *record_type` (~93 usages) → Use `gpc_type_get_record()`
+- [ ] `struct TypeAlias *type_alias` (~62 usages) → Use GpcType queries
 
 ### Priority 3: Cleanup
 - [ ] Remove all legacy fields from `HashNode` structure
@@ -84,29 +85,45 @@ The next phases will migrate the remaining legacy fields from HashNode:
 4. Commit the changes
 
 ### Challenges:
-- **Volume**: ~288 total usages of legacy fields across the codebase
+- **Volume**: ~201 reader usages remaining (var_type + record_type + type_alias)
 - **Complexity**: Some legacy code may not have GpcType available
 - **Testing**: Need to ensure no behavioral changes during migration
 
 ### Approach:
 - Migrate field-by-field to keep changes manageable
 - Use GpcType helpers extensively to simplify migration
-- Maintain backward compatibility during transition via Legacy API
+- Maintain backward compatibility during transition via fallback to legacy fields
 - Remove legacy code only after all usages are migrated
 
 ## Timeline Estimate
 
 - ✅ Phase 1-2: args field removal (COMPLETE)
-- 📅 Phase 3: var_type migration (3-4 hours)
-- 📅 Phase 4: record_type migration (4-5 hours)
-- 📅 Phase 5: type_alias migration (3-4 hours)
-- 📅 Phase 6: array fields migration (2-3 hours)
-- 📅 Phase 7: Final cleanup (2-3 hours)
+- ✅ Phase 3: array fields migration (COMPLETE - 12 reader usages migrated)
+- 📅 Phase 4: var_type migration (~46 usages, estimated 3-4 hours)
+- 📅 Phase 5: record_type migration (~93 usages, estimated 4-5 hours)
+- 📅 Phase 6: type_alias migration (~62 usages, estimated 3-4 hours)
+- 📅 Phase 7: Final cleanup (estimated 2-3 hours)
 
-**Total estimated: 15-20 hours of focused work**
+**Total estimated: 12-16 hours of focused work remaining**
+
+## Recent Progress (This PR)
+
+### Commits in Sub-PR #190:
+1. **Initial plan** - Created comprehensive migration strategy
+2. **gpc_type_is_dynamic_array** - Added helper and migrated 3 reader usages
+3. **is_array migration** - Migrated 2 reader usages to use `gpc_type_is_array()`
+4. **array_start/end migration** - Migrated 4 reader usages to use `gpc_type_get_array_bounds()`
+5. **element_size migration** - Added `gpc_type_get_array_element_size()` and migrated 3 reader usages
+
+### Summary:
+- **12 reader usages** successfully migrated across 4 array-related fields
+- All readers now prefer GpcType when available, with graceful fallback to legacy fields
+- Zero regressions - all 79 compiler tests still passing
+- Build clean with no new warnings
 
 ## Files Modified So Far
 
+### Phase 1-2 (Complete):
 1. `GPC/Parser/ParseTree/GpcType.h` - Added helper function declarations
 2. `GPC/Parser/ParseTree/GpcType.c` - Implemented helper functions
 3. `GPC/Parser/SemanticCheck/HashTable/HashTable.h` - Removed args from HashNode and API
@@ -116,6 +133,14 @@ The next phases will migrate the remaining legacy fields from HashNode:
 7. `GPC/Parser/SemanticCheck/SemChecks/SemCheck_expr.c` - Use GpcType helpers
 8. `GPC/Parser/SemanticCheck/SemChecks/SemCheck_stmt.c` - Use GpcType helpers
 9. `GPC/CodeGenerator/Intel_x86-64/codegen_expression.c` - Use GpcType helpers
+
+### Phase 3 (Complete - Array Fields):
+1. `GPC/Parser/ParseTree/GpcType.h` - Added array helper declarations
+2. `GPC/Parser/ParseTree/GpcType.c` - Implemented array helpers:
+   - `gpc_type_is_dynamic_array()`
+   - `gpc_type_get_array_element_size()`
+3. `GPC/Parser/SemanticCheck/SemChecks/SemCheck_expr.c` - Migrated array field readers
+4. `GPC/CodeGenerator/Intel_x86-64/codegen_expression.c` - Migrated array field readers
 
 ## Testing Strategy
 
