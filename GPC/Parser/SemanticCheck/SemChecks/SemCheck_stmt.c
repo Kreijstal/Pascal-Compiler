@@ -1035,6 +1035,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 return return_val;
             }
 
+            /* Set the resolved_proc field so codegen knows this is an indirect call */
+            stmt->stmt_data.procedure_call_data.resolved_proc = proc_var;
+
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
 
