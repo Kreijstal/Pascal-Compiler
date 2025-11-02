@@ -1066,16 +1066,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
-        // Use the original name for the external symbol, to support overloading
-        func_return = PushProcedureOntoScope(symtab, id_to_use_for_lookup,
+        /* Create GpcType for the procedure */
+        GpcType *proc_type = create_procedure_type(
+            subprogram->tree_data.subprogram_data.args_var,
+            NULL  /* procedures have no return type */
+        );
+        
+        // Use the typed version to properly set the GpcType
+        func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
                         subprogram->tree_data.subprogram_data.mangled_id,
-                        subprogram->tree_data.subprogram_data.args_var);
+                        proc_type);
 
         PushScope(symtab);
+        
+        /* Create another GpcType for the recursive scope (they're separate) */
+        GpcType *proc_type_recursive = create_procedure_type(
+            subprogram->tree_data.subprogram_data.args_var,
+            NULL
+        );
+        
         // Push it again in the new scope to allow recursion
-        PushProcedureOntoScope(symtab, id_to_use_for_lookup,
+        PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
             subprogram->tree_data.subprogram_data.mangled_id,
-            subprogram->tree_data.subprogram_data.args_var);
+            proc_type_recursive);
 
         new_max_scope = max_scope_lev+1;
     }
@@ -1083,6 +1096,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         /* Need to additionally extract the return type */
         HashNode_t *return_type_node = NULL;
+        GpcType *return_gpc_type = NULL;
+        
         if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
         {
             HashNode_t *type_node;
@@ -1097,6 +1112,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 var_type = type_node->var_type;
                 return_type_node = type_node;
+                /* Get or create GpcType for the return type */
+                if (type_node->type != NULL)
+                {
+                    /* Use existing GpcType (don't own it) */
+                    return_gpc_type = type_node->type;
+                }
             }
         }
         else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)
@@ -1112,10 +1133,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         else
             var_type = HASHVAR_REAL;
 
-        // Use the original name for the external symbol, to support overloading
-        func_return = PushFunctionOntoScope(symtab, id_to_use_for_lookup,
+        /* Create a primitive GpcType for the return type if we don't have one */
+        if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)
+        {
+            return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
+        }
+        
+        /* Create GpcType for the function (which is also a procedure type with a return value) */
+        GpcType *func_type = create_procedure_type(
+            subprogram->tree_data.subprogram_data.args_var,
+            return_gpc_type  /* functions have a return type */
+        );
+        
+        // Use the typed version to properly set the GpcType
+        func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                         subprogram->tree_data.subprogram_data.mangled_id,
-                        var_type, subprogram->tree_data.subprogram_data.args_var);
+                        func_type);
 
         if (return_type_node != NULL && func_return == 0)
         {
