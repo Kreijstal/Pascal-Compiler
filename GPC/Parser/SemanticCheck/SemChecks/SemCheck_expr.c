@@ -234,7 +234,16 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         node_upper_bound = node->array_end;
     }
     
-    int node_element_size = node->element_size;
+    /* Get element size from GpcType if available */
+    long long node_element_size;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        node_element_size = gpc_type_get_array_element_size(node->type);
+        if (node_element_size < 0)
+            node_element_size = node->element_size; /* Fall back to legacy if GpcType fails */
+    } else {
+        node_element_size = node->element_size;
+    }
+    
     int node_is_dynamic = (node->type != NULL) ? 
         gpc_type_is_dynamic_array(node->type) : node->is_dynamic_array;
 
@@ -1387,7 +1396,16 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
             return 1;
         }
 
-        long long element_size = node->element_size;
+        /* Get element size from GpcType if available */
+        long long element_size;
+        if (node->type != NULL && gpc_type_is_array(node->type)) {
+            element_size = gpc_type_get_array_element_size(node->type);
+            if (element_size < 0)
+                element_size = node->element_size; /* Fall back to legacy */
+        } else {
+            element_size = node->element_size;
+        }
+        
         if (element_size <= 0)
         {
             long long base = sizeof_from_var_type(node->var_type);

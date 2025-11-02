@@ -143,7 +143,16 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    long long element_size = node->element_size;
+    /* Get element size from GpcType if available */
+    long long element_size;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        element_size = gpc_type_get_array_element_size(node->type);
+        if (element_size < 0)
+            element_size = node->element_size; /* Fall back to legacy */
+    } else {
+        element_size = node->element_size;
+    }
+    
     if (element_size <= 0)
     {
         if (node->type_alias != NULL && node->type_alias->is_array)
