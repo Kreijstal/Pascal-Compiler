@@ -2678,6 +2678,10 @@ int semcheck_varid(int *type_return,
             {
                 /* Constants are readable values. */
             }
+            else if(hash_return->hash_type == HASHTYPE_PROCEDURE && mutating == 0)
+            {
+                /* Procedures can be used as values when not mutating (for procedure variables). */
+            }
             else
             {
                 fprintf(stderr, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",

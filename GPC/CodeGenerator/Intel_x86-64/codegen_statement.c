@@ -2110,8 +2110,60 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
-    else
+    
+    /* Check if this is an indirect call through a procedure variable */
+    int is_indirect_call = (proc_node != NULL && proc_node->hash_type == HASHTYPE_VAR &&
+                            proc_node->type != NULL && proc_node->type->kind == TYPE_KIND_PROCEDURE);
+    
+    if (is_indirect_call)
     {
+        /* INDIRECT CALL LOGIC */
+        
+        /* 1. Create a temporary expression to evaluate the procedure variable */
+        struct Expression *callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
+        callee_expr->resolved_type = PROCEDURE;
+        
+        /* 2. Generate code to load the procedure's address into a register */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_evaluate_expr(callee_expr, inst_list, ctx, &addr_reg);
+        destroy_expr(callee_expr);
+        
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+        {
+            return inst_list;
+        }
+        
+        /* 3. Prevent clobbering %rax. Move the address to a safe register if needed */
+        const char *call_reg_name = addr_reg->bit_64;
+        if (strcmp(call_reg_name, "%rax") == 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            call_reg_name = "%r11";
+        }
+        
+        /* 4. Pass arguments as usual */
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
+        
+        /* 5. Zero out %eax for varargs ABI compatibility */
+        inst_list = codegen_vect_reg(inst_list, 0);
+        
+        /* 6. Perform the indirect call */
+        snprintf(buffer, sizeof(buffer), "\tcall\t*%s\n", call_reg_name);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* 7. Cleanup */
+        free_reg(get_reg_stack(), addr_reg);
+        free_arg_regs();
+        
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (indirect call)\n", __func__);
+        #endif
+        return inst_list;
+    }
+    else if (proc_node != NULL && proc_node->hash_type == HASHTYPE_PROCEDURE)
+    {
+        /* DIRECT CALL LOGIC */
         int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
         int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
         int callee_depth = 0;
@@ -2176,6 +2228,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         #endif
         return inst_list;
     }
+    
+    /* Fallback: if we reach here, something is wrong but return inst_list to avoid compiler warning */
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s (fallback)\n", __func__);
+    #endif
+    return inst_list;
 }
 
 /* Code generation for if-then-else statements */

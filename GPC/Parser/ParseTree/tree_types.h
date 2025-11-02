@@ -215,7 +215,8 @@ enum ExprType {
     EXPR_SET,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
-    EXPR_TYPECAST
+    EXPR_TYPECAST,
+    EXPR_ADDR_OF_PROC
 };
 
 /* An expression subtree */
@@ -325,6 +326,12 @@ struct Expression
             char *target_type_id;
             struct Expression *expr;
         } typecast_data;
+
+        /* Address of procedure */
+        struct AddrOfProc
+        {
+            struct HashNode *procedure_symbol;
+        } addr_of_proc_data;
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;

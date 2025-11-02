@@ -383,6 +383,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_SET:
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
+        case EXPR_ADDR_OF_PROC:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -823,6 +824,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     else if (expr->type == EXPR_ADDR)
     {
         return codegen_addressof_leaf(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_ADDR_OF_PROC)
+    {
+        HashNode_t *proc_symbol = expr->expr_data.addr_of_proc_data.procedure_symbol;
+        if (proc_symbol == NULL || proc_symbol->mangled_id == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Missing symbol information for procedure address.");
+            return inst_list;
+        }
+        /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_symbol->mangled_id, target_reg->bit_64);
+        return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_STRING)
     {

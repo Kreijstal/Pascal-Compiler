@@ -839,6 +839,21 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 gpc_type_to_string(rhs_gpctype));
             ++return_val;
         }
+        else if (type_first == PROCEDURE && type_second == PROCEDURE)
+        {
+            /* AST TRANSFORMATION: Mark RHS as procedure address if it's a direct procedure reference */
+            if (expr != NULL && expr->type == EXPR_VAR_ID)
+            {
+                HashNode_t *rhs_symbol = NULL;
+                if (FindIdent(&rhs_symbol, symtab, expr->expr_data.id) >= 0 &&
+                    rhs_symbol != NULL && rhs_symbol->hash_type == HASHTYPE_PROCEDURE)
+                {
+                    /* Transform the expression to EXPR_ADDR_OF_PROC */
+                    expr->type = EXPR_ADDR_OF_PROC;
+                    expr->expr_data.addr_of_proc_data.procedure_symbol = rhs_symbol;
+                }
+            }
+        }
     }
 
     if (!handled_by_gpctype)
