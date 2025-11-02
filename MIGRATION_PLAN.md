@@ -127,10 +127,14 @@ Added assertions for cases that should never fail.
 - [ ] Consider adding GpcType *resolved_gpc_type field
 - [ ] Migrate expression type checking to use GpcType
 
-#### 3.2: TypeAlias and RecordField array info
-- [ ] These structures have their own is_array, array_start fields
-- [ ] They represent type DEFINITIONS, not symbol table entries
-- [ ] Keep as-is (they're part of the type system, not migration targets)
+#### 3.2: TypeAlias and RecordField array info ✅
+- [x] These structures have their own is_array, array_start fields
+- [x] They represent type DEFINITIONS, not symbol table entries
+- [x] Decision: Keep as-is (they're part of the type system, not migration targets)
+
+**Rationale:** TypeAlias and RecordField structures define type information and are not
+HashNode symbol table entries. Their array fields are part of the type definition syntax
+and should remain unchanged during this migration.
 
 #### 3.3: Constants
 - [ ] Handle constant type inference with GpcType
