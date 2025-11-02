@@ -39,6 +39,8 @@ typedef struct {
     int is_file;
     int file_type;
     char *file_type_id;
+    int base_type;
+    ast_t *proc_params;
 } TypeInfo;
 
 static void destroy_type_info_contents(TypeInfo *info) {
@@ -371,6 +373,8 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->is_file = 0;
         type_info->file_type = UNKNOWN_TYPE;
         type_info->file_type_id = NULL;
+        type_info->base_type = UNKNOWN_TYPE;
+        type_info->proc_params = NULL;
     }
 
     if (type_spec == NULL)
@@ -524,9 +528,27 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     }
 
     if (spec_node->typ == PASCAL_T_PROCEDURE_TYPE || spec_node->typ == PASCAL_T_FUNCTION_TYPE) {
-        // Note: For now, we return PROCEDURE as the type tag for both procedures and functions
-        // The actual GpcType object will be created later in the semantic checker
-        // This is a temporary bridge solution until full migration to GpcType
+        if (type_info != NULL) {
+            type_info->base_type = PROCEDURE;
+            
+            /* Parse parameters */
+            ast_t *cursor = spec_node->child;
+            
+            /* Check if first child is a PARAM_LIST */
+            if (cursor != NULL && cursor->typ == PASCAL_T_PARAM_LIST) {
+                /* The PARAM_LIST node should contain PARAM children */
+                ast_t *param_cursor = cursor->child;
+                type_info->proc_params = param_cursor;
+            } else {
+                /* Skip to parameter list if present */
+                while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
+                    cursor = cursor->next;
+                
+                if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
+                    type_info->proc_params = cursor;
+                }
+            }
+        }
         return PROCEDURE;
     }
 
@@ -1581,6 +1603,18 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     GpcType *gpc_type = NULL;
     if (spec_node != NULL)
         gpc_type = convert_type_spec_to_gpctype(spec_node, NULL);
+    
+    /* Special handling for procedure type aliases - ensure they get proper GpcType */
+    if (gpc_type == NULL && type_info.base_type == PROCEDURE) {
+        /* Create a procedure type for procedure aliases with correct parameter information */
+        ListNode_t *params = NULL;
+        if (type_info.proc_params != NULL) {
+            params = convert_param_list(&type_info.proc_params);
+        }
+        gpc_type = create_procedure_type(params, NULL);
+        assert(gpc_type != NULL && "Failed to create procedure type for alias");
+        assert(gpc_type->kind == TYPE_KIND_PROCEDURE && "Created type must be TYPE_KIND_PROCEDURE");
+    }
 
     Tree_t *decl = NULL;
     if (record_type != NULL) {
@@ -1592,6 +1626,9 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     } else if (mapped_type != UNKNOWN_TYPE || type_id != NULL) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 0, mapped_type, type_id, 0, 0);
         type_id = NULL;
+    } else if (type_info.base_type == PROCEDURE && gpc_type != NULL) {
+        /* Procedure type alias with proper GpcType */
+        decl = mk_typealiasdecl(type_decl_node->line, id, 0, PROCEDURE, NULL, 0, 0);
     } else {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
     }
