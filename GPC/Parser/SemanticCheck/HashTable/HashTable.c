@@ -405,6 +405,36 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         set_var_type_from_gpctype(hash_node, type);
         hash_node->record_type = NULL;
         hash_node->type_alias = NULL;
+        
+        /* For array types, populate legacy array fields from GpcType */
+        if (type->kind == TYPE_KIND_ARRAY)
+        {
+            hash_node->is_array = 1;
+            hash_node->array_start = type->info.array_info.start_index;
+            hash_node->array_end = type->info.array_info.end_index;
+            hash_node->is_dynamic_array = (type->info.array_info.end_index < type->info.array_info.start_index);
+            
+            /* Calculate element size */
+            GpcType *element_type = type->info.array_info.element_type;
+            if (element_type != NULL)
+            {
+                long long elem_size = gpc_type_sizeof(element_type);
+                hash_node->element_size = (elem_size > 0) ? (int)elem_size : 0;
+            }
+            else
+            {
+                hash_node->element_size = 0;
+            }
+        }
+        else
+        {
+            /* Not an array - set array fields to defaults */
+            hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+            hash_node->array_start = 0;
+            hash_node->array_end = 0;
+            hash_node->element_size = 0;
+            hash_node->is_dynamic_array = 0;
+        }
     }
     else
     {
@@ -412,14 +442,14 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->var_type = var_type;
         hash_node->record_type = record_type;
         hash_node->type_alias = type_alias;
+        
+        /* Set array-specific fields to defaults - will be set later by caller if needed */
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
     }
-    
-    /* Set array-specific fields */
-    hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-    hash_node->array_start = 0;
-    hash_node->array_end = 0;
-    hash_node->element_size = 0;
-    hash_node->is_dynamic_array = 0;
     
     return hash_node;
 }
@@ -476,7 +506,18 @@ static void set_var_type_from_gpctype(HashNode_t* hash_node, GpcType* type)
     }
     else if (type->kind == TYPE_KIND_ARRAY)
     {
-        hash_node->var_type = HASHVAR_ARRAY;
+        /* For arrays, set var_type to the element type for backward compatibility
+         * with code that queries var_type to determine element type */
+        GpcType *element_type = type->info.array_info.element_type;
+        if (element_type != NULL && element_type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            hash_node->var_type = primitive_tag_to_var_type(element_type->info.primitive_type_tag);
+        }
+        else
+        {
+            /* For non-primitive element types, keep HASHVAR_ARRAY */
+            hash_node->var_type = HASHVAR_ARRAY;
+        }
     }
 }
 

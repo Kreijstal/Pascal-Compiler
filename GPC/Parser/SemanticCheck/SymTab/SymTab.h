@@ -83,6 +83,17 @@ int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, Gp
 /* Pushes a new type declaration with a GpcType onto the current scope */
 int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
 
+/* NEW: Builtin declarations using GpcType */
+
+/* Adds a built-in type with a GpcType */
+int AddBuiltinType_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Adds a built-in procedure with a GpcType */
+int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Adds a built-in function with a GpcType */
+int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */

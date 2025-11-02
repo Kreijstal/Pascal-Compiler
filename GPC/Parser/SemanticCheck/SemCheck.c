@@ -509,139 +509,203 @@ void semcheck_add_builtins(SymTab_t *symtab)
 {
     char *pchar_name = strdup("PChar");
     if (pchar_name != NULL) {
-        AddBuiltinType(symtab, pchar_name, HASHVAR_PCHAR);
+        GpcType *pchar_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(pchar_type != NULL && "Failed to create PChar type");
+        AddBuiltinType_Typed(symtab, pchar_name, pchar_type);
         free(pchar_name);
     }
     char *integer_name = strdup("integer");
     if (integer_name != NULL) {
-        AddBuiltinType(symtab, integer_name, HASHVAR_INTEGER);
+        GpcType *integer_type = gpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(integer_type != NULL && "Failed to create integer type");
+        AddBuiltinType_Typed(symtab, integer_name, integer_type);
         free(integer_name);
     }
     char *longint_name = strdup("longint");
     if (longint_name != NULL) {
-        AddBuiltinType(symtab, longint_name, HASHVAR_LONGINT);
+        GpcType *longint_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(longint_type != NULL && "Failed to create longint type");
+        AddBuiltinType_Typed(symtab, longint_name, longint_type);
         free(longint_name);
     }
     char *real_name = strdup("real");
     if (real_name != NULL) {
-        AddBuiltinType(symtab, real_name, HASHVAR_REAL);
+        GpcType *real_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(real_type != NULL && "Failed to create real type");
+        AddBuiltinType_Typed(symtab, real_name, real_type);
         free(real_name);
     }
     char *single_name = strdup("single");
     if (single_name != NULL) {
-        AddBuiltinType(symtab, single_name, HASHVAR_REAL);
+        GpcType *single_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(single_type != NULL && "Failed to create single type");
+        AddBuiltinType_Typed(symtab, single_name, single_type);
         free(single_name);
     }
     char *double_name = strdup("double");
     if (double_name != NULL) {
-        AddBuiltinType(symtab, double_name, HASHVAR_REAL);
+        GpcType *double_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(double_type != NULL && "Failed to create double type");
+        AddBuiltinType_Typed(symtab, double_name, double_type);
         free(double_name);
     }
     char *string_name = strdup("string");
     if (string_name != NULL) {
-        AddBuiltinType(symtab, string_name, HASHVAR_PCHAR);
+        GpcType *string_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(string_type != NULL && "Failed to create string type");
+        AddBuiltinType_Typed(symtab, string_name, string_type);
         free(string_name);
     }
     char *boolean_name = strdup("boolean");
     if (boolean_name != NULL) {
-        AddBuiltinType(symtab, boolean_name, HASHVAR_BOOLEAN);
+        GpcType *boolean_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
+        assert(boolean_type != NULL && "Failed to create boolean type");
+        AddBuiltinType_Typed(symtab, boolean_name, boolean_type);
         free(boolean_name);
     }
     char *char_name = strdup("char");
     if (char_name != NULL) {
-        AddBuiltinType(symtab, char_name, HASHVAR_CHAR);
+        GpcType *char_type = gpc_type_from_var_type(HASHVAR_CHAR);
+        assert(char_type != NULL && "Failed to create char type");
+        AddBuiltinType_Typed(symtab, char_name, char_type);
         free(char_name);
     }
     char *file_name = strdup("file");
     if (file_name != NULL) {
-        AddBuiltinType(symtab, file_name, HASHVAR_FILE);
+        GpcType *file_type = gpc_type_from_var_type(HASHVAR_FILE);
+        assert(file_type != NULL && "Failed to create file type");
+        AddBuiltinType_Typed(symtab, file_name, file_type);
         free(file_name);
     }
     char *text_name = strdup("text");
     if (text_name != NULL) {
-        AddBuiltinType(symtab, text_name, HASHVAR_FILE);
+        GpcType *text_type = gpc_type_from_var_type(HASHVAR_FILE);
+        assert(text_type != NULL && "Failed to create text type");
+        AddBuiltinType_Typed(symtab, text_name, text_type);
         free(text_name);
     }
 
+    /* Builtin procedures - procedures have no return type */
     char *setlength_name = strdup("SetLength");
     if (setlength_name != NULL) {
-        AddBuiltinProc(symtab, setlength_name, NULL);
+        GpcType *setlength_type = create_procedure_type(NULL, NULL);
+        assert(setlength_type != NULL && "Failed to create SetLength procedure type");
+        AddBuiltinProc_Typed(symtab, setlength_name, setlength_type);
         free(setlength_name);
     }
 
     char *write_name = strdup("write");
     if (write_name != NULL) {
-        AddBuiltinProc(symtab, write_name, NULL);
+        GpcType *write_type = create_procedure_type(NULL, NULL);
+        assert(write_type != NULL && "Failed to create write procedure type");
+        AddBuiltinProc_Typed(symtab, write_name, write_type);
         free(write_name);
     }
 
     char *writeln_name = strdup("writeln");
     if (writeln_name != NULL) {
-        AddBuiltinProc(symtab, writeln_name, NULL);
+        GpcType *writeln_type = create_procedure_type(NULL, NULL);
+        assert(writeln_type != NULL && "Failed to create writeln procedure type");
+        AddBuiltinProc_Typed(symtab, writeln_name, writeln_type);
         free(writeln_name);
     }
 
     char *move_name = strdup("Move");
     if (move_name != NULL) {
-        AddBuiltinProc(symtab, move_name, NULL);
+        GpcType *move_type = create_procedure_type(NULL, NULL);
+        assert(move_type != NULL && "Failed to create Move procedure type");
+        AddBuiltinProc_Typed(symtab, move_name, move_type);
         free(move_name);
     }
     char *val_name = strdup("Val");
     if (val_name != NULL) {
-        AddBuiltinProc(symtab, val_name, NULL);
+        GpcType *val_type = create_procedure_type(NULL, NULL);
+        assert(val_type != NULL && "Failed to create Val procedure type");
+        AddBuiltinProc_Typed(symtab, val_name, val_type);
         free(val_name);
     }
 
     char *inc_name = strdup("Inc");
     if (inc_name != NULL) {
-        AddBuiltinProc(symtab, inc_name, NULL);
+        GpcType *inc_type = create_procedure_type(NULL, NULL);
+        assert(inc_type != NULL && "Failed to create Inc procedure type");
+        AddBuiltinProc_Typed(symtab, inc_name, inc_type);
         free(inc_name);
     }
 
     char *new_name = strdup("New");
     if (new_name != NULL) {
-        AddBuiltinProc(symtab, new_name, NULL);
+        GpcType *new_type = create_procedure_type(NULL, NULL);
+        assert(new_type != NULL && "Failed to create New procedure type");
+        AddBuiltinProc_Typed(symtab, new_name, new_type);
         free(new_name);
     }
 
     char *dispose_name = strdup("Dispose");
     if (dispose_name != NULL) {
-        AddBuiltinProc(symtab, dispose_name, NULL);
+        GpcType *dispose_type = create_procedure_type(NULL, NULL);
+        assert(dispose_type != NULL && "Failed to create Dispose procedure type");
+        AddBuiltinProc_Typed(symtab, dispose_name, dispose_type);
         free(dispose_name);
     }
 
+    /* Builtin functions - functions have return types */
     char *length_name = strdup("Length");
     if (length_name != NULL) {
-        AddBuiltinFunction(symtab, length_name, HASHVAR_LONGINT);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for Length");
+        GpcType *length_type = create_procedure_type(NULL, return_type);
+        assert(length_type != NULL && "Failed to create Length function type");
+        AddBuiltinFunction_Typed(symtab, length_name, length_type);
         free(length_name);
     }
 
     char *copy_name = strdup("Copy");
     if (copy_name != NULL) {
-        AddBuiltinFunction(symtab, copy_name, HASHVAR_PCHAR);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(return_type != NULL && "Failed to create return type for Copy");
+        GpcType *copy_type = create_procedure_type(NULL, return_type);
+        assert(copy_type != NULL && "Failed to create Copy function type");
+        AddBuiltinFunction_Typed(symtab, copy_name, copy_type);
         free(copy_name);
     }
     char *eof_name = strdup("EOF");
     if (eof_name != NULL) {
-        AddBuiltinFunction(symtab, eof_name, HASHVAR_BOOLEAN);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
+        assert(return_type != NULL && "Failed to create return type for EOF");
+        GpcType *eof_type = create_procedure_type(NULL, return_type);
+        assert(eof_type != NULL && "Failed to create EOF function type");
+        AddBuiltinFunction_Typed(symtab, eof_name, eof_type);
         free(eof_name);
     }
 
     char *sizeof_name = strdup("SizeOf");
     if (sizeof_name != NULL) {
-        AddBuiltinFunction(symtab, sizeof_name, HASHVAR_LONGINT);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for SizeOf");
+        GpcType *sizeof_type = create_procedure_type(NULL, return_type);
+        assert(sizeof_type != NULL && "Failed to create SizeOf function type");
+        AddBuiltinFunction_Typed(symtab, sizeof_name, sizeof_type);
         free(sizeof_name);
     }
 
     char *chr_name = strdup("Chr");
     if (chr_name != NULL) {
-        AddBuiltinFunction(symtab, chr_name, HASHVAR_PCHAR);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(return_type != NULL && "Failed to create return type for Chr");
+        GpcType *chr_type = create_procedure_type(NULL, return_type);
+        assert(chr_type != NULL && "Failed to create Chr function type");
+        AddBuiltinFunction_Typed(symtab, chr_name, chr_type);
         free(chr_name);
     }
 
     char *ord_name = strdup("Ord");
     if (ord_name != NULL) {
-        AddBuiltinFunction(symtab, ord_name, HASHVAR_LONGINT);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for Ord");
+        GpcType *ord_type = create_procedure_type(NULL, return_type);
+        assert(ord_type != NULL && "Failed to create Ord function type");
+        AddBuiltinFunction_Typed(symtab, ord_name, ord_type);
         free(ord_name);
     }
 
@@ -798,17 +862,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (type_node->type_alias != NULL && type_node->type_alias->is_array)
                         {
                             struct TypeAlias *alias = type_node->type_alias;
-                            int element_size;
-                            if (var_type == HASHVAR_REAL)
-                                element_size = 8;
-                            else if (var_type == HASHVAR_LONGINT)
-                                element_size = 8;
-                            else if (var_type == HASHVAR_PCHAR)
-                                element_size = 8;
-                            else if (var_type == HASHVAR_CHAR)
-                                element_size = 1;
-                            else
-                                element_size = 4;
                             int start = alias->array_start;
                             int end = alias->array_end;
                             if (alias->is_open_array)
@@ -817,26 +870,47 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 end = -1;
                             }
 
-                            func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
-                                start, end, element_size);
+                            /* Create GpcType for the array element */
+                            GpcType *element_type = gpc_type_from_var_type(var_type);
+                            assert(element_type != NULL && "Array element type must be createable");
+                            
+                            /* Create array GpcType */
+                            GpcType *array_type = create_array_type(element_type, start, end);
+                            assert(array_type != NULL && "Failed to create array type");
+                            
+                            func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
 
                             if (func_return == 0)
                             {
                                 HashNode_t *array_node = NULL;
                                 if (FindIdent(&array_node, symtab, (char *)ids->cur) != -1 && array_node != NULL)
                                 {
-                                    array_node->is_dynamic_array = alias->is_open_array;
                                     array_node->type_alias = alias;
-                                    if (alias->is_open_array)
-                                    {
-                                        array_node->array_start = start;
-                                        array_node->array_end = end;
-                                    }
                                 }
                             }
 
                             goto next_identifier;
                         }
+                        
+                        /* For non-array type references (e.g., enum, set, file), use legacy API to preserve type_alias */
+                        func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                        if (func_return == 0)
+                        {
+                            HashNode_t *var_node = NULL;
+                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            {
+                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                if (type_node->type_alias != NULL)
+                                    var_node->type_alias = type_node->type_alias;
+                                if (type_node->record_type != NULL)
+                                {
+                                    if (var_node->record_type != NULL)
+                                        destroy_record_type(var_node->record_type);
+                                    var_node->record_type = clone_record_type(type_node->record_type);
+                                }
+                            }
+                        }
+                        goto next_identifier;
                     }
                 }
                 else if (tree->tree_data.var_decl_data.inferred_type)
@@ -855,7 +929,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_PCHAR;
                 else
                     var_type = HASHVAR_REAL;
-                func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                
+                /* Create GpcType for typed variables */
+                GpcType *var_gpc_type = gpc_type_from_var_type(var_type);
+                if (var_gpc_type != NULL) {
+                    func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                } else {
+                    /* For UNTYPED variables, use legacy API */
+                    func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                }
                 if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
@@ -901,21 +983,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                     var_type = HASHVAR_REAL;
 
-                int element_size;
-                if (var_type == HASHVAR_REAL)
-                    element_size = 8;
-                else if (var_type == HASHVAR_LONGINT)
-                    element_size = 8;
-                else if (var_type == HASHVAR_PCHAR)
-                    element_size = 8;
-                else if (var_type == HASHVAR_CHAR)
-                    element_size = 1;
-                else if (var_type == HASHVAR_BOOLEAN)
-                    element_size = 1;
-                else
-                    element_size = 4;
-                func_return = PushArrayOntoScope(symtab, var_type, (char *)ids->cur,
-                    tree->tree_data.arr_decl_data.s_range, tree->tree_data.arr_decl_data.e_range, element_size);
+                /* Create GpcType for the array */
+                GpcType *element_type = gpc_type_from_var_type(var_type);
+                assert(element_type != NULL && "Array element type must be createable from VarType");
+                
+                GpcType *array_type = create_array_type(
+                    element_type,
+                    tree->tree_data.arr_decl_data.s_range,
+                    tree->tree_data.arr_decl_data.e_range
+                );
+                assert(array_type != NULL && "Failed to create array type");
+                
+                func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
             }
 
             /* Greater than 0 signifies an error */

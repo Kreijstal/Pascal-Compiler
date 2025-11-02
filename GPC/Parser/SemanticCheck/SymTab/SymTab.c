@@ -327,6 +327,40 @@ int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
     return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_TYPE, type);
 }
 
+/* Adds a built-in type with a GpcType */
+int AddBuiltinType_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(type != NULL);
+
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_TYPE, type);
+}
+
+/* Adds a built-in procedure with a GpcType */
+int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(type != NULL);
+    assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin proc must have procedure type");
+    assert(type->info.proc_info.return_type == NULL && "Procedure must not have return type");
+
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
+}
+
+/* Adds a built-in function with a GpcType */
+int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(type != NULL);
+    assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin function must have procedure type");
+    assert(type->info.proc_info.return_type != NULL && "Function must have return type");
+
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
+}
+
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab)
 {
