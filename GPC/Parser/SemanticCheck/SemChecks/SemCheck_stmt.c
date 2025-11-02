@@ -22,6 +22,7 @@
 #include "../../ParseTree/tree_types.h"
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
+#include "../../ParseTree/GpcType.h"
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
@@ -39,6 +40,8 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
 static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
+static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
+    int max_scope_lev);
 
 static int var_type_to_expr_type(enum VarType var_type)
 {
@@ -84,6 +87,94 @@ static int types_numeric_compatible(int lhs, int rhs)
         return 1;
 
     return 0;
+}
+
+static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
+    int max_scope_lev)
+{
+    (void)max_scope_lev;
+    if (proc_node == NULL || proc_node->type == NULL ||
+        proc_node->type->kind != TYPE_KIND_PROCEDURE)
+        return 0;
+
+    int return_val = 0;
+    ListNode_t *formal_params = proc_node->type->info.proc_info.params;
+    ListNode_t *args_given = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_index = 0;
+
+    while (formal_params != NULL && args_given != NULL)
+    {
+        ++arg_index;
+        assert(formal_params->type == LIST_TREE);
+        assert(args_given->type == LIST_EXPR);
+
+        Tree_t *param_decl = (Tree_t *)formal_params->cur;
+        struct Expression *arg_expr = (struct Expression *)args_given->cur;
+
+        /* Phase 3: Use GpcType for comprehensive type checking */
+        
+        /* Resolve GpcType for the argument expression */
+        int arg_type_owned = 0;
+        GpcType *arg_type = semcheck_resolve_expression_gpc_type(symtab, arg_expr, INT_MAX, NO_MUTATE, &arg_type_owned);
+        
+        /* Resolve GpcType for the formal parameter */
+        int param_type_owned = 0;
+        GpcType *param_type = NULL;
+        if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
+        {
+            param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
+        }
+
+        /* Both types must be resolved for proper type checking */
+        if (arg_type == NULL || param_type == NULL)
+        {
+            fprintf(stderr,
+                "Error on line %d, on procedure call %s, argument %d: Unable to resolve type!\n\n",
+                stmt->line_num,
+                stmt->stmt_data.procedure_call_data.id,
+                arg_index);
+            ++return_val;
+        }
+        else
+        {
+            /* Use comprehensive GpcType-based type compatibility checking */
+            if (!are_types_compatible_for_assignment(param_type, arg_type, symtab))
+            {
+                fprintf(stderr,
+                    "Error on line %d, on procedure call %s, argument %d: Type mismatch (expected %s, got %s)!\n\n",
+                    stmt->line_num,
+                    stmt->stmt_data.procedure_call_data.id,
+                    arg_index,
+                    gpc_type_to_string(param_type),
+                    gpc_type_to_string(arg_type));
+                ++return_val;
+            }
+        }
+
+        /* Clean up owned types */
+        if (arg_type_owned && arg_type != NULL)
+            destroy_gpc_type(arg_type);
+        if (param_type_owned && param_type != NULL)
+            destroy_gpc_type(param_type);
+
+        formal_params = formal_params->next;
+        args_given = args_given->next;
+    }
+
+    if (formal_params == NULL && args_given != NULL)
+    {
+        fprintf(stderr, "Error on line %d, on procedure call %s, too many arguments given!\n\n",
+            stmt->line_num, stmt->stmt_data.procedure_call_data.id);
+        ++return_val;
+    }
+    else if (formal_params != NULL && args_given == NULL)
+    {
+        fprintf(stderr, "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
+            stmt->line_num, stmt->stmt_data.procedure_call_data.id);
+        ++return_val;
+    }
+
+    return return_val;
 }
 
 typedef int (*builtin_semcheck_handler_t)(SymTab_t *, struct Statement *, int);
@@ -726,43 +817,76 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    int coerced_rhs_type = type_second;
-    int types_compatible = (type_first == type_second);
+    int lhs_owned = 0, rhs_owned = 0;
+    GpcType *lhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, var, max_scope_lev, MUTATE, &lhs_owned);
+    GpcType *rhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
+    int handled_by_gpctype = 0;
 
-    if (!types_compatible)
+    if (lhs_gpctype != NULL && rhs_gpctype != NULL &&
+        (lhs_gpctype->kind == TYPE_KIND_PROCEDURE || rhs_gpctype->kind == TYPE_KIND_PROCEDURE))
     {
-        if ((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
-            (type_first == INT_TYPE && type_second == LONGINT_TYPE))
+        handled_by_gpctype = 1;
+        if (!are_types_compatible_for_assignment(lhs_gpctype, rhs_gpctype, symtab))
         {
-            types_compatible = 1;
-        }
-        else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
-            expr != NULL && expr->type == EXPR_STRING &&
-            expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1)
-        {
-            types_compatible = 1;
-            coerced_rhs_type = CHAR_TYPE;
-            expr->resolved_type = CHAR_TYPE;
+            const char *lhs_name = "<expression>";
+            if (var != NULL && var->type == EXPR_VAR_ID)
+                lhs_name = var->expr_data.id;
+            fprintf(stderr,
+                "Error on line %d, incompatible types in assignment for %s (lhs: %s, rhs: %s)!\n\n",
+                stmt->line_num,
+                lhs_name,
+                gpc_type_to_string(lhs_gpctype),
+                gpc_type_to_string(rhs_gpctype));
+            ++return_val;
         }
     }
 
-    if (!types_compatible)
+    if (!handled_by_gpctype)
     {
-        const char *lhs_name = "<expression>";
-        if (var != NULL && var->type == EXPR_VAR_ID)
-            lhs_name = var->expr_data.id;
-        fprintf(stderr,
-            "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
-            stmt->line_num,
-            lhs_name,
-            type_tag_to_name(type_first),
-            type_tag_to_name(type_second));
-        ++return_val;
+        int coerced_rhs_type = type_second;
+        int types_compatible = (type_first == type_second);
+
+        if (!types_compatible)
+        {
+            if ((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+                (type_first == INT_TYPE && type_second == LONGINT_TYPE))
+            {
+                types_compatible = 1;
+            }
+            else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
+                expr != NULL && expr->type == EXPR_STRING &&
+                expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1)
+            {
+                types_compatible = 1;
+                coerced_rhs_type = CHAR_TYPE;
+                expr->resolved_type = CHAR_TYPE;
+            }
+        }
+
+        if (!types_compatible)
+        {
+            const char *lhs_name = "<expression>";
+            if (var != NULL && var->type == EXPR_VAR_ID)
+                lhs_name = var->expr_data.id;
+            fprintf(stderr,
+                "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
+                stmt->line_num,
+                lhs_name,
+                type_tag_to_name(type_first),
+                type_tag_to_name(type_second));
+            ++return_val;
+        }
+        else
+        {
+            type_second = coerced_rhs_type;
+        }
     }
-    else
-    {
-        type_second = coerced_rhs_type;
-    }
+
+    /* Clean up owned GpcTypes */
+    if (lhs_owned && lhs_gpctype != NULL)
+        destroy_gpc_type(lhs_gpctype);
+    if (rhs_owned && rhs_gpctype != NULL)
+        destroy_gpc_type(rhs_gpctype);
 
     return return_val;
 }
@@ -868,6 +992,26 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     }
     else if (match_count == 0)
     {
+        HashNode_t *proc_var = NULL;
+        int proc_scope = FindIdent(&proc_var, symtab, proc_id);
+        if (proc_scope != -1 && proc_var != NULL && proc_var->hash_type == HASHTYPE_VAR &&
+            proc_var->type != NULL && proc_var->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            DestroyList(overload_candidates);
+            free(mangled_name);
+
+            proc_var->referenced += 1;
+            if (proc_scope > max_scope_lev)
+            {
+                fprintf(stderr, "Error on line %d, %s cannot be called in the current context!\n\n",
+                    stmt->line_num, proc_id);
+                return_val++;
+                return return_val;
+            }
+
+            return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
+        }
+
         fprintf(stderr, "Error on line %d, call to procedure %s does not match any available overload\n", stmt->line_num, proc_id);
         DestroyList(overload_candidates);
         free(mangled_name);

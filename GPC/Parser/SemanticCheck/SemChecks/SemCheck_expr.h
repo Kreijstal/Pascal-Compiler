@@ -16,6 +16,7 @@
 
 #include "../SymTab/SymTab.h"
 #include "../../ParseTree/tree_types.h"
+#include "../../ParseTree/GpcType.h"
 
 /* Semantic check on a normal expression */
 int semcheck_expr(int *type_return,
@@ -29,6 +30,14 @@ int semcheck_expr_func(int *type_return,
 /* NOTE: Using one of the above two functions is more readable */
 int semcheck_expr_main(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+
+/* Helper function to resolve GpcType from an expression
+ * This bridges the legacy type system to the new GpcType system.
+ * Returns NULL if type cannot be resolved.
+ * If owns_type is not NULL, it will be set to 1 (caller must free the returned type).
+ */
+GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expression *expr,
+    int max_scope_lev, int mutating, int *owns_type);
 
 void set_hash_meta(HashNode_t *node, int mutating);
 

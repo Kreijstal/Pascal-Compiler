@@ -6,6 +6,7 @@
 #include "tree.h"
 #include "tree_types.h"
 #include "type_tags.h"
+#include "GpcType.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -909,6 +910,11 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
+            if (tree->tree_data.type_decl_data.gpc_type != NULL)
+            {
+                destroy_gpc_type(tree->tree_data.type_decl_data.gpc_type);
+                tree->tree_data.type_decl_data.gpc_type = NULL;
+            }
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 destroy_record_type(tree->tree_data.type_decl_data.info.record);
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
@@ -1391,6 +1397,7 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RANGE;
+    new_tree->tree_data.type_decl_data.gpc_type = NULL;
     new_tree->tree_data.type_decl_data.info.range.start = start;
     new_tree->tree_data.type_decl_data.info.range.end = end;
 
@@ -1408,6 +1415,7 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RECORD;
+    new_tree->tree_data.type_decl_data.gpc_type = NULL;
     new_tree->tree_data.type_decl_data.info.record = record_type;
 
     return new_tree;
@@ -1495,6 +1503,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     new_tree->type = TREE_TYPE_DECL;
     new_tree->tree_data.type_decl_data.id = id;
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_ALIAS;
+    new_tree->tree_data.type_decl_data.gpc_type = NULL;
 
     struct TypeAlias *alias = &new_tree->tree_data.type_decl_data.info.alias;
     alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
