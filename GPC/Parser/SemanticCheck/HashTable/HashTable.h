@@ -48,9 +48,6 @@ typedef struct HashNode
     /* NEW: Unified type system - this one pointer replaces var_type, type_alias, 
      * record_type, is_array, array_start, array_end, and other scattered type info */
     GpcType *type;
-    
-    /* Keep args for now for declared procedures/functions */
-    ListNode_t *args; /* NULL when no args (or not applicable to given type) */
 
     /* Symbol table resources */
     int referenced;
@@ -87,7 +84,7 @@ HashTable_t *InitHashTable();
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
-    enum HashType hash_type, ListNode_t *args, GpcType *type);
+    enum HashType hash_type, GpcType *type);
 
 /* DEPRECATED: Old signature kept for backward compatibility during migration */
 int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,

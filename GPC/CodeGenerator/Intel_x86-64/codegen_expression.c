@@ -1730,7 +1730,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
-    CodeGenContext *ctx, HashNode_t *proc_node, int arg_start_index)
+    CodeGenContext *ctx, struct GpcType *proc_type, int arg_start_index)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1744,12 +1744,29 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     assert(ctx != NULL);
 
     ListNode_t *formal_args = NULL;
-    if(proc_node != NULL)
+    if(proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE)
     {
-        /* With the fix in PushVarOntoScope_Typed, proc_node->args is now properly
-         * populated for all cases (procedures, functions, and procedure variables).
-         * We can safely use it directly. */
-        formal_args = proc_node->args;
+        /* Get formal parameters from the GpcType.
+         * This avoids use-after-free bugs by not relying on HashNode pointers
+         * that may point to freed memory after PopScope. */
+        formal_args = proc_type->info.proc_info.params;
+        CODEGEN_DEBUG("DEBUG: Using formal_args from GpcType: %p\n", formal_args);
+    }
+    
+    /* CRITICAL VALIDATION: Ensure formal_args is either NULL or properly structured.
+     * This catches any remaining cases of corrupted list pointers. */
+    if (formal_args != NULL)
+    {
+        /* Basic sanity check: formal_args should have a valid list type.
+         * This catches cases where formal_args contains garbage data. */
+        if (formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
+        {
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - corrupted formal_args list (invalid type %d). "
+                "This may indicate a bug in the semantic checker or memory corruption.",
+                formal_args->type);
+            return inst_list;
+        }
     }
 
     typedef struct ArgInfo
@@ -1786,7 +1803,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         /* Validate argument expression */
         if (arg_expr == NULL)
         {
-            const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
+            const char *proc_name = "(unknown)";
             codegen_report_error(ctx,
                 "ERROR: NULL argument expression in call to %s at argument position %d",
                 proc_name, arg_num);
@@ -1799,7 +1816,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
+        {
+            /* CRITICAL VALIDATION: Before dereferencing formal_args, verify it's not corrupted.
+             * On Cygwin/MSYS, corrupted list nodes can cause segfaults when accessing ->cur.
+             * We check the list type to detect garbage values early. */
+            if (formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
+            {
+                const char *proc_name = "(unknown)";
+                codegen_report_error(ctx,
+                    "FATAL: Internal compiler error - corrupted formal_args list node (type=%d) at argument %d for procedure %s. "
+                    "This indicates memory corruption or an improperly initialized list.",
+                    formal_args->type, arg_num, proc_name);
+                if (arg_infos != NULL)
+                    free(arg_infos);
+                return inst_list;
+            }
             formal_arg_decl = (Tree_t *)formal_args->cur;
+        }
 
         int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
 
@@ -1938,7 +1971,24 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
         args = args->next;
         if(formal_args != NULL)
+        {
             formal_args = formal_args->next;
+            
+            /* CRITICAL VALIDATION: After advancing formal_args, check if the new node is valid.
+             * On some platforms, corrupted list nodes may have garbage in their 'next' pointer.
+             * We validate the next node before the next iteration to prevent segfaults. */
+            if (formal_args != NULL && formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
+            {
+                const char *proc_name = "(unknown)";
+                codegen_report_error(ctx,
+                    "FATAL: Internal compiler error - corrupted formal_args->next (type=%d) at argument %d for procedure %s. "
+                    "This indicates the formal arguments list is not properly NULL-terminated or contains corrupted nodes.",
+                    formal_args->type, arg_num, proc_name);
+                if (arg_infos != NULL)
+                    free(arg_infos);
+                return inst_list;
+            }
+        }
         ++arg_num;
     }
 
@@ -1987,7 +2037,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
         else
         {
-            const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
+            const char *proc_name = "(unknown)";
             fprintf(stderr,
                     "ERROR: Missing evaluated value for argument %d in call to %s (%s).\n",
                     i,
