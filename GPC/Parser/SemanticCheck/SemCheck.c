@@ -22,6 +22,7 @@
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
 #include "../ParseTree/type_tags.h"
+#include "../ParseTree/GpcType.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
@@ -389,8 +390,28 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 break;
         }
 
-        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
-            record_info, alias_info);
+        GpcType *gpc_type = tree->tree_data.type_decl_data.gpc_type;
+
+        if (gpc_type != NULL) {
+            func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
+            if (func_return == 0)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
+                {
+                    type_node->var_type = var_type;
+                    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                        type_node->type_alias = alias_info;
+                    else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                        type_node->record_type = record_info;
+                }
+                tree->tree_data.type_decl_data.gpc_type = NULL;
+            }
+        } else {
+            /* Fall back to legacy API for types we can't convert yet */
+            func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
+                record_info, alias_info);
+        }
 
         if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
         {
@@ -749,6 +770,21 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                     else
                     {
+                        if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PROCEDURE)
+                        {
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
+                            if (func_return == 0)
+                            {
+                                HashNode_t *var_node = NULL;
+                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                {
+                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    if (type_node->type_alias != NULL)
+                                        var_node->type_alias = type_node->type_alias;
+                                }
+                            }
+                            goto next_identifier;
+                        }
                         var_type = type_node->var_type;
                         if (type_node->type_alias != NULL && type_node->type_alias->is_array)
                         {
@@ -826,6 +862,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 if (var_node->record_type != NULL)
                                     destroy_record_type(var_node->record_type);
                                 var_node->record_type = clone_record_type(resolved_type->record_type);
+                            }
+                            
+                            /* Phase 3: For procedure types, copy the GpcType
+                             * This enables procedure variable support */
+                            if (resolved_type->type != NULL && 
+                                resolved_type->type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                /* For procedure types, we share the type pointer
+                                 * This is safe because procedure types in the symbol table are persistent */
+                                var_node->type = resolved_type->type;
                             }
                         }
                     }

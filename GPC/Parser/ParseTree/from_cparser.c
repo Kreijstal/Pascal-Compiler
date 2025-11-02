@@ -18,6 +18,7 @@
 #include "tree_types.h"
 #include "type_tags.h"
 #include "pascal_parser.h"
+#include "GpcType.h"
 
 typedef struct {
     int is_array;
@@ -540,6 +541,188 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     }
 
     return UNKNOWN_TYPE;
+}
+
+/* Forward declare functions we need */
+static ListNode_t *convert_param_list(ast_t **cursor);
+static ListNode_t *convert_param(ast_t *param_node);
+
+/* Convert an AST type specification to a GpcType object.
+ * This is the Phase 2 bridge function that creates GpcType objects from AST nodes.
+ * Returns NULL if the type cannot be converted or if symtab is needed but not provided.
+ */
+GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
+    if (type_spec == NULL)
+        return NULL;
+
+    ast_t *spec_node = type_spec;
+    if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+        spec_node = spec_node->child;
+
+    if (spec_node == NULL)
+        return NULL;
+
+    /* Handle primitive types by identifier */
+    if (spec_node->typ == PASCAL_T_IDENTIFIER) {
+        char *type_name = dup_symbol(spec_node);
+        if (type_name == NULL)
+            return NULL;
+
+        int type_tag = map_type_name(type_name, NULL);
+        free(type_name);
+
+        if (type_tag != UNKNOWN_TYPE) {
+            return create_primitive_type(type_tag);
+        }
+
+        /* If unknown type and we have a symbol table, try to look it up */
+        if (symtab != NULL) {
+            /* This will be resolved later during semantic checking */
+            /* For now, we need to look up the type in the symbol table */
+            /* But that requires SymTab.h which creates circular dependency */
+            /* So we return NULL and let the caller handle named type lookup */
+            return NULL;
+        }
+
+        return NULL;
+    }
+
+    /* Handle array types */
+    if (spec_node->typ == PASCAL_T_ARRAY_TYPE) {
+        ast_t *child = spec_node->child;
+        ast_t *element_node = child;
+        
+        /* Find the element type node (last child) */
+        while (element_node != NULL && element_node->next != NULL)
+            element_node = element_node->next;
+
+        /* Get range if available (first dimension only for now) */
+        int start = 0, end = -1;
+        if (child != NULL && child->typ == PASCAL_T_RANGE_TYPE) {
+            ast_t *lower = child->child;
+            ast_t *upper = (lower != NULL) ? lower->next : NULL;
+            if (lower != NULL && upper != NULL && lower->sym != NULL && upper->sym != NULL) {
+                start = atoi(lower->sym->name);
+                end = atoi(upper->sym->name);
+            }
+        }
+
+        /* Recursively convert element type */
+        GpcType *element_type = convert_type_spec_to_gpctype(element_node, symtab);
+        if (element_type == NULL) {
+            /* Try to get a primitive type from identifier */
+            if (element_node != NULL && element_node->typ == PASCAL_T_IDENTIFIER) {
+                char *elem_type_name = dup_symbol(element_node);
+                if (elem_type_name != NULL) {
+                    int elem_tag = map_type_name(elem_type_name, NULL);
+                    free(elem_type_name);
+                    if (elem_tag != UNKNOWN_TYPE) {
+                        element_type = create_primitive_type(elem_tag);
+                    }
+                }
+            }
+        }
+
+        if (element_type == NULL)
+            return NULL;
+
+        return create_array_type(element_type, start, end);
+    }
+
+    /* Handle pointer types */
+    if (spec_node->typ == PASCAL_T_POINTER_TYPE) {
+        ast_t *target = spec_node->child;
+        while (target != NULL && target->typ != PASCAL_T_IDENTIFIER && target->typ != PASCAL_T_TYPE_SPEC)
+            target = target->next;
+
+        if (target != NULL) {
+            GpcType *points_to = convert_type_spec_to_gpctype(target, symtab);
+            if (points_to == NULL) {
+                /* Try primitive type lookup */
+                if (target->typ == PASCAL_T_IDENTIFIER) {
+                    char *target_name = dup_symbol(target);
+                    if (target_name != NULL) {
+                        int target_tag = map_type_name(target_name, NULL);
+                        free(target_name);
+                        if (target_tag != UNKNOWN_TYPE) {
+                            points_to = create_primitive_type(target_tag);
+                        }
+                    }
+                }
+            }
+
+            if (points_to != NULL) {
+                return create_pointer_type(points_to);
+            }
+        }
+        return NULL;
+    }
+
+    /* Handle procedure and function types */
+    if (spec_node->typ == PASCAL_T_PROCEDURE_TYPE || spec_node->typ == PASCAL_T_FUNCTION_TYPE) {
+        int is_function = (spec_node->typ == PASCAL_T_FUNCTION_TYPE);
+        
+        /* Parse parameters */
+        ast_t *cursor = spec_node->child;
+        ListNode_t *params = NULL;
+        
+        /* Skip to parameter list if present */
+        while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
+            cursor = cursor->next;
+        
+        if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
+            params = convert_param_list(&cursor);
+        }
+        
+        /* For functions, get return type */
+        GpcType *return_type = NULL;
+        if (is_function) {
+            /* Look for return type specification */
+            while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC && cursor->typ != PASCAL_T_IDENTIFIER)
+                cursor = cursor->next;
+                
+            if (cursor != NULL) {
+                if (cursor->typ == PASCAL_T_TYPE_SPEC) {
+                    return_type = convert_type_spec_to_gpctype(cursor, symtab);
+                } else if (cursor->typ == PASCAL_T_IDENTIFIER) {
+                    char *ret_type_name = dup_symbol(cursor);
+                    if (ret_type_name != NULL) {
+                        int ret_tag = map_type_name(ret_type_name, NULL);
+                        free(ret_type_name);
+                        if (ret_tag != UNKNOWN_TYPE) {
+                            return_type = create_primitive_type(ret_tag);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return create_procedure_type(params, return_type);
+    }
+
+    /* Handle record types */
+    if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
+        struct RecordType *record = convert_record_type(spec_node);
+        if (record != NULL) {
+            return create_record_type(record);
+        }
+        return NULL;
+    }
+
+    /* Handle set types */
+    if (spec_node->typ == PASCAL_T_SET) {
+        /* For sets, we currently just return a primitive SET_TYPE */
+        /* In the future, we could extend GpcType to include set element type info */
+        return create_primitive_type(SET_TYPE);
+    }
+
+    /* Handle enum types */
+    if (spec_node->typ == PASCAL_T_ENUMERATED_TYPE) {
+        /* For enums, we currently just return a primitive ENUM_TYPE */
+        return create_primitive_type(ENUM_TYPE);
+    }
+
+    return NULL;
 }
 
 static ListNode_t *convert_identifier_list(ast_t **cursor) {
@@ -1388,6 +1571,10 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
         }
     }
 
+    GpcType *gpc_type = NULL;
+    if (spec_node != NULL)
+        gpc_type = convert_type_spec_to_gpctype(spec_node, NULL);
+
     Tree_t *decl = NULL;
     if (record_type != NULL) {
         decl = mk_record_type(type_decl_node->line, id, record_type);
@@ -1401,6 +1588,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     } else {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
     }
+
+    if (decl != NULL)
+        decl->tree_data.type_decl_data.gpc_type = gpc_type;
+    else if (gpc_type != NULL)
+        destroy_gpc_type(gpc_type);
 
     if (decl != NULL && decl->type == TREE_TYPE_DECL &&
         decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
