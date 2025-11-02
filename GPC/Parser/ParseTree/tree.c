@@ -7,6 +7,7 @@
 #include "tree_types.h"
 #include "type_tags.h"
 #include "GpcType.h"
+#include "../SemanticCheck/HashTable/HashTable.h"  /* For HashType enum */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -1643,6 +1644,9 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.mangled_id = NULL;
     new_stmt->stmt_data.procedure_call_data.expr_args = expr_args;
     new_stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+    new_stmt->stmt_data.procedure_call_data.is_call_info_valid = 0;
+    new_stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;  /* Default, will be overwritten */
+    new_stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
 
     return new_stmt;
 }

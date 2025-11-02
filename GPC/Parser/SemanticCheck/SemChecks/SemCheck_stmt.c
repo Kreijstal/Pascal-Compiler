@@ -206,6 +206,12 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        
+        /* Populate call info to avoid use-after-free when HashNode is freed */
+        stmt->stmt_data.procedure_call_data.call_hash_type = builtin_node->hash_type;
+        stmt->stmt_data.procedure_call_data.call_gpc_type = builtin_node->type;
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        
         builtin_node->referenced += 1;
         if (handled != NULL)
             *handled = 1;
@@ -1013,6 +1019,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         else
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
+        
+        /* Populate call info to avoid use-after-free when HashNode is freed */
+        stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
+        stmt->stmt_data.procedure_call_data.call_gpc_type = resolved_proc->type;
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        
         sym_return = resolved_proc;
         scope_return = 0; // FIXME: This needs to be properly calculated
     }
@@ -1037,6 +1049,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
             /* Set the resolved_proc field so codegen knows this is an indirect call */
             stmt->stmt_data.procedure_call_data.resolved_proc = proc_var;
+            
+            /* Populate call info to avoid use-after-free when HashNode is freed */
+            stmt->stmt_data.procedure_call_data.call_hash_type = proc_var->hash_type;
+            stmt->stmt_data.procedure_call_data.call_gpc_type = proc_var->type;
+            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
 
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }

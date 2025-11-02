@@ -521,7 +521,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
             inst_list = codegen_pass_arguments(
                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_node, 1);
+                func_node ? func_node->type : NULL, 1);
 
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                 src_expr->expr_data.function_call_data.mangled_id);
@@ -2094,55 +2094,73 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
-    HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
-
-    if(proc_node == NULL)
+    
+    /* CRITICAL FIX: Use cached information from AST instead of HashNode pointer.
+     * The resolved_proc pointer may point to freed memory if the HashNode was in a scope
+     * that has been popped (e.g., nested procedures' parameters/local variables).
+     * 
+     * During semantic checking, we now cache the essential information (hash_type and GpcType)
+     * directly in the AST, avoiding the need to dereference potentially freed HashNode pointers.
+     */
+    int call_hash_type;  /* HashType enum value */
+    struct GpcType *call_gpc_type;
+    
+    if (stmt->stmt_data.procedure_call_data.is_call_info_valid)
     {
-        FindIdent(&proc_node, symtab, unmangled_name);
-        stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
+        /* Use cached information from semantic checking */
+        call_hash_type = stmt->stmt_data.procedure_call_data.call_hash_type;
+        call_gpc_type = stmt->stmt_data.procedure_call_data.call_gpc_type;
     }
     else
     {
-        /* proc_node already resolved, but we still need the scope level */
-        HashNode_t *temp_node = NULL;
-        FindIdent(&temp_node, symtab, unmangled_name);
-        /* BUG FIX: Use the symbol from semantic checker, not from FindIdent!
-         * The semantic checker has already resolved the correct symbol.
-         * FindIdent might find a different symbol in a different scope. */
+        /* Fallback: look up the symbol (for old code paths or if semantic checker didn't set it) */
+        HashNode_t *proc_node = NULL;
+        FindIdent(&proc_node, symtab, unmangled_name);
+        if (proc_node != NULL)
+        {
+            call_hash_type = proc_node->hash_type;
+            call_gpc_type = proc_node->type;
+        }
+        else
+        {
+            /* Symbol not found - this is an error that should have been caught in semantic checking */
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - procedure %s not found during code generation. "
+                "This should have been caught during semantic checking.",
+                unmangled_name ? unmangled_name : "(unknown)");
+            return inst_list;
+        }
     }
 
-    if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    if(call_hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
     
     /* Check if this is an indirect call through a procedure variable */
-    /* The semantic checker sets resolved_proc for both direct and indirect calls.
-     * For indirect calls (procedure variables/parameters), we need to generate an indirect call.
+    /* For indirect calls (procedure variables/parameters), we need to generate an indirect call.
      * 
      * IMPORTANT: We must check hash_type FIRST, before checking type information.
      * On some platforms (e.g., Cygwin), type information may not be properly set,
      * but hash_type is always reliable for distinguishing variables from procedures.
      */
     int is_indirect_call = 0;
-    if (proc_node != NULL)
+    
+    /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
+     * It MUST be an indirect call, regardless of whether type info is present. */
+    if (call_hash_type == HASHTYPE_VAR)
     {
-        /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
-         * It MUST be an indirect call, regardless of whether type info is present. */
-        if (proc_node->hash_type == HASHTYPE_VAR)
-        {
-            is_indirect_call = 1;
-        }
-        /* Case 2: If hash_type is PROCEDURE but type info indicates it's a procedure type,
-         * and either proc_name is NULL or doesn't match, treat as indirect call.
-         * This handles corrupted or improperly resolved procedure nodes. */
-        else if (proc_node->hash_type == HASHTYPE_PROCEDURE &&
-                 proc_node->type != NULL && 
-                 proc_node->type->kind == TYPE_KIND_PROCEDURE &&
-                 (proc_name == NULL || proc_node->mangled_id == NULL || strcmp(proc_name, proc_node->mangled_id) != 0))
-        {
-            is_indirect_call = 1;
-        }
+        is_indirect_call = 1;
+    }
+    /* Case 2: If hash_type is PROCEDURE but type info indicates it's a procedure type,
+     * and either proc_name is NULL or doesn't match, treat as indirect call.
+     * This handles corrupted or improperly resolved procedure nodes. */
+    else if (call_hash_type == HASHTYPE_PROCEDURE &&
+             call_gpc_type != NULL && 
+             call_gpc_type->kind == TYPE_KIND_PROCEDURE &&
+             proc_name == NULL)
+    {
+        is_indirect_call = 1;
     }
     
     if (is_indirect_call)
@@ -2190,7 +2208,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
         
         /* 4. Pass arguments as usual */
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 0);
         
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
@@ -2208,7 +2226,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         #endif
         return inst_list;
     }
-    else if (proc_node != NULL && proc_node->hash_type == HASHTYPE_PROCEDURE)
+    else if (call_hash_type == HASHTYPE_PROCEDURE)
     {
         /* DIRECT CALL LOGIC */
 
@@ -2266,7 +2284,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
         
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 0);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
