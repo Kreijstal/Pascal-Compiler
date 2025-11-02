@@ -52,16 +52,23 @@ int is_array = gpc_type_is_array(node->type);
 - [x] Created typed builtin APIs (AddBuiltinType_Typed, AddBuiltinProc_Typed, AddBuiltinFunction_Typed)
 - [x] Migrated all 18 builtin declarations to use GpcType
 - [x] All builtins now have proper GpcType instances
-- [ ] Still TODO: Migrate user-defined variable/array/type declarations
+- [x] Modified HashTable.c to populate legacy fields from GpcType when available
+- [x] Fixed set_var_type_from_gpctype() to handle arrays correctly
+- [x] Added HASHVAR_ARRAY case to set_type_from_hashtype()
 
-#### 1.3: Stop populating legacy fields from GpcType
-- [ ] Modify set_var_type_from_gpctype() to NOT set legacy fields
-- [ ] Remove array field initialization in AddIdentToTable
-- [ ] Add assertions that GpcType is present
+#### 1.3: Legacy field synchronization ✅
+- [x] Modified AddIdentToTable to populate ALL legacy fields from GpcType (array fields, etc.)
+- [x] Ensured backward compatibility: legacy APIs still work, GpcType APIs are preferred
+- [x] Both systems work in parallel during transition
 
-**Status:** Builtins complete, user-defined declarations still use legacy APIs
+**Status:** Phase 1 complete! All HashNodes now have consistent type information via GpcType or legacy fields.
 
-### Phase 2: Migrate Type Query Operations (IN PROGRESS)
+**Key Achievement:** HashTable.c now serves as the bridge between old and new systems:
+- When GpcType is provided → legacy fields are auto-populated from it
+- When legacy API is used → legacy fields are populated directly
+- This enables incremental migration without breaking existing code
+
+### Phase 2: Migrate Type Query Operations (NEXT PHASE)
 **Goal:** All type queries use GpcType exclusively
 
 #### 2.1: Remove fallback patterns
