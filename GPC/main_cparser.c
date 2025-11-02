@@ -268,6 +268,7 @@ static void set_flags(char **optional_args, int count)
         else if (strcmp(arg, "--target-windows") == 0 || strcmp(arg, "-target-windows") == 0 || strcmp(arg, "--windows-abi") == 0)
         {
             fprintf(stderr, "Target ABI: Windows x64\n\n");
+            fflush(stderr);
             set_target_windows_flag();
         }
         else if (strcmp(arg, "--target-sysv") == 0 || strcmp(arg, "-target-sysv") == 0 || strcmp(arg, "--sysv-abi") == 0)
@@ -281,11 +282,13 @@ static void set_flags(char **optional_args, int count)
             if (strcasecmp(value, "windows") == 0 || strcasecmp(value, "win64") == 0)
             {
                 fprintf(stderr, "Target ABI: Windows x64\n\n");
+                fflush(stderr);
                 set_target_windows_flag();
             }
             else if (strcasecmp(value, "sysv") == 0 || strcasecmp(value, "systemv") == 0 || strcasecmp(value, "linux") == 0)
             {
                 fprintf(stderr, "Target ABI: System V AMD64\n\n");
+                fflush(stderr);
                 set_target_sysv_flag();
             }
             else
@@ -302,11 +305,13 @@ static void set_flags(char **optional_args, int count)
             if (strcasecmp(value, "windows") == 0 || strcasecmp(value, "win64") == 0)
             {
                 fprintf(stderr, "Target ABI: Windows x64\n\n");
+                fflush(stderr);
                 set_target_windows_flag();
             }
             else if (strcasecmp(value, "sysv") == 0 || strcasecmp(value, "systemv") == 0 || strcasecmp(value, "linux") == 0)
             {
                 fprintf(stderr, "Target ABI: System V AMD64\n\n");
+                fflush(stderr);
                 set_target_sysv_flag();
             }
             else
