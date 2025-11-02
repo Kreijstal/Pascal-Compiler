@@ -1746,31 +1746,33 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     ListNode_t *formal_args = NULL;
     if(proc_node != NULL)
     {
-        /* CRITICAL FIX: Always use formal_args from the GpcType, not from proc_node->args.
+        /* CRITICAL FIX: Always use formal_args from the GpcType.
          * 
-         * ROOT CAUSE: The proc_node->args field is set to the same pointer as
+         * ROOT CAUSE: The old proc_node->args field was set to the same pointer as
          * type->info.proc_info.params (see PushProcedureOntoScope_Typed and
          * PushVarOntoScope_Typed in SymTab.c). However, when the GpcType is destroyed
          * via destroy_gpc_type(), it calls DestroyList(type->info.proc_info.params),
-         * which frees the list. This leaves proc_node->args as a dangling pointer.
+         * which frees the list. This left proc_node->args as a dangling pointer.
          * 
          * On Cygwin/MSYS, dereferencing this dangling pointer causes a segfault because
          * the freed memory may be reused or filled with garbage values (e.g., 0xa00000003).
          * 
-         * FIX: Always get formal_args from proc_node->type->info.proc_info.params instead
-         * of proc_node->args. The GpcType should remain valid for the lifetime of the
-         * HashNode since it's stored in proc_node->type. */
+         * FIX: Always get formal_args from proc_node->type->info.proc_info.params.
+         * The GpcType should remain valid for the lifetime of the HashNode since it's
+         * stored in proc_node->type.
+         * 
+         * The args field has been removed from HashNode to prevent future use-after-free bugs. */
         if (proc_node->type != NULL && proc_node->type->kind == TYPE_KIND_PROCEDURE)
         {
             formal_args = proc_node->type->info.proc_info.params;
             CODEGEN_DEBUG("DEBUG: Using formal_args from GpcType: %p for proc %s\n", 
                           formal_args, proc_node->id ? proc_node->id : "(null)");
         }
-        else if (proc_node->hash_type == HASHTYPE_PROCEDURE || proc_node->hash_type == HASHTYPE_FUNCTION)
+        else
         {
-            /* Fallback for procedures/functions without GpcType (shouldn't happen in Phase 3) */
-            formal_args = proc_node->args;
-            CODEGEN_DEBUG("DEBUG: Using formal_args from proc_node->args (fallback): %p\n", formal_args);
+            /* No GpcType available - this shouldn't happen in Phase 3 */
+            CODEGEN_DEBUG("DEBUG: WARNING: proc_node %s has no GpcType\n",
+                          proc_node->id ? proc_node->id : "(null)");
         }
         
         /* CRITICAL VALIDATION: Ensure formal_args is either NULL or properly structured.

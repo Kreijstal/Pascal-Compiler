@@ -1085,7 +1085,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
-        true_args = sym_return->args;
+        /* Get formal arguments from GpcType instead of deprecated args field */
+        true_args = gpc_type_get_procedure_params(sym_return->type);
         while(args_given != NULL && true_args != NULL)
         {
             ++cur_arg;

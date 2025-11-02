@@ -2914,10 +2914,13 @@ int semcheck_funccall(int *type_return,
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
 
-            if (ListLength(candidate->args) == ListLength(args_given))
+            /* Get formal arguments from GpcType instead of deprecated args field */
+            ListNode_t *candidate_args = gpc_type_get_procedure_params(candidate->type);
+            
+            if (ListLength(candidate_args) == ListLength(args_given))
             {
                 int current_score = 0;
-                ListNode_t *formal_args = candidate->args;
+                ListNode_t *formal_args = candidate_args;
                 ListNode_t *call_args = args_given;
 
                 while(formal_args != NULL)
@@ -3016,7 +3019,8 @@ int semcheck_funccall(int *type_return,
 
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
-        true_args = hash_return->args;
+        /* Get formal arguments from GpcType instead of deprecated args field */
+        true_args = gpc_type_get_procedure_params(hash_return->type);
         while(args_given != NULL && true_args != NULL)
         {
             ++cur_arg;
