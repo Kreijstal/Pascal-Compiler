@@ -161,6 +161,7 @@ int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum 
         assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
+        hash_node->type = NULL;
         hash_node->id = strdup(id);
         if (hash_node->id == NULL)
         {
@@ -213,6 +214,7 @@ int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum 
         assert(hash_node != NULL);
         hash_node->hash_type = hash_type;
         hash_node->var_type = var_type;
+        hash_node->type = NULL;
         hash_node->id = strdup(id);
         if (hash_node->id == NULL)
         {
