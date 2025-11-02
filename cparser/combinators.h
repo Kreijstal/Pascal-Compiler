@@ -9,6 +9,7 @@
 
 combinator_t * expect(combinator_t * c, char * msg);
 combinator_t * many(combinator_t* p);
+combinator_t * many1(combinator_t* p);
 combinator_t * optional(combinator_t* p);
 combinator_t * sep_by(combinator_t* p, combinator_t* sep);
 combinator_t * sep_by1(combinator_t* p, combinator_t* sep);
