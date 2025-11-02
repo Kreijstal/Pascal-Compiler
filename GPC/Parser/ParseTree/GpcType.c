@@ -110,21 +110,27 @@ static int types_numeric_compatible(int lhs, int rhs) {
 
 /* Helper function to get GpcType from a parameter Tree_t node 
  * This is needed for procedure type compatibility checking */
-static GpcType *resolve_type_from_vardecl(Tree_t *var_decl) {
+static GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type) {
     if (var_decl == NULL || var_decl->type != TREE_VAR_DECL)
         return NULL;
 
-    /* For now, we create a primitive type from the type field 
+    if (owns_type != NULL)
+        *owns_type = 0;
+
+    /* For now, we create a primitive type from the type field
      * In a fully migrated system, the type would be stored directly */
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
-    
+
     /* Handle special cases */
     if (var_type_tag == UNKNOWN_TYPE && var_decl->tree_data.var_decl_data.type_id != NULL) {
         /* This is a named type reference - for now we can't fully resolve it without symtab */
         /* We'll do a simple check based on the type_id string matching */
+        (void)symtab;
         return NULL;
     }
 
+    if (owns_type != NULL)
+        *owns_type = 1;
     return create_primitive_type(var_type_tag);
 }
 
@@ -230,8 +236,10 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
                     return 0;
 
                 /* Check parameter types */
-                GpcType *lhs_param_type = resolve_type_from_vardecl(lhs_decl);
-                GpcType *rhs_param_type = resolve_type_from_vardecl(rhs_decl);
+                int lhs_param_owned = 0;
+                int rhs_param_owned = 0;
+                GpcType *lhs_param_type = resolve_type_from_vardecl(lhs_decl, symtab, &lhs_param_owned);
+                GpcType *rhs_param_type = resolve_type_from_vardecl(rhs_decl, symtab, &rhs_param_owned);
 
                 int param_compatible = 1;
                 if (lhs_param_type != NULL && rhs_param_type != NULL) {
@@ -257,9 +265,9 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
                 }
 
                 /* Clean up temporary types */
-                if (lhs_param_type != NULL)
+                if (lhs_param_owned && lhs_param_type != NULL)
                     destroy_gpc_type(lhs_param_type);
-                if (rhs_param_type != NULL)
+                if (rhs_param_owned && rhs_param_type != NULL)
                     destroy_gpc_type(rhs_param_type);
 
                 if (!param_compatible)

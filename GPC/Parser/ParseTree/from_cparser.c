@@ -1571,6 +1571,10 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
         }
     }
 
+    GpcType *gpc_type = NULL;
+    if (spec_node != NULL)
+        gpc_type = convert_type_spec_to_gpctype(spec_node, NULL);
+
     Tree_t *decl = NULL;
     if (record_type != NULL) {
         decl = mk_record_type(type_decl_node->line, id, record_type);
@@ -1584,6 +1588,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     } else {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
     }
+
+    if (decl != NULL)
+        decl->tree_data.type_decl_data.gpc_type = gpc_type;
+    else if (gpc_type != NULL)
+        destroy_gpc_type(gpc_type);
 
     if (decl != NULL && decl->type == TREE_TYPE_DECL &&
         decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
