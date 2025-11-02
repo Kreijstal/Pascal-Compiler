@@ -244,8 +244,13 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         node_element_size = node->element_size;
     }
     
-    int node_is_dynamic = (node->type != NULL) ? 
-        gpc_type_is_dynamic_array(node->type) : node->is_dynamic_array;
+    /* Check if array is dynamic - prefer GpcType if available */
+    int node_is_dynamic;
+    if (node->type != NULL) {
+        node_is_dynamic = gpc_type_is_dynamic_array(node->type);
+    } else {
+        node_is_dynamic = node->is_dynamic_array;
+    }
 
     expr->array_lower_bound = node_lower_bound;
     expr->array_upper_bound = node_upper_bound;

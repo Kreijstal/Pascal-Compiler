@@ -131,9 +131,13 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
-        gpc_type_is_dynamic_array(node->type) : 
-        (node->is_dynamic_array || node->array_end < node->array_start);
+    /* Check if array is dynamic */
+    int is_dynamic;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        is_dynamic = gpc_type_is_dynamic_array(node->type);
+    } else {
+        is_dynamic = (node->is_dynamic_array || node->array_end < node->array_start);
+    }
     
     if (is_dynamic)
     {
