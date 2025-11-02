@@ -63,7 +63,7 @@ int main() {
     printf("Calling codegen_pass_arguments...\n");
 
     ListNode_t *args = CreateListNode(expr, LIST_EXPR);
-    codegen_pass_arguments(args, NULL, ctx, NULL, 0);
+    codegen_pass_arguments(args, NULL, ctx, NULL, NULL, 0);
 
     printf("codegen_pass_arguments returned\n");
 

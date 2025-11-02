@@ -1753,7 +1753,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
-    CodeGenContext *ctx, struct GpcType *proc_type, int arg_start_index)
+    CodeGenContext *ctx, struct GpcType *proc_type, const char *procedure_name, int arg_start_index)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1826,7 +1826,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         /* Validate argument expression */
         if (arg_expr == NULL)
         {
-            const char *proc_name = "(unknown)";
+            const char *proc_name = procedure_name ? procedure_name : "(unknown)";
             codegen_report_error(ctx,
                 "ERROR: NULL argument expression in call to %s at argument position %d",
                 proc_name, arg_num);
@@ -2002,7 +2002,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
              * We validate the next node before the next iteration to prevent segfaults. */
             if (formal_args != NULL && formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
             {
-                const char *proc_name = "(unknown)";
+                const char *proc_name = procedure_name ? procedure_name : "(unknown)";
                 codegen_report_error(ctx,
                     "FATAL: Internal compiler error - corrupted formal_args->next (type=%d) at argument %d for procedure %s. "
                     "This indicates the formal arguments list is not properly NULL-terminated or contains corrupted nodes.",
@@ -2060,7 +2060,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
         else
         {
-            const char *proc_name = "(unknown)";
+            const char *proc_name = procedure_name ? procedure_name : "(unknown)";
             fprintf(stderr,
                     "ERROR: Missing evaluated value for argument %d in call to %s (%s).\n",
                     i,

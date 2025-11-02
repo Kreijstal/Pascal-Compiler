@@ -521,7 +521,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
             inst_list = codegen_pass_arguments(
                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_node ? func_node->type : NULL, 1);
+                func_node ? func_node->type : NULL, 
+                src_expr->expr_data.function_call_data.id, 1);
 
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                 src_expr->expr_data.function_call_data.mangled_id);
@@ -1664,7 +1665,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 0);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 
+        stmt->stmt_data.procedure_call_data.id, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -2208,7 +2210,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
         
         /* 4. Pass arguments as usual */
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 0);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 
+            unmangled_name, 0);
         
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
@@ -2284,7 +2287,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
         
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 0);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 
+            unmangled_name, 0);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
