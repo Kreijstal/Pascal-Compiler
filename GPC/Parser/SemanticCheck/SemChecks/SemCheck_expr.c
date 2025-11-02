@@ -1381,13 +1381,26 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         }
     }
 
-    int is_array = (node->type != NULL) ? gpc_type_is_array(node->type) : node->is_array;
+    /* For array size calculation, GpcType should be populated by HashTable bridge */
+    int is_array;
+    if (node->type != NULL) {
+        /* GpcType available - use it as source of truth */
+        is_array = gpc_type_is_array(node->type);
+    } else {
+        /* Legacy path - GpcType not yet populated for this node */
+        is_array = node->is_array;
+    }
     
     if (is_array)
     {
-        int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
-            gpc_type_is_dynamic_array(node->type) : 
-            (node->is_dynamic_array || node->array_end < node->array_start);
+        int is_dynamic;
+        if (node->type != NULL && gpc_type_is_array(node->type)) {
+            /* Use GpcType for dynamic check */
+            is_dynamic = gpc_type_is_dynamic_array(node->type);
+        } else {
+            /* Use legacy fields for dynamic check */
+            is_dynamic = (node->is_dynamic_array || node->array_end < node->array_start);
+        }
         
         if (is_dynamic)
         {
@@ -1396,29 +1409,27 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
             return 1;
         }
 
-        /* Get element size from GpcType if available */
+        /* Get element size */
         long long element_size;
         if (node->type != NULL && gpc_type_is_array(node->type)) {
             element_size = gpc_type_get_array_element_size(node->type);
-            if (element_size < 0)
-                element_size = node->element_size; /* Fall back to legacy */
+            if (element_size < 0) {
+                /* GpcType couldn't determine size, try var_type */
+                element_size = sizeof_from_var_type(node->var_type);
+                assert(element_size > 0 && "Must be able to determine element size from var_type");
+            }
         } else {
+            /* Use legacy element_size field */
             element_size = node->element_size;
+            if (element_size <= 0) {
+                /* Try to get from var_type as fallback */
+                long long base = sizeof_from_var_type(node->var_type);
+                assert(base > 0 && "Must be able to determine element size");
+                element_size = base;
+            }
         }
         
-        if (element_size <= 0)
-        {
-            long long base = sizeof_from_var_type(node->var_type);
-            if (base < 0)
-            {
-                fprintf(stderr, "Error on line %d, SizeOf cannot determine element size for array %s.\n",
-                    line_num, node->id);
-                return 1;
-            }
-            element_size = base;
-        }
-
-        /* Get array bounds from GpcType if available */
+        /* Get array bounds */
         int array_start, array_end;
         if (node->type != NULL && gpc_type_is_array(node->type)) {
             gpc_type_get_array_bounds(node->type, &array_start, &array_end);
