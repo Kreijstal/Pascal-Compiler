@@ -346,6 +346,10 @@ struct Expression
     struct Expression *field_width;
     struct Expression *field_precision;
     int resolved_type;
+    
+    /* NEW: Unified type system - resolved GpcType for this expression */
+    struct GpcType *resolved_gpc_type;
+    
     int pointer_subtype;
     char *pointer_subtype_id;
     struct RecordType *record_type;

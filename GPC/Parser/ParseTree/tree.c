@@ -1847,6 +1847,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->field_width = NULL;
     expr->field_precision = NULL;
     expr->resolved_type = UNKNOWN_TYPE;
+    expr->resolved_gpc_type = NULL;
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
     expr->record_type = NULL;

@@ -49,6 +49,9 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
 
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
 
+/* Pushes a constant with explicit GpcType onto the current scope (head) */
+int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, GpcType *type);
+
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
 int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args);
