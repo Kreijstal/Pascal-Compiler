@@ -9,6 +9,8 @@
 
 #include "../List/List.h"
 #include "tree_types.h"
+
+struct GpcType;
 #include <stdio.h>
 
 /******* Trees and statement types ********/
@@ -62,6 +64,7 @@ typedef struct Tree
         {
             char *id;
             enum TypeDeclKind kind;
+            struct GpcType *gpc_type;
             union
             {
                 struct
