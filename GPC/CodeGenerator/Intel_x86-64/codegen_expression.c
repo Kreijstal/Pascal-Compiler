@@ -131,7 +131,11 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    if (node->is_dynamic_array || node->array_end < node->array_start)
+    int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
+        gpc_type_is_dynamic_array(node->type) : 
+        (node->is_dynamic_array || node->array_end < node->array_start);
+    
+    if (is_dynamic)
     {
         codegen_report_error(ctx,
             "ERROR: Unable to determine size of dynamic array %s.",

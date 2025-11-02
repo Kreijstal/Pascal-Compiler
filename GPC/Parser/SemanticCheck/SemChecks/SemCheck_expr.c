@@ -227,7 +227,8 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     int node_lower_bound = node->array_start;
     int node_upper_bound = node->array_end;
     int node_element_size = node->element_size;
-    int node_is_dynamic = node->is_dynamic_array;
+    int node_is_dynamic = (node->type != NULL) ? 
+        gpc_type_is_dynamic_array(node->type) : node->is_dynamic_array;
 
     expr->array_lower_bound = node_lower_bound;
     expr->array_upper_bound = node_upper_bound;
@@ -1365,7 +1366,11 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
 
     if (node->is_array)
     {
-        if (node->is_dynamic_array || node->array_end < node->array_start)
+        int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
+            gpc_type_is_dynamic_array(node->type) : 
+            (node->is_dynamic_array || node->array_end < node->array_start);
+        
+        if (is_dynamic)
         {
             fprintf(stderr, "Error on line %d, SizeOf cannot determine size of dynamic array %s.\n",
                 line_num, node->id);

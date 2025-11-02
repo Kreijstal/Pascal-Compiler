@@ -475,3 +475,11 @@ GpcType* gpc_type_get_return_type(GpcType *type)
         return NULL;
     return type->info.proc_info.return_type;
 }
+
+int gpc_type_is_dynamic_array(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return 0;
+    /* Dynamic/open arrays are represented with end < start (e.g., [0..-1]) */
+    return (type->info.array_info.end_index < type->info.array_info.start_index);
+}
