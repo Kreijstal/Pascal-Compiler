@@ -40,7 +40,6 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
 static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
-static GpcType *semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expression *expr);
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev);
 
@@ -90,38 +89,6 @@ static int types_numeric_compatible(int lhs, int rhs)
     return 0;
 }
 
-static GpcType *semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expression *expr)
-{
-    if (symtab == NULL || expr == NULL)
-        return NULL;
-
-    switch (expr->type)
-    {
-        case EXPR_VAR_ID:
-        {
-            HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
-                return node->type;
-            break;
-        }
-        case EXPR_FUNCTION_CALL:
-        {
-            if (expr->expr_data.function_call_data.resolved_func != NULL)
-                return expr->expr_data.function_call_data.resolved_func->type;
-
-            HashNode_t *node = NULL;
-            if (expr->expr_data.function_call_data.id != NULL &&
-                FindIdent(&node, symtab, expr->expr_data.function_call_data.id) != -1 && node != NULL)
-                return node->type;
-            break;
-        }
-        default:
-            break;
-    }
-
-    return NULL;
-}
-
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
 {
@@ -144,11 +111,41 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         Tree_t *param_decl = (Tree_t *)formal_params->cur;
         struct Expression *arg_expr = (struct Expression *)args_given->cur;
 
-        int arg_type = UNKNOWN_TYPE;
-        return_val += semcheck_expr_main(&arg_type, symtab, arg_expr, INT_MAX, NO_MUTATE);
-
+        /* Phase 3 Step 4: Use GpcType for type checking instead of legacy integer tags */
+        
+        /* Resolve GpcType for the argument expression */
+        int arg_type_owned = 0;
+        GpcType *arg_type = semcheck_resolve_expression_gpc_type(symtab, arg_expr, INT_MAX, NO_MUTATE, &arg_type_owned);
+        
+        /* Resolve GpcType for the formal parameter */
+        int param_type_owned = 0;
+        GpcType *param_type = NULL;
         if (param_decl != NULL && param_decl->type == TREE_VAR_DECL)
         {
+            param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
+        }
+
+        /* Use are_types_compatible_for_assignment to compare */
+        if (arg_type != NULL && param_type != NULL)
+        {
+            if (!are_types_compatible_for_assignment(param_type, arg_type, symtab))
+            {
+                fprintf(stderr,
+                    "Error on line %d, on procedure call %s, argument %d: Type mismatch (expected %s, got %s)!\n\n",
+                    stmt->line_num,
+                    stmt->stmt_data.procedure_call_data.id,
+                    arg_index,
+                    gpc_type_to_string(param_type),
+                    gpc_type_to_string(arg_type));
+                ++return_val;
+            }
+        }
+        else if (param_type == NULL || arg_type == NULL)
+        {
+            /* Fallback to legacy type checking if GpcType resolution failed */
+            int arg_type_tag = UNKNOWN_TYPE;
+            semcheck_expr_main(&arg_type_tag, symtab, arg_expr, INT_MAX, NO_MUTATE);
+            
             int expected_type = param_decl->tree_data.var_decl_data.type;
             if ((expected_type == -1 || expected_type == UNKNOWN_TYPE) &&
                 param_decl->tree_data.var_decl_data.type_id != NULL)
@@ -159,8 +156,8 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
             }
 
             if (expected_type != BUILTIN_ANY_TYPE &&
-                arg_type != expected_type &&
-                !types_numeric_compatible(expected_type, arg_type))
+                arg_type_tag != expected_type &&
+                !types_numeric_compatible(expected_type, arg_type_tag))
             {
                 fprintf(stderr,
                     "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
@@ -170,6 +167,12 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
                 ++return_val;
             }
         }
+
+        /* Clean up owned types */
+        if (arg_type_owned && arg_type != NULL)
+            destroy_gpc_type(arg_type);
+        if (param_type_owned && param_type != NULL)
+            destroy_gpc_type(param_type);
 
         formal_params = formal_params->next;
         args_given = args_given->next;
@@ -831,8 +834,9 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    GpcType *lhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, var);
-    GpcType *rhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, expr);
+    int lhs_owned = 0, rhs_owned = 0;
+    GpcType *lhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, var, max_scope_lev, MUTATE, &lhs_owned);
+    GpcType *rhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
     int handled_by_gpctype = 0;
 
     if (lhs_gpctype != NULL && rhs_gpctype != NULL &&
@@ -894,6 +898,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             type_second = coerced_rhs_type;
         }
     }
+
+    /* Clean up owned GpcTypes */
+    if (lhs_owned && lhs_gpctype != NULL)
+        destroy_gpc_type(lhs_gpctype);
+    if (rhs_owned && rhs_gpctype != NULL)
+        destroy_gpc_type(rhs_gpctype);
 
     return return_val;
 }
