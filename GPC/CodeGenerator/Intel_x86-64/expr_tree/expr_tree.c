@@ -807,7 +807,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
-            inst_list, ctx, func_type, 0);
+            inst_list, ctx, func_type, expr->expr_data.function_call_data.id, 0);
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE ||
