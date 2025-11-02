@@ -2261,30 +2261,39 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         return inst_list;
     }
     
-    /* Fallback: if we reach here, something is wrong.
-     * This should never happen in correct code. Log diagnostic information. */
+    /* If we reach here, it's a compiler bug - this should never happen.
+     * In semantic checking, we should have caught any invalid procedure calls.
+     * If we get here, it means:
+     * 1. proc_node is NULL (semantic checker failed to resolve the symbol), OR
+     * 2. proc_node has an unexpected hash_type (not VAR, PROCEDURE, or BUILTIN)
+     * 
+     * This indicates a serious internal error, so we assert in debug builds
+     * and report a fatal error in release builds. */
+    
     #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: LEAVING %s (fallback - this indicates a bug!)\n", __func__);
+    CODEGEN_DEBUG("FATAL: Reached unreachable code in %s - this is a compiler bug!\n", __func__);
     if (proc_node != NULL) {
         CODEGEN_DEBUG("  proc_name: %s\n", proc_name ? proc_name : "(null)");
         CODEGEN_DEBUG("  unmangled_name: %s\n", unmangled_name ? unmangled_name : "(null)");
-        CODEGEN_DEBUG("  hash_type: %d\n", proc_node->hash_type);
+        CODEGEN_DEBUG("  hash_type: %d (expected VAR=%d, PROCEDURE=%d, or BUILTIN=%d)\n", 
+                     proc_node->hash_type, HASHTYPE_VAR, HASHTYPE_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE);
         CODEGEN_DEBUG("  type: %p\n", (void*)proc_node->type);
         if (proc_node->type != NULL) {
             CODEGEN_DEBUG("  type->kind: %d\n", proc_node->type->kind);
         }
     } else {
-        CODEGEN_DEBUG("  proc_node is NULL\n");
+        CODEGEN_DEBUG("  proc_node is NULL - semantic checker should have caught this!\n");
     }
     #endif
     
-    /* Report error to help debugging */
+    /* In debug builds, assert to catch this bug during development */
+    assert(0 && "Unreachable: procedure call with unexpected hash_type or NULL proc_node");
+    
+    /* In release builds, report a fatal error and stop code generation */
     codegen_report_error(ctx,
-        "ERROR: Unable to generate code for procedure call '%s' - "
-        "proc_node is %s, hash_type is %d. This is likely a compiler bug.",
-        unmangled_name ? unmangled_name : "(unknown)",
-        proc_node ? "not NULL" : "NULL",
-        proc_node ? proc_node->hash_type : -1);
+        "FATAL: Internal compiler error in procedure call code generation for '%s'. "
+        "Please report this bug with your source code.",
+        unmangled_name ? unmangled_name : "(unknown)");
     
     return inst_list;
 }
