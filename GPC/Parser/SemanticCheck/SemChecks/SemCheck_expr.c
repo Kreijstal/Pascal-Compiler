@@ -22,6 +22,7 @@
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
+#include "../../ParseTree/GpcType.h"
 #include "../../../identifier_utils.h"
 
 int is_type_ir(int *type);
@@ -2080,6 +2081,92 @@ int semcheck_expr_func(int *type_return,
 {
     assert(type_return != NULL);
     return semcheck_expr_main(type_return, symtab, expr, 0, mutating);
+}
+
+/* Phase 3 Step 3: Resolve GpcType from an expression
+ * This function performs semantic checking and returns the GpcType of the expression.
+ * This is the bridge between the legacy int-based type system and the new GpcType system.
+ * 
+ * Implementation strategy:
+ * 1. For simple cases (var IDs, function calls), we can directly get GpcType from symbol table
+ * 2. For complex expressions, we use semcheck_expr_main to get the type tag, then convert to GpcType
+ * 3. We also check expr->resolved_gpc_type if it was previously computed
+ * 
+ * Returns NULL if type cannot be resolved.
+ * If owns_type is not NULL, it will be set to:
+ *   - 0 if the caller does NOT own the type (shared reference from symbol table)
+ *   - 1 if the caller OWNS the type (must free it with destroy_gpc_type)
+ */
+GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expression *expr,
+    int max_scope_lev, int mutating, int *owns_type)
+{
+    if (symtab == NULL || expr == NULL)
+        return NULL;
+    
+    /* Default: caller owns the type we create */
+    if (owns_type != NULL)
+        *owns_type = 1;
+    
+    /* Try to get GpcType directly from the expression for specific cases */
+    switch (expr->type)
+    {
+        case EXPR_VAR_ID:
+        {
+            /* For variable IDs, we can get the GpcType directly from the symbol table */
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
+            {
+                if (node->type != NULL)
+                {
+                    /* Return a shared reference - caller doesn't own it */
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return node->type;
+                }
+            }
+            break;
+        }
+        
+        case EXPR_FUNCTION_CALL:
+        {
+            /* For function calls, try to get the return type from the resolved function */
+            HashNode_t *func_node = expr->expr_data.function_call_data.resolved_func;
+            if (func_node == NULL && expr->expr_data.function_call_data.id != NULL)
+            {
+                FindIdent(&func_node, symtab, expr->expr_data.function_call_data.id);
+            }
+            
+            if (func_node != NULL && func_node->type != NULL)
+            {
+                if (func_node->type->kind == TYPE_KIND_PROCEDURE && 
+                    func_node->type->info.proc_info.return_type != NULL)
+                {
+                    /* Return the function's return type - caller doesn't own it */
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return func_node->type->info.proc_info.return_type;
+                }
+            }
+            break;
+        }
+        
+        default:
+            break;
+    }
+    
+    /* For all other cases or if direct resolution failed, use semcheck_expr_main
+     * to get the type tag, then convert to GpcType */
+    int type_tag = UNKNOWN_TYPE;
+    int result = semcheck_expr_main(&type_tag, symtab, expr, max_scope_lev, mutating);
+    
+    if (result != 0 || type_tag == UNKNOWN_TYPE)
+        return NULL;
+    
+    /* Create a GpcType from the type tag - caller owns this */
+    if (owns_type != NULL)
+        *owns_type = 1;
+    
+    return create_primitive_type(type_tag);
 }
 
 /* Main semantic checking */

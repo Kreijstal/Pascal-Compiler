@@ -81,4 +81,11 @@ void destroy_gpc_type(GpcType *type);
 int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab);
 const char* gpc_type_to_string(GpcType *type); // For debugging
 
+/* Helper function to resolve GpcType from a parameter Tree_t node (TREE_VAR_DECL)
+ * Returns NULL if type cannot be resolved.
+ * If owns_type is not NULL, it will be set to 1 if caller owns the returned type (must free it),
+ * or 0 if the type is a reference (must not free it).
+ */
+GpcType* resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type);
+
 #endif // GPC_TYPE_H

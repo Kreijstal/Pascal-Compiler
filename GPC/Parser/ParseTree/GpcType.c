@@ -108,9 +108,9 @@ static int types_numeric_compatible(int lhs, int rhs) {
     return 0;
 }
 
-/* Helper function to get GpcType from a parameter Tree_t node 
+/* Helper function to resolve GpcType from a parameter Tree_t node 
  * This is needed for procedure type compatibility checking */
-static GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type) {
+GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type) {
     if (var_decl == NULL || var_decl->type != TREE_VAR_DECL)
         return NULL;
 
