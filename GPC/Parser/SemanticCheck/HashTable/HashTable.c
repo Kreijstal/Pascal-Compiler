@@ -22,7 +22,7 @@
 
 /* Forward declarations for internal helper functions */
 static HashNode_t* create_hash_node(char* id, char* mangled_id, 
-                                   enum HashType hash_type, ListNode_t* args, 
+                                   enum HashType hash_type,
                                    GpcType* type, enum VarType var_type,
                                    struct RecordType* record_type, 
                                    struct TypeAlias* type_alias);
@@ -35,7 +35,6 @@ typedef struct {
     char* id;
     char* mangled_id;
     enum HashType hash_type;
-    ListNode_t* args;
     GpcType* type;
     enum VarType var_type;
     struct RecordType* record_type;
@@ -99,7 +98,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
     {
         /* Empty bucket - create new entry */
         HashNode_t *hash_node = create_hash_node(params->id, params->mangled_id, 
-                                               params->hash_type, params->args, 
+                                               params->hash_type,
                                                params->type, params->var_type,
                                                params->record_type, params->type_alias);
         if (hash_node == NULL)
@@ -132,7 +131,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
 
         /* No collision or allowed collision - create new entry */
         HashNode_t *hash_node = create_hash_node(params->id, params->mangled_id, 
-                                               params->hash_type, params->args, 
+                                               params->hash_type,
                                                params->type, params->var_type,
                                                params->record_type, params->type_alias);
         if (hash_node == NULL)
@@ -148,13 +147,12 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
 }
 
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
-    enum HashType hash_type, ListNode_t *args, GpcType *type)
+    enum HashType hash_type, GpcType *type)
 {
     HashTableParams params = {
         .id = id,
         .mangled_id = mangled_id,
         .hash_type = hash_type,
-        .args = args,
         .type = type,
         .var_type = HASHVAR_UNTYPED,  // Will be set from GpcType
         .record_type = NULL,
@@ -168,11 +166,14 @@ int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum 
     enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
     struct TypeAlias *type_alias)
 {
+    /* NOTE: args parameter is ignored - it's kept only for API compatibility.
+     * The legacy system doesn't store args in HashNode anymore. */
+    (void)args;  // Suppress unused parameter warning
+    
     HashTableParams params = {
         .id = id,
         .mangled_id = mangled_id,
         .hash_type = hash_type,
-        .args = args,
         .type = NULL,  // Legacy function doesn't use GpcType
         .var_type = var_type,
         .record_type = record_type,
@@ -368,7 +369,7 @@ int hashpjw( char *s )
 
 /* Create and initialize a new hash node with default values */
 static HashNode_t* create_hash_node(char* id, char* mangled_id, 
-                                   enum HashType hash_type, ListNode_t* args, 
+                                   enum HashType hash_type,
                                    GpcType* type, enum VarType var_type,
                                    struct RecordType* record_type, 
                                    struct TypeAlias* type_alias)
@@ -382,7 +383,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Set basic fields */
     hash_node->hash_type = hash_type;
     hash_node->type = type;
-    hash_node->args = args;
     hash_node->mangled_id = mangled_id;
     hash_node->referenced = 0;
     hash_node->mutated = 0;

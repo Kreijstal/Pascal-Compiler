@@ -354,3 +354,124 @@ const char* gpc_type_to_string(GpcType *type) {
             return "unknown";
     }
 }
+
+// --- Helper Function Implementations ---
+
+long long gpc_type_sizeof(GpcType *type)
+{
+    if (type == NULL)
+        return -1;
+    
+    switch (type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+            switch (type->info.primitive_type_tag)
+            {
+                case INT_TYPE:
+                case BOOL:
+                case SET_TYPE:
+                case ENUM_TYPE:
+                    return 4;
+                case LONGINT_TYPE:
+                case REAL_TYPE:
+                    return 8;
+                case STRING_TYPE:
+                case POINTER_TYPE:
+                case PROCEDURE:
+                case FILE_TYPE:
+                    return 8; /* Pointers are 8 bytes on x86-64 */
+                case CHAR_TYPE:
+                    return 1;
+                default:
+                    return -1;
+            }
+        
+        case TYPE_KIND_POINTER:
+            return 8; /* Pointers are 8 bytes on x86-64 */
+        
+        case TYPE_KIND_ARRAY:
+        {
+            long long element_size = gpc_type_sizeof(type->info.array_info.element_type);
+            if (element_size < 0)
+                return -1;
+            int count = type->info.array_info.end_index - type->info.array_info.start_index + 1;
+            if (count < 0)
+                return -1;
+            return element_size * count;
+        }
+        
+        case TYPE_KIND_RECORD:
+            /* Record size would need to be computed by iterating fields
+             * For now, we return -1 to indicate it needs special handling */
+            return -1;
+        
+        case TYPE_KIND_PROCEDURE:
+            return 8; /* Procedure pointers are 8 bytes */
+        
+        default:
+            return -1;
+    }
+}
+
+int gpc_type_is_array(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_ARRAY);
+}
+
+int gpc_type_is_record(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_RECORD);
+}
+
+int gpc_type_is_procedure(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
+}
+
+int gpc_type_get_array_bounds(GpcType *type, int *start_out, int *end_out)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return -1;
+    
+    if (start_out != NULL)
+        *start_out = type->info.array_info.start_index;
+    if (end_out != NULL)
+        *end_out = type->info.array_info.end_index;
+    
+    return 0;
+}
+
+struct RecordType* gpc_type_get_record(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_RECORD)
+        return NULL;
+    return type->info.record_info;
+}
+
+int gpc_type_get_primitive_tag(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
+        return -1;
+    return type->info.primitive_type_tag;
+}
+
+GpcType* gpc_type_get_array_element_type(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return NULL;
+    return type->info.array_info.element_type;
+}
+
+ListNode_t* gpc_type_get_procedure_params(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+        return NULL;
+    return type->info.proc_info.params;
+}
+
+GpcType* gpc_type_get_return_type(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+        return NULL;
+    return type->info.proc_info.return_type;
+}
