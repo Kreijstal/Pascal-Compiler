@@ -560,3 +560,18 @@ GpcType* gpc_type_from_var_type(enum VarType var_type)
             return NULL;
     }
 }
+
+/* Get the type alias metadata from a GpcType */
+struct TypeAlias* gpc_type_get_type_alias(GpcType *type)
+{
+    if (type == NULL)
+        return NULL;
+    return type->type_alias;
+}
+
+/* Set the type alias metadata on a GpcType */
+void gpc_type_set_type_alias(GpcType *type, struct TypeAlias *alias)
+{
+    assert(type != NULL && "Cannot set type_alias on NULL GpcType");
+    type->type_alias = alias;
+}
