@@ -63,6 +63,38 @@ static WithContextEntry *with_context_stack = NULL;
 static size_t with_context_count = 0;
 static size_t with_context_capacity = 0;
 
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_get_type_alias(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->type_alias;
+}
+
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && gpc_type_is_record(node->type))
+    {
+        return gpc_type_get_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->record_type;
+}
+
 static int ensure_with_capacity(void);
 static struct Expression *clone_expression(const struct Expression *expr);
 static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
@@ -150,16 +182,18 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
     if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
         return NULL;
 
-    if (type_node->record_type != NULL)
-        return type_node->record_type;
+    struct RecordType *record = get_record_type_from_node(type_node);
+    if (record != NULL)
+        return record;
 
-    if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL && alias->target_type_id != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
+        if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
             target_node != NULL)
         {
-            return target_node->record_type;
+            return get_record_type_from_node(target_node);
         }
     }
 
@@ -1369,14 +1403,35 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         return 1;
     }
 
+    /* PREFERRED PATH: Try using GpcType directly if available */
+    if (node->type != NULL)
+    {
+        long long size = gpc_type_sizeof(node->type);
+        if (size > 0)
+        {
+            *size_out = size;
+            return 0;
+        }
+        else if (size == 0)
+        {
+            /* Zero-sized type (e.g., empty record or zero-length array) */
+            *size_out = 0;
+            return 0;
+        }
+        /* else size < 0: gpc_type_sizeof couldn't determine size, fall through to legacy path */
+    }
+
+    /* LEGACY PATH: GpcType not available or couldn't determine size */
+    
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        if (node->record_type != NULL)
-            return sizeof_from_record(symtab, node->record_type, size_out,
-                depth + 1, line_num);
-        if (node->type_alias != NULL)
-            return sizeof_from_alias(symtab, node->type_alias, size_out,
-                depth + 1, line_num);
+        struct RecordType *record = get_record_type_from_node(node);
+        if (record != NULL)
+            return sizeof_from_record(symtab, record, size_out, depth + 1, line_num);
+            
+        struct TypeAlias *alias = get_type_alias_from_node(node);
+        if (alias != NULL)
+            return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
         long long base = sizeof_from_var_type(node->var_type);
         if (base >= 0)
@@ -1386,13 +1441,11 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         }
     }
 
-    /* For array size calculation, GpcType should be populated by HashTable bridge */
+    /* For array size calculation */
     int is_array;
     if (node->type != NULL) {
-        /* GpcType available - use it as source of truth */
         is_array = gpc_type_is_array(node->type);
     } else {
-        /* Legacy path - GpcType not yet populated for this node */
         is_array = node->is_array;
     }
     
@@ -1400,10 +1453,8 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
     {
         int is_dynamic;
         if (node->type != NULL && gpc_type_is_array(node->type)) {
-            /* Use GpcType for dynamic check */
             is_dynamic = gpc_type_is_dynamic_array(node->type);
         } else {
-            /* Use legacy fields for dynamic check */
             is_dynamic = (node->is_dynamic_array || node->array_end < node->array_start);
         }
         
@@ -1455,13 +1506,16 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         return 0;
     }
 
-    if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
-        return sizeof_from_record(symtab, node->record_type, size_out,
-            depth + 1, line_num);
+    if (node->var_type == HASHVAR_RECORD)
+    {
+        struct RecordType *record = get_record_type_from_node(node);
+        if (record != NULL)
+            return sizeof_from_record(symtab, record, size_out, depth + 1, line_num);
+    }
 
-    if (node->type_alias != NULL)
-        return sizeof_from_alias(symtab, node->type_alias, size_out,
-            depth + 1, line_num);
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (alias != NULL)
+        return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
     long long base = sizeof_from_var_type(node->var_type);
     if (base >= 0)
