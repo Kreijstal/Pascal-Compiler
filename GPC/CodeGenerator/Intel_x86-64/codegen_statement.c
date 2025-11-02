@@ -2149,6 +2149,14 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         /* INDIRECT CALL LOGIC */
         
+        /* Validate that we have a procedure name for the indirect call */
+        if (unmangled_name == NULL)
+        {
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - indirect call with NULL procedure name. "
+                "Please report this bug with your source code.");
+            return inst_list;
+        }
 
         /* 1. Create a temporary expression to evaluate the procedure variable */
         struct Expression *callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
@@ -2166,6 +2174,14 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         
         /* 3. Prevent clobbering %rax. Move the address to a safe register if needed */
         const char *call_reg_name = addr_reg->bit_64;
+        if (call_reg_name == NULL)
+        {
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - NULL register name in indirect call. "
+                "Please report this bug with your source code.");
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
         if (strcmp(call_reg_name, "%rax") == 0)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%r11\n");
