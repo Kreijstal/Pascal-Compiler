@@ -273,7 +273,16 @@ int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
 
     HashTable_t *cur_hash;
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_VAR, NULL, type);
+    
+    /* For procedure variables, extract args from the procedure type.
+     * This ensures that proc_node->args is properly set for procedure variables,
+     * avoiding garbage pointer issues in code generation. */
+    ListNode_t *args = NULL;
+    if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
+        args = type->info.proc_info.params;
+    }
+    
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_VAR, args, type);
 }
 
 /* Pushes a new array with a GpcType onto the current scope */

@@ -8,7 +8,6 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
-#include <stdint.h>
 
 #include "codegen_expression.h"
 #include "register_types.h"
@@ -1747,27 +1746,10 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     ListNode_t *formal_args = NULL;
     if(proc_node != NULL)
     {
-        /* For direct calls, proc_node->args contains the formal parameter list.
-         * For indirect calls through procedure variables, we need to get the
-         * parameter list from the procedure type information. */
-        if (proc_node->hash_type == HASHTYPE_VAR && proc_node->type != NULL &&
-            proc_node->type->kind == TYPE_KIND_PROCEDURE)
-        {
-            /* This is an indirect call through a procedure variable.
-             * Get formal parameters from the type information. */
-            formal_args = proc_node->type->info.proc_info.params;
-        }
-        else if (proc_node->hash_type == HASHTYPE_PROCEDURE)
-        {
-            /* Direct call to a procedure - use the args field directly. */
-            formal_args = proc_node->args;
-        }
-        else
-        {
-            /* For procedure parameters or other edge cases, we don't have reliable
-             * formal parameter information. Treat all arguments as pass-by-value. */
-            formal_args = NULL;
-        }
+        /* With the fix in PushVarOntoScope_Typed, proc_node->args is now properly
+         * populated for all cases (procedures, functions, and procedure variables).
+         * We can safely use it directly. */
+        formal_args = proc_node->args;
     }
 
     typedef struct ArgInfo
@@ -1817,25 +1799,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
-        {
-            /* Validate that formal_args looks like a valid pointer before dereferencing.
-             * In some cases (especially on Cygwin/MSYS), proc_node->args can contain
-             * garbage for procedure variables/parameters. */
-            uintptr_t ptr_val = (uintptr_t)formal_args;
-            
-            /* Basic sanity check: valid pointers should be in a reasonable memory range.
-             * Very small values (< 0x10000) or suspicious patterns suggest garbage. */
-            if (ptr_val >= 0x10000 && (ptr_val >> 32) != 0)
-            {
-                /* Looks like a reasonable 64-bit pointer, try to use it. */
-                formal_arg_decl = (Tree_t *)formal_args->cur;
-            }
-            else
-            {
-                /* This looks like garbage - ignore it and treat as pass-by-value. */
-                formal_args = NULL;
-            }
-        }
+            formal_arg_decl = (Tree_t *)formal_args->cur;
 
         int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
 
