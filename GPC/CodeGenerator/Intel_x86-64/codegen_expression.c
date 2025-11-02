@@ -504,7 +504,8 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    if (node->is_array)
+    int is_array = (node->type != NULL) ? gpc_type_is_array(node->type) : node->is_array;
+    if (is_array)
         return codegen_sizeof_array_node(ctx, node, size_out, depth);
 
     if (node->hash_type == HASHTYPE_TYPE)

@@ -1364,7 +1364,9 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         }
     }
 
-    if (node->is_array)
+    int is_array = (node->type != NULL) ? gpc_type_is_array(node->type) : node->is_array;
+    
+    if (is_array)
     {
         int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
             gpc_type_is_dynamic_array(node->type) : 
