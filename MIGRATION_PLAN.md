@@ -68,8 +68,23 @@ int is_array = gpc_type_is_array(node->type);
 - When legacy API is used → legacy fields are populated directly
 - This enables incremental migration without breaking existing code
 
-### Phase 2: Migrate Type Query Operations (NEXT PHASE)
+### Phase 2: Migrate Type Query Operations (IN PROGRESS)
 **Goal:** All type queries use GpcType exclusively
+
+**Status:** Variable declarations mostly migrated, tests passing
+
+#### 2.0: Migrate Declaration APIs ✅
+- [x] Migrated simple variable declarations to PushVarOntoScope_Typed()
+- [x] Migrated explicit array declarations to PushArrayOntoScope_Typed()
+- [x] Migrated type alias array declarations to PushArrayOntoScope_Typed()
+- [x] Fixed set_var_type_from_gpctype() to handle arrays correctly (set to element type)
+- [x] Added proper handling for non-array type alias references (enum, set, file)
+- [x] All 79 tests passing
+
+**Remaining legacy API calls:**
+- PushTypeOntoScope (line 421) - for types that can't be converted yet
+- PushVarOntoScope (line 777) - for HASHVAR_UNTYPED procedure arguments
+- Some type alias and non-array type reference cases still use legacy API to preserve metadata
 
 #### 2.1: Remove fallback patterns
 - [ ] Find all `(node->type != NULL) ? gpc_X(node->type) : node->legacy_field` patterns
