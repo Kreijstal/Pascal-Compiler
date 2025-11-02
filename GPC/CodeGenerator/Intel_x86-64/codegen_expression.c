@@ -1750,6 +1750,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
          * populated for all cases (procedures, functions, and procedure variables).
          * We can safely use it directly. */
         formal_args = proc_node->args;
+
+        /* Assert that if we have a procedure variable, it has valid args */
+        if (proc_node->hash_type == HASHTYPE_VAR &&
+            proc_node->type != NULL &&
+            proc_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            assert(formal_args != NULL && "Procedure variable must have args populated from type");
+        }
     }
 
     typedef struct ArgInfo
@@ -1799,9 +1807,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
+        {
+            assert(formal_args->type == LIST_TREE && "formal_args must be a LIST_TREE");
             formal_arg_decl = (Tree_t *)formal_args->cur;
+        }
 
-        int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
+        int is_var_param = 0;
+        if (formal_arg_decl != NULL)
+        {
+            assert(formal_arg_decl->type == TREE_VAR_DECL && "formal_arg_decl must be TREE_VAR_DECL");
+            is_var_param = formal_arg_decl->tree_data.var_decl_data.is_var_param;
+        }
 
         if(is_var_param)
         {

@@ -2189,6 +2189,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             call_reg_name = "%r11";
         }
         
+        /* Assert that proc_node is valid for codegen_pass_arguments */
+        assert(proc_node != NULL && "proc_node must not be NULL for indirect call");
+        assert(proc_node->hash_type == HASHTYPE_VAR && "indirect call must use procedure variable");
+        assert(proc_node->type != NULL && "procedure variable must have type");
+        assert(proc_node->type->kind == TYPE_KIND_PROCEDURE && "procedure variable must have procedure type");
+        assert(proc_node->args != NULL && "procedure variable must have args populated from type");
+        
         /* 4. Pass arguments as usual */
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
         
@@ -2264,6 +2271,16 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 }
                 codegen_end_expression(ctx);
             }
+        }
+        
+        /* Assert that proc_node is valid for codegen_pass_arguments */
+        assert(proc_node != NULL && "proc_node must not be NULL for direct call");
+        if (proc_node->hash_type == HASHTYPE_VAR) {
+            assert(proc_node->type != NULL && "procedure variable must have type");
+            assert(proc_node->type->kind == TYPE_KIND_PROCEDURE && "procedure variable must have procedure type");
+            assert(proc_node->args != NULL && "procedure variable must have args populated from type");
+        } else if (proc_node->hash_type == HASHTYPE_PROCEDURE) {
+            assert(proc_node->args != NULL && "direct procedure must have args");
         }
         
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
