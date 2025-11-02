@@ -224,10 +224,28 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         return;
 
     expr->is_array_expr = 1;
-    int node_lower_bound = node->array_start;
-    int node_upper_bound = node->array_end;
-    int node_element_size = node->element_size;
-    int node_is_dynamic = node->is_dynamic_array;
+    
+    /* Get array bounds from GpcType if available, otherwise fall back to legacy fields */
+    int node_lower_bound, node_upper_bound;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        gpc_type_get_array_bounds(node->type, &node_lower_bound, &node_upper_bound);
+    } else {
+        node_lower_bound = node->array_start;
+        node_upper_bound = node->array_end;
+    }
+    
+    /* Get element size from GpcType if available */
+    long long node_element_size;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        node_element_size = gpc_type_get_array_element_size(node->type);
+        if (node_element_size < 0)
+            node_element_size = node->element_size; /* Fall back to legacy if GpcType fails */
+    } else {
+        node_element_size = node->element_size;
+    }
+    
+    int node_is_dynamic = (node->type != NULL) ? 
+        gpc_type_is_dynamic_array(node->type) : node->is_dynamic_array;
 
     expr->array_lower_bound = node_lower_bound;
     expr->array_upper_bound = node_upper_bound;
@@ -1363,16 +1381,31 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         }
     }
 
-    if (node->is_array)
+    int is_array = (node->type != NULL) ? gpc_type_is_array(node->type) : node->is_array;
+    
+    if (is_array)
     {
-        if (node->is_dynamic_array || node->array_end < node->array_start)
+        int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
+            gpc_type_is_dynamic_array(node->type) : 
+            (node->is_dynamic_array || node->array_end < node->array_start);
+        
+        if (is_dynamic)
         {
             fprintf(stderr, "Error on line %d, SizeOf cannot determine size of dynamic array %s.\n",
                 line_num, node->id);
             return 1;
         }
 
-        long long element_size = node->element_size;
+        /* Get element size from GpcType if available */
+        long long element_size;
+        if (node->type != NULL && gpc_type_is_array(node->type)) {
+            element_size = gpc_type_get_array_element_size(node->type);
+            if (element_size < 0)
+                element_size = node->element_size; /* Fall back to legacy */
+        } else {
+            element_size = node->element_size;
+        }
+        
         if (element_size <= 0)
         {
             long long base = sizeof_from_var_type(node->var_type);
@@ -1385,7 +1418,16 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
             element_size = base;
         }
 
-        long long count = (long long)node->array_end - (long long)node->array_start + 1;
+        /* Get array bounds from GpcType if available */
+        int array_start, array_end;
+        if (node->type != NULL && gpc_type_is_array(node->type)) {
+            gpc_type_get_array_bounds(node->type, &array_start, &array_end);
+        } else {
+            array_start = node->array_start;
+            array_end = node->array_end;
+        }
+        
+        long long count = (long long)array_end - (long long)array_start + 1;
         if (count < 0)
         {
             fprintf(stderr, "Error on line %d, invalid bounds for array %s in SizeOf.\n",

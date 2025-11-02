@@ -131,7 +131,11 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    if (node->is_dynamic_array || node->array_end < node->array_start)
+    int is_dynamic = (node->type != NULL && gpc_type_is_array(node->type)) ? 
+        gpc_type_is_dynamic_array(node->type) : 
+        (node->is_dynamic_array || node->array_end < node->array_start);
+    
+    if (is_dynamic)
     {
         codegen_report_error(ctx,
             "ERROR: Unable to determine size of dynamic array %s.",
@@ -139,7 +143,16 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    long long element_size = node->element_size;
+    /* Get element size from GpcType if available */
+    long long element_size;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        element_size = gpc_type_get_array_element_size(node->type);
+        if (element_size < 0)
+            element_size = node->element_size; /* Fall back to legacy */
+    } else {
+        element_size = node->element_size;
+    }
+    
     if (element_size <= 0)
     {
         if (node->type_alias != NULL && node->type_alias->is_array)
@@ -169,7 +182,16 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         }
     }
 
-    long long count = (long long)node->array_end - (long long)node->array_start + 1;
+    /* Get array bounds from GpcType if available */
+    int array_start, array_end;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        gpc_type_get_array_bounds(node->type, &array_start, &array_end);
+    } else {
+        array_start = node->array_start;
+        array_end = node->array_end;
+    }
+    
+    long long count = (long long)array_end - (long long)array_start + 1;
     if (count < 0)
     {
         codegen_report_error(ctx,
@@ -500,7 +522,8 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    if (node->is_array)
+    int is_array = (node->type != NULL) ? gpc_type_is_array(node->type) : node->is_array;
+    if (is_array)
         return codegen_sizeof_array_node(ctx, node, size_out, depth);
 
     if (node->hash_type == HASHTYPE_TYPE)

@@ -128,4 +128,12 @@ ListNode_t* gpc_type_get_procedure_params(GpcType *type);
  * Returns NULL if not a function or if it's a procedure (no return type). */
 GpcType* gpc_type_get_return_type(GpcType *type);
 
+/* Check if an array type is a dynamic/open array.
+ * Returns 1 if it is a dynamic array, 0 otherwise. */
+int gpc_type_is_dynamic_array(GpcType *type);
+
+/* Get element size in bytes for an array type.
+ * Returns the element size, or -1 if not an array or size cannot be determined. */
+long long gpc_type_get_array_element_size(GpcType *type);
+
 #endif // GPC_TYPE_H
