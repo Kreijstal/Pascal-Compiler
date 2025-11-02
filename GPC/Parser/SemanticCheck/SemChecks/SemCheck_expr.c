@@ -224,8 +224,16 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         return;
 
     expr->is_array_expr = 1;
-    int node_lower_bound = node->array_start;
-    int node_upper_bound = node->array_end;
+    
+    /* Get array bounds from GpcType if available, otherwise fall back to legacy fields */
+    int node_lower_bound, node_upper_bound;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        gpc_type_get_array_bounds(node->type, &node_lower_bound, &node_upper_bound);
+    } else {
+        node_lower_bound = node->array_start;
+        node_upper_bound = node->array_end;
+    }
+    
     int node_element_size = node->element_size;
     int node_is_dynamic = (node->type != NULL) ? 
         gpc_type_is_dynamic_array(node->type) : node->is_dynamic_array;
@@ -1392,7 +1400,16 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
             element_size = base;
         }
 
-        long long count = (long long)node->array_end - (long long)node->array_start + 1;
+        /* Get array bounds from GpcType if available */
+        int array_start, array_end;
+        if (node->type != NULL && gpc_type_is_array(node->type)) {
+            gpc_type_get_array_bounds(node->type, &array_start, &array_end);
+        } else {
+            array_start = node->array_start;
+            array_end = node->array_end;
+        }
+        
+        long long count = (long long)array_end - (long long)array_start + 1;
         if (count < 0)
         {
             fprintf(stderr, "Error on line %d, invalid bounds for array %s in SizeOf.\n",

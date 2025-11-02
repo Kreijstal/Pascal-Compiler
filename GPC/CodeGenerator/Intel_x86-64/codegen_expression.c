@@ -173,7 +173,16 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         }
     }
 
-    long long count = (long long)node->array_end - (long long)node->array_start + 1;
+    /* Get array bounds from GpcType if available */
+    int array_start, array_end;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        gpc_type_get_array_bounds(node->type, &array_start, &array_end);
+    } else {
+        array_start = node->array_start;
+        array_end = node->array_end;
+    }
+    
+    long long count = (long long)array_end - (long long)array_start + 1;
     if (count < 0)
     {
         codegen_report_error(ctx,
