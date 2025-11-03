@@ -402,6 +402,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
 
         if (gpc_type != NULL) {
+            /* Set type_alias on GpcType before pushing */
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
+                gpc_type_set_type_alias(gpc_type, alias_info);
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
+                gpc_type->info.record_info = record_info;
+            
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
             {
@@ -409,10 +415,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
                 {
                     type_node->var_type = var_type;
-                    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
-                        type_node->type_alias = alias_info;
-                    else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-                        type_node->record_type = record_info;
                 }
                 tree->tree_data.type_decl_data.gpc_type = NULL;
             }
@@ -852,8 +854,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                    if (type_node->type_alias != NULL)
-                                        var_node->type_alias = type_node->type_alias;
                                 }
                             }
                             goto next_identifier;
@@ -878,16 +878,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             GpcType *array_type = create_array_type(element_type, start, end);
                             assert(array_type != NULL && "Failed to create array type");
                             
+                            /* Set type_alias on GpcType so it's properly propagated */
+                            gpc_type_set_type_alias(array_type, alias);
+                            
                             func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
-
-                            if (func_return == 0)
-                            {
-                                HashNode_t *array_node = NULL;
-                                if (FindIdent(&array_node, symtab, (char *)ids->cur) != -1 && array_node != NULL)
-                                {
-                                    array_node->type_alias = alias;
-                                }
-                            }
 
                             goto next_identifier;
                         }

@@ -26,6 +26,56 @@
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
+/* Helper functions for transitioning from legacy type fields to GpcType */
+
+/* Helper function to check if a node is a record type, preferring GpcType when available */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_is_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->var_type == HASHVAR_RECORD;
+}
+
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && gpc_type_is_record(node->type))
+    {
+        return gpc_type_get_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->record_type;
+}
+
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_get_type_alias(node->type);
+    }
+    
+    /* Fall back to legacy field for nodes without GpcType */
+    return node->type_alias;
+}
+
 static unsigned long codegen_next_record_temp_id(void)
 {
     static unsigned long counter = 0;
@@ -159,16 +209,18 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
     
     if (element_size <= 0)
     {
-        if (node->type_alias != NULL && node->type_alias->is_array)
+        struct TypeAlias *alias = get_type_alias_from_node(node);
+        if (alias != NULL && alias->is_array)
         {
-            if (codegen_sizeof_type(ctx, node->type_alias->array_element_type,
-                    node->type_alias->array_element_type_id, NULL,
+            if (codegen_sizeof_type(ctx, alias->array_element_type,
+                    alias->array_element_type_id, NULL,
                     &element_size, depth + 1) != 0)
                 return 1;
         }
-        else if (node->record_type != NULL && node->var_type == HASHVAR_RECORD)
+        else if (node_is_record_type(node))
         {
-            if (codegen_sizeof_record(ctx, node->record_type, &element_size,
+            struct RecordType *record_type = get_record_type_from_node(node);
+            if (record_type != NULL && codegen_sizeof_record(ctx, record_type, &element_size,
                     depth + 1) != 0)
                 return 1;
         }
@@ -559,17 +611,24 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
 
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        if (node->record_type != NULL)
-            return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
-        if (node->type_alias != NULL)
-            return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
+        struct RecordType *record = get_record_type_from_node(node);
+        if (record != NULL)
+            return codegen_sizeof_record(ctx, record, size_out, depth + 1);
+        struct TypeAlias *alias = get_type_alias_from_node(node);
+        if (alias != NULL)
+            return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
     }
 
-    if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
-        return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
+    if (node_is_record_type(node))
+    {
+        struct RecordType *record_type = get_record_type_from_node(node);
+        if (record_type != NULL)
+            return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
+    }
 
-    if (node->type_alias != NULL)
-        return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (alias != NULL)
+        return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
 
     long long base = codegen_sizeof_var_type(node->var_type);
     if (base >= 0)

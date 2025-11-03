@@ -23,6 +23,97 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/ParseTree/GpcType.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+
+/* Helper functions for transitioning from legacy type fields to GpcType */
+
+/* Helper function to check if a node is a record type, preferring GpcType when available */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_is_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->var_type == HASHVAR_RECORD;
+}
+
+/* Helper function to get the primitive type tag from a node, preferring GpcType when available */
+static inline int get_primitive_tag_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return -1;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        return gpc_type_get_primitive_tag(node->type);
+    }
+    
+    /* Fall back to legacy var_type - map to primitive tags */
+    switch (node->var_type)
+    {
+        case HASHVAR_INTEGER: return INT_TYPE;
+        case HASHVAR_LONGINT: return LONGINT_TYPE;
+        case HASHVAR_REAL: return REAL_TYPE;
+        case HASHVAR_BOOLEAN: return BOOL;
+        case HASHVAR_CHAR: return CHAR_TYPE;
+        case HASHVAR_PCHAR: return STRING_TYPE;
+        case HASHVAR_SET: return SET_TYPE;
+        case HASHVAR_FILE: return FILE_TYPE;
+        case HASHVAR_ENUM: return ENUM_TYPE;
+        default: return UNKNOWN_TYPE;
+    }
+}
+
+/* Helper function to check if a node is a file type, preferring GpcType when available */
+static inline int node_is_file_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    
+    /* For now, GpcType doesn't have FILE type - use legacy field */
+    /* TODO: Add FILE type support to GpcType in future */
+    return node->var_type == HASHVAR_FILE;
+}
+
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && gpc_type_is_record(node->type))
+    {
+        return gpc_type_get_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->record_type;
+}
+
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_get_type_alias(node->type);
+    }
+    
+    /* Fall back to legacy field for nodes without GpcType */
+    return node->type_alias;
+}
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
@@ -750,9 +841,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
             while(id_list != NULL)
             {
-                if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_array)
                 {
-                    struct TypeAlias *alias = type_node->type_alias;
                     long long computed_size = 0;
                     int element_size = 0;
                     struct RecordType *element_record = NULL;
@@ -763,7 +854,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         HashNode_t *element_node = NULL;
                         if (FindIdent(&element_node, ctx->symtab, alias->array_element_type_id) >= 0 &&
                             element_node != NULL)
-                            element_record = element_node->record_type;
+                            element_record = get_record_type_from_node(element_node);
                     }
 
                     if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
@@ -775,7 +866,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (element_size <= 0)
                     {
-                        if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
+                        int prim_tag = get_primitive_tag_from_node(type_node);
+                        if (prim_tag == REAL_TYPE || prim_tag == LONGINT_TYPE)
                             element_size = 8;
                         else
                             element_size = 4;
@@ -819,10 +911,10 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     else if (var_kind == HASHVAR_RECORD)
                     {
                         struct RecordType *record_desc = NULL;
-                        if (var_info != NULL && var_info->record_type != NULL)
-                            record_desc = var_info->record_type;
-                        else if (type_node != NULL && type_node->record_type != NULL)
-                            record_desc = type_node->record_type;
+                        if (var_info != NULL)
+                            record_desc = get_record_type_from_node(var_info);
+                        else if (type_node != NULL)
+                            record_desc = get_record_type_from_node(type_node);
 
                         long long record_size = 0;
                         if (record_desc != NULL &&
@@ -874,16 +966,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             struct RecordType *record_desc = NULL;
             if (type_node != NULL)
             {
-                if (type_node->record_type != NULL)
-                    record_desc = type_node->record_type;
-                else if (type_node->type_alias != NULL &&
-                    type_node->type_alias->target_type_id != NULL)
+                record_desc = get_record_type_from_node(type_node);
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (record_desc == NULL && alias != NULL && alias->target_type_id != NULL)
                 {
                     HashNode_t *target_node = NULL;
-                    if (FindIdent(&target_node, symtab,
-                            type_node->type_alias->target_type_id) >= 0 &&
-                        target_node != NULL && target_node->record_type != NULL)
-                        record_desc = target_node->record_type;
+                    if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+                        target_node != NULL)
+                        record_desc = get_record_type_from_node(target_node);
                 }
             }
 
@@ -1155,6 +1245,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (symtab != NULL)
         FindIdent(&func_node, symtab, func->id);
 
+    /* For function nodes, var_type represents the RETURN type, not the function type itself.
+     * The GpcType represents the function signature (TYPE_KIND_PROCEDURE).
+     * So we check the legacy var_type field for record returns until we properly
+     * migrate to storing return type information in GpcType. */
     if (func_node != NULL && func_node->var_type == HASHVAR_RECORD && func_node->record_type != NULL)
     {
         if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, func_node->record_type,
@@ -1190,6 +1284,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         return_size = (int)record_return_size;
     else if (func_node != NULL)
     {
+        /* For function nodes, var_type represents the RETURN type.
+         * TODO: Migrate to use return type from GpcType procedure info. */
         if (func_node->var_type == HASHVAR_LONGINT || func_node->var_type == HASHVAR_REAL ||
             func_node->var_type == HASHVAR_PCHAR)
             return_size = 8;
@@ -1370,10 +1466,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     struct RecordType *record_type_info = NULL;
                     if (!symbol_is_var_param)
                     {
-                        if (arg_symbol != NULL && arg_symbol->record_type != NULL)
-                            record_type_info = arg_symbol->record_type;
-                        else if (resolved_type_node != NULL && resolved_type_node->record_type != NULL)
-                            record_type_info = resolved_type_node->record_type;
+                        if (arg_symbol != NULL)
+                            record_type_info = get_record_type_from_node(arg_symbol);
+                        else if (resolved_type_node != NULL)
+                            record_type_info = get_record_type_from_node(resolved_type_node);
                     }
 
                     if (record_type_info != NULL)
@@ -1513,8 +1609,8 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             if (decl->tree_data.var_decl_data.type_id != NULL)
                 FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id);
 
-            if (type_node != NULL && type_node->type_alias != NULL &&
-                type_node->type_alias->is_array && type_node->type_alias->is_open_array)
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL && alias->is_array && alias->is_open_array)
             {
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)
@@ -1538,7 +1634,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             /* Initialize FILE variables to NULL */
-            if (type_node != NULL && type_node->var_type == HASHVAR_FILE)
+            if (type_node != NULL && node_is_file_type(type_node))
             {
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)
