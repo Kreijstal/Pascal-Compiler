@@ -1042,6 +1042,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Local VAR section - reuse the existing var_section parser
     combinator_t* local_var_section = var_section;
 
+    // Allow local CONST/TYPE/VAR sections before the statement body.
+    combinator_t* local_decl_sections = many(multi(new_combinator(), PASCAL_T_NONE,
+        const_section,
+        type_section,
+        local_var_section,
+        NULL));
+
     // Create a specialized function body parser that avoids circular references
     // This parser handles the most common function body patterns without full recursive complexity
 
@@ -1054,17 +1061,9 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Forward declaration for nested functions - these will refer to working_function and working_procedure below
     combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
 
-    // Allow local CONST/TYPE/VAR sections to be interspersed with nested functions/procedures
-    combinator_t* local_declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
-        const_section,
-        type_section,
-        local_var_section,
-        nested_function_decl,
-        NULL
-    );
-
     combinator_t* nested_function_body = seq(new_combinator(), PASCAL_T_NONE,
-        many(local_declaration_or_section),         // zero or more local decls/sections in any order
+        local_decl_sections,                        // zero or more local const/type/var sections
+        many(nested_function_decl),                 // zero or more nested function/procedure declarations
         lazy(stmt_parser),                          // begin-end block handled by statement parser
         NULL
     );
