@@ -526,7 +526,27 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    /* Check if this is an array - prefer GpcType if available */
+    /* PREFERRED PATH: Try using GpcType directly if available */
+    if (node->type != NULL)
+    {
+        long long size = gpc_type_sizeof(node->type);
+        if (size > 0)
+        {
+            *size_out = size;
+            return 0;
+        }
+        else if (size == 0)
+        {
+            /* Zero-sized type */
+            *size_out = 0;
+            return 0;
+        }
+        /* else size < 0: gpc_type_sizeof couldn't determine size, fall through to legacy path */
+    }
+
+    /* LEGACY PATH: GpcType not available or couldn't determine size */
+
+    /* Check if this is an array */
     int is_array;
     if (node->type != NULL) {
         is_array = gpc_type_is_array(node->type);

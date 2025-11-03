@@ -403,8 +403,19 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     {
         /* New API with GpcType - derive var_type from GpcType */
         set_var_type_from_gpctype(hash_node, type);
-        hash_node->record_type = NULL;
-        hash_node->type_alias = NULL;
+        
+        /* Copy metadata from GpcType to legacy fields */
+        hash_node->type_alias = type->type_alias;  // May be NULL
+        
+        /* For record types, copy record_info from GpcType */
+        if (type->kind == TYPE_KIND_RECORD)
+        {
+            hash_node->record_type = type->info.record_info;
+        }
+        else
+        {
+            hash_node->record_type = NULL;
+        }
         
         /* For array types, populate legacy array fields from GpcType */
         if (type->kind == TYPE_KIND_ARRAY)

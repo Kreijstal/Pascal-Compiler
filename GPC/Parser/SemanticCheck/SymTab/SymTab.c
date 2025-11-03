@@ -134,6 +134,28 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
     return result;
 }
 
+/* Pushes a constant with explicit GpcType onto the current scope (head) */
+int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+    assert(type != NULL && "GpcType must be provided for typed constant");
+
+    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(cur_hash, id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_int_value = value;
+        }
+    }
+    return result;
+}
+
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
 int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args)

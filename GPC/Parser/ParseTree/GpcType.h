@@ -57,6 +57,10 @@ struct GpcType {
     GpcTypeKind kind;
     int size_in_bytes;      // To be calculated and filled in by the semantic checker.
     int alignment_in_bytes; // For future architecture support.
+    
+    // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
+    // This is owned by the AST, not by GpcType, so should not be freed.
+    struct TypeAlias *type_alias;
 
     // A union to hold the specific details of the type.
     union {
@@ -146,5 +150,13 @@ long long gpc_type_get_array_element_size(GpcType *type);
  * appropriate create_*_type() function instead.
  * Returns a new GpcType that caller owns, or NULL for complex types. */
 GpcType* gpc_type_from_var_type(enum VarType var_type);
+
+/* Get the type alias metadata from a GpcType.
+ * Returns NULL if no type alias metadata is attached. */
+struct TypeAlias* gpc_type_get_type_alias(GpcType *type);
+
+/* Set the type alias metadata on a GpcType.
+ * The TypeAlias is owned by the AST, not by GpcType. */
+void gpc_type_set_type_alias(GpcType *type, struct TypeAlias *alias);
 
 #endif // GPC_TYPE_H
