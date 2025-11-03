@@ -250,33 +250,40 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                 struct TypeAlias *alias_info = &tree->tree_data.type_decl_data.info.alias;
                 if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
                 {
-                    int ordinal = 0;
-                    ListNode_t *literal_node = alias_info->enum_literals;
-                    while (literal_node != NULL)
+                    /* Create ONE shared GpcType for this enum type if not already created */
+                    if (alias_info->gpc_type == NULL)
                     {
-                        if (literal_node->cur != NULL)
+                        alias_info->gpc_type = create_primitive_type(ENUM_TYPE);
+                        if (alias_info->gpc_type == NULL)
                         {
-                            char *literal_name = (char *)literal_node->cur;
-                            HashNode_t *existing = NULL;
-                            if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
-                            {
-                                existing->var_type = HASHVAR_ENUM;
-                                existing->const_int_value = ordinal;
-                            }
-                            else if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
-                            {
-                                fprintf(stderr,
-                                        "Error on line %d, redeclaration of enum literal %s!\n",
-                                        tree->line_num, literal_name);
-                                ++errors;
-                            }
-                            else if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
-                            {
-                                existing->var_type = HASHVAR_ENUM;
-                            }
+                            fprintf(stderr, "Error: Failed to create enum type for %s\n",
+                                    tree->tree_data.type_decl_data.id);
+                            ++errors;
                         }
-                        ++ordinal;
-                        literal_node = literal_node->next;
+                    }
+                    
+                    if (alias_info->gpc_type != NULL)
+                    {
+                        int ordinal = 0;
+                        ListNode_t *literal_node = alias_info->enum_literals;
+                        while (literal_node != NULL)
+                        {
+                            if (literal_node->cur != NULL)
+                            {
+                                char *literal_name = (char *)literal_node->cur;
+                                /* Use typed API with shared enum GpcType - all literals reference same type */
+                                if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->gpc_type) > 0)
+                                {
+                                    fprintf(stderr,
+                                            "Error on line %d, redeclaration of enum literal %s!\n",
+                                            tree->line_num, literal_name);
+                                    ++errors;
+                                }
+                            }
+                            ++ordinal;
+                            literal_node = literal_node->next;
+                        }
+                        /* GpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
                 }
             }
@@ -411,12 +418,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
             {
-                HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
-                {
-                    type_node->var_type = var_type;
-                }
+                /* GpcType ownership transferred to symbol table */
                 tree->tree_data.type_decl_data.gpc_type = NULL;
+                /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
             }
         } else {
             /* Fall back to legacy API for types we can't convert yet */
@@ -424,36 +428,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 record_info, alias_info);
         }
 
-        if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
-        {
-            int ordinal = 0;
-            ListNode_t *literal_node = alias_info->enum_literals;
-            while (literal_node != NULL)
-            {
-                if (literal_node->cur != NULL)
-                {
-                    char *literal_name = (char *)literal_node->cur;
-                    HashNode_t *enum_node = NULL;
-                    if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
-                    {
-                        enum_node->var_type = HASHVAR_ENUM;
-                        enum_node->const_int_value = ordinal;
-                    }
-                    else if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
-                    {
-                        fprintf(stderr, "Error on line %d, redeclaration of enum literal %s!\n",
-                                tree->line_num, literal_name);
-                        ++return_val;
-                    }
-                    else if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
-                    {
-                        enum_node->var_type = HASHVAR_ENUM;
-                    }
-                }
-                ++ordinal;
-                literal_node = literal_node->next;
-            }
-        }
+        /* Note: Enum literals are declared in predeclare_enum_literals() during first pass.
+         * We don't redeclare them here to avoid "redeclaration" errors. */
 
         if(func_return > 0)
         {
