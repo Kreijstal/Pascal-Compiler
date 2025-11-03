@@ -40,7 +40,7 @@ static inline int node_is_record_type(HashNode_t *node)
         return gpc_type_is_record(node->type);
     }
     
-    /* Fall back to legacy field */
+    /* Legacy nodes - fall back to var_type */
     return node->var_type == HASHVAR_RECORD;
 }
 
@@ -226,15 +226,32 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         }
         else
         {
-            long long base = codegen_sizeof_var_type(node->var_type);
-            if (base < 0)
+            /* Try GpcType first */
+            if (node->type != NULL)
             {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine element size for array %s.",
-                    node->id != NULL ? node->id : "");
-                return 1;
+                long long base = gpc_type_sizeof(node->type);
+                if (base < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine element size for array %s.",
+                        node->id != NULL ? node->id : "");
+                    return 1;
+                }
+                element_size = base;
             }
-            element_size = base;
+            else
+            {
+                /* Legacy fallback */
+                long long base = codegen_sizeof_var_type(node->var_type);
+                if (base < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine element size for array %s.",
+                        node->id != NULL ? node->id : "");
+                    return 1;
+                }
+                element_size = base;
+            }
         }
     }
 
@@ -630,6 +647,18 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     if (alias != NULL)
         return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
 
+    /* Try GpcType first */
+    if (node->type != NULL)
+    {
+        long long base = gpc_type_sizeof(node->type);
+        if (base >= 0)
+        {
+            *size_out = base;
+            return 0;
+        }
+    }
+    
+    /* Legacy fallback */
     long long base = codegen_sizeof_var_type(node->var_type);
     if (base >= 0)
     {
