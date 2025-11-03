@@ -2925,11 +2925,13 @@ int semcheck_varid(int *type_return,
             {
                 HashNode_t *target_node = NULL;
                 if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) != -1 && target_node != NULL)
-                    expr->record_type = target_node->record_type;
+                    expr->record_type = get_record_type_from_node(target_node);
             }
         }
         if (*type_return == RECORD_TYPE)
-            expr->record_type = hash_return->record_type;
+        {
+            expr->record_type = get_record_type_from_node(hash_return);
+        }
         else
             expr->record_type = NULL;
     }
