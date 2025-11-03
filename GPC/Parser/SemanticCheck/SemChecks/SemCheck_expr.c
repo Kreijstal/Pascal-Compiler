@@ -2180,6 +2180,30 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         }
         else if (hash_node->type->kind == TYPE_KIND_PROCEDURE)
         {
+            /* For functions, return the return type, not PROCEDURE */
+            GpcType *return_type = gpc_type_get_return_type(hash_node->type);
+            if (return_type != NULL)
+            {
+                if (return_type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    *type = gpc_type_get_primitive_tag(return_type);
+                    return 0;
+                }
+                else if (return_type->kind == TYPE_KIND_RECORD)
+                {
+                    *type = RECORD_TYPE;
+                    return 0;
+                }
+                else if (return_type->kind == TYPE_KIND_POINTER)
+                {
+                    *type = POINTER_TYPE;
+                    return 0;
+                }
+                /* Add other return type kinds as needed */
+                *type = UNKNOWN_TYPE;
+                return 0;
+            }
+            /* No return type means it's a procedure (void) */
             *type = PROCEDURE;
             return 0;
         }
