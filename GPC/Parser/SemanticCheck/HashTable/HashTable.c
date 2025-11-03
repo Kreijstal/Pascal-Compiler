@@ -488,5 +488,6 @@ enum VarType hashnode_get_var_type(const HashNode_t *node)
     }
     
     /* Fall back to legacy field when GpcType is not available */
+    /* TODO: This fallback should be removed once all HashNodes have GpcType */
     return node->var_type;
 }
