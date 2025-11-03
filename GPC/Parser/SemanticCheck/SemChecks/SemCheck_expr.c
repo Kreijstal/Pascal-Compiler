@@ -95,6 +95,22 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return node->record_type;
 }
 
+/* Helper function to check if a node is a record type, preferring GpcType when available */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_is_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->var_type == HASHVAR_RECORD;
+}
+
 static int ensure_with_capacity(void);
 static struct Expression *clone_expression(const struct Expression *expr);
 static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
@@ -1506,7 +1522,7 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         return 0;
     }
 
-    if (node->var_type == HASHVAR_RECORD)
+    if (node_is_record_type(node))
     {
         struct RecordType *record = get_record_type_from_node(node);
         if (record != NULL)
