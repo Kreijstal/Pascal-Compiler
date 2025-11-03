@@ -58,15 +58,9 @@ typedef struct HashNode
 
     int is_var_parameter;
     
-    /* PHASE 6: Legacy fields commented out - migration to GpcType complete
-     * These fields are DEPRECATED and will be removed once all code is verified.
-     * Use GpcType queries instead:
-     * - var_type → gpc_type_get_primitive_tag(node->type)
-     * - record_type → gpc_type_get_record(node->type)
-     * - type_alias → gpc_type_get_type_alias(node->type)
-     * - is_array → gpc_type_is_array(node->type)
-     * - array bounds → gpc_type_get_array_bounds(node->type, ...)
-     */
+    /* PHASE 6: Legacy fields temporarily enabled for debugging test failures
+     * Will be removed once all tests pass with GpcType-only infrastructure */
+    #define ENABLE_LEGACY_FIELDS_PHASE6 1
     #ifdef ENABLE_LEGACY_FIELDS_PHASE6
     enum VarType var_type;
     struct RecordType *record_type;

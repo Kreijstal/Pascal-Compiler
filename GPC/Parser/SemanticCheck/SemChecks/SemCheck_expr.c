@@ -48,6 +48,40 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     HashNode_t *node, int line_num);
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
+
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_get_type_alias(node->type);
+    }
+    
+    /* Fall back to legacy field for nodes without GpcType */
+    return node->type_alias;
+}
+
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && gpc_type_is_record(node->type))
+    {
+        return gpc_type_get_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->record_type;
+}
+
+static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_recordaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
@@ -310,22 +344,23 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     expr->array_element_type = UNKNOWN_TYPE;
     set_type_from_hashtype(&expr->array_element_type, node);
 
-    if (node->type_alias != NULL && node->type_alias->is_array)
+    struct TypeAlias *type_alias = get_type_alias_from_node(node);
+    if (type_alias != NULL && type_alias->is_array)
     {
-        semcheck_set_array_info_from_alias(expr, symtab, node->type_alias, line_num);
+        semcheck_set_array_info_from_alias(expr, symtab, type_alias, line_num);
 
         if (expr->array_element_size <= 0 && node_element_size > 0)
             expr->array_element_size = node_element_size;
         else if (expr->array_element_size <= 0 &&
-            node->type_alias->array_end >= node->type_alias->array_start)
+            type_alias->array_end >= type_alias->array_start)
         {
-            long long count = (long long)node->type_alias->array_end -
-                (long long)node->type_alias->array_start + 1;
-            if (count > 0 && node->type_alias->array_element_type != UNKNOWN_TYPE)
+            long long count = (long long)type_alias->array_end -
+                (long long)type_alias->array_start + 1;
+            if (count > 0 && type_alias->array_element_type != UNKNOWN_TYPE)
             {
                 long long element_size = 0;
-                if (sizeof_from_type_ref(symtab, node->type_alias->array_element_type,
-                        node->type_alias->array_element_type_id, &element_size,
+                if (sizeof_from_type_ref(symtab, type_alias->array_element_type,
+                        type_alias->array_element_type_id, &element_size,
                         0, line_num) == 0)
                 {
                     expr->array_element_size = (int)element_size;
@@ -343,7 +378,7 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     }
     else
     {
-        expr->array_element_record_type = node->record_type;
+        expr->array_element_record_type = get_record_type_from_node(node);
     }
 }
 
@@ -2141,12 +2176,52 @@ static int semcheck_addressof(int *type_return,
     *type_return = POINTER_TYPE;
     return error_count;
 }
-/* Sets a type based on a hash_type */
+/* Sets a type based on a hash_type - uses GpcType when available */
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)
 {
     assert(type != NULL);
     assert(hash_node != NULL);
 
+    /* Try GpcType first if available */
+    if (hash_node->type != NULL)
+    {
+        if (hash_node->type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            *type = gpc_type_get_primitive_tag(hash_node->type);
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_POINTER)
+        {
+            *type = POINTER_TYPE;
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_RECORD)
+        {
+            *type = RECORD_TYPE;
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            *type = PROCEDURE;
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_ARRAY)
+        {
+            /* For arrays, return the element type's primitive tag if available */
+            GpcType *elem_type = hash_node->type->info.array_info.element_type;
+            if (elem_type != NULL && elem_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                *type = gpc_type_get_primitive_tag(elem_type);
+                return 0;
+            }
+            *type = UNKNOWN_TYPE;
+            return 0;
+        }
+        *type = UNKNOWN_TYPE;
+        return 0;
+    }
+
+    /* Fallback to legacy var_type */
     switch(hash_node->var_type)
     {
         case HASHVAR_INTEGER:

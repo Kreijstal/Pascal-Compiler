@@ -44,6 +44,38 @@ int semcheck_id_not_main(char *id)
     return 0;
 }
 
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_get_type_alias(node->type);
+    }
+    
+    /* Fall back to legacy field for nodes without GpcType */
+    return node->type_alias;
+}
+
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && gpc_type_is_record(node->type))
+    {
+        return gpc_type_get_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->record_type;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
@@ -850,9 +882,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             goto next_identifier;
                         }
                         var_type = type_node->var_type;
-                        if (type_node->type_alias != NULL && type_node->type_alias->is_array)
+                        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                        if (alias != NULL && alias->is_array)
                         {
-                            struct TypeAlias *alias = type_node->type_alias;
                             int start = alias->array_start;
                             int end = alias->array_end;
                             if (alias->is_open_array)
@@ -887,19 +919,21 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         else
                         {
-                            /* Fallback: create GpcType from legacy fields */
-                            if (type_node->record_type != NULL)
+                            /* Fallback: create GpcType from legacy fields using helpers */
+                            struct RecordType *record_type = get_record_type_from_node(type_node);
+                            if (record_type != NULL)
                             {
-                                var_gpc_type = create_record_type(clone_record_type(type_node->record_type));
+                                var_gpc_type = create_record_type(clone_record_type(record_type));
                             }
                             else
                             {
                                 var_gpc_type = gpc_type_from_var_type(var_type);
                             }
                             
-                            if (var_gpc_type != NULL && type_node->type_alias != NULL)
+                            struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+                            if (var_gpc_type != NULL && type_alias != NULL)
                             {
-                                gpc_type_set_type_alias(var_gpc_type, type_node->type_alias);
+                                gpc_type_set_type_alias(var_gpc_type, type_alias);
                             }
                             
                             if (var_gpc_type != NULL)
@@ -956,13 +990,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     /* Add metadata from resolved_type if present */
                     if (var_gpc_type != NULL && resolved_type != NULL)
                     {
-                        if (resolved_type->type_alias != NULL)
+                        struct TypeAlias *type_alias = get_type_alias_from_node(resolved_type);
+                        if (type_alias != NULL)
                         {
-                            gpc_type_set_type_alias(var_gpc_type, resolved_type->type_alias);
+                            gpc_type_set_type_alias(var_gpc_type, type_alias);
                         }
-                        if (resolved_type->record_type != NULL && var_gpc_type->kind == TYPE_KIND_RECORD)
+                        struct RecordType *record_type = get_record_type_from_node(resolved_type);
+                        if (record_type != NULL && var_gpc_type->kind == TYPE_KIND_RECORD)
                         {
-                            var_gpc_type->info.record_info = clone_record_type(resolved_type->record_type);
+                            var_gpc_type->info.record_info = clone_record_type(record_type);
                         }
                     }
                 }
@@ -1286,13 +1322,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* Add type metadata from return_type_node to return_gpc_type */
         if (return_gpc_type != NULL && return_type_node != NULL)
         {
-            if (return_type_node->type_alias != NULL)
+            struct TypeAlias *type_alias = get_type_alias_from_node(return_type_node);
+            if (type_alias != NULL)
             {
-                gpc_type_set_type_alias(return_gpc_type, return_type_node->type_alias);
+                gpc_type_set_type_alias(return_gpc_type, type_alias);
             }
-            if (return_type_node->record_type != NULL && return_gpc_type->kind == TYPE_KIND_RECORD)
+            struct RecordType *record_type = get_record_type_from_node(return_type_node);
+            if (record_type != NULL && return_gpc_type->kind == TYPE_KIND_RECORD)
             {
-                return_gpc_type->info.record_info = clone_record_type(return_type_node->record_type);
+                return_gpc_type->info.record_info = clone_record_type(record_type);
             }
         }
         
