@@ -57,6 +57,18 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
+    
+    /* Legacy fields kept for backward compatibility during migration
+     * These are populated from legacy API calls when GpcType is not provided
+     * Helper functions should prefer GpcType when available */
+    enum VarType var_type;
+    struct RecordType *record_type;
+    int is_array;
+    int array_start;
+    int array_end;
+    int element_size;
+    int is_dynamic_array;
+    struct TypeAlias *type_alias;
 
 } HashNode_t;
 
@@ -106,63 +118,86 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 static inline int hashnode_is_array(const HashNode_t *node)
 {
     if (node == NULL) return 0;
-    if (node->type == NULL) return 0;
-    return gpc_type_is_array(node->type);
+    if (node->type != NULL) {
+        return gpc_type_is_array(node->type);
+    }
+    /* Fall back to legacy field */
+    return node->is_array;
 }
 
 /* Check if node represents a record */
 static inline int hashnode_is_record(const HashNode_t *node)
 {
     if (node == NULL) return 0;
-    if (node->type == NULL) return 0;
-    return gpc_type_is_record(node->type);
+    if (node->type != NULL) {
+        return gpc_type_is_record(node->type);
+    }
+    /* Fall back to legacy field */
+    return node->var_type == HASHVAR_RECORD;
 }
 
 /* Check if node represents a dynamic array */
 static inline int hashnode_is_dynamic_array(const HashNode_t *node)
 {
     if (node == NULL) return 0;
-    if (node->type == NULL || !gpc_type_is_array(node->type)) return 0;
-    return gpc_type_is_dynamic_array(node->type);
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        return gpc_type_is_dynamic_array(node->type);
+    }
+    /* Fall back to legacy field */
+    return node->is_dynamic_array;
 }
 
 /* Get array bounds from node */
 static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start, int *end)
 {
-    if (node == NULL || node->type == NULL) {
+    if (node == NULL || (!node->type && !node->is_array)) {
         if (start) *start = 0;
         if (end) *end = 0;
         return;
     }
-    if (gpc_type_is_array(node->type)) {
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
         gpc_type_get_array_bounds(node->type, start, end);
+    } else {
+        /* Fall back to legacy fields */
+        if (start) *start = node->array_start;
+        if (end) *end = node->array_end;
     }
 }
 
 /* Get element size from array node */
 static inline int hashnode_get_element_size(const HashNode_t *node)
 {
-    if (node == NULL || node->type == NULL) return 0;
-    if (!gpc_type_is_array(node->type)) return 0;
-    
-    GpcType *element_type = gpc_type_get_array_element_type(node->type);
-    if (element_type == NULL) return 0;
-    return gpc_type_sizeof(element_type);
+    if (node == NULL) return 0;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        GpcType *element_type = gpc_type_get_array_element_type(node->type);
+        if (element_type != NULL) {
+            return gpc_type_sizeof(element_type);
+        }
+    }
+    /* Fall back to legacy field */
+    return node->element_size;
 }
 
 /* Get record type from node */
 static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node)
 {
-    if (node == NULL || node->type == NULL) return NULL;
-    if (!gpc_type_is_record(node->type)) return NULL;
-    return gpc_type_get_record(node->type);
+    if (node == NULL) return NULL;
+    if (node->type != NULL && gpc_type_is_record(node->type)) {
+        return gpc_type_get_record(node->type);
+    }
+    /* Fall back to legacy field */
+    return node->record_type;
 }
 
 /* Get type alias from node */
 static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
 {
-    if (node == NULL || node->type == NULL) return NULL;
-    return gpc_type_get_type_alias(node->type);
+    if (node == NULL) return NULL;
+    if (node->type != NULL) {
+        return gpc_type_get_type_alias(node->type);
+    }
+    /* Fall back to legacy field */
+    return node->type_alias;
 }
 
 /* Get VarType equivalent from node (for legacy code compatibility) */

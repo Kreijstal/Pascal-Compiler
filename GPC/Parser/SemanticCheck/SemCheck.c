@@ -1007,7 +1007,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 else if (tree->tree_data.var_decl_data.inferred_type)
-                    var_type = HASHVAR_UNTYPED;
+                {
+                    /* For type inference, use INTEGER as placeholder - will be replaced later */
+                    var_type = HASHVAR_INTEGER;  /* Placeholder */
+                }
                 else if(tree->tree_data.var_decl_data.type == INT_TYPE)
                     var_type = HASHVAR_INTEGER;
                 else if(tree->tree_data.var_decl_data.type == LONGINT_TYPE)
@@ -1182,15 +1185,18 @@ next_identifier:
                             if (inferred_var_type != HASHVAR_UNTYPED)
                             {
                                 tree->tree_data.var_decl_data.type = normalized_type;
-                                /* Replace GpcType with inferred type */
-                                assert(var_node->type != NULL && "Variable node must have GpcType");
-                                /* The variable was created with a default/untyped GpcType, now update it */
+                                /* Replace or create GpcType with inferred type */
                                 GpcType *inferred_gpc_type = create_primitive_type(normalized_type);
                                 if (inferred_gpc_type != NULL)
                                 {
-                                    /* Free old type and replace with inferred type */
-                                    destroy_gpc_type(var_node->type);
+                                    if (var_node->type != NULL)
+                                    {
+                                        /* Free old type and replace */
+                                        destroy_gpc_type(var_node->type);
+                                    }
                                     var_node->type = inferred_gpc_type;
+                                    /* Update legacy field as well */
+                                    var_node->var_type = inferred_var_type;
                                 }
                             }
                         }
