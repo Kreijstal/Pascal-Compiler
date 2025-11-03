@@ -290,10 +290,44 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     }
     else if (type_alias != NULL)
     {
-        /* Type alias case - for now, pass NULL and rely on SemCheck to populate GpcType */
-        /* The actual GpcType will be created in SemCheck when processing the type declaration */
-        /* This is a temporary workaround - ideally we'd create the full GpcType here */
-        gpc_type = NULL;
+        /* Try to create GpcType from TypeAlias */
+        /* If TypeAlias already has a GpcType (enums, sets), use it */
+        if (type_alias->gpc_type != NULL)
+        {
+            gpc_type = type_alias->gpc_type;
+            /* Don't set type_alias->gpc_type to NULL - it's owned by TypeAlias */
+        }
+        /* For simple base type aliases (type MyInt = Integer), create GpcType */
+        else if (!type_alias->is_array && !type_alias->is_pointer && 
+                 !type_alias->is_set && !type_alias->is_enum && !type_alias->is_file &&
+                 type_alias->base_type != UNKNOWN_TYPE && type_alias->target_type_id == NULL)
+        {
+            /* Simple primitive type alias */
+            gpc_type = create_primitive_type(type_alias->base_type);
+            if (gpc_type != NULL)
+            {
+                gpc_type_set_type_alias(gpc_type, type_alias);
+            }
+        }
+        /* For type aliases that reference another type by name, try to resolve it */
+        else if (!type_alias->is_array && !type_alias->is_pointer &&
+                 !type_alias->is_set && !type_alias->is_enum && !type_alias->is_file &&
+                 type_alias->target_type_id != NULL)
+        {
+            /* Type alias references another type - try to resolve it */
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, symtab, type_alias->target_type_id) >= 0 &&
+                target_node != NULL && target_node->type != NULL)
+            {
+                /* Reference the target's GpcType (don't clone, just reference) */
+                gpc_type = target_node->type;
+                /* Note: We don't set type_alias on this GpcType because it already
+                 * represents the target type. The TypeAlias metadata will be stored
+                 * separately in the HashNode if needed. */
+            }
+        }
+        /* For other cases (complex arrays, pointers, sets, enums, files), fall back to legacy */
+        /* These require more complex handling that will be done in future phases */
     }
     else if (var_type != HASHVAR_UNTYPED)
     {
@@ -307,7 +341,14 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     }
     else
     {
-        /* Fallback to legacy API for cases we can't convert yet */
+        /* Fallback to legacy API for complex type aliases we can't convert yet:
+         * - Arrays (need element type resolution)
+         * - Pointers (need pointee type resolution)
+         * - Sets (need element type and literal handling)
+         * - Enums without pre-created GpcType
+         * - Files (need file type resolution)
+         * - Forward references (target type not yet declared)
+         */
         HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
         return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
     }
