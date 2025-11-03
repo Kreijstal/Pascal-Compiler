@@ -57,20 +57,6 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
-    
-    /* PHASE 6: Legacy fields temporarily enabled for debugging test failures
-     * Will be removed once all tests pass with GpcType-only infrastructure */
-    #define ENABLE_LEGACY_FIELDS_PHASE6 1
-    #ifdef ENABLE_LEGACY_FIELDS_PHASE6
-    enum VarType var_type;
-    struct RecordType *record_type;
-    int is_array;
-    int array_start;
-    int array_end;
-    int element_size;
-    int is_dynamic_array;
-    struct TypeAlias *type_alias;
-    #endif
 
 } HashNode_t;
 
@@ -112,6 +98,75 @@ void DestroyBuiltin(HashNode_t *);
 
 /* Prints all entries in the HashTable */
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
+
+/* Helper functions to query HashNode type information via GpcType */
+/* These functions assert that GpcType is populated and should be used everywhere */
+
+/* Check if node represents an array */
+static inline int hashnode_is_array(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type == NULL) return 0;
+    return gpc_type_is_array(node->type);
+}
+
+/* Check if node represents a record */
+static inline int hashnode_is_record(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type == NULL) return 0;
+    return gpc_type_is_record(node->type);
+}
+
+/* Check if node represents a dynamic array */
+static inline int hashnode_is_dynamic_array(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type == NULL || !gpc_type_is_array(node->type)) return 0;
+    return gpc_type_is_dynamic_array(node->type);
+}
+
+/* Get array bounds from node */
+static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start, int *end)
+{
+    if (node == NULL || node->type == NULL) {
+        if (start) *start = 0;
+        if (end) *end = 0;
+        return;
+    }
+    if (gpc_type_is_array(node->type)) {
+        gpc_type_get_array_bounds(node->type, start, end);
+    }
+}
+
+/* Get element size from array node */
+static inline int hashnode_get_element_size(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL) return 0;
+    if (!gpc_type_is_array(node->type)) return 0;
+    
+    GpcType *element_type = gpc_type_get_array_element_type(node->type);
+    if (element_type == NULL) return 0;
+    return gpc_type_sizeof(element_type);
+}
+
+/* Get record type from node */
+static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL) return NULL;
+    if (!gpc_type_is_record(node->type)) return NULL;
+    return gpc_type_get_record(node->type);
+}
+
+/* Get type alias from node */
+static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL) return NULL;
+    return gpc_type_get_type_alias(node->type);
+}
+
+/* Get VarType equivalent from node (for legacy code compatibility) */
+enum VarType hashnode_get_var_type(const HashNode_t *node);
 
 /* The well-known symbol hash function
  * -----------------------------------------------------------------------------

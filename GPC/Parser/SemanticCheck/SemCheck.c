@@ -50,14 +50,9 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     if (node == NULL)
         return NULL;
     
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_get_type_alias(node->type);
-    }
-    
-    /* Fall back to legacy field for nodes without GpcType */
-    return node->type_alias;
+    /* GpcType is the single source of truth */
+    assert(node->type != NULL && "HashNode must have GpcType populated");
+    return gpc_type_get_type_alias(node->type);
 }
 
 /* Helper function to get RecordType from HashNode, preferring GpcType when available */
@@ -66,14 +61,20 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     if (node == NULL)
         return NULL;
     
-    /* Prefer GpcType if available */
-    if (node->type != NULL && gpc_type_is_record(node->type))
+    /* GpcType is the single source of truth */
+    assert(node->type != NULL && "HashNode must have GpcType populated");
+    if (gpc_type_is_record(node->type))
     {
         return gpc_type_get_record(node->type);
     }
     
-    /* Fall back to legacy field */
-    return node->record_type;
+    return NULL;
+}
+
+/* Helper function to get VarType from HashNode */
+static inline enum VarType get_var_type_from_node(HashNode_t *node)
+{
+    return hashnode_get_var_type(node);
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
@@ -425,7 +426,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         HashNode_t *target_node = NULL;
                         if (FindIdent(&target_node, symtab, alias_info->target_type_id) != -1 && target_node != NULL)
                         {
-                            var_type = target_node->var_type;
+                            var_type = get_var_type_from_node(target_node);
                         }
                     }
                 }
@@ -881,7 +882,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             }
                             goto next_identifier;
                         }
-                        var_type = type_node->var_type;
+                        var_type = get_var_type_from_node(type_node);
                         struct TypeAlias *alias = get_type_alias_from_node(type_node);
                         if (alias != NULL && alias->is_array)
                         {
@@ -908,8 +909,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 }
                                 else if (element_type_node != NULL)
                                 {
-                                    /* Fallback: create GpcType from element_type_node's var_type */
-                                    element_type = gpc_type_from_var_type(element_type_node->var_type);
+                                    /* Get GpcType from element_type_node */
+                                    element_type = element_type_node->type;
+                                    assert(element_type != NULL && "Element type node must have GpcType");
                                 }
                             }
                             else if (element_type_tag != UNKNOWN_TYPE)
@@ -1190,22 +1192,22 @@ next_identifier:
                             if (inferred_var_type != HASHVAR_UNTYPED)
                             {
                                 tree->tree_data.var_decl_data.type = normalized_type;
-                                /* Update GpcType if present, otherwise update legacy field */
-                                if (var_node->type != NULL)
+                                /* Replace GpcType with inferred type */
+                                assert(var_node->type != NULL && "Variable node must have GpcType");
+                                /* The variable was created with a default/untyped GpcType, now update it */
+                                GpcType *inferred_gpc_type = create_primitive_type(normalized_type);
+                                if (inferred_gpc_type != NULL)
                                 {
-                                    /* TODO: Update GpcType - requires modifying existing GpcType or replacing it */
-                                    /* For now, keep legacy field write until GpcType modification API exists */
-                                    var_node->var_type = inferred_var_type;
-                                }
-                                else
-                                {
-                                    var_node->var_type = inferred_var_type;
+                                    /* Free old type and replace with inferred type */
+                                    gpc_type_free(var_node->type);
+                                    var_node->type = inferred_gpc_type;
                                 }
                             }
                         }
                         else
                         {
-                            if (inferred_var_type != var_node->var_type)
+                            enum VarType current_var_type = get_var_type_from_node(var_node);
+                            if (inferred_var_type != current_var_type)
                             {
                                 fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
                                     tree->line_num, var_name);
@@ -1314,46 +1316,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
             else
             {
-                var_type = type_node->var_type;
+                var_type = get_var_type_from_node(type_node);
                 return_type_node = type_node;
-                /* Get or create GpcType for the return type */
-                if (type_node->type != NULL)
-                {
-                    /* Use existing GpcType (don't own it) */
-                    return_gpc_type = type_node->type;
-                }
-                else if (type_node->var_type != HASHVAR_UNTYPED)
-                {
-                    /* Create a GpcType from the var_type if we don't have one */
-                    int primitive_tag = -1;
-                    switch (type_node->var_type)
-                    {
-                        case HASHVAR_INTEGER:
-                            primitive_tag = INT_TYPE;
-                            break;
-                        case HASHVAR_LONGINT:
-                            primitive_tag = LONGINT_TYPE;
-                            break;
-                        case HASHVAR_REAL:
-                            primitive_tag = REAL_TYPE;
-                            break;
-                        case HASHVAR_PCHAR:
-                            primitive_tag = STRING_TYPE;
-                            break;
-                        case HASHVAR_BOOLEAN:
-                            primitive_tag = BOOL;
-                            break;
-                        case HASHVAR_CHAR:
-                            primitive_tag = CHAR_TYPE;
-                            break;
-                        default:
-                            break;
-                    }
-                    if (primitive_tag != -1)
-                    {
-                        return_gpc_type = create_primitive_type(primitive_tag);
-                    }
-                }
+                /* Get GpcType for the return type */
+                assert(type_node->type != NULL && "Type node must have GpcType");
+                return_gpc_type = type_node->type;
             }
         }
         else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)

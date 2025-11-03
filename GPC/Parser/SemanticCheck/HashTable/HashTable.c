@@ -83,34 +83,6 @@ enum VarType primitive_tag_to_var_type(int tag)
     }
 }
 
-/* Helper to convert GpcType to VarType for legacy compatibility */
-static enum VarType gpctype_to_vartype(GpcType *type)
-{
-    if (type == NULL)
-        return HASHVAR_UNTYPED;
-    
-    switch (type->kind)
-    {
-        case TYPE_KIND_PRIMITIVE:
-            return primitive_tag_to_var_type(gpc_type_get_primitive_tag(type));
-        
-        case TYPE_KIND_POINTER:
-            return HASHVAR_POINTER;
-        
-        case TYPE_KIND_ARRAY:
-            return HASHVAR_ARRAY;
-        
-        case TYPE_KIND_RECORD:
-            return HASHVAR_RECORD;
-        
-        case TYPE_KIND_PROCEDURE:
-            return HASHVAR_PROCEDURE;
-        
-        default:
-            return HASHVAR_UNTYPED;
-    }
-}
-
 /* Unified internal function for adding identifiers to hash table */
 static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams* params)
 {
@@ -429,47 +401,12 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         return NULL;
     }
     
-    /* Handle type information based on which API is being used */
-    if (type != NULL)
-    {
-        /* New API with GpcType - Initialize legacy fields to safe defaults
-         * All type information accessed through GpcType */
-        
-        /* Assert that we're not accidentally using both APIs */
-        assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
-        assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
-        assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
-        
-        /* Derive var_type from GpcType for compatibility with legacy code */
-        hash_node->var_type = gpctype_to_vartype(type);
-        hash_node->record_type = NULL;
-        hash_node->type_alias = NULL;
-        hash_node->is_array = 0;
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
-    }
-    else
-    {
-        #ifdef ENABLE_LEGACY_FIELDS_PHASE6
-        /* Legacy API - use provided values */
-        hash_node->var_type = var_type;
-        hash_node->record_type = record_type;
-        hash_node->type_alias = type_alias;
-        
-        /* Set array-specific fields to defaults - will be set later by caller if needed */
-        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
-        #else
-        /* Phase 6: Legacy fields removed - this path should not be used */
-        (void)var_type; (void)record_type; (void)type_alias; /* Suppress unused warnings */
-        assert(0 && "Legacy API path - should use typed API with GpcType");
-        #endif
-    }
+    /* GpcType is the single source of truth for type information */
+    /* Assert that we're not accidentally using legacy parameters */
+    assert(type != NULL && "GpcType must be provided");
+    assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
+    assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
+    assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
     
     return hash_node;
 }
@@ -488,4 +425,34 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
 
     /* Allow collision only if both are procedures/functions */
     return (is_new_proc_func && is_existing_proc_func);
+}
+
+/* Get VarType equivalent from node (for legacy code compatibility) */
+enum VarType hashnode_get_var_type(const HashNode_t *node)
+{
+    if (node == NULL)
+        return HASHVAR_UNTYPED;
+    
+    /* GpcType is the single source of truth */
+    if (node->type == NULL)
+        return HASHVAR_UNTYPED;
+    
+    switch (node->type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+        {
+            int tag = gpc_type_get_primitive_tag(node->type);
+            return primitive_tag_to_var_type(tag);
+        }
+        case TYPE_KIND_POINTER:
+            return HASHVAR_POINTER;
+        case TYPE_KIND_ARRAY:
+            return HASHVAR_ARRAY;
+        case TYPE_KIND_RECORD:
+            return HASHVAR_RECORD;
+        case TYPE_KIND_PROCEDURE:
+            return HASHVAR_PROCEDURE;
+        default:
+            return HASHVAR_UNTYPED;
+    }
 }
