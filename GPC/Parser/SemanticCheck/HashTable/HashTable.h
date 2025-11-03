@@ -12,6 +12,7 @@
 #define TABLE_SIZE	211
 
 #include <stdio.h>
+#include <assert.h>
 #include "../../List/List.h"
 #include "../../ParseTree/GpcType.h"
 
@@ -63,12 +64,12 @@ typedef struct HashNode
      * Helper functions should prefer GpcType when available */
     enum VarType var_type;
     struct RecordType *record_type;
-    int is_array;
-    int array_start;
-    int array_end;
-    int element_size;
-    int is_dynamic_array;
-    struct TypeAlias *type_alias;
+    struct TypeAlias *type_alias;  /* Still needed for legacy API - some type aliases not yet in GpcType */
+    /* REMOVED: is_array - use hashnode_is_array() helper instead */
+    /* REMOVED: array_start, array_end - use hashnode_get_array_bounds() helper instead */
+    /* REMOVED: element_size - use hashnode_get_element_size() helper instead */
+    /* REMOVED: is_dynamic_array - use hashnode_is_dynamic_array() helper instead */
+
 
 } HashNode_t;
 
@@ -112,7 +113,8 @@ void DestroyBuiltin(HashNode_t *);
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 
 /* Helper functions to query HashNode type information via GpcType */
-/* These functions assert that GpcType is populated and should be used everywhere */
+/* These functions prefer GpcType but fall back to legacy fields when necessary */
+/* TODO Phase 6: Remove fallbacks once all HashNodes have GpcType populated */
 
 /* Check if node represents an array */
 static inline int hashnode_is_array(const HashNode_t *node)
@@ -121,8 +123,9 @@ static inline int hashnode_is_array(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_array(node->type);
     }
-    /* Fall back to legacy field */
-    return node->is_array;
+    /* No fallback - is_array field has been removed */
+    /* Array status must come from GpcType */
+    return 0;
 }
 
 /* Check if node represents a record */
@@ -132,7 +135,7 @@ static inline int hashnode_is_record(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_record(node->type);
     }
-    /* Fall back to legacy field */
+    /* TODO: Remove fallback once all HashNodes have GpcType */
     return node->var_type == HASHVAR_RECORD;
 }
 
@@ -143,25 +146,27 @@ static inline int hashnode_is_dynamic_array(const HashNode_t *node)
     if (node->type != NULL && gpc_type_is_array(node->type)) {
         return gpc_type_is_dynamic_array(node->type);
     }
-    /* Fall back to legacy field */
-    return node->is_dynamic_array;
+    /* No fallback needed - is_dynamic_array field has been removed */
+    /* Dynamic array info must come from GpcType */
+    return 0;
 }
 
 /* Get array bounds from node */
 static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start, int *end)
 {
-    if (node == NULL || (!node->type && !node->is_array)) {
+    if (node == NULL) {
         if (start) *start = 0;
         if (end) *end = 0;
         return;
     }
     if (node->type != NULL && gpc_type_is_array(node->type)) {
         gpc_type_get_array_bounds(node->type, start, end);
-    } else {
-        /* Fall back to legacy fields */
-        if (start) *start = node->array_start;
-        if (end) *end = node->array_end;
+        return;
     }
+    /* No fallback - array_start/end fields have been removed */
+    /* Array bounds must come from GpcType */
+    if (start) *start = 0;
+    if (end) *end = 0;
 }
 
 /* Get element size from array node */
@@ -174,8 +179,9 @@ static inline int hashnode_get_element_size(const HashNode_t *node)
             return gpc_type_sizeof(element_type);
         }
     }
-    /* Fall back to legacy field */
-    return node->element_size;
+    /* No fallback - element_size field has been removed */
+    /* Element size must come from GpcType */
+    return 0;
 }
 
 /* Get record type from node */
@@ -185,7 +191,7 @@ static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node
     if (node->type != NULL && gpc_type_is_record(node->type)) {
         return gpc_type_get_record(node->type);
     }
-    /* Fall back to legacy field */
+    /* TODO: Remove fallback once all HashNodes have GpcType */
     return node->record_type;
 }
 
@@ -196,7 +202,8 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_get_type_alias(node->type);
     }
-    /* Fall back to legacy field */
+    /* TODO: Remove fallback once all HashNodes have GpcType */
+    /* For now, needed because legacy API still creates HashNodes without GpcType */
     return node->type_alias;
 }
 
