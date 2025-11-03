@@ -44,36 +44,36 @@ int semcheck_id_not_main(char *id)
     return 0;
 }
 
-/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+/* Helper function to get TypeAlias from HashNode via GpcType */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     if (node == NULL)
         return NULL;
     
-    /* Prefer GpcType if available */
+    /* Get TypeAlias from GpcType */
     if (node->type != NULL)
     {
         return gpc_type_get_type_alias(node->type);
     }
     
-    /* Fall back to legacy field for nodes without GpcType */
-    return node->type_alias;
+    /* No GpcType means no type alias */
+    return NULL;
 }
 
-/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+/* Helper function to get RecordType from HashNode via GpcType */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     if (node == NULL)
         return NULL;
     
-    /* Prefer GpcType if available */
+    /* Get RecordType from GpcType */
     if (node->type != NULL && gpc_type_is_record(node->type))
     {
         return gpc_type_get_record(node->type);
     }
     
-    /* Fall back to legacy field */
-    return node->record_type;
+    /* No GpcType or not a record */
+    return NULL;
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
@@ -331,7 +331,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     ListNode_t *cur;
     Tree_t *tree;
     int return_val, func_return;
-    enum VarType var_type;
 
     assert(symtab != NULL);
 
@@ -347,117 +346,35 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
         
-
-
+        /* Extract metadata based on type declaration kind */
         switch (tree->tree_data.type_decl_data.kind)
         {
             case TYPE_DECL_RECORD:
-                var_type = HASHVAR_RECORD;
                 record_info = tree->tree_data.type_decl_data.info.record;
                 break;
             case TYPE_DECL_ALIAS:
-            {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
-
-                if (alias_info->is_array)
-                {
-                    int element_type = alias_info->array_element_type;
-                    if (element_type == REAL_TYPE)
-                        var_type = HASHVAR_REAL;
-                    else if (element_type == LONGINT_TYPE)
-                        var_type = HASHVAR_LONGINT;
-                    else if (element_type == STRING_TYPE)
-                        var_type = HASHVAR_PCHAR;
-                    else if (element_type == BOOL)
-                        var_type = HASHVAR_BOOLEAN;
-                    else if (element_type == CHAR_TYPE)
-                        var_type = HASHVAR_CHAR;
-                    else if (element_type == POINTER_TYPE)
-                        var_type = HASHVAR_POINTER;
-                    else if (element_type == SET_TYPE)
-                        var_type = HASHVAR_SET;
-                    else if (element_type == ENUM_TYPE)
-                        var_type = HASHVAR_ENUM;
-                    else if (element_type == FILE_TYPE)
-                        var_type = HASHVAR_FILE;
-                    else
-                        var_type = HASHVAR_INTEGER;
-                }
-                else
-                {
-                    int base_type = alias_info->base_type;
-                    if (base_type == REAL_TYPE)
-                        var_type = HASHVAR_REAL;
-                    else if (base_type == LONGINT_TYPE)
-                        var_type = HASHVAR_LONGINT;
-                    else if (base_type == STRING_TYPE)
-                        var_type = HASHVAR_PCHAR;
-                    else if (base_type == BOOL)
-                        var_type = HASHVAR_BOOLEAN;
-                    else if (base_type == CHAR_TYPE)
-                        var_type = HASHVAR_CHAR;
-                    else if (base_type == POINTER_TYPE)
-                        var_type = HASHVAR_POINTER;
-                    else if (base_type == SET_TYPE)
-                        var_type = HASHVAR_SET;
-                    else if (base_type == ENUM_TYPE)
-                        var_type = HASHVAR_ENUM;
-                    else if (base_type == FILE_TYPE)
-                        var_type = HASHVAR_FILE;
-                    else if (base_type == INT_TYPE)
-                        var_type = HASHVAR_INTEGER;
-                    else if (base_type == PROCEDURE)
-                        var_type = HASHVAR_PROCEDURE;
-                    else
-                        var_type = HASHVAR_UNTYPED;
-
-                    if (alias_info->is_pointer)
-                        var_type = HASHVAR_POINTER;
-                    else if (alias_info->is_set)
-                        var_type = HASHVAR_SET;
-                    else if (alias_info->is_enum)
-                        var_type = HASHVAR_ENUM;
-                    else if (alias_info->is_file)
-                        var_type = HASHVAR_FILE;
-
-                    if (var_type == HASHVAR_UNTYPED && alias_info->target_type_id != NULL)
-                    {
-                        HashNode_t *target_node = NULL;
-                        if (FindIdent(&target_node, symtab, alias_info->target_type_id) != -1 && target_node != NULL)
-                        {
-                            var_type = target_node->var_type;
-                        }
-                    }
-                }
                 break;
-            }
             default:
-                var_type = HASHVAR_INTEGER;
                 break;
         }
 
         GpcType *gpc_type = tree->tree_data.type_decl_data.gpc_type;
 
-
-
-        if (gpc_type != NULL) {
-            /* Set type_alias on GpcType before pushing */
-            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
-                gpc_type_set_type_alias(gpc_type, alias_info);
-            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
-                gpc_type->info.record_info = record_info;
-            
-            func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
-            if (func_return == 0)
-            {
-                /* GpcType ownership transferred to symbol table */
-                tree->tree_data.type_decl_data.gpc_type = NULL;
-                /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
-            }
-        } else {
-            /* Fall back to legacy API for types we can't convert yet */
-            func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
-                record_info, alias_info);
+        /* All type declarations must have GpcType - no legacy path */
+        assert(gpc_type != NULL && "Type declaration must have GpcType");
+        
+        /* Set type_alias on GpcType before pushing */
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
+            gpc_type_set_type_alias(gpc_type, alias_info);
+        else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
+            gpc_type->info.record_info = record_info;
+        
+        func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
+        if (func_return == 0)
+        {
+            /* GpcType ownership transferred to symbol table */
+            tree->tree_data.type_decl_data.gpc_type = NULL;
         }
 
         /* Note: Enum literals are declared in predeclare_enum_literals() during first pass.
