@@ -93,20 +93,23 @@ GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab 
             /* Direct primitive type tag */
             element_type = create_primitive_type(element_type_tag);
         } else if (alias->array_element_type_id != NULL && symtab != NULL) {
-            /* Type reference - resolve it */
+            /* Type reference - try to resolve it */
             HashNode_t *element_node = NULL;
             if (FindIdent(&element_node, symtab, alias->array_element_type_id) >= 0 &&
                 element_node != NULL && element_node->type != NULL) {
                 /* Use the resolved type (don't clone, just reference) */
                 element_type = element_node->type;
+            } else {
+                /* Forward reference - create NULL element type for now
+                 * This will be resolved when the array is actually used */
+                element_type = NULL;
             }
         }
         
-        if (element_type != NULL) {
-            result = create_array_type(element_type, start, end);
-            if (result != NULL) {
-                gpc_type_set_type_alias(result, alias);
-            }
+        /* Create array type even if element type is NULL (forward reference) */
+        result = create_array_type(element_type, start, end);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
         }
         return result;
     }
@@ -120,20 +123,24 @@ GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab 
             /* Direct primitive type tag */
             pointee_type = create_primitive_type(pointer_type_tag);
         } else if (alias->pointer_type_id != NULL && symtab != NULL) {
-            /* Type reference - resolve it */
+            /* Type reference - try to resolve it */
             HashNode_t *pointee_node = NULL;
             if (FindIdent(&pointee_node, symtab, alias->pointer_type_id) >= 0 &&
                 pointee_node != NULL && pointee_node->type != NULL) {
                 /* Use the resolved type (don't clone, just reference) */
                 pointee_type = pointee_node->type;
+            } else {
+                /* Forward reference or unresolved type
+                 * Create a pointer to NULL - this is valid in Pascal
+                 * The pointee type will be resolved later during usage */
+                pointee_type = NULL;
             }
         }
         
-        if (pointee_type != NULL) {
-            result = create_pointer_type(pointee_type);
-            if (result != NULL) {
-                gpc_type_set_type_alias(result, alias);
-            }
+        /* Create pointer type even if pointee is NULL (forward reference) */
+        result = create_pointer_type(pointee_type);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
         }
         return result;
     }

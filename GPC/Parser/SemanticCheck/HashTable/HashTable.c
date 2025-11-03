@@ -401,30 +401,15 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         return NULL;
     }
     
-    /* Handle type information */
-    if (type != NULL)
-    {
-        /* New API with GpcType - assert that legacy parameters are not set */
+    /* Legacy parameters are no longer used - assert they're not set */
+    if (type != NULL) {
+        /* When GpcType is provided, legacy parameters should not be set */
         assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
         assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
-        
-        /* Initialize legacy fields to safe defaults - they should not be used when GpcType is present */
-        hash_node->var_type = HASHVAR_UNTYPED;
-        hash_node->record_type = NULL;
-        hash_node->type_alias = NULL;
     }
-    else
-    {
-        /* Legacy API - populate legacy fields from parameters */
-        /* This path should only be used for:
-         * 1. UNTYPED procedure parameters (var_type == HASHVAR_UNTYPED)
-         * 2. Complex TYPE declarations that haven't been migrated to GpcType yet
-         */
-        hash_node->var_type = var_type;
-        hash_node->record_type = record_type;
-        hash_node->type_alias = type_alias;
-    }
+    /* If type is NULL, this is an UNTYPED node (valid for untyped procedure parameters) */
+    /* No legacy fields to populate - they've been removed */
     
     return hash_node;
 }
@@ -474,7 +459,6 @@ enum VarType hashnode_get_var_type(const HashNode_t *node)
         }
     }
     
-    /* Fall back to legacy field when GpcType is not available */
-    /* TODO: This fallback should be removed once all HashNodes have GpcType */
-    return node->var_type;
+    /* If type is NULL, this is an UNTYPED node */
+    return HASHVAR_UNTYPED;
 }

@@ -46,16 +46,20 @@ typedef struct HashNode
     char *mangled_id;
     enum HashType hash_type;
     
-    /* NEW: Unified type system - this one pointer replaces var_type, type_alias, 
+    /* Unified type system - this one pointer replaces var_type, type_alias, 
      * record_type, is_array, array_start, array_end, and other scattered type info.
      * 
-     * When type != NULL: Use GpcType APIs exclusively. Legacy fields are set to safe defaults.
-     * When type == NULL: Legacy fields are used (UNTYPED parameters, complex TYPE declarations).
+     * When type != NULL: GpcType contains all type information
+     * When type == NULL: Node is UNTYPED (untyped procedure parameters in Pascal)
      * 
-     * Migration Status: ~95% of code uses GpcType. Legacy fields remain for:
-     * - UNTYPED procedure parameters (valid Pascal construct)
-     * - Complex TYPE declarations (arrays, pointers, sets, files via type alias)
-     * See PHASE_6_STATUS.md for details.
+     * ALL type information queries MUST use helper functions:
+     * - hashnode_get_var_type()
+     * - hashnode_get_record_type()
+     * - hashnode_get_type_alias()
+     * - hashnode_is_array()
+     * - hashnode_get_array_bounds()
+     * - hashnode_get_element_size()
+     * - hashnode_is_dynamic_array()
      */
     GpcType *type;
 
@@ -67,27 +71,6 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
-    
-    /* Legacy fields - used only when type == NULL
-     * 
-     * DO NOT ACCESS DIRECTLY - use helper functions:
-     * - hashnode_get_var_type() instead of node->var_type
-     * - hashnode_get_record_type() instead of node->record_type
-     * - hashnode_get_type_alias() instead of node->type_alias
-     * 
-     * These helper functions prefer GpcType when available and fall back to legacy fields
-     * only when necessary (type == NULL).
-     */
-    enum VarType var_type;
-    struct RecordType *record_type;
-    struct TypeAlias *type_alias;
-    
-    /* Array fields REMOVED in earlier phases - use hashnode_* helpers:
-     * - hashnode_is_array() instead of is_array
-     * - hashnode_get_array_bounds() instead of array_start/array_end
-     * - hashnode_get_element_size() instead of element_size
-     * - hashnode_is_dynamic_array() instead of is_dynamic_array
-     */
 
 } HashNode_t;
 
@@ -130,10 +113,6 @@ void DestroyBuiltin(HashNode_t *);
 /* Prints all entries in the HashTable */
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 
-/* Helper functions to query HashNode type information via GpcType */
-/* These functions prefer GpcType but fall back to legacy fields when necessary */
-/* TODO Phase 6: Remove fallbacks once all HashNodes have GpcType populated */
-
 /* Check if node represents an array */
 static inline int hashnode_is_array(const HashNode_t *node)
 {
@@ -141,10 +120,11 @@ static inline int hashnode_is_array(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_array(node->type);
     }
-    /* No fallback - is_array field has been removed */
-    /* Array status must come from GpcType */
+    /* UNTYPED nodes are not arrays */
     return 0;
 }
+
+/* Helper functions to query HashNode type information via GpcType */
 
 /* Check if node represents a record */
 static inline int hashnode_is_record(const HashNode_t *node)
@@ -153,8 +133,8 @@ static inline int hashnode_is_record(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_record(node->type);
     }
-    /* Fallback for legacy nodes without GpcType (typically TYPE declarations) */
-    return node->var_type == HASHVAR_RECORD;
+    /* UNTYPED nodes are not records */
+    return 0;
 }
 
 /* Check if node represents a dynamic array */
@@ -209,8 +189,8 @@ static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node
     if (node->type != NULL && gpc_type_is_record(node->type)) {
         return gpc_type_get_record(node->type);
     }
-    /* Fallback for legacy nodes without GpcType (typically TYPE declarations) */
-    return node->record_type;
+    /* UNTYPED nodes have no record type */
+    return NULL;
 }
 
 /* Get type alias from node */
@@ -220,10 +200,8 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_get_type_alias(node->type);
     }
-    /* Fallback for legacy nodes without GpcType */
-    /* Valid cases: HASHTYPE_TYPE nodes with type_alias, or UNTYPED nodes */
-    /* (Type alias nodes are created by legacy API when processing type declarations) */
-    return node->type_alias;
+    /* UNTYPED nodes have no type alias */
+    return NULL;
 }
 
 /* Get VarType equivalent from node (for legacy code compatibility) */
