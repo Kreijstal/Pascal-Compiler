@@ -81,6 +81,13 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type);
 GpcType* create_array_type(GpcType *element_type, int start_index, int end_index);
 GpcType* create_record_type(struct RecordType *record_info);
 
+/* Create GpcType from TypeAlias structure
+ * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
+ * Returns NULL if conversion fails (e.g., unresolvable type reference)
+ * symtab is used to resolve type references (target_type_id, element_type_id, etc.)
+ */
+GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab);
+
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_gpc_type(GpcType *type);
 
