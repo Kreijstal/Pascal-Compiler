@@ -414,10 +414,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->record_type = NULL;
         hash_node->type_alias = NULL;
         hash_node->is_array = 0;
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
     }
     else
     {
@@ -426,10 +422,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->record_type = record_type;
         hash_node->type_alias = type_alias;
         hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
     }
     
     return hash_node;
