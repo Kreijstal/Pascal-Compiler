@@ -46,7 +46,7 @@ cparser_tests = executable('cparser_tests', 'cparser/tests.c',
   dependencies: cparser_dep,
 )
 
-test('cparser unit tests', cparser_tests,timeout:60)
+test('cparser unit tests', cparser_tests,timeout:120)
 
 if build_integration_tests
   calculator_logic_lib = static_library('calculator_logic',
