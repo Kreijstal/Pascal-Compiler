@@ -3060,6 +3060,35 @@ int semcheck_arrayaccess(int *type_return,
     return return_val;
 }
 
+/* Helper to resolve the actual type tag from a TREE_VAR_DECL parameter declaration */
+static int resolve_param_type(Tree_t *var_decl, SymTab_t *symtab)
+{
+    assert(var_decl != NULL && var_decl->type == TREE_VAR_DECL);
+    assert(symtab != NULL);
+    
+    int type_tag = var_decl->tree_data.var_decl_data.type;
+    char *type_id = var_decl->tree_data.var_decl_data.type_id;
+    
+    /* If type is known directly (primitive), return it */
+    if (type_tag != UNKNOWN_TYPE)
+        return type_tag;
+    
+    /* If type_id is provided, resolve it from symbol table */
+    if (type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
+        {
+            /* Get the type tag from the type node */
+            int resolved_type = UNKNOWN_TYPE;
+            set_type_from_hashtype(&resolved_type, type_node);
+            return resolved_type;
+        }
+    }
+    
+    return UNKNOWN_TYPE;
+}
+
 /** FUNC_CALL **/
 int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
@@ -3139,11 +3168,12 @@ int semcheck_funccall(int *type_return,
                 while(formal_args != NULL)
                 {
                     Tree_t *formal_decl = (Tree_t *)formal_args->cur;
-                    int formal_type = formal_decl->tree_data.var_decl_data.type;
+                    int formal_type = resolve_param_type(formal_decl, symtab);
 
                     int call_type;
                     semcheck_expr_main(&call_type, symtab, (struct Expression *)call_args->cur, max_scope_lev, NO_MUTATE);
 
+                    fprintf(stderr, "DEBUG overload: formal_type=%d, call_type=%d\n", formal_type, call_type);
                     if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
@@ -3249,11 +3279,26 @@ int semcheck_funccall(int *type_return,
 
             while(true_arg_ids != NULL && args_given != NULL)
             {
-                int expected_type = arg_decl->tree_data.var_decl_data.type;
+                int expected_type = resolve_param_type(arg_decl, symtab);
+                fprintf(stderr, "DEBUG: arg_type=%d, expected_type=%d, cur_arg=%d\n", arg_type, expected_type, cur_arg);
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
-                    if (!((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
-                          (arg_type == LONGINT_TYPE && expected_type == INT_TYPE)))
+                    /* Allow integer/longint conversion */
+                    int type_compatible = 0;
+                    if ((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
+                        (arg_type == LONGINT_TYPE && expected_type == INT_TYPE))
+                    {
+                        type_compatible = 1;
+                    }
+                    /* For complex types (records, files, etc.), if both have the same type tag,
+                     * consider them compatible. The overload resolution already ensured we have
+                     * the right function via name mangling. */
+                    else if (arg_type == expected_type)
+                    {
+                        type_compatible = 1;
+                    }
+                    
+                    if (!type_compatible)
                     {
                         fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
                             expr->line_num, id, cur_arg);
