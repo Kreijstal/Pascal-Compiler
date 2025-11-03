@@ -413,6 +413,7 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     }
     else
     {
+        #ifdef ENABLE_LEGACY_FIELDS_PHASE6
         /* Legacy API - use provided values */
         hash_node->var_type = var_type;
         hash_node->record_type = record_type;
@@ -424,6 +425,11 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->array_end = 0;
         hash_node->element_size = 0;
         hash_node->is_dynamic_array = 0;
+        #else
+        /* Phase 6: Legacy fields removed - this path should not be used */
+        (void)var_type; (void)record_type; (void)type_alias; /* Suppress unused warnings */
+        assert(0 && "Legacy API path - should use typed API with GpcType");
+        #endif
     }
     
     return hash_node;

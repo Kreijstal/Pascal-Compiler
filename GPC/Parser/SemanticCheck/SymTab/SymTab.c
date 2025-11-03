@@ -94,6 +94,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
 
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
     int result = AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL, NULL);
+    #ifdef ENABLE_LEGACY_FIELDS_PHASE6
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(cur_hash, id);
@@ -106,6 +107,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
             node->is_dynamic_array = (end < start);
         }
     }
+    #endif
     return result;
 }
 
