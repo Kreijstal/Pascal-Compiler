@@ -1540,13 +1540,13 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 {
                     HashNode_t *type_node = NULL;
                     FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id);
-                    if (type_node != NULL && type_node->type_alias != NULL)
+                    if (type_node != NULL)
                     {
-                        type = type_node->type_alias->base_type;
-                        resolved_type_node = type_node;
-                    }
-                    else if (type_node != NULL)
-                    {
+                        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                        if (alias != NULL)
+                        {
+                            type = alias->base_type;
+                        }
                         resolved_type_node = type_node;
                     }
                 }
