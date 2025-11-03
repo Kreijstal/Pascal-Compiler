@@ -2919,6 +2919,17 @@ int semcheck_varid(int *type_return,
                 subtype = alias->pointer_type;
                 type_id = alias->pointer_type_id;
             }
+            
+            /* If subtype is unknown but we have a type_id, resolve it */
+            if (subtype == UNKNOWN_TYPE && type_id != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindIdent(&target_node, symtab, (char*)type_id) != -1 && target_node != NULL)
+                {
+                    set_type_from_hashtype(&subtype, target_node);
+                }
+            }
+            
             semcheck_set_pointer_info(expr, subtype, type_id);
             expr->record_type = NULL;
             if (expr->pointer_subtype_id != NULL)
