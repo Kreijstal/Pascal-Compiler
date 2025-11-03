@@ -48,6 +48,7 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     HashNode_t *node, int line_num);
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
 /* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
@@ -81,6 +82,22 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return node->record_type;
 }
 
+/* Helper function to check if a node is a record type */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    
+    /* Check GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_is_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->var_type == HASHVAR_RECORD;
+}
+
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_recordaccess(int *type_return,
@@ -96,54 +113,6 @@ typedef struct WithContextEntry {
 static WithContextEntry *with_context_stack = NULL;
 static size_t with_context_count = 0;
 static size_t with_context_capacity = 0;
-
-/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_get_type_alias(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->type_alias;
-}
-
-/* Helper function to get RecordType from HashNode, preferring GpcType when available */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL && gpc_type_is_record(node->type))
-    {
-        return gpc_type_get_record(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->record_type;
-}
-
-/* Helper function to check if a node is a record type, preferring GpcType when available */
-static inline int node_is_record_type(HashNode_t *node)
-{
-    if (node == NULL)
-        return 0;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_is_record(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->var_type == HASHVAR_RECORD;
-}
 
 static int ensure_with_capacity(void);
 static struct Expression *clone_expression(const struct Expression *expr);
@@ -594,7 +563,7 @@ static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
-                record_info = target_node->record_type;
+                record_info = get_record_type_from_node(target_node);
         }
         return record_info;
     }
@@ -1788,9 +1757,9 @@ static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
 
     set_type_from_hashtype(out_type, type_node);
 
-    if (type_node->type_alias != NULL)
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL)
     {
-        struct TypeAlias *alias = type_node->type_alias;
         if (alias->base_type != UNKNOWN_TYPE)
             *out_type = alias->base_type;
 
@@ -1902,9 +1871,9 @@ static int semcheck_pointer_deref(int *type_return,
             target_node != NULL)
         {
             set_type_from_hashtype(&target_type, target_node);
-            if (target_node->type_alias != NULL)
+            struct TypeAlias *alias = get_type_alias_from_node(target_node);
+            if (alias != NULL)
             {
-                struct TypeAlias *alias = target_node->type_alias;
                 if (alias->base_type != UNKNOWN_TYPE)
                     target_type = alias->base_type;
                 else if (alias->is_pointer)
@@ -1938,10 +1907,13 @@ static int semcheck_pointer_deref(int *type_return,
     if (pointer_expr->pointer_subtype_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != -1 && type_node != NULL &&
-            type_node->type_alias != NULL && type_node->type_alias->is_array)
+        if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != -1 && type_node != NULL)
         {
-            semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL && alias->is_array)
+            {
+                semcheck_set_array_info_from_alias(expr, symtab, alias, expr->line_num);
+            }
         }
     }
 
@@ -1987,7 +1959,7 @@ static int semcheck_recordaccess(int *type_return,
             if (FindIdent(&target_node, symtab, record_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
             {
-                record_info = target_node->record_type;
+                record_info = get_record_type_from_node(target_node);
             }
         }
 
@@ -2086,20 +2058,26 @@ static int semcheck_recordaccess(int *type_return,
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 && type_node != NULL)
         {
-            if (type_node->record_type != NULL)
-                field_record = type_node->record_type;
-            else if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+            struct RecordType *record_type = get_record_type_from_node(type_node);
+            if (record_type != NULL)
+                field_record = record_type;
+            else
             {
-                HashNode_t *target_node = NULL;
-                if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
-                    target_node != NULL && target_node->record_type != NULL)
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->target_type_id != NULL)
                 {
-                    field_record = target_node->record_type;
+                    HashNode_t *target_node = NULL;
+                    if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
+                        target_node != NULL)
+                    {
+                        field_record = get_record_type_from_node(target_node);
+                    }
                 }
             }
 
-            if (type_node->type_alias != NULL && type_node->type_alias->is_array)
-                array_alias = type_node->type_alias;
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL && alias->is_array)
+                array_alias = alias;
         }
 
         if (field_record != NULL && field_type == UNKNOWN_TYPE)
@@ -2911,9 +2889,9 @@ int semcheck_varid(int *type_return,
         {
             int subtype = UNKNOWN_TYPE;
             const char *type_id = NULL;
-            if (hash_return->type_alias != NULL)
+            struct TypeAlias *alias = get_type_alias_from_node(hash_return);
+            if (alias != NULL)
             {
-                struct TypeAlias *alias = hash_return->type_alias;
                 subtype = alias->pointer_type;
                 type_id = alias->pointer_type_id;
             }
@@ -2996,10 +2974,13 @@ int semcheck_arrayaccess(int *type_return,
         if (array_expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL &&
-                type_node->type_alias != NULL && type_node->type_alias->is_array)
+            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL)
             {
-                semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_array)
+                {
+                    semcheck_set_array_info_from_alias(expr, symtab, alias, expr->line_num);
+                }
             }
         }
 
@@ -3013,13 +2994,16 @@ int semcheck_arrayaccess(int *type_return,
             {
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
-                    type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_pointer)
+                    type_node != NULL)
                 {
-                    struct TypeAlias *alias = type_node->type_alias;
-                    pointer_subtype = alias->pointer_type;
-                    pointer_type_id = alias->pointer_type_id;
-                    if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
-                        pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                    if (alias != NULL && alias->is_pointer)
+                    {
+                        pointer_subtype = alias->pointer_type;
+                        pointer_type_id = alias->pointer_type_id;
+                        if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
+                            pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                    }
                 }
             }
 
@@ -3210,8 +3194,9 @@ int semcheck_funccall(int *type_return,
 
         if (*type_return == RECORD_TYPE)
         {
-            if (hash_return->record_type != NULL)
-                expr->record_type = hash_return->record_type;
+            struct RecordType *record_type = get_record_type_from_node(hash_return);
+            if (record_type != NULL)
+                expr->record_type = record_type;
             else
                 expr->record_type = NULL;
         }

@@ -738,7 +738,7 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     {
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, (char *)type_id) >= 0 && node != NULL)
-            record_type = node->record_type;
+            record_type = get_record_type_from_node(node);
     }
 
     if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)
