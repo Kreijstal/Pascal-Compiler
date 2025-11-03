@@ -28,52 +28,22 @@
 
 /* Helper functions for transitioning from legacy type fields to GpcType */
 
-/* Helper function to check if a node is a record type, preferring GpcType when available */
+/* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
 {
-    if (node == NULL)
-        return 0;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_is_record(node->type);
-    }
-    
-    /* Legacy nodes - fall back to var_type */
-    return node->var_type == HASHVAR_RECORD;
+    return hashnode_is_record(node);
 }
 
-/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+/* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL && gpc_type_is_record(node->type))
-    {
-        return gpc_type_get_record(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->record_type;
+    return hashnode_get_record_type(node);
 }
 
-/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+/* Helper function to get TypeAlias from HashNode */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_get_type_alias(node->type);
-    }
-    
-    /* Fall back to legacy field for nodes without GpcType */
-    return node->type_alias;
+    return hashnode_get_type_alias(node);
 }
 
 static unsigned long codegen_next_record_temp_id(void)
@@ -182,12 +152,7 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
     }
 
     /* Check if array is dynamic */
-    int is_dynamic;
-    if (node->type != NULL && gpc_type_is_array(node->type)) {
-        is_dynamic = gpc_type_is_dynamic_array(node->type);
-    } else {
-        is_dynamic = (node->is_dynamic_array || node->array_end < node->array_start);
-    }
+    int is_dynamic = hashnode_is_dynamic_array(node);
     
     if (is_dynamic)
     {
@@ -197,15 +162,8 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    /* Get element size from GpcType if available */
-    long long element_size;
-    if (node->type != NULL && gpc_type_is_array(node->type)) {
-        element_size = gpc_type_get_array_element_size(node->type);
-        if (element_size < 0)
-            element_size = node->element_size; /* Fall back to legacy */
-    } else {
-        element_size = node->element_size;
-    }
+    /* Get element size from GpcType */
+    long long element_size = hashnode_get_element_size(node);
     
     if (element_size <= 0)
     {
@@ -241,8 +199,9 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
             }
             else
             {
-                /* Legacy fallback */
-                long long base = codegen_sizeof_var_type(node->var_type);
+                /* Use hashnode helper */
+                enum VarType var_type = hashnode_get_var_type(node);
+                long long base = codegen_sizeof_var_type(var_type);
                 if (base < 0)
                 {
                     codegen_report_error(ctx,
@@ -257,12 +216,7 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
 
     /* Get array bounds from GpcType if available */
     int array_start, array_end;
-    if (node->type != NULL && gpc_type_is_array(node->type)) {
-        gpc_type_get_array_bounds(node->type, &array_start, &array_end);
-    } else {
-        array_start = node->array_start;
-        array_end = node->array_end;
-    }
+    hashnode_get_array_bounds(node, &array_start, &array_end);
     
     long long count = (long long)array_end - (long long)array_start + 1;
     if (count < 0)
@@ -616,12 +570,7 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     /* LEGACY PATH: GpcType not available or couldn't determine size */
 
     /* Check if this is an array */
-    int is_array;
-    if (node->type != NULL) {
-        is_array = gpc_type_is_array(node->type);
-    } else {
-        is_array = node->is_array;
-    }
+    int is_array = hashnode_is_array(node);
     
     if (is_array)
         return codegen_sizeof_array_node(ctx, node, size_out, depth);
@@ -658,8 +607,9 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         }
     }
     
-    /* Legacy fallback */
-    long long base = codegen_sizeof_var_type(node->var_type);
+    /* Use hashnode helper */
+    enum VarType var_type = hashnode_get_var_type(node);
+    long long base = codegen_sizeof_var_type(var_type);
     if (base >= 0)
     {
         *size_out = base;

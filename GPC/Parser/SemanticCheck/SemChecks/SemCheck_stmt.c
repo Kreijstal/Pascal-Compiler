@@ -262,7 +262,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
             }
             else
             {
-                is_dynamic = array_node->is_dynamic_array;
+                is_dynamic = hashnode_is_dynamic_array(array_node);
             }
             
             if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
@@ -511,7 +511,7 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
     {
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, target_expr->pointer_subtype_id) != -1 && type_node != NULL)
-            target_expr->record_type = type_node->record_type;
+            target_expr->record_type = hashnode_get_record_type(type_node);
     }
 
     return return_val;
@@ -1146,7 +1146,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         expected_type_node != NULL)
                     {
 
-                        expected_type = var_type_to_expr_type(expected_type_node->var_type);
+                        expected_type = var_type_to_expr_type(hashnode_get_var_type(expected_type_node));
                         expected_gpc_type = expected_type_node->type;
 
                     }

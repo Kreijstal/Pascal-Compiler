@@ -53,49 +53,19 @@ static int semcheck_pointer_deref(int *type_return,
 /* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_get_type_alias(node->type);
-    }
-    
-    /* Fall back to legacy field for nodes without GpcType */
-    return node->type_alias;
+    return hashnode_get_type_alias(node);
 }
 
-/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+/* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL && gpc_type_is_record(node->type))
-    {
-        return gpc_type_get_record(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->record_type;
+    return hashnode_get_record_type(node);
 }
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
 {
-    if (node == NULL)
-        return 0;
-    
-    /* Check GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_is_record(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->var_type == HASHVAR_RECORD;
+    return hashnode_is_record(node);
 }
 
 static int semcheck_pointer_deref(int *type_return,
@@ -278,32 +248,15 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
 
     expr->is_array_expr = 1;
     
-    /* Get array bounds from GpcType if available, otherwise fall back to legacy fields */
+    /* Get array bounds from GpcType */
     int node_lower_bound, node_upper_bound;
-    if (node->type != NULL && gpc_type_is_array(node->type)) {
-        gpc_type_get_array_bounds(node->type, &node_lower_bound, &node_upper_bound);
-    } else {
-        node_lower_bound = node->array_start;
-        node_upper_bound = node->array_end;
-    }
+    hashnode_get_array_bounds(node, &node_lower_bound, &node_upper_bound);
     
-    /* Get element size from GpcType if available */
-    long long node_element_size;
-    if (node->type != NULL && gpc_type_is_array(node->type)) {
-        node_element_size = gpc_type_get_array_element_size(node->type);
-        if (node_element_size < 0)
-            node_element_size = node->element_size; /* Fall back to legacy if GpcType fails */
-    } else {
-        node_element_size = node->element_size;
-    }
+    /* Get element size from GpcType */
+    long long node_element_size = hashnode_get_element_size(node);
     
-    /* Check if array is dynamic - prefer GpcType if available */
-    int node_is_dynamic;
-    if (node->type != NULL) {
-        node_is_dynamic = gpc_type_is_dynamic_array(node->type);
-    } else {
-        node_is_dynamic = node->is_dynamic_array;
-    }
+    /* Check if array is dynamic */
+    int node_is_dynamic = hashnode_is_dynamic_array(node);
 
     expr->array_lower_bound = node_lower_bound;
     expr->array_upper_bound = node_upper_bound;
@@ -1453,7 +1406,8 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         if (alias != NULL)
             return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
-        long long base = sizeof_from_var_type(node->var_type);
+        enum VarType var_type = hashnode_get_var_type(node);
+        long long base = sizeof_from_var_type(var_type);
         if (base >= 0)
         {
             *size_out = base;
@@ -1462,21 +1416,11 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
     }
 
     /* For array size calculation */
-    int is_array;
-    if (node->type != NULL) {
-        is_array = gpc_type_is_array(node->type);
-    } else {
-        is_array = node->is_array;
-    }
+    int is_array = hashnode_is_array(node);
     
     if (is_array)
     {
-        int is_dynamic;
-        if (node->type != NULL && gpc_type_is_array(node->type)) {
-            is_dynamic = gpc_type_is_dynamic_array(node->type);
-        } else {
-            is_dynamic = (node->is_dynamic_array || node->array_end < node->array_start);
-        }
+        int is_dynamic = hashnode_is_dynamic_array(node);
         
         if (is_dynamic)
         {
@@ -1486,33 +1430,17 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         }
 
         /* Get element size */
-        long long element_size;
-        if (node->type != NULL && gpc_type_is_array(node->type)) {
-            element_size = gpc_type_get_array_element_size(node->type);
-            if (element_size < 0) {
-                /* GpcType couldn't determine size, try var_type */
-                element_size = sizeof_from_var_type(node->var_type);
-                assert(element_size > 0 && "Must be able to determine element size from var_type");
-            }
-        } else {
-            /* Use legacy element_size field */
-            element_size = node->element_size;
-            if (element_size <= 0) {
-                /* Try to get from var_type as fallback */
-                long long base = sizeof_from_var_type(node->var_type);
-                assert(base > 0 && "Must be able to determine element size");
-                element_size = base;
-            }
+        long long element_size = hashnode_get_element_size(node);
+        if (element_size <= 0)
+        {
+            fprintf(stderr, "Error on line %d, cannot determine element size for array %s.\n",
+                line_num, node->id);
+            return 1;
         }
         
         /* Get array bounds */
         int array_start, array_end;
-        if (node->type != NULL && gpc_type_is_array(node->type)) {
-            gpc_type_get_array_bounds(node->type, &array_start, &array_end);
-        } else {
-            array_start = node->array_start;
-            array_end = node->array_end;
-        }
+        hashnode_get_array_bounds(node, &array_start, &array_end);
         
         long long count = (long long)array_end - (long long)array_start + 1;
         if (count < 0)
@@ -1537,7 +1465,8 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
     if (alias != NULL)
         return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
-    long long base = sizeof_from_var_type(node->var_type);
+    enum VarType var_type = hashnode_get_var_type(node);
+    long long base = sizeof_from_var_type(var_type);
     if (base >= 0)
     {
         *size_out = base;
@@ -2224,7 +2153,8 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
     }
 
     /* Fallback to legacy var_type */
-    switch(hash_node->var_type)
+    enum VarType var_type = hashnode_get_var_type(hash_node);
+    switch(var_type)
     {
         case HASHVAR_INTEGER:
             *type = INT_TYPE;

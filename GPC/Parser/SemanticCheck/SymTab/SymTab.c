@@ -14,6 +14,8 @@
 #include "SymTab.h"
 #include "../HashTable/HashTable.h"
 #include "../../List/List.h"
+#include "../../ParseTree/GpcType.h"
+#include "../../ParseTree/type_tags.h"
 
 /* Initializes the SymTab with stack_head pointing to NULL */
 SymTab_t *InitSymTab()
@@ -94,20 +96,6 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
 
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
     int result = AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL, NULL);
-    #ifdef ENABLE_LEGACY_FIELDS_PHASE6
-    if (result == 0)
-    {
-        HashNode_t *node = FindIdentInTable(cur_hash, id);
-        if (node != NULL)
-        {
-            node->is_array = 1;
-            node->array_start = start;
-            node->array_end = end;
-            node->element_size = element_size;
-            node->is_dynamic_array = (end < start);
-        }
-    }
-    #endif
     return result;
 }
 
@@ -120,10 +108,17 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
     HashTable_t *cur_hash;
 
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    enum VarType stored_type = HASHVAR_INTEGER;
+    
+    /* Determine type based on value range and create GpcType */
+    int type_tag = INT_TYPE;
     if (value > INT_MAX || value < INT_MIN)
-        stored_type = HASHVAR_LONGINT;
-    int result = AddIdentToTable_Legacy(cur_hash, id, NULL, stored_type, HASHTYPE_CONST, NULL, NULL, NULL);
+        type_tag = LONGINT_TYPE;
+    
+    GpcType *gpc_type = create_primitive_type(type_tag);
+    if (gpc_type == NULL)
+        return 1; /* Failed to create type */
+    
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, gpc_type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(cur_hash, id);
@@ -132,6 +127,11 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
             node->is_constant = 1;
             node->const_int_value = value;
         }
+    }
+    else
+    {
+        /* Failed to add, clean up GpcType */
+        destroy_gpc_type(gpc_type);
     }
     return result;
 }
@@ -280,10 +280,37 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     assert(symtab->stack_head != NULL);
     assert(id != NULL);
 
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
+    /* Create GpcType from legacy parameters */
+    GpcType *gpc_type = NULL;
+    
+    if (record_type != NULL)
+    {
+        /* Create record type */
+        gpc_type = create_record_type(record_type);
+    }
+    else if (type_alias != NULL)
+    {
+        /* Type alias case - for now, pass NULL and rely on SemCheck to populate GpcType */
+        /* The actual GpcType will be created in SemCheck when processing the type declaration */
+        /* This is a temporary workaround - ideally we'd create the full GpcType here */
+        gpc_type = NULL;
+    }
+    else if (var_type != HASHVAR_UNTYPED)
+    {
+        /* Create from var_type */
+        gpc_type = gpc_type_from_var_type(var_type);
+    }
+    
+    if (gpc_type != NULL)
+    {
+        return PushTypeOntoScope_Typed(symtab, id, gpc_type);
+    }
+    else
+    {
+        /* Fallback to legacy API for cases we can't convert yet */
+        HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+        return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
+    }
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING GpcType ===== */
