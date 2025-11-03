@@ -140,6 +140,16 @@ static ParseResult between_fn(input_t * in, void * args, char* parser_name) {
     return r_p;
 }
 
+static ast_t* find_tail_node(ast_t* node) {
+    if (node == NULL || node == ast_nil)
+        return node;
+
+    ast_t* cur = node;
+    while (cur->next != NULL && cur->next != ast_nil)
+        cur = cur->next;
+    return cur;
+}
+
 static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
     while (1) {
         InputState state;
@@ -169,7 +179,7 @@ static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
         }
 
         tail->next = next_res.value.ast;
-        tail = tail->next;
+        tail = find_tail_node(tail->next);
     }
 
     return tail;
@@ -186,7 +196,7 @@ static ParseResult sep_by_common(input_t *in, sep_by_args *sargs, bool require_f
     }
 
     ast_t *head = first.value.ast;
-    ast_t *tail = head;
+    ast_t *tail = find_tail_node(head);
 
     tail = append_remaining(in, sargs, tail);
 
@@ -211,7 +221,8 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
         free_error(res.value.error);
         return make_success(ast_nil);
     }
-    head = tail = res.value.ast;
+    head = res.value.ast;
+    tail = find_tail_node(head);
 
     while (1) {
         InputState state; save_input_state(in, &state);
@@ -239,7 +250,7 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
         }
 
         tail->next = p_res.value.ast;
-        tail = tail->next;
+        tail = find_tail_node(tail->next);
     }
 
     // Try to parse a final separator
@@ -344,10 +355,11 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             break;
         }
         if (head == NULL) {
-            head = tail = res.value.ast;
+            head = res.value.ast;
+            tail = find_tail_node(head);
         } else {
             tail->next = res.value.ast;
-            tail = tail->next;
+            tail = find_tail_node(tail->next);
         }
     }
     return make_success(head ? head : ast_nil);
@@ -361,7 +373,7 @@ static ParseResult many1_fn(input_t * in, void * args, char* parser_name) {
     }
 
     ast_t* head = first.value.ast;
-    ast_t* tail = head;
+    ast_t* tail = find_tail_node(head);
     while (1) {
         InputState state;
         save_input_state(in, &state);
@@ -379,7 +391,7 @@ static ParseResult many1_fn(input_t * in, void * args, char* parser_name) {
             break;
         }
         tail->next = res.value.ast;
-        tail = tail->next;
+        tail = find_tail_node(tail->next);
     }
     return make_success(head);
 }
@@ -394,15 +406,6 @@ static ParseResult map_fn(input_t * in, void * args, char* parser_name) {
     return make_success(new_ast);
 }
 
-static ast_t* find_tail_node(ast_t* node) {
-    if (node == NULL || node == ast_nil)
-        return node;
-
-    ast_t* cur = node;
-    while (cur->next != NULL && cur->next != ast_nil)
-        cur = cur->next;
-    return cur;
-}
 
 static ParseResult gseq_fn(input_t * in, void * args, char* parser_name) {
     seq_args * sa = (seq_args *) args;
