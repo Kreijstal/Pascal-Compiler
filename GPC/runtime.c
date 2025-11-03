@@ -1177,7 +1177,7 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
         }
         if (match_token_ci(cursor, "zzz"))
         {
-            char buffer[5];
+            char buffer[12];  // Large enough for any int value
             snprintf(buffer, sizeof(buffer), "%03d", millis);
             if (!append_text(&result, &length, &capacity, buffer))
             {

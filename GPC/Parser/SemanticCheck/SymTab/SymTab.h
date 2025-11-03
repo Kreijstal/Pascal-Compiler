@@ -27,46 +27,19 @@ typedef struct SymTab
 /* Initializes the SymTab with stack_head pointing to NULL */
 SymTab_t *InitSymTab();
 
-/* Adds a built-in procedure call */
-/* NOTE: Built-ins reflected on all scope levels */
-/* Returns 1 if failed, 0 otherwise */
-int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args);
-
-/* Adds a built-in function */
-int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type);
-
-/* Adds a built-in type */
-int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type);
-
 /* Pushes a new scope onto the stack (FIFO) */
 void PushScope(SymTab_t *symtab);
 
-/* Pushes a new variable onto the current scope (head) */
-int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id);
-
-/* Pushes a new array onto the current scope (head) */
-int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int start, int end, int element_size);
-
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
 
-/* Pushes a new procedure onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args);
-
-/* Pushes a new function onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum VarType var_type, ListNode_t *args);
-
-/* Pushes a new function return type var onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args);
+/* Pushes a constant with explicit GpcType onto the current scope (head) */
+int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, GpcType *type);
 
 /* Pushes a new type onto the current scope (head) */
 int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     struct RecordType *record_type, struct TypeAlias *type_alias);
 
-/* NEW: Type system functions using GpcType */
-/* These are the future API - use these for new code */
+/* Type system functions using GpcType */
 
 /* Pushes a new variable with a GpcType onto the current scope */
 int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
@@ -80,8 +53,22 @@ int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, G
 /* Pushes a new function with a GpcType onto the current scope */
 int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, GpcType *type);
 
+/* Pushes a new function return value with a GpcType onto the current scope */
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
 /* Pushes a new type declaration with a GpcType onto the current scope */
 int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Builtin declarations using GpcType */
+
+/* Adds a built-in type with a GpcType */
+int AddBuiltinType_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Adds a built-in procedure with a GpcType */
+int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
+/* Adds a built-in function with a GpcType */
+int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, GpcType *type);
 
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */

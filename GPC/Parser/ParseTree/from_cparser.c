@@ -666,12 +666,19 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
         ast_t *cursor = spec_node->child;
         ListNode_t *params = NULL;
         
-        /* Skip to parameter list if present */
-        while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
-            cursor = cursor->next;
-        
-        if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
-            params = convert_param_list(&cursor);
+        /* Check if first child is a PARAM_LIST */
+        if (cursor != NULL && cursor->typ == PASCAL_T_PARAM_LIST) {
+            /* The PARAM_LIST node should contain PARAM children */
+            ast_t *param_cursor = cursor->child;
+            params = convert_param_list(&param_cursor);
+        } else {
+            /* Skip to parameter list if present */
+            while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
+                cursor = cursor->next;
+            
+            if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
+                params = convert_param_list(&cursor);
+            }
         }
         
         /* For functions, get return type */

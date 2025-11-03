@@ -69,6 +69,8 @@ static int var_type_to_expr_type(enum VarType var_type)
             return FILE_TYPE;
         case HASHVAR_RECORD:
             return RECORD_TYPE;
+        case HASHVAR_PROCEDURE:
+            return PROCEDURE;
         default:
             return UNKNOWN_TYPE;
     }
@@ -124,6 +126,8 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
         {
             param_type = resolve_type_from_vardecl(param_decl, symtab, &param_type_owned);
         }
+
+
 
         /* Both types must be resolved for proper type checking */
         if (arg_type == NULL || param_type == NULL)
@@ -202,6 +206,12 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        
+        /* Populate call info to avoid use-after-free when HashNode is freed */
+        stmt->stmt_data.procedure_call_data.call_hash_type = builtin_node->hash_type;
+        stmt->stmt_data.procedure_call_data.call_gpc_type = builtin_node->type;
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        
         builtin_node->referenced += 1;
         if (handled != NULL)
             *handled = 1;
@@ -243,7 +253,19 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         else
         {
             set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
-            if (array_node->hash_type != HASHTYPE_ARRAY || !array_node->is_dynamic_array)
+            
+            /* Check if it's a dynamic array using GpcType first, then legacy field */
+            int is_dynamic = 0;
+            if (array_node->type != NULL)
+            {
+                is_dynamic = gpc_type_is_dynamic_array(array_node->type);
+            }
+            else
+            {
+                is_dynamic = hashnode_is_dynamic_array(array_node);
+            }
+            
+            if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
             {
                 fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
                 ++return_val;
@@ -489,7 +511,7 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
     {
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, target_expr->pointer_subtype_id) != -1 && type_node != NULL)
-            target_expr->record_type = type_node->record_type;
+            target_expr->record_type = hashnode_get_record_type(type_node);
     }
 
     return return_val;
@@ -839,6 +861,28 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 gpc_type_to_string(rhs_gpctype));
             ++return_val;
         }
+        else if (type_first == PROCEDURE && type_second == PROCEDURE)
+        {
+            /* AST TRANSFORMATION: Mark RHS as procedure address if it's a direct procedure reference */
+            /* Only transform if BOTH LHS and RHS are actual procedures (not functions) */
+            /* Functions should be called, not have their address taken */
+            int lhs_is_procedure = (lhs_gpctype->kind == TYPE_KIND_PROCEDURE && 
+                                    lhs_gpctype->info.proc_info.return_type == NULL);
+            int rhs_is_procedure = (rhs_gpctype->kind == TYPE_KIND_PROCEDURE && 
+                                    rhs_gpctype->info.proc_info.return_type == NULL);
+            
+            if (lhs_is_procedure && rhs_is_procedure && expr != NULL && expr->type == EXPR_VAR_ID)
+            {
+                HashNode_t *rhs_symbol = NULL;
+                if (FindIdent(&rhs_symbol, symtab, expr->expr_data.id) >= 0 &&
+                    rhs_symbol != NULL && rhs_symbol->hash_type == HASHTYPE_PROCEDURE)
+                {
+                    /* Transform the expression to EXPR_ADDR_OF_PROC */
+                    expr->type = EXPR_ADDR_OF_PROC;
+                    expr->expr_data.addr_of_proc_data.procedure_symbol = rhs_symbol;
+                }
+            }
+        }
     }
 
     if (!handled_by_gpctype)
@@ -987,6 +1031,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         else
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
+        
+        /* Populate call info to avoid use-after-free when HashNode is freed */
+        stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
+        stmt->stmt_data.procedure_call_data.call_gpc_type = resolved_proc->type;
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        
         sym_return = resolved_proc;
         scope_return = 0; // FIXME: This needs to be properly calculated
     }
@@ -1008,6 +1058,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 return_val++;
                 return return_val;
             }
+
+            /* Set the resolved_proc field so codegen knows this is an indirect call */
+            stmt->stmt_data.procedure_call_data.resolved_proc = proc_var;
+            
+            /* Populate call info to avoid use-after-free when HashNode is freed */
+            stmt->stmt_data.procedure_call_data.call_hash_type = proc_var->hash_type;
+            stmt->stmt_data.procedure_call_data.call_gpc_type = proc_var->type;
+            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
 
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
@@ -1056,7 +1114,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
-        true_args = sym_return->args;
+        /* Get formal arguments from GpcType instead of deprecated args field */
+        true_args = gpc_type_get_procedure_params(sym_return->type);
         while(args_given != NULL && true_args != NULL)
         {
             ++cur_arg;
@@ -1064,6 +1123,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             assert(true_args->type == LIST_TREE);
             return_val += semcheck_expr_main(&arg_type,
                 symtab, (struct Expression *)args_given->cur, INT_MAX, NO_MUTATE);
+            
+
 
             arg_decl = (Tree_t *)true_args->cur;
             assert(arg_decl->type == TREE_VAR_DECL);
@@ -1072,21 +1133,90 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = arg_decl->tree_data.var_decl_data.type;
+
+                GpcType *expected_gpc_type = NULL;
+                GpcType *arg_gpc_type = NULL;
+                HashNode_t *expected_type_node = NULL;
+                
                 if ((expected_type == -1 || expected_type == UNKNOWN_TYPE) &&
                     arg_decl->tree_data.var_decl_data.type_id != NULL)
                 {
-                    HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1 &&
-                        type_node != NULL)
+
+                    if (FindIdent(&expected_type_node, symtab, arg_decl->tree_data.var_decl_data.type_id) != -1 &&
+                        expected_type_node != NULL)
                     {
-                        expected_type = var_type_to_expr_type(type_node->var_type);
+
+                        expected_type = var_type_to_expr_type(hashnode_get_var_type(expected_type_node));
+                        expected_gpc_type = expected_type_node->type;
+
+                    }
+                    else
+                    {
+
                     }
                 }
 
-                if (expected_type != BUILTIN_ANY_TYPE &&
-                    arg_type != expected_type &&
-                    !types_numeric_compatible(expected_type, arg_type))
+                /* For procedure types, we need to use GpcType comparison */
+                int types_match = 0;
+                if (expected_type == PROCEDURE && arg_type == PROCEDURE)
                 {
+                    /* Both are procedures - need to check signatures using GpcType */
+                    /* Get the GpcType for the actual argument */
+                    struct Expression *arg_expr = (struct Expression *)args_given->cur;
+
+                    if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
+                    {
+                        HashNode_t *arg_node = NULL;
+                        if (FindIdent(&arg_node, symtab, arg_expr->expr_data.id) != -1 &&
+                            arg_node != NULL)
+                        {
+                            arg_gpc_type = arg_node->type;
+
+                            /* AST TRANSFORMATION: Convert procedure identifiers to procedure addresses
+                             * when passed as arguments to procedure parameters */
+                            if (arg_node->hash_type == HASHTYPE_PROCEDURE)
+                            {
+                                /* Transform the expression to EXPR_ADDR_OF_PROC */
+                                arg_expr->type = EXPR_ADDR_OF_PROC;
+                                arg_expr->expr_data.addr_of_proc_data.procedure_symbol = arg_node;
+                            }
+                        }
+                        else
+                        {
+
+                        }
+                    }
+                    else
+                    {
+
+                    }
+                    
+                    /* If we have GpcTypes for both, compare them */
+                    if (expected_gpc_type != NULL && arg_gpc_type != NULL)
+                    {
+                        types_match = are_types_compatible_for_assignment(expected_gpc_type, arg_gpc_type, symtab);
+
+                    }
+                    else
+                    {
+                        /* Fallback to tag comparison if no GpcType */
+                        types_match = (expected_type == arg_type);
+
+                    }
+                }
+                else if (expected_type != BUILTIN_ANY_TYPE &&
+                         (arg_type == expected_type || types_numeric_compatible(expected_type, arg_type)))
+                {
+                    types_match = 1;
+                }
+                else if (expected_type == BUILTIN_ANY_TYPE)
+                {
+                    types_match = 1;
+                }
+
+                if (!types_match)
+                {
+
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, proc_id, cur_arg);
                     ++return_val;

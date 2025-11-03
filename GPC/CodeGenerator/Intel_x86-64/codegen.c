@@ -23,6 +23,124 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/ParseTree/GpcType.h"
+#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+
+/* Helper functions for transitioning from legacy type fields to GpcType */
+
+/* Helper function to check if a node is a record type */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    return hashnode_is_record(node);
+}
+
+/* Helper function to get the primitive type tag from a node */
+static inline int get_primitive_tag_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return -1;
+    
+    /* GpcType should be present for typed nodes */
+    if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        return gpc_type_get_primitive_tag(node->type);
+    }
+    
+    /* Use hashnode helper to get var_type, then map to primitive tags */
+    enum VarType var_type = hashnode_get_var_type(node);
+    switch (var_type)
+    {
+        case HASHVAR_INTEGER: return INT_TYPE;
+        case HASHVAR_LONGINT: return LONGINT_TYPE;
+        case HASHVAR_REAL: return REAL_TYPE;
+        case HASHVAR_BOOLEAN: return BOOL;
+        case HASHVAR_CHAR: return CHAR_TYPE;
+        case HASHVAR_PCHAR: return STRING_TYPE;
+        case HASHVAR_SET: return SET_TYPE;
+        case HASHVAR_FILE: return FILE_TYPE;
+        case HASHVAR_ENUM: return ENUM_TYPE;
+        default: return UNKNOWN_TYPE;
+    }
+}
+
+/* Helper function to check if a node is a file type */
+static inline int node_is_file_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    
+    /* Check GpcType if present */
+    if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        return gpc_type_get_primitive_tag(node->type) == FILE_TYPE;
+    }
+    
+    /* Use hashnode helper */
+    return hashnode_get_var_type(node) == HASHVAR_FILE;
+}
+
+/* Helper function to get RecordType from HashNode */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    return hashnode_get_record_type(node);
+}
+
+/* Helper function to get TypeAlias from HashNode */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    return hashnode_get_type_alias(node);
+}
+
+/* Helper function to determine variable storage size (for stack allocation)
+ * Returns size in bytes, or -1 on error */
+static inline int get_var_storage_size(HashNode_t *node)
+{
+    if (node == NULL)
+        return -1;
+    
+    /* Check GpcType first */
+    if (node->type != NULL)
+    {
+        if (node->type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int tag = gpc_type_get_primitive_tag(node->type);
+            switch (tag)
+            {
+                case LONGINT_TYPE:
+                case REAL_TYPE:
+                case STRING_TYPE:  /* PCHAR */
+                case FILE_TYPE:
+                    return 8;
+                default:
+                    return DOUBLEWORD;  /* 4 bytes for most primitives */
+            }
+        }
+        else if (node->type->kind == TYPE_KIND_POINTER)
+        {
+            return 8;
+        }
+        else if (node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            return 8;  /* Function pointers are 8 bytes */
+        }
+        else if (node->type->kind == TYPE_KIND_RECORD || node->type->kind == TYPE_KIND_ARRAY)
+        {
+            /* These should use sizeof, not this helper */
+            return -1;
+        }
+    }
+    
+    /* Fallback using hashnode helper */
+    enum VarType var_kind = hashnode_get_var_type(node);
+    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
+        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
+        var_kind == HASHVAR_FILE || var_kind == HASHVAR_PROCEDURE)
+    {
+        return 8;
+    }
+    
+    return DOUBLEWORD;
+}
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
@@ -750,9 +868,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
             while(id_list != NULL)
             {
-                if (type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_array)
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_array)
                 {
-                    struct TypeAlias *alias = type_node->type_alias;
                     long long computed_size = 0;
                     int element_size = 0;
                     struct RecordType *element_record = NULL;
@@ -763,7 +881,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         HashNode_t *element_node = NULL;
                         if (FindIdent(&element_node, ctx->symtab, alias->array_element_type_id) >= 0 &&
                             element_node != NULL)
-                            element_record = element_node->record_type;
+                            element_record = get_record_type_from_node(element_node);
                     }
 
                     if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
@@ -775,7 +893,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (element_size <= 0)
                     {
-                        if (type_node->var_type == HASHVAR_REAL || type_node->var_type == HASHVAR_LONGINT)
+                        int prim_tag = get_primitive_tag_from_node(type_node);
+                        if (prim_tag == REAL_TYPE || prim_tag == LONGINT_TYPE)
                             element_size = 8;
                         else
                             element_size = 4;
@@ -799,45 +918,38 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 else
                 {
                     int alloc_size = DOUBLEWORD;
-                    enum VarType var_kind = HASHVAR_INTEGER;
                     HashNode_t *var_info = NULL;
+                    HashNode_t *size_node = NULL;  /* Node to get size from */
+                    
                     if (symtab != NULL)
                     {
                         if (FindIdent(&var_info, symtab, (char *)id_list->cur) >= 0 && var_info != NULL)
-                            var_kind = var_info->var_type;
+                            size_node = var_info;
                     }
-                    if (type_node != NULL)
-                        var_kind = type_node->var_type;
-
-                    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
-                        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
-                        var_kind == HASHVAR_FILE)
+                    /* Use type_node if we don't have specific var_info */
+                    if (size_node == NULL && type_node != NULL)
+                        size_node = type_node;
+                    
+                    /* Get allocation size using helper */
+                    if (size_node != NULL)
                     {
-                        alloc_size = 8;
-                    }
-                    else if (var_kind == HASHVAR_RECORD)
-                    {
-                        struct RecordType *record_desc = NULL;
-                        if (var_info != NULL && var_info->record_type != NULL)
-                            record_desc = var_info->record_type;
-                        else if (type_node != NULL && type_node->record_type != NULL)
-                            record_desc = type_node->record_type;
-
-                        long long record_size = 0;
-                        if (record_desc != NULL &&
-                            codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
-                            record_size > 0)
+                        int size = get_var_storage_size(size_node);
+                        if (size > 0)
                         {
-                            alloc_size = (int)record_size;
+                            alloc_size = size;
                         }
-                        else
+                        else if (node_is_record_type(size_node))
                         {
-                            alloc_size = DOUBLEWORD;
+                            /* For records, get the full struct size */
+                            struct RecordType *record_desc = get_record_type_from_node(size_node);
+                            long long record_size = 0;
+                            if (record_desc != NULL &&
+                                codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
+                                record_size > 0)
+                            {
+                                alloc_size = (int)record_size;
+                            }
                         }
-                    }
-                    else
-                    {
-                        alloc_size = DOUBLEWORD;
                     }
 
                     add_l_x((char *)id_list->cur, alloc_size);
@@ -856,33 +968,17 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             if (arr->type_id != NULL && symtab != NULL)
                 FindIdent(&type_node, symtab, arr->type_id);
 
-            enum VarType arr_var_type = HASHVAR_REAL;
-            if (type_node != NULL)
-                arr_var_type = type_node->var_type;
-            else if (arr->type == INT_TYPE)
-                arr_var_type = HASHVAR_INTEGER;
-            else if (arr->type == LONGINT_TYPE)
-                arr_var_type = HASHVAR_LONGINT;
-            else if (arr->type == BOOL)
-                arr_var_type = HASHVAR_BOOLEAN;
-            else if (arr->type == STRING_TYPE)
-                arr_var_type = HASHVAR_PCHAR;
-            else if (arr->type == CHAR_TYPE)
-                arr_var_type = HASHVAR_CHAR;
-
             struct RecordType *record_desc = NULL;
             if (type_node != NULL)
             {
-                if (type_node->record_type != NULL)
-                    record_desc = type_node->record_type;
-                else if (type_node->type_alias != NULL &&
-                    type_node->type_alias->target_type_id != NULL)
+                record_desc = get_record_type_from_node(type_node);
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (record_desc == NULL && alias != NULL && alias->target_type_id != NULL)
                 {
                     HashNode_t *target_node = NULL;
-                    if (FindIdent(&target_node, symtab,
-                            type_node->type_alias->target_type_id) >= 0 &&
-                        target_node != NULL && target_node->record_type != NULL)
-                        record_desc = target_node->record_type;
+                    if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+                        target_node != NULL)
+                        record_desc = get_record_type_from_node(target_node);
                 }
             }
 
@@ -903,14 +999,35 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
             if (element_size <= 0)
             {
-                if (arr_var_type == HASHVAR_REAL || arr_var_type == HASHVAR_LONGINT ||
-                    arr_var_type == HASHVAR_PCHAR || arr_var_type == HASHVAR_POINTER ||
-                    arr_var_type == HASHVAR_PROCEDURE || arr_var_type == HASHVAR_FILE)
-                    element_size = 8;
-                else if (arr_var_type == HASHVAR_BOOLEAN || arr_var_type == HASHVAR_CHAR)
-                    element_size = 1;
+                /* Fallback: determine element size from type */
+                if (type_node != NULL)
+                {
+                    int size = get_var_storage_size(type_node);
+                    if (size > 0)
+                        element_size = size;
+                    else
+                        element_size = DOUBLEWORD;
+                }
                 else
-                    element_size = DOUBLEWORD;
+                {
+                    /* Use arr->type to determine element size */
+                    switch (arr->type)
+                    {
+                        case LONGINT_TYPE:
+                        case REAL_TYPE:
+                        case STRING_TYPE:
+                        case FILE_TYPE:
+                            element_size = 8;
+                            break;
+                        case BOOL:
+                        case CHAR_TYPE:
+                            element_size = 1;
+                            break;
+                        default:
+                            element_size = DOUBLEWORD;
+                            break;
+                    }
+                }
             }
 
             if (is_dynamic)
@@ -1154,19 +1271,47 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (symtab != NULL)
         FindIdent(&func_node, symtab, func->id);
 
-    if (func_node != NULL && func_node->var_type == HASHVAR_RECORD && func_node->record_type != NULL)
+    /* Check if function returns a record by examining GpcType */
+    if (func_node != NULL && func_node->type != NULL &&
+        func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
-        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, func_node->record_type,
-                &record_return_size) != 0 || record_return_size <= 0 ||
-            record_return_size > INT_MAX)
+        GpcType *return_type = gpc_type_get_return_type(func_node->type);
+        if (return_type != NULL && gpc_type_is_record(return_type))
         {
-            codegen_report_error(ctx,
-                "ERROR: Unable to determine size for record return value of %s.", func->id);
-            record_return_size = 0;
+            struct RecordType *record_desc = gpc_type_get_record(return_type);
+            if (record_desc != NULL &&
+                codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record_desc,
+                    &record_return_size) == 0 && record_return_size > 0 &&
+                record_return_size <= INT_MAX)
+            {
+                has_record_return = 1;
+            }
+            else
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine size for record return value of %s.", func->id);
+                record_return_size = 0;
+            }
         }
-        else
+    }
+    else if (func_node != NULL && hashnode_get_var_type(func_node) == HASHVAR_RECORD)
+    {
+        struct RecordType *record = hashnode_get_record_type(func_node);
+        if (record != NULL)
         {
-            has_record_return = 1;
+            /* Get size from record */
+            if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record,
+                    &record_return_size) != 0 || record_return_size <= 0 ||
+                record_return_size > INT_MAX)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine size for record return value of %s.", func->id);
+                record_return_size = 0;
+            }
+            else
+            {
+                has_record_return = 1;
+            }
         }
     }
 
@@ -1187,12 +1332,38 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int return_size = DOUBLEWORD;
     if (has_record_return)
         return_size = (int)record_return_size;
+    else if (func_node != NULL && func_node->type != NULL &&
+             func_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        /* Get return type from GpcType */
+        GpcType *return_type = gpc_type_get_return_type(func_node->type);
+        if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int tag = gpc_type_get_primitive_tag(return_type);
+            switch (tag)
+            {
+                case LONGINT_TYPE:
+                case REAL_TYPE:
+                case STRING_TYPE:  /* PCHAR */
+                    return_size = 8;
+                    break;
+                case BOOL:
+                    return_size = DOUBLEWORD;
+                    break;
+                default:
+                    return_size = DOUBLEWORD;
+                    break;
+            }
+        }
+    }
     else if (func_node != NULL)
     {
-        if (func_node->var_type == HASHVAR_LONGINT || func_node->var_type == HASHVAR_REAL ||
-            func_node->var_type == HASHVAR_PCHAR)
+        /* Use hashnode helper to get var_type */
+        enum VarType var_type = hashnode_get_var_type(func_node);
+        if (var_type == HASHVAR_LONGINT || var_type == HASHVAR_REAL ||
+            var_type == HASHVAR_PCHAR)
             return_size = 8;
-        else if (func_node->var_type == HASHVAR_BOOLEAN)
+        else if (var_type == HASHVAR_BOOLEAN)
             return_size = DOUBLEWORD;
     }
 
@@ -1345,13 +1516,13 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 {
                     HashNode_t *type_node = NULL;
                     FindIdent(&type_node, symtab, arg_decl->tree_data.var_decl_data.type_id);
-                    if (type_node != NULL && type_node->type_alias != NULL)
+                    if (type_node != NULL)
                     {
-                        type = type_node->type_alias->base_type;
-                        resolved_type_node = type_node;
-                    }
-                    else if (type_node != NULL)
-                    {
+                        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                        if (alias != NULL)
+                        {
+                            type = alias->base_type;
+                        }
                         resolved_type_node = type_node;
                     }
                 }
@@ -1369,10 +1540,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     struct RecordType *record_type_info = NULL;
                     if (!symbol_is_var_param)
                     {
-                        if (arg_symbol != NULL && arg_symbol->record_type != NULL)
-                            record_type_info = arg_symbol->record_type;
-                        else if (resolved_type_node != NULL && resolved_type_node->record_type != NULL)
-                            record_type_info = resolved_type_node->record_type;
+                        if (arg_symbol != NULL)
+                            record_type_info = get_record_type_from_node(arg_symbol);
+                        else if (resolved_type_node != NULL)
+                            record_type_info = get_record_type_from_node(resolved_type_node);
                     }
 
                     if (record_type_info != NULL)
@@ -1456,7 +1627,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int use_64bit = is_var_param ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
-                         type == REAL_TYPE || type == LONGINT_TYPE);
+                         type == REAL_TYPE || type == LONGINT_TYPE || type == PROCEDURE);
                     arg_reg = use_64bit ?
                         get_arg_reg64_num(arg_start_index + arg_num) :
                         get_arg_reg32_num(arg_start_index + arg_num);
@@ -1512,8 +1683,8 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             if (decl->tree_data.var_decl_data.type_id != NULL)
                 FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id);
 
-            if (type_node != NULL && type_node->type_alias != NULL &&
-                type_node->type_alias->is_array && type_node->type_alias->is_open_array)
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL && alias->is_array && alias->is_open_array)
             {
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)
@@ -1537,7 +1708,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             /* Initialize FILE variables to NULL */
-            if (type_node != NULL && type_node->var_type == HASHVAR_FILE)
+            if (type_node != NULL && node_is_file_type(type_node))
             {
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)

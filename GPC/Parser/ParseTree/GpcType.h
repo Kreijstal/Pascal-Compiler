@@ -19,6 +19,9 @@ typedef struct GpcType GpcType;
 // Forward declaration for symbol table (avoid circular dependency)
 struct SymTab;
 
+// Forward declaration for VarType enum (defined in HashTable.h)
+enum VarType;
+
 // Defines what kind of type we are dealing with.
 typedef enum {
     TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
@@ -54,6 +57,10 @@ struct GpcType {
     GpcTypeKind kind;
     int size_in_bytes;      // To be calculated and filled in by the semantic checker.
     int alignment_in_bytes; // For future architecture support.
+    
+    // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
+    // This is owned by the AST, not by GpcType, so should not be freed.
+    struct TypeAlias *type_alias;
 
     // A union to hold the specific details of the type.
     union {
@@ -74,6 +81,13 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type);
 GpcType* create_array_type(GpcType *element_type, int start_index, int end_index);
 GpcType* create_record_type(struct RecordType *record_info);
 
+/* Create GpcType from TypeAlias structure
+ * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
+ * Returns NULL if conversion fails (e.g., unresolvable type reference)
+ * symtab is used to resolve type references (target_type_id, element_type_id, etc.)
+ */
+GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab);
+
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_gpc_type(GpcType *type);
 
@@ -87,5 +101,69 @@ const char* gpc_type_to_string(GpcType *type); // For debugging
  * or 0 if the type is a reference (must not free it).
  */
 GpcType* resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type);
+
+// --- Helper Functions for Accessing Type Information ---
+
+/* Get the size in bytes of a type.
+ * Returns the size, or -1 if size cannot be determined.
+ * For records and arrays, computes the full size including all fields/elements. */
+long long gpc_type_sizeof(GpcType *type);
+
+/* Check if a type is an array type. */
+int gpc_type_is_array(GpcType *type);
+
+/* Check if a type is a record type. */
+int gpc_type_is_record(GpcType *type);
+
+/* Check if a type is a procedure type. */
+int gpc_type_is_procedure(GpcType *type);
+
+/* Get array bounds. Returns 0 on success, -1 if not an array.
+ * start_out and end_out may be NULL if not needed. */
+int gpc_type_get_array_bounds(GpcType *type, int *start_out, int *end_out);
+
+/* Get the record info from a record type.
+ * Returns NULL if not a record type. */
+struct RecordType* gpc_type_get_record(GpcType *type);
+
+/* Get the primitive type tag from a primitive type.
+ * Returns the tag, or -1 if not a primitive type. */
+int gpc_type_get_primitive_tag(GpcType *type);
+
+/* Get the element type of an array.
+ * Returns NULL if not an array type. */
+GpcType* gpc_type_get_array_element_type(GpcType *type);
+
+/* Get formal parameters from a procedure/function type.
+ * Returns NULL if not a procedure type. */
+ListNode_t* gpc_type_get_procedure_params(GpcType *type);
+
+/* Get return type from a function type.
+ * Returns NULL if not a function or if it's a procedure (no return type). */
+GpcType* gpc_type_get_return_type(GpcType *type);
+
+/* Check if an array type is a dynamic/open array.
+ * Returns 1 if it is a dynamic array, 0 otherwise. */
+int gpc_type_is_dynamic_array(GpcType *type);
+
+/* Get element size in bytes for an array type.
+ * Returns the element size, or -1 if not an array or size cannot be determined. */
+long long gpc_type_get_array_element_size(GpcType *type);
+
+/* Create a GpcType from a VarType enum value.
+ * This is a helper for migrating from the legacy type system.
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE require
+ * additional information beyond VarType and will return NULL - caller must use
+ * appropriate create_*_type() function instead.
+ * Returns a new GpcType that caller owns, or NULL for complex types. */
+GpcType* gpc_type_from_var_type(enum VarType var_type);
+
+/* Get the type alias metadata from a GpcType.
+ * Returns NULL if no type alias metadata is attached. */
+struct TypeAlias* gpc_type_get_type_alias(GpcType *type);
+
+/* Set the type alias metadata on a GpcType.
+ * The TypeAlias is owned by the AST, not by GpcType. */
+void gpc_type_set_type_alias(GpcType *type, struct TypeAlias *alias);
 
 #endif // GPC_TYPE_H

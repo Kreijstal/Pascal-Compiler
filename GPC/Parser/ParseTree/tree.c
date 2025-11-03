@@ -7,6 +7,7 @@
 #include "tree_types.h"
 #include "type_tags.h"
 #include "GpcType.h"
+#include "../SemanticCheck/HashTable/HashTable.h"  /* For HashType enum */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -934,6 +935,12 @@ void destroy_tree(Tree_t *tree)
                     destroy_list(alias->enum_literals);
                 if (alias->file_type_id != NULL)
                     free(alias->file_type_id);
+                /* Clean up shared GpcType for enums/sets */
+                if (alias->gpc_type != NULL)
+                {
+                    destroy_gpc_type(alias->gpc_type);
+                    alias->gpc_type = NULL;
+                }
             }
             break;
 
@@ -1174,6 +1181,10 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.typecast_data.expr);
               expr->expr_data.typecast_data.expr = NULL;
           }
+          break;
+
+        case EXPR_ADDR_OF_PROC:
+          /* Nothing to free - procedure_symbol is a reference, not owned */
           break;
 
         default:
@@ -1525,6 +1536,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->enum_literals = NULL;
     alias->is_file = 0;
     alias->file_type = UNKNOWN_TYPE;
+    alias->gpc_type = NULL;  /* Initialize shared GpcType for enums/sets */
     alias->file_type_id = NULL;
 
     if (alias->is_array)
@@ -1639,6 +1651,9 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.mangled_id = NULL;
     new_stmt->stmt_data.procedure_call_data.expr_args = expr_args;
     new_stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+    new_stmt->stmt_data.procedure_call_data.is_call_info_valid = 0;
+    new_stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;  /* Default, will be overwritten */
+    new_stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
 
     return new_stmt;
 }
@@ -1839,6 +1854,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->field_width = NULL;
     expr->field_precision = NULL;
     expr->resolved_type = UNKNOWN_TYPE;
+    expr->resolved_gpc_type = NULL;
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
     expr->record_type = NULL;

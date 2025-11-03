@@ -12,6 +12,7 @@
 #define TABLE_SIZE	211
 
 #include <stdio.h>
+#include <assert.h>
 #include "../../List/List.h"
 #include "../../ParseTree/GpcType.h"
 
@@ -45,12 +46,22 @@ typedef struct HashNode
     char *mangled_id;
     enum HashType hash_type;
     
-    /* NEW: Unified type system - this one pointer replaces var_type, type_alias, 
-     * record_type, is_array, array_start, array_end, and other scattered type info */
+    /* Unified type system - this one pointer replaces var_type, type_alias, 
+     * record_type, is_array, array_start, array_end, and other scattered type info.
+     * 
+     * When type != NULL: GpcType contains all type information
+     * When type == NULL: Node is UNTYPED (untyped procedure parameters in Pascal)
+     * 
+     * ALL type information queries MUST use helper functions:
+     * - hashnode_get_var_type()
+     * - hashnode_get_record_type()
+     * - hashnode_get_type_alias()
+     * - hashnode_is_array()
+     * - hashnode_get_array_bounds()
+     * - hashnode_get_element_size()
+     * - hashnode_is_dynamic_array()
+     */
     GpcType *type;
-    
-    /* Keep args for now for declared procedures/functions */
-    ListNode_t *args; /* NULL when no args (or not applicable to given type) */
 
     /* Symbol table resources */
     int referenced;
@@ -60,17 +71,6 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
-    
-    /* OLD fields kept temporarily for backward compatibility during migration
-     * These will be removed in later phases */
-    enum VarType var_type;
-    struct RecordType *record_type;
-    int is_array;
-    int array_start;
-    int array_end;
-    int element_size;
-    int is_dynamic_array;
-    struct TypeAlias *type_alias;
 
 } HashNode_t;
 
@@ -87,12 +87,7 @@ HashTable_t *InitHashTable();
 /* Adds an identifier to the table */
 /* Returns 0 if successfully added, 1 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
-    enum HashType hash_type, ListNode_t *args, GpcType *type);
-
-/* DEPRECATED: Old signature kept for backward compatibility during migration */
-int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
-    struct TypeAlias *type_alias);
+    enum HashType hash_type, GpcType *type);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
@@ -112,6 +107,100 @@ void DestroyBuiltin(HashNode_t *);
 
 /* Prints all entries in the HashTable */
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
+
+/* Check if node represents an array */
+static inline int hashnode_is_array(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type != NULL) {
+        return gpc_type_is_array(node->type);
+    }
+    /* UNTYPED nodes are not arrays */
+    return 0;
+}
+
+/* Helper functions to query HashNode type information via GpcType */
+
+/* Check if node represents a record */
+static inline int hashnode_is_record(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type != NULL) {
+        return gpc_type_is_record(node->type);
+    }
+    /* UNTYPED nodes are not records */
+    return 0;
+}
+
+/* Check if node represents a dynamic array */
+static inline int hashnode_is_dynamic_array(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        return gpc_type_is_dynamic_array(node->type);
+    }
+    /* No fallback needed - is_dynamic_array field has been removed */
+    /* Dynamic array info must come from GpcType */
+    return 0;
+}
+
+/* Get array bounds from node */
+static inline void hashnode_get_array_bounds(const HashNode_t *node, int *start, int *end)
+{
+    if (node == NULL) {
+        if (start) *start = 0;
+        if (end) *end = 0;
+        return;
+    }
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        gpc_type_get_array_bounds(node->type, start, end);
+        return;
+    }
+    /* No fallback - array_start/end fields have been removed */
+    /* Array bounds must come from GpcType */
+    if (start) *start = 0;
+    if (end) *end = 0;
+}
+
+/* Get element size from array node */
+static inline int hashnode_get_element_size(const HashNode_t *node)
+{
+    if (node == NULL) return 0;
+    if (node->type != NULL && gpc_type_is_array(node->type)) {
+        GpcType *element_type = gpc_type_get_array_element_type(node->type);
+        if (element_type != NULL) {
+            return gpc_type_sizeof(element_type);
+        }
+    }
+    /* No fallback - element_size field has been removed */
+    /* Element size must come from GpcType */
+    return 0;
+}
+
+/* Get record type from node */
+static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node)
+{
+    if (node == NULL) return NULL;
+    if (node->type != NULL && gpc_type_is_record(node->type)) {
+        return gpc_type_get_record(node->type);
+    }
+    /* UNTYPED nodes have no record type */
+    return NULL;
+}
+
+/* Get type alias from node */
+static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
+{
+    if (node == NULL) return NULL;
+    if (node->type != NULL) {
+        return gpc_type_get_type_alias(node->type);
+    }
+    /* UNTYPED nodes have no type alias */
+    return NULL;
+}
+
+/* Get VarType equivalent from node (for legacy code compatibility) */
+enum VarType hashnode_get_var_type(const HashNode_t *node);
 
 /* The well-known symbol hash function
  * -----------------------------------------------------------------------------

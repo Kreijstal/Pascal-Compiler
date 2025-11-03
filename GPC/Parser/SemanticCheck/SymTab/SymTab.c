@@ -14,6 +14,8 @@
 #include "SymTab.h"
 #include "../HashTable/HashTable.h"
 #include "../../List/List.h"
+#include "../../ParseTree/GpcType.h"
+#include "../../ParseTree/type_tags.h"
 
 /* Initializes the SymTab with stack_head pointing to NULL */
 SymTab_t *InitSymTab()
@@ -26,34 +28,6 @@ SymTab_t *InitSymTab()
     new_symtab->builtins = InitHashTable();
 
     return new_symtab;
-}
-
-/* Adds a built-in procedure call */
-/* NOTE: Built-ins reflected on all scope levels */
-/* Returns 1 if failed, 0 otherwise */
-int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    return AddIdentToTable_Legacy(symtab->builtins, id, NULL, HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args, NULL, NULL);
-}
-
-int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    return AddIdentToTable_Legacy(symtab->builtins, id, NULL, return_type, HASHTYPE_FUNCTION, NULL, NULL, NULL);
-}
-
-/* Adds a built-in type */
-int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    return AddIdentToTable_Legacy(symtab->builtins, id, NULL, var_type, HASHTYPE_TYPE, NULL, NULL, NULL);
 }
 
 /* Pushes a new scope onto the stack (FIFO) */
@@ -71,44 +45,6 @@ void PushScope(SymTab_t *symtab)
             CreateListNode(new_hash, LIST_UNSPECIFIED));
 }
 
-/* Pushes a new variable onto the current scope (head) */
-int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_VAR, NULL, NULL, NULL);
-}
-
-/* Pushes a new array onto the current scope (head) */
-int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int start, int end, int element_size)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    int result = AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL, NULL);
-    if (result == 0)
-    {
-        HashNode_t *node = FindIdentInTable(cur_hash, id);
-        if (node != NULL)
-        {
-            node->is_array = 1;
-            node->array_start = start;
-            node->array_end = end;
-            node->element_size = element_size;
-            node->is_dynamic_array = (end < start);
-        }
-    }
-    return result;
-}
-
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
 {
     assert(symtab != NULL);
@@ -118,10 +54,44 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
     HashTable_t *cur_hash;
 
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    enum VarType stored_type = HASHVAR_INTEGER;
+    
+    /* Determine type based on value range and create GpcType */
+    int type_tag = INT_TYPE;
     if (value > INT_MAX || value < INT_MIN)
-        stored_type = HASHVAR_LONGINT;
-    int result = AddIdentToTable_Legacy(cur_hash, id, NULL, stored_type, HASHTYPE_CONST, NULL, NULL, NULL);
+        type_tag = LONGINT_TYPE;
+    
+    GpcType *gpc_type = create_primitive_type(type_tag);
+    if (gpc_type == NULL)
+        return 1; /* Failed to create type */
+    
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, gpc_type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(cur_hash, id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_int_value = value;
+        }
+    }
+    else
+    {
+        /* Failed to add, clean up GpcType */
+        destroy_gpc_type(gpc_type);
+    }
+    return result;
+}
+
+/* Pushes a constant with explicit GpcType onto the current scope (head) */
+int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+    assert(type != NULL && "GpcType must be provided for typed constant");
+
+    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(cur_hash, id);
@@ -136,46 +106,6 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
 
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, mangled_id, HASHVAR_PROCEDURE, HASHTYPE_PROCEDURE, args, NULL, NULL);
-}
-
-/* Pushes a new function onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum VarType var_type, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, mangled_id, var_type, HASHTYPE_FUNCTION, args, NULL, NULL);
-}
-
-/* Pushes a new function return type var onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_FUNCTION_RETURN, args, NULL, NULL);
-}
-
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
@@ -256,10 +186,32 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     assert(symtab->stack_head != NULL);
     assert(id != NULL);
 
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
+    /* Create GpcType from legacy parameters */
+    GpcType *gpc_type = NULL;
+    
+    if (record_type != NULL)
+    {
+        /* Create record type */
+        gpc_type = create_record_type(record_type);
+    }
+    else if (type_alias != NULL)
+    {
+        /* Use the comprehensive TypeAlias → GpcType converter
+         * This handles ALL cases: arrays, pointers, sets, enums, files, primitives */
+        gpc_type = create_gpc_type_from_type_alias(type_alias, symtab);
+        
+        /* If conversion failed (e.g., forward reference), we'll handle it below */
+    }
+    else if (var_type != HASHVAR_UNTYPED)
+    {
+        /* Create from var_type */
+        gpc_type = gpc_type_from_var_type(var_type);
+    }
+    
+    /* All cases should create a GpcType now. If gpc_type is NULL, it means:
+     * - Truly UNTYPED (var_type == HASHVAR_UNTYPED)
+     * - This is valid and we use NULL GpcType */
+    return PushTypeOntoScope_Typed(symtab, id, gpc_type);
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING GpcType ===== */
@@ -273,7 +225,8 @@ int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
 
     HashTable_t *cur_hash;
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_VAR, NULL, type);
+    
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_VAR, type);
 }
 
 /* Pushes a new array with a GpcType onto the current scope */
@@ -285,7 +238,7 @@ int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
 
     HashTable_t *cur_hash;
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_ARRAY, NULL, type);
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_ARRAY, type);
 }
 
 /* Pushes a new procedure with a GpcType onto the current scope */
@@ -298,13 +251,7 @@ int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, G
     HashTable_t *cur_hash;
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
     
-    // Extract args from the procedure type if present
-    ListNode_t *args = NULL;
-    if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
-        args = type->info.proc_info.params;
-    }
-    
-    return AddIdentToTable(cur_hash, id, mangled_id, HASHTYPE_PROCEDURE, args, type);
+    return AddIdentToTable(cur_hash, id, mangled_id, HASHTYPE_PROCEDURE, type);
 }
 
 /* Pushes a new function with a GpcType onto the current scope */
@@ -317,13 +264,19 @@ int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, Gp
     HashTable_t *cur_hash;
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
     
-    // Extract args from the procedure type if present
-    ListNode_t *args = NULL;
-    if (type != NULL && type->kind == TYPE_KIND_PROCEDURE) {
-        args = type->info.proc_info.params;
-    }
-    
-    return AddIdentToTable(cur_hash, id, mangled_id, HASHTYPE_FUNCTION, args, type);
+    return AddIdentToTable(cur_hash, id, mangled_id, HASHTYPE_FUNCTION, type);
+}
+
+/* Pushes a new function return value with a GpcType onto the current scope */
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+
+    HashTable_t *cur_hash;
+    cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_FUNCTION_RETURN, type);
 }
 
 /* Pushes a new type declaration with a GpcType onto the current scope */
@@ -335,7 +288,41 @@ int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
 
     HashTable_t *cur_hash;
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_TYPE, NULL, type);
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_TYPE, type);
+}
+
+/* Adds a built-in type with a GpcType */
+int AddBuiltinType_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(type != NULL);
+
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_TYPE, type);
+}
+
+/* Adds a built-in procedure with a GpcType */
+int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(type != NULL);
+    assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin proc must have procedure type");
+    assert(type->info.proc_info.return_type == NULL && "Procedure must not have return type");
+
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_BUILTIN_PROCEDURE, type);
+}
+
+/* Adds a built-in function with a GpcType */
+int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(type != NULL);
+    assert(type->kind == TYPE_KIND_PROCEDURE && "Builtin function must have procedure type");
+    assert(type->info.proc_info.return_type != NULL && "Function must have return type");
+
+    return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
 }
 
 /* Pops the current scope */

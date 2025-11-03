@@ -8,6 +8,7 @@
 #include "../ParseTree/type_tags.h"
 #include "SemChecks/SemCheck_expr.h"
 #include "SymTab/SymTab.h"
+#include "../ParseTree/GpcType.h"
 
 // Helper to free a list of integers
 static void DestroyIntList(ListNode_t* list) {
@@ -50,6 +51,31 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
     }
 }
 
+// Helper to get VarType from a type HashNode, preferring GpcType
+static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
+    if (type_node == NULL)
+        return HASHVAR_UNTYPED;
+    
+    // If GpcType is available, extract VarType from it
+    if (type_node->type != NULL) {
+        if (type_node->type->kind == TYPE_KIND_PRIMITIVE) {
+            int tag = gpc_type_get_primitive_tag(type_node->type);
+            return ConvertParserTypeToVarType(tag);
+        } else if (type_node->type->kind == TYPE_KIND_POINTER) {
+            return HASHVAR_POINTER;
+        } else if (type_node->type->kind == TYPE_KIND_RECORD) {
+            return HASHVAR_RECORD;
+        } else if (type_node->type->kind == TYPE_KIND_ARRAY) {
+            return HASHVAR_ARRAY;
+        } else if (type_node->type->kind == TYPE_KIND_PROCEDURE) {
+            return HASHVAR_PROCEDURE;
+        }
+    }
+    
+    // Fallback to hashnode helper
+    return hashnode_get_var_type(type_node);
+}
+
 // Helper function to flatten argument lists into a list of HASHVAR_ types.
 static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab) { // <-- Add symtab
     assert(symtab != NULL);
@@ -71,7 +97,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 // It's a custom type, look it up in the symbol table
                 HashNode_t* type_node;
                 if (FindIdent(&type_node, symtab, decl_tree->tree_data.var_decl_data.type_id) != -1 && type_node->hash_type == HASHTYPE_TYPE) {
-                    resolved_type = type_node->var_type;
+                    resolved_type = GetVarTypeFromTypeNode(type_node);
                 }
             } else {
                 // It's a built-in type, convert from parser token to semantic type

@@ -724,12 +724,12 @@ static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
    InputState state; save_input_state(in, &state);
    int start_pos_ws = in->start;
    char c = read1(in);
-   if (!isdigit(c)) {
+   if (!isdigit((unsigned char)c)) {
        restore_input_state(in, &state);
        char* unexpected = strndup(in->buffer + state.start, 10);
        return make_failure_v2(in, parser_name, strdup("Expected a digit."), unexpected);
    }
-   while (isdigit(c = read1(in))) ;
+   while (isdigit((unsigned char)(c = read1(in)))) ;
    if (c != EOF) in->start--;
    int len = in->start - start_pos_ws;
    char * text = (char*)safe_malloc(len + 1);
@@ -747,12 +747,12 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    InputState state; save_input_state(in, &state);
    int start_pos_ws = in->start;
    char c = read1(in);
-   if (c != '_' && !isalpha(c)) {
+   if (c != '_' && !isalpha((unsigned char)c)) {
        restore_input_state(in, &state);
        char* unexpected = strndup(in->buffer + state.start, 10);
        return make_failure_v2(in, parser_name, strdup("Expected identifier."), unexpected);
    }
-   while (isalnum(c = read1(in)) || c == '_') ;
+   while (isalnum((unsigned char)(c = read1(in))) || c == '_') ;
    if (c != EOF) in->start--;
    int len = in->start - start_pos_ws;
    char * text = (char*)safe_malloc(len + 1);

@@ -521,7 +521,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
             inst_list = codegen_pass_arguments(
                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_node, 1);
+                func_node ? func_node->type : NULL, 
+                src_expr->expr_data.function_call_data.id, 1);
 
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                 src_expr->expr_data.function_call_data.mangled_id);
@@ -1664,7 +1665,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 0);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 
+        stmt->stmt_data.procedure_call_data.id, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)
@@ -1760,6 +1762,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     {
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
+
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
         if (codegen_had_error(ctx) || value_reg == NULL)
@@ -1826,6 +1829,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else if(nonlocal_flag() == 1)
         {
+
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
             snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
         }
@@ -2092,26 +2096,143 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
-    HashNode_t *proc_node = stmt->stmt_data.procedure_call_data.resolved_proc;
-
-    if(proc_node == NULL)
+    
+    /* CRITICAL FIX: Use cached information from AST instead of HashNode pointer.
+     * The resolved_proc pointer may point to freed memory if the HashNode was in a scope
+     * that has been popped (e.g., nested procedures' parameters/local variables).
+     * 
+     * During semantic checking, we now cache the essential information (hash_type and GpcType)
+     * directly in the AST, avoiding the need to dereference potentially freed HashNode pointers.
+     */
+    int call_hash_type;  /* HashType enum value */
+    struct GpcType *call_gpc_type;
+    
+    if (stmt->stmt_data.procedure_call_data.is_call_info_valid)
     {
-        FindIdent(&proc_node, symtab, unmangled_name);
-        stmt->stmt_data.procedure_call_data.resolved_proc = proc_node;
+        /* Use cached information from semantic checking */
+        call_hash_type = stmt->stmt_data.procedure_call_data.call_hash_type;
+        call_gpc_type = stmt->stmt_data.procedure_call_data.call_gpc_type;
     }
     else
     {
-        /* proc_node already resolved, but we still need the scope level */
-        HashNode_t *temp_node = NULL;
-        FindIdent(&temp_node, symtab, unmangled_name);
+        /* Fallback: look up the symbol (for old code paths or if semantic checker didn't set it) */
+        HashNode_t *proc_node = NULL;
+        FindIdent(&proc_node, symtab, unmangled_name);
+        if (proc_node != NULL)
+        {
+            call_hash_type = proc_node->hash_type;
+            call_gpc_type = proc_node->type;
+        }
+        else
+        {
+            /* Symbol not found - this is an error that should have been caught in semantic checking */
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - procedure %s not found during code generation. "
+                "This should have been caught during semantic checking.",
+                unmangled_name ? unmangled_name : "(unknown)");
+            return inst_list;
+        }
     }
 
-    if(proc_node != NULL && proc_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    if(call_hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
-    else
+    
+    /* Check if this is an indirect call through a procedure variable */
+    /* For indirect calls (procedure variables/parameters), we need to generate an indirect call.
+     * 
+     * IMPORTANT: We must check hash_type FIRST, before checking type information.
+     * On some platforms (e.g., Cygwin), type information may not be properly set,
+     * but hash_type is always reliable for distinguishing variables from procedures.
+     */
+    int is_indirect_call = 0;
+    
+    /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
+     * It MUST be an indirect call, regardless of whether type info is present. */
+    if (call_hash_type == HASHTYPE_VAR)
     {
+        is_indirect_call = 1;
+    }
+    /* Case 2: If hash_type is PROCEDURE but type info indicates it's a procedure type,
+     * and either proc_name is NULL or doesn't match, treat as indirect call.
+     * This handles corrupted or improperly resolved procedure nodes. */
+    else if (call_hash_type == HASHTYPE_PROCEDURE &&
+             call_gpc_type != NULL && 
+             call_gpc_type->kind == TYPE_KIND_PROCEDURE &&
+             proc_name == NULL)
+    {
+        is_indirect_call = 1;
+    }
+    
+    if (is_indirect_call)
+    {
+        /* INDIRECT CALL LOGIC */
+        
+        /* Validate that we have a procedure name for the indirect call */
+        if (unmangled_name == NULL)
+        {
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - indirect call with NULL procedure name. "
+                "Please report this bug with your source code.");
+            return inst_list;
+        }
+
+        /* 1. Create a temporary expression to evaluate the procedure variable */
+        struct Expression *callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
+        callee_expr->resolved_type = PROCEDURE;
+        
+        /* 2. Generate code to load the procedure's address into a register */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_evaluate_expr(callee_expr, inst_list, ctx, &addr_reg);
+        destroy_expr(callee_expr);
+        
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+        {
+            return inst_list;
+        }
+        
+        /* 3. Prevent clobbering %rax. Move the address to a safe register if needed */
+        const char *call_reg_name = addr_reg->bit_64;
+        if (call_reg_name == NULL)
+        {
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - NULL register name in indirect call. "
+                "Please report this bug with your source code.");
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+        if (strcmp(call_reg_name, "%rax") == 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            call_reg_name = "%r11";
+        }
+        
+        /* 4. Pass arguments as usual */
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 
+            unmangled_name, 0);
+        
+        /* 5. Zero out %eax for varargs ABI compatibility */
+        inst_list = codegen_vect_reg(inst_list, 0);
+        
+        /* 6. Perform the indirect call */
+        snprintf(buffer, sizeof(buffer), "\tcall\t*%s\n", call_reg_name);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* 7. Cleanup */
+        free_reg(get_reg_stack(), addr_reg);
+        free_arg_regs();
+        
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (indirect call)\n", __func__);
+        #endif
+        return inst_list;
+    }
+    else if (call_hash_type == HASHTYPE_PROCEDURE)
+    {
+        /* DIRECT CALL LOGIC */
+
         int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
         int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
         int callee_depth = 0;
@@ -2166,7 +2287,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
         
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, proc_node, 0);
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 
+            unmangled_name, 0);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
@@ -2176,6 +2298,42 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         #endif
         return inst_list;
     }
+    
+    /* If we reach here, it's a compiler bug - this should never happen.
+     * In semantic checking, we should have caught any invalid procedure calls.
+     * If we get here, it means:
+     * 1. proc_node is NULL (semantic checker failed to resolve the symbol), OR
+     * 2. proc_node has an unexpected hash_type (not VAR, PROCEDURE, or BUILTIN)
+     * 
+     * This indicates a serious internal error, so we assert in debug builds
+     * and report a fatal error in release builds. */
+    
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("FATAL: Reached unreachable code in %s - this is a compiler bug!\n", __func__);
+    if (proc_node != NULL) {
+        CODEGEN_DEBUG("  proc_name: %s\n", proc_name ? proc_name : "(null)");
+        CODEGEN_DEBUG("  unmangled_name: %s\n", unmangled_name ? unmangled_name : "(null)");
+        CODEGEN_DEBUG("  hash_type: %d (expected VAR=%d, PROCEDURE=%d, or BUILTIN=%d)\n", 
+                     proc_node->hash_type, HASHTYPE_VAR, HASHTYPE_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE);
+        CODEGEN_DEBUG("  type: %p\n", (void*)proc_node->type);
+        if (proc_node->type != NULL) {
+            CODEGEN_DEBUG("  type->kind: %d\n", proc_node->type->kind);
+        }
+    } else {
+        CODEGEN_DEBUG("  proc_node is NULL - semantic checker should have caught this!\n");
+    }
+    #endif
+    
+    /* In debug builds, assert to catch this bug during development */
+    assert(0 && "Unreachable: procedure call with unexpected hash_type or NULL proc_node");
+    
+    /* In release builds, report a fatal error and stop code generation */
+    codegen_report_error(ctx,
+        "FATAL: Internal compiler error in procedure call code generation for '%s'. "
+        "Please report this bug with your source code.",
+        unmangled_name ? unmangled_name : "(unknown)");
+    
+    return inst_list;
 }
 
 /* Code generation for if-then-else statements */
