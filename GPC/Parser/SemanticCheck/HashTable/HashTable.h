@@ -64,11 +64,12 @@ typedef struct HashNode
      * Helper functions should prefer GpcType when available */
     enum VarType var_type;
     struct RecordType *record_type;
-    int is_array;
+    struct TypeAlias *type_alias;  /* Still needed for legacy API - some type aliases not yet in GpcType */
+    /* REMOVED: is_array - use hashnode_is_array() helper instead */
     /* REMOVED: array_start, array_end - use hashnode_get_array_bounds() helper instead */
     /* REMOVED: element_size - use hashnode_get_element_size() helper instead */
     /* REMOVED: is_dynamic_array - use hashnode_is_dynamic_array() helper instead */
-    struct TypeAlias *type_alias;
+
 
 } HashNode_t;
 
@@ -122,8 +123,9 @@ static inline int hashnode_is_array(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_array(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
-    return node->is_array;
+    /* No fallback - is_array field has been removed */
+    /* Array status must come from GpcType */
+    return 0;
 }
 
 /* Check if node represents a record */
@@ -201,6 +203,7 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
         return gpc_type_get_type_alias(node->type);
     }
     /* TODO: Remove fallback once all HashNodes have GpcType */
+    /* For now, needed because legacy API still creates HashNodes without GpcType */
     return node->type_alias;
 }
 

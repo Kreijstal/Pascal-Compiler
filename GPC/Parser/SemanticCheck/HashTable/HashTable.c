@@ -413,7 +413,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->var_type = HASHVAR_UNTYPED;
         hash_node->record_type = NULL;
         hash_node->type_alias = NULL;
-        hash_node->is_array = 0;
     }
     else
     {
@@ -421,7 +420,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->var_type = var_type;
         hash_node->record_type = record_type;
         hash_node->type_alias = type_alias;
-        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
     }
     
     return hash_node;
