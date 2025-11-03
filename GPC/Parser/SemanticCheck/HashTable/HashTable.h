@@ -135,7 +135,7 @@ static inline int hashnode_is_record(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_record(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
+    /* Fallback for legacy nodes without GpcType (typically TYPE declarations) */
     return node->var_type == HASHVAR_RECORD;
 }
 
@@ -191,7 +191,7 @@ static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node
     if (node->type != NULL && gpc_type_is_record(node->type)) {
         return gpc_type_get_record(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
+    /* Fallback for legacy nodes without GpcType (typically TYPE declarations) */
     return node->record_type;
 }
 
@@ -202,8 +202,9 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_get_type_alias(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
-    /* For now, needed because legacy API still creates HashNodes without GpcType */
+    /* Fallback for legacy nodes without GpcType */
+    /* Valid cases: HASHTYPE_TYPE nodes with type_alias, or UNTYPED nodes */
+    /* (Type alias nodes are created by legacy API when processing type declarations) */
     return node->type_alias;
 }
 
