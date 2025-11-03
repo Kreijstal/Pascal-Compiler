@@ -4002,10 +4002,10 @@ void test_variant_record_field_attributes(void) {
     free(input);
 }
 
-void test_pascal_interspersed_declarations(void) {
+void test_pascal_interspersed_decls_in_procedure(void) {
     combinator_t* p = get_program_parser();
     input_t* input = new_input();
-    char* program = load_pascal_file("../../../../tests/test_cases/interspersed_declarations.p");
+    char* program = load_pascal_file("../../../../tests/test_cases/interspersed_decls_in_procedure.p");
     TEST_ASSERT(program != NULL);
     if (!program) {
         free(input);
@@ -4160,6 +4160,6 @@ TEST_LIST = {
     { "test_whitespace_around_ifdef_condition", test_whitespace_around_ifdef_condition },
     { "test_deprecated_on_const", test_deprecated_on_const },
     { "test_variant_record_field_attributes", test_variant_record_field_attributes },
-    { "test_pascal_interspersed_declarations", test_pascal_interspersed_declarations },
+    { "test_pascal_interspersed_decls_in_procedure", test_pascal_interspersed_decls_in_procedure },
     { NULL, NULL }
 };

@@ -1054,8 +1054,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Forward declaration for nested functions - these will refer to working_function and working_procedure below
     combinator_t* nested_function_decl = lazy_owned(nested_proc_or_func);
 
-    // Allow local CONST/TYPE/VAR sections to be interspersed with nested functions/procedures
-    combinator_t* local_declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
+    // Allow local CONST/TYPE/VAR sections to be interspersed with nested function/procedure declarations
+    combinator_t* local_declaration_or_nested_function = multi(new_combinator(), PASCAL_T_NONE,
         const_section,
         type_section,
         local_var_section,
@@ -1064,7 +1064,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     combinator_t* nested_function_body = seq(new_combinator(), PASCAL_T_NONE,
-        many(local_declaration_or_section),         // zero or more local decls/sections in any order
+        many(local_declaration_or_nested_function), // zero or more local sections or nested functions
         lazy(stmt_parser),                          // begin-end block handled by statement parser
         NULL
     );
