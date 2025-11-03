@@ -26,7 +26,6 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
                                    GpcType* type, enum VarType var_type,
                                    struct RecordType* record_type, 
                                    struct TypeAlias* type_alias);
-static void set_var_type_from_gpctype(HashNode_t* hash_node, GpcType* type);
 static int is_procedure_or_function(enum HashType hash_type);
 static int check_collision_allowance(HashNode_t* existing_node, enum HashType new_hash_type);
 
@@ -401,54 +400,20 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Handle type information based on which API is being used */
     if (type != NULL)
     {
-        /* New API with GpcType - derive var_type from GpcType */
-        set_var_type_from_gpctype(hash_node, type);
+        /* New API with GpcType - NO legacy field population
+         * Legacy fields remain at default values (0/NULL)
+         * All type information accessed through GpcType */
         
-        /* Copy metadata from GpcType to legacy fields */
-        hash_node->type_alias = type->type_alias;  // May be NULL
+        /* Assert that we're not accidentally using both APIs */
+        assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
+        assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
+        assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
         
-        /* For record types, copy record_info from GpcType */
-        if (type->kind == TYPE_KIND_RECORD)
-        {
-            hash_node->record_type = type->info.record_info;
-        }
-        else
-        {
-            hash_node->record_type = NULL;
-        }
-        
-        /* For array types, populate legacy array fields from GpcType */
-        if (type->kind == TYPE_KIND_ARRAY)
-        {
-            hash_node->is_array = 1;
-            hash_node->array_start = type->info.array_info.start_index;
-            hash_node->array_end = type->info.array_info.end_index;
-            hash_node->is_dynamic_array = (type->info.array_info.end_index < type->info.array_info.start_index);
-            
-            /* Calculate element size */
-            GpcType *element_type = type->info.array_info.element_type;
-            if (element_type != NULL)
-            {
-                long long elem_size = gpc_type_sizeof(element_type);
-                hash_node->element_size = (elem_size > 0) ? (int)elem_size : 0;
-            }
-            else
-            {
-                hash_node->element_size = 0;
-            }
-        }
-        else
-        {
-            /* Not an array - set array fields to defaults */
-            hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-            hash_node->array_start = 0;
-            hash_node->array_end = 0;
-            hash_node->element_size = 0;
-            hash_node->is_dynamic_array = 0;
-        }
+        /* Legacy fields intentionally left at defaults - use GpcType instead */
     }
     else
     {
+        #ifdef ENABLE_LEGACY_FIELDS_PHASE6
         /* Legacy API - use provided values */
         hash_node->var_type = var_type;
         hash_node->record_type = record_type;
@@ -460,76 +425,14 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         hash_node->array_end = 0;
         hash_node->element_size = 0;
         hash_node->is_dynamic_array = 0;
+        #else
+        /* Phase 6: Legacy fields removed - this path should not be used */
+        (void)var_type; (void)record_type; (void)type_alias; /* Suppress unused warnings */
+        assert(0 && "Legacy API path - should use typed API with GpcType");
+        #endif
     }
     
     return hash_node;
-}
-
-/* Set var_type field based on GpcType information */
-static void set_var_type_from_gpctype(HashNode_t* hash_node, GpcType* type)
-{
-    assert(hash_node != NULL);
-    assert(type != NULL);
-    
-    hash_node->var_type = HASHVAR_UNTYPED;  // Default
-    
-    if (type->kind == TYPE_KIND_PROCEDURE)
-    {
-        if (type->info.proc_info.return_type == NULL)
-        {
-            /* It's a procedure (no return type) */
-            hash_node->var_type = HASHVAR_PROCEDURE;
-        }
-        else
-        {
-            /* It's a function (has return type) */
-            GpcType *return_type = type->info.proc_info.return_type;
-            if (return_type->kind == TYPE_KIND_PRIMITIVE)
-            {
-                hash_node->var_type = primitive_tag_to_var_type(return_type->info.primitive_type_tag);
-            }
-            else if (return_type->kind == TYPE_KIND_POINTER)
-            {
-                hash_node->var_type = HASHVAR_POINTER;
-            }
-            else if (return_type->kind == TYPE_KIND_RECORD)
-            {
-                hash_node->var_type = HASHVAR_RECORD;
-            }
-            else if (return_type->kind == TYPE_KIND_ARRAY)
-            {
-                hash_node->var_type = HASHVAR_ARRAY;
-            }
-        }
-    }
-    else if (type->kind == TYPE_KIND_PRIMITIVE)
-    {
-        /* For non-procedure types, set var_type directly */
-        hash_node->var_type = primitive_tag_to_var_type(type->info.primitive_type_tag);
-    }
-    else if (type->kind == TYPE_KIND_POINTER)
-    {
-        hash_node->var_type = HASHVAR_POINTER;
-    }
-    else if (type->kind == TYPE_KIND_RECORD)
-    {
-        hash_node->var_type = HASHVAR_RECORD;
-    }
-    else if (type->kind == TYPE_KIND_ARRAY)
-    {
-        /* For arrays, set var_type to the element type for backward compatibility
-         * with code that queries var_type to determine element type */
-        GpcType *element_type = type->info.array_info.element_type;
-        if (element_type != NULL && element_type->kind == TYPE_KIND_PRIMITIVE)
-        {
-            hash_node->var_type = primitive_tag_to_var_type(element_type->info.primitive_type_tag);
-        }
-        else
-        {
-            /* For non-primitive element types, keep HASHVAR_ARRAY */
-            hash_node->var_type = HASHVAR_ARRAY;
-        }
-    }
 }
 
 /* Check if a hash type represents a procedure or function */

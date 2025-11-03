@@ -42,6 +42,10 @@ struct TypeAlias
     int is_file;
     int file_type;
     char *file_type_id;
+    
+    /* GpcType for this type alias - used for enums and sets to provide a shared
+     * type that all literals/members reference. Owned by this structure. */
+    struct GpcType *gpc_type;
 };
 
 struct RecordType;

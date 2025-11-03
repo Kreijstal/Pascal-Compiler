@@ -94,6 +94,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
 
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
     int result = AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL, NULL);
+    #ifdef ENABLE_LEGACY_FIELDS_PHASE6
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(cur_hash, id);
@@ -106,6 +107,7 @@ int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int st
             node->is_dynamic_array = (end < start);
         }
     }
+    #endif
     return result;
 }
 
@@ -335,6 +337,18 @@ int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, Gp
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
     
     return AddIdentToTable(cur_hash, id, mangled_id, HASHTYPE_FUNCTION, type);
+}
+
+/* Pushes a new function return value with a GpcType onto the current scope */
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+
+    HashTable_t *cur_hash;
+    cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_FUNCTION_RETURN, type);
 }
 
 /* Pushes a new type declaration with a GpcType onto the current scope */

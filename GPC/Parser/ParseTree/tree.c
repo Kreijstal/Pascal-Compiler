@@ -935,6 +935,12 @@ void destroy_tree(Tree_t *tree)
                     destroy_list(alias->enum_literals);
                 if (alias->file_type_id != NULL)
                     free(alias->file_type_id);
+                /* Clean up shared GpcType for enums/sets */
+                if (alias->gpc_type != NULL)
+                {
+                    destroy_gpc_type(alias->gpc_type);
+                    alias->gpc_type = NULL;
+                }
             }
             break;
 
@@ -1530,6 +1536,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->enum_literals = NULL;
     alias->is_file = 0;
     alias->file_type = UNKNOWN_TYPE;
+    alias->gpc_type = NULL;  /* Initialize shared GpcType for enums/sets */
     alias->file_type_id = NULL;
 
     if (alias->is_array)

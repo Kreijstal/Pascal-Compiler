@@ -44,6 +44,38 @@ int semcheck_id_not_main(char *id)
     return 0;
 }
 
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL)
+    {
+        return gpc_type_get_type_alias(node->type);
+    }
+    
+    /* Fall back to legacy field for nodes without GpcType */
+    return node->type_alias;
+}
+
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (node->type != NULL && gpc_type_is_record(node->type))
+    {
+        return gpc_type_get_record(node->type);
+    }
+    
+    /* Fall back to legacy field */
+    return node->record_type;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
@@ -250,33 +282,40 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                 struct TypeAlias *alias_info = &tree->tree_data.type_decl_data.info.alias;
                 if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
                 {
-                    int ordinal = 0;
-                    ListNode_t *literal_node = alias_info->enum_literals;
-                    while (literal_node != NULL)
+                    /* Create ONE shared GpcType for this enum type if not already created */
+                    if (alias_info->gpc_type == NULL)
                     {
-                        if (literal_node->cur != NULL)
+                        alias_info->gpc_type = create_primitive_type(ENUM_TYPE);
+                        if (alias_info->gpc_type == NULL)
                         {
-                            char *literal_name = (char *)literal_node->cur;
-                            HashNode_t *existing = NULL;
-                            if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
-                            {
-                                existing->var_type = HASHVAR_ENUM;
-                                existing->const_int_value = ordinal;
-                            }
-                            else if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
-                            {
-                                fprintf(stderr,
-                                        "Error on line %d, redeclaration of enum literal %s!\n",
-                                        tree->line_num, literal_name);
-                                ++errors;
-                            }
-                            else if (FindIdent(&existing, symtab, literal_name) != -1 && existing != NULL)
-                            {
-                                existing->var_type = HASHVAR_ENUM;
-                            }
+                            fprintf(stderr, "Error: Failed to create enum type for %s\n",
+                                    tree->tree_data.type_decl_data.id);
+                            ++errors;
                         }
-                        ++ordinal;
-                        literal_node = literal_node->next;
+                    }
+                    
+                    if (alias_info->gpc_type != NULL)
+                    {
+                        int ordinal = 0;
+                        ListNode_t *literal_node = alias_info->enum_literals;
+                        while (literal_node != NULL)
+                        {
+                            if (literal_node->cur != NULL)
+                            {
+                                char *literal_name = (char *)literal_node->cur;
+                                /* Use typed API with shared enum GpcType - all literals reference same type */
+                                if (PushConstOntoScope_Typed(symtab, literal_name, ordinal, alias_info->gpc_type) > 0)
+                                {
+                                    fprintf(stderr,
+                                            "Error on line %d, redeclaration of enum literal %s!\n",
+                                            tree->line_num, literal_name);
+                                    ++errors;
+                                }
+                            }
+                            ++ordinal;
+                            literal_node = literal_node->next;
+                        }
+                        /* GpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
                 }
             }
@@ -411,12 +450,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
             {
-                HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
-                {
-                    type_node->var_type = var_type;
-                }
+                /* GpcType ownership transferred to symbol table */
                 tree->tree_data.type_decl_data.gpc_type = NULL;
+                /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
             }
         } else {
             /* Fall back to legacy API for types we can't convert yet */
@@ -424,36 +460,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 record_info, alias_info);
         }
 
-        if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
-        {
-            int ordinal = 0;
-            ListNode_t *literal_node = alias_info->enum_literals;
-            while (literal_node != NULL)
-            {
-                if (literal_node->cur != NULL)
-                {
-                    char *literal_name = (char *)literal_node->cur;
-                    HashNode_t *enum_node = NULL;
-                    if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
-                    {
-                        enum_node->var_type = HASHVAR_ENUM;
-                        enum_node->const_int_value = ordinal;
-                    }
-                    else if (PushConstOntoScope(symtab, literal_name, ordinal) > 0)
-                    {
-                        fprintf(stderr, "Error on line %d, redeclaration of enum literal %s!\n",
-                                tree->line_num, literal_name);
-                        ++return_val;
-                    }
-                    else if (FindIdent(&enum_node, symtab, literal_name) != -1 && enum_node != NULL)
-                    {
-                        enum_node->var_type = HASHVAR_ENUM;
-                    }
-                }
-                ++ordinal;
-                literal_node = literal_node->next;
-            }
-        }
+        /* Note: Enum literals are declared in predeclare_enum_literals() during first pass.
+         * We don't redeclare them here to avoid "redeclaration" errors. */
 
         if(func_return > 0)
         {
@@ -486,17 +494,32 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
             ++return_val;
         }
-        else if (PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value) > 0)
+        else
         {
-            fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
-                    tree->line_num, tree->tree_data.const_decl_data.id);
-            ++return_val;
-        }
-        else if (value_expr != NULL && value_expr->type == EXPR_SET)
-        {
-            HashNode_t *const_node = NULL;
-            if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
-                const_node->var_type = HASHVAR_SET;
+            /* Create GpcType if this is a set constant */
+            GpcType *const_type = NULL;
+            if (value_expr != NULL && value_expr->type == EXPR_SET)
+            {
+                const_type = create_primitive_type(SET_TYPE);
+            }
+            
+            /* Use typed or legacy API depending on whether we have a GpcType */
+            int push_result;
+            if (const_type != NULL)
+            {
+                push_result = PushConstOntoScope_Typed(symtab, tree->tree_data.const_decl_data.id, value, const_type);
+            }
+            else
+            {
+                push_result = PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value);
+            }
+            
+            if (push_result > 0)
+            {
+                fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                        tree->line_num, tree->tree_data.const_decl_data.id);
+                ++return_val;
+            }
         }
 
         cur = cur->next;
@@ -859,9 +882,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             goto next_identifier;
                         }
                         var_type = type_node->var_type;
-                        if (type_node->type_alias != NULL && type_node->type_alias->is_array)
+                        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                        if (alias != NULL && alias->is_array)
                         {
-                            struct TypeAlias *alias = type_node->type_alias;
                             int start = alias->array_start;
                             int end = alias->array_end;
                             if (alias->is_open_array)
@@ -886,22 +909,50 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             goto next_identifier;
                         }
                         
-                        /* For non-array type references (e.g., enum, set, file), use legacy API to preserve type_alias */
-                        func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                        /* For non-array type references (e.g., enum, set, file, record), create GpcType from type_node */
+                        GpcType *var_gpc_type = NULL;
+                        if (type_node->type != NULL)
+                        {
+                            /* Type node already has a GpcType - reference it (don't clone) */
+                            var_gpc_type = type_node->type;
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                        }
+                        else
+                        {
+                            /* Fallback: create GpcType from legacy fields using helpers */
+                            struct RecordType *record_type = get_record_type_from_node(type_node);
+                            if (record_type != NULL)
+                            {
+                                var_gpc_type = create_record_type(clone_record_type(record_type));
+                            }
+                            else
+                            {
+                                var_gpc_type = gpc_type_from_var_type(var_type);
+                            }
+                            
+                            struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+                            if (var_gpc_type != NULL && type_alias != NULL)
+                            {
+                                gpc_type_set_type_alias(var_gpc_type, type_alias);
+                            }
+                            
+                            if (var_gpc_type != NULL)
+                            {
+                                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                            }
+                            else
+                            {
+                                /* Last resort fallback */
+                                func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                            }
+                        }
+                        
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                if (type_node->type_alias != NULL)
-                                    var_node->type_alias = type_node->type_alias;
-                                if (type_node->record_type != NULL)
-                                {
-                                    if (var_node->record_type != NULL)
-                                        destroy_record_type(var_node->record_type);
-                                    var_node->record_type = clone_record_type(type_node->record_type);
-                                }
                             }
                         }
                         goto next_identifier;
@@ -925,7 +976,33 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_REAL;
                 
                 /* Create GpcType for typed variables */
-                GpcType *var_gpc_type = gpc_type_from_var_type(var_type);
+                GpcType *var_gpc_type = NULL;
+                if (resolved_type != NULL && resolved_type->type != NULL)
+                {
+                    /* Use GpcType from resolved type if available */
+                    var_gpc_type = resolved_type->type;
+                }
+                else
+                {
+                    /* Create GpcType from var_type */
+                    var_gpc_type = gpc_type_from_var_type(var_type);
+                    
+                    /* Add metadata from resolved_type if present */
+                    if (var_gpc_type != NULL && resolved_type != NULL)
+                    {
+                        struct TypeAlias *type_alias = get_type_alias_from_node(resolved_type);
+                        if (type_alias != NULL)
+                        {
+                            gpc_type_set_type_alias(var_gpc_type, type_alias);
+                        }
+                        struct RecordType *record_type = get_record_type_from_node(resolved_type);
+                        if (record_type != NULL && var_gpc_type->kind == TYPE_KIND_RECORD)
+                        {
+                            var_gpc_type->info.record_info = clone_record_type(record_type);
+                        }
+                    }
+                }
+                
                 if (var_gpc_type != NULL) {
                     func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
                 } else {
@@ -938,27 +1015,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                        if (resolved_type != NULL)
-                        {
-                            if (resolved_type->type_alias != NULL)
-                                var_node->type_alias = resolved_type->type_alias;
-                            if (resolved_type->record_type != NULL)
-                            {
-                                if (var_node->record_type != NULL)
-                                    destroy_record_type(var_node->record_type);
-                                var_node->record_type = clone_record_type(resolved_type->record_type);
-                            }
-                            
-                            /* Phase 3: For procedure types, copy the GpcType
-                             * This enables procedure variable support */
-                            if (resolved_type->type != NULL && 
-                                resolved_type->type->kind == TYPE_KIND_PROCEDURE)
-                            {
-                                /* For procedure types, we share the type pointer
-                                 * This is safe because procedure types in the symbol table are persistent */
-                                var_node->type = resolved_type->type;
-                            }
-                        }
                     }
                 }
             }
@@ -1078,7 +1134,17 @@ next_identifier:
                             if (inferred_var_type != HASHVAR_UNTYPED)
                             {
                                 tree->tree_data.var_decl_data.type = normalized_type;
-                                var_node->var_type = inferred_var_type;
+                                /* Update GpcType if present, otherwise update legacy field */
+                                if (var_node->type != NULL)
+                                {
+                                    /* TODO: Update GpcType - requires modifying existing GpcType or replacing it */
+                                    /* For now, keep legacy field write until GpcType modification API exists */
+                                    var_node->var_type = inferred_var_type;
+                                }
+                                else
+                                {
+                                    var_node->var_type = inferred_var_type;
+                                }
                             }
                         }
                         else
@@ -1253,6 +1319,21 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
         }
         
+        /* Add type metadata from return_type_node to return_gpc_type */
+        if (return_gpc_type != NULL && return_type_node != NULL)
+        {
+            struct TypeAlias *type_alias = get_type_alias_from_node(return_type_node);
+            if (type_alias != NULL)
+            {
+                gpc_type_set_type_alias(return_gpc_type, type_alias);
+            }
+            struct RecordType *record_type = get_record_type_from_node(return_type_node);
+            if (record_type != NULL && return_gpc_type->kind == TYPE_KIND_RECORD)
+            {
+                return_gpc_type->info.record_info = clone_record_type(record_type);
+            }
+        }
+        
         /* Create GpcType for the function (which is also a procedure type with a return value) */
         GpcType *func_type = create_procedure_type(
             subprogram->tree_data.subprogram_data.args_var,
@@ -1264,45 +1345,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                         subprogram->tree_data.subprogram_data.mangled_id,
                         func_type);
 
-        if (return_type_node != NULL && func_return == 0)
-        {
-            HashNode_t *function_symbol = NULL;
-            if (FindIdent(&function_symbol, symtab, id_to_use_for_lookup) != -1 &&
-                function_symbol != NULL && function_symbol->hash_type == HASHTYPE_FUNCTION)
-            {
-                if (return_type_node->type_alias != NULL)
-                    function_symbol->type_alias = return_type_node->type_alias;
-                if (return_type_node->record_type != NULL)
-                {
-                    if (function_symbol->record_type != NULL)
-                        destroy_record_type(function_symbol->record_type);
-                    function_symbol->record_type = clone_record_type(return_type_node->record_type);
-                }
-            }
-        }
+        /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
         PushScope(symtab);
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
-        // Use the ORIGINAL name for the internal return variable.
-        PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
-            var_type, subprogram->tree_data.subprogram_data.args_var);
-
-        if (return_type_node != NULL)
+        // Use the ORIGINAL name for the internal return variable with GpcType
+        if (return_gpc_type != NULL)
         {
-            HashNode_t *return_symbol = NULL;
-            if (FindIdent(&return_symbol, symtab, subprogram->tree_data.subprogram_data.id) != -1 &&
-                return_symbol != NULL && return_symbol->hash_type == HASHTYPE_FUNCTION_RETURN)
-            {
-                if (return_type_node->type_alias != NULL)
-                    return_symbol->type_alias = return_type_node->type_alias;
-                if (return_type_node->record_type != NULL)
-                {
-                    if (return_symbol->record_type != NULL)
-                        destroy_record_type(return_symbol->record_type);
-                    return_symbol->record_type = clone_record_type(return_type_node->record_type);
-                }
-            }
+            PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
         }
+        else
+        {
+            PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
+                var_type, subprogram->tree_data.subprogram_data.args_var);
+        }
+
+        /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
         new_max_scope = max_scope_lev+1;
     }
