@@ -253,7 +253,19 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         else
         {
             set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
-            if (array_node->hash_type != HASHTYPE_ARRAY || !array_node->is_dynamic_array)
+            
+            /* Check if it's a dynamic array using GpcType first, then legacy field */
+            int is_dynamic = 0;
+            if (array_node->type != NULL)
+            {
+                is_dynamic = gpc_type_is_dynamic_array(array_node->type);
+            }
+            else
+            {
+                is_dynamic = array_node->is_dynamic_array;
+            }
+            
+            if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
             {
                 fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
                 ++return_val;
