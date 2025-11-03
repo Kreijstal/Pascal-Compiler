@@ -140,16 +140,6 @@ static ParseResult between_fn(input_t * in, void * args, char* parser_name) {
     return r_p;
 }
 
-static ast_t* find_tail_node(ast_t* node) {
-    if (node == NULL || node == ast_nil)
-        return node;
-
-    ast_t* cur = node;
-    while (cur->next != NULL && cur->next != ast_nil)
-        cur = cur->next;
-    return cur;
-}
-
 static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
     while (1) {
         InputState state;
@@ -179,7 +169,7 @@ static ast_t *append_remaining(input_t *in, sep_by_args *sargs, ast_t *tail) {
         }
 
         tail->next = next_res.value.ast;
-        tail = find_tail_node(tail->next);
+        tail = tail->next;
     }
 
     return tail;
@@ -196,7 +186,7 @@ static ParseResult sep_by_common(input_t *in, sep_by_args *sargs, bool require_f
     }
 
     ast_t *head = first.value.ast;
-    ast_t *tail = find_tail_node(head);
+    ast_t *tail = head;
 
     tail = append_remaining(in, sargs, tail);
 
@@ -221,8 +211,7 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
         free_error(res.value.error);
         return make_success(ast_nil);
     }
-    head = res.value.ast;
-    tail = find_tail_node(head);
+    head = tail = res.value.ast;
 
     while (1) {
         InputState state; save_input_state(in, &state);
@@ -250,7 +239,7 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
         }
 
         tail->next = p_res.value.ast;
-        tail = find_tail_node(tail->next);
+        tail = tail->next;
     }
 
     // Try to parse a final separator
@@ -355,45 +344,13 @@ static ParseResult many_fn(input_t * in, void * args, char* parser_name) {
             break;
         }
         if (head == NULL) {
-            head = res.value.ast;
-            tail = find_tail_node(head);
+            head = tail = res.value.ast;
         } else {
             tail->next = res.value.ast;
-            tail = find_tail_node(tail->next);
+            tail = tail->next;
         }
     }
     return make_success(head ? head : ast_nil);
-}
-
-static ParseResult many1_fn(input_t * in, void * args, char* parser_name) {
-    combinator_t* p = (combinator_t*)args;
-    ParseResult first = parse(in, p);
-    if (!first.is_success) {
-        return first;
-    }
-
-    ast_t* head = first.value.ast;
-    ast_t* tail = find_tail_node(head);
-    while (1) {
-        InputState state;
-        save_input_state(in, &state);
-        ParseResult res = parse(in, p);
-        if (!res.is_success) {
-            restore_input_state(in, &state);
-            free_error(res.value.error);
-            break;
-        }
-        // Check if the parser consumed any input - prevents infinite loop on epsilon matches
-        if (in->start == state.start) {
-            // Parser succeeded but didn't consume input - restore state and break
-            restore_input_state(in, &state);
-            free_ast(res.value.ast);
-            break;
-        }
-        tail->next = res.value.ast;
-        tail = find_tail_node(tail->next);
-    }
-    return make_success(head);
 }
 
 static ParseResult map_fn(input_t * in, void * args, char* parser_name) {
@@ -406,6 +363,15 @@ static ParseResult map_fn(input_t * in, void * args, char* parser_name) {
     return make_success(new_ast);
 }
 
+static ast_t* find_tail_node(ast_t* node) {
+    if (node == NULL || node == ast_nil)
+        return node;
+
+    ast_t* cur = node;
+    while (cur->next != NULL && cur->next != ast_nil)
+        cur = cur->next;
+    return cur;
+}
 
 static ParseResult gseq_fn(input_t * in, void * args, char* parser_name) {
     seq_args * sa = (seq_args *) args;
@@ -807,16 +773,6 @@ combinator_t * commit(combinator_t* p) {
     (void)ret;
     comb->type = COMB_COMMIT;
     comb->fn = commit_fn;
-    comb->args = (void *) p;
-    return comb;
-}
-
-combinator_t * many1(combinator_t* p) {
-    combinator_t * comb = new_combinator();
-    int ret = asprintf(&comb->name, "many1 %s", p->name ? p->name : "unnamed_parser");
-    (void)ret;
-    comb->type = COMB_MANY1;
-    comb->fn = many1_fn;
     comb->args = (void *) p;
     return comb;
 }
