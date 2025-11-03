@@ -417,6 +417,10 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     else
     {
         /* Legacy API - populate legacy fields from parameters */
+        /* This path should only be used for:
+         * 1. UNTYPED procedure parameters (var_type == HASHVAR_UNTYPED)
+         * 2. Complex TYPE declarations that haven't been migrated to GpcType yet
+         */
         hash_node->var_type = var_type;
         hash_node->record_type = record_type;
         hash_node->type_alias = type_alias;

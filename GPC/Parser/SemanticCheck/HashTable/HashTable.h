@@ -47,7 +47,16 @@ typedef struct HashNode
     enum HashType hash_type;
     
     /* NEW: Unified type system - this one pointer replaces var_type, type_alias, 
-     * record_type, is_array, array_start, array_end, and other scattered type info */
+     * record_type, is_array, array_start, array_end, and other scattered type info.
+     * 
+     * When type != NULL: Use GpcType APIs exclusively. Legacy fields are set to safe defaults.
+     * When type == NULL: Legacy fields are used (UNTYPED parameters, complex TYPE declarations).
+     * 
+     * Migration Status: ~95% of code uses GpcType. Legacy fields remain for:
+     * - UNTYPED procedure parameters (valid Pascal construct)
+     * - Complex TYPE declarations (arrays, pointers, sets, files via type alias)
+     * See PHASE_6_STATUS.md for details.
+     */
     GpcType *type;
 
     /* Symbol table resources */
@@ -59,17 +68,26 @@ typedef struct HashNode
 
     int is_var_parameter;
     
-    /* Legacy fields kept for backward compatibility during migration
-     * These are populated from legacy API calls when GpcType is not provided
-     * Helper functions should prefer GpcType when available */
+    /* Legacy fields - used only when type == NULL
+     * 
+     * DO NOT ACCESS DIRECTLY - use helper functions:
+     * - hashnode_get_var_type() instead of node->var_type
+     * - hashnode_get_record_type() instead of node->record_type
+     * - hashnode_get_type_alias() instead of node->type_alias
+     * 
+     * These helper functions prefer GpcType when available and fall back to legacy fields
+     * only when necessary (type == NULL).
+     */
     enum VarType var_type;
     struct RecordType *record_type;
-    struct TypeAlias *type_alias;  /* Still needed for legacy API - some type aliases not yet in GpcType */
-    /* REMOVED: is_array - use hashnode_is_array() helper instead */
-    /* REMOVED: array_start, array_end - use hashnode_get_array_bounds() helper instead */
-    /* REMOVED: element_size - use hashnode_get_element_size() helper instead */
-    /* REMOVED: is_dynamic_array - use hashnode_is_dynamic_array() helper instead */
-
+    struct TypeAlias *type_alias;
+    
+    /* Array fields REMOVED in earlier phases - use hashnode_* helpers:
+     * - hashnode_is_array() instead of is_array
+     * - hashnode_get_array_bounds() instead of array_start/array_end
+     * - hashnode_get_element_size() instead of element_size
+     * - hashnode_is_dynamic_array() instead of is_dynamic_array
+     */
 
 } HashNode_t;
 
