@@ -1195,8 +1195,7 @@ next_identifier:
                                         destroy_gpc_type(var_node->type);
                                     }
                                     var_node->type = inferred_gpc_type;
-                                    /* Update legacy field as well */
-                                    var_node->var_type = inferred_var_type;
+                                    /* Legacy field will be populated by helper if needed */
                                 }
                             }
                         }
