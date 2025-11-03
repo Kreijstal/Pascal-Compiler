@@ -400,8 +400,7 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Handle type information based on which API is being used */
     if (type != NULL)
     {
-        /* New API with GpcType - NO legacy field population
-         * Legacy fields remain at default values (0/NULL)
+        /* New API with GpcType - Initialize legacy fields to safe defaults
          * All type information accessed through GpcType */
         
         /* Assert that we're not accidentally using both APIs */
@@ -409,7 +408,15 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
         
-        /* Legacy fields intentionally left at defaults - use GpcType instead */
+        /* Initialize legacy fields to safe defaults (0/NULL) */
+        hash_node->var_type = HASHVAR_UNTYPED;
+        hash_node->record_type = NULL;
+        hash_node->type_alias = NULL;
+        hash_node->is_array = 0;
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
     }
     else
     {
