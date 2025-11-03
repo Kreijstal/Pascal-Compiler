@@ -72,8 +72,8 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
         }
     }
     
-    // Fallback to legacy field
-    return type_node->var_type;
+    // Fallback to hashnode helper
+    return hashnode_get_var_type(type_node);
 }
 
 // Helper function to flatten argument lists into a list of HASHVAR_ types.

@@ -35,16 +35,13 @@ static inline int node_is_record_type(HashNode_t *node)
         return 0;
     
     /* GpcType must be present for typed nodes */
-    if (node->type != NULL)
-    {
-        return gpc_type_is_record(node->type);
-    }
-    
-    /* Legacy nodes without GpcType - use legacy field */
-    return node->var_type == HASHVAR_RECORD;
+/* Helper function to check if a node is a record type */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    return hashnode_is_record(node);
 }
 
-/* Helper function to get the primitive type tag from a node, preferring GpcType when available */
+/* Helper function to get the primitive type tag from a node */
 static inline int get_primitive_tag_from_node(HashNode_t *node)
 {
     if (node == NULL)
@@ -56,8 +53,9 @@ static inline int get_primitive_tag_from_node(HashNode_t *node)
         return gpc_type_get_primitive_tag(node->type);
     }
     
-    /* Legacy nodes - map var_type to primitive tags */
-    switch (node->var_type)
+    /* Use hashnode helper to get var_type, then map to primitive tags */
+    enum VarType var_type = hashnode_get_var_type(node);
+    switch (var_type)
     {
         case HASHVAR_INTEGER: return INT_TYPE;
         case HASHVAR_LONGINT: return LONGINT_TYPE;
@@ -84,40 +82,20 @@ static inline int node_is_file_type(HashNode_t *node)
         return gpc_type_get_primitive_tag(node->type) == FILE_TYPE;
     }
     
-    /* Legacy nodes - check var_type */
-    return node->var_type == HASHVAR_FILE;
+    /* Use hashnode helper */
+    return hashnode_get_var_type(node) == HASHVAR_FILE;
 }
 
-/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+/* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL && gpc_type_is_record(node->type))
-    {
-        return gpc_type_get_record(node->type);
-    }
-    
-    /* Fall back to legacy field */
-    return node->record_type;
+    return hashnode_get_record_type(node);
 }
 
-/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+/* Helper function to get TypeAlias from HashNode */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* Prefer GpcType if available */
-    if (node->type != NULL)
-    {
-        return gpc_type_get_type_alias(node->type);
-    }
-    
-    /* Fall back to legacy field for nodes without GpcType */
-    return node->type_alias;
+    return hashnode_get_type_alias(node);
 }
 
 /* Helper function to determine variable storage size (for stack allocation)
@@ -159,8 +137,8 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
     }
     
-    /* Legacy fallback */
-    enum VarType var_kind = node->var_type;
+    /* Fallback using hashnode helper */
+    enum VarType var_kind = hashnode_get_var_type(node);
     if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
         var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
         var_kind == HASHVAR_FILE || var_kind == HASHVAR_PROCEDURE)
@@ -1323,20 +1301,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
-    else if (func_node != NULL && func_node->var_type == HASHVAR_RECORD && func_node->record_type != NULL)
+    else if (func_node != NULL && hashnode_get_var_type(func_node) == HASHVAR_RECORD)
     {
-        /* Legacy fallback for nodes without GpcType */
-        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, func_node->record_type,
-                &record_return_size) != 0 || record_return_size <= 0 ||
-            record_return_size > INT_MAX)
+        struct RecordType *record = hashnode_get_record_type(func_node);
+        if (record != NULL)
         {
-            codegen_report_error(ctx,
-                "ERROR: Unable to determine size for record return value of %s.", func->id);
-            record_return_size = 0;
-        }
-        else
-        {
-            has_record_return = 1;
+            /* Get size from record */
+            if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record,
+                    &record_return_size) != 0 || record_return_size <= 0 ||
+                record_return_size > INT_MAX)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine size for record return value of %s.", func->id);
+                record_return_size = 0;
+            }
+            else
+            {
+                has_record_return = 1;
+            }
         }
     }
 
@@ -1383,11 +1365,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     else if (func_node != NULL)
     {
-        /* Legacy fallback using var_type */
-        if (func_node->var_type == HASHVAR_LONGINT || func_node->var_type == HASHVAR_REAL ||
-            func_node->var_type == HASHVAR_PCHAR)
+        /* Use hashnode helper to get var_type */
+        enum VarType var_type = hashnode_get_var_type(func_node);
+        if (var_type == HASHVAR_LONGINT || var_type == HASHVAR_REAL ||
+            var_type == HASHVAR_PCHAR)
             return_size = 8;
-        else if (func_node->var_type == HASHVAR_BOOLEAN)
+        else if (var_type == HASHVAR_BOOLEAN)
             return_size = DOUBLEWORD;
     }
 
