@@ -61,6 +61,146 @@ GpcType* create_record_type(struct RecordType *record_info) {
     return type;
 }
 
+/* Create GpcType from TypeAlias structure
+ * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
+ * Returns NULL if conversion fails (e.g., unresolvable type reference)
+ */
+GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab) {
+    if (alias == NULL) return NULL;
+    
+    /* If alias already has a GpcType (enums, sets), use it */
+    if (alias->gpc_type != NULL) {
+        return alias->gpc_type;
+    }
+    
+    GpcType *result = NULL;
+    
+    /* Handle array type aliases: type TIntArray = array[1..10] of Integer */
+    if (alias->is_array) {
+        int start = alias->array_start;
+        int end = alias->array_end;
+        
+        if (alias->is_open_array) {
+            start = 0;
+            end = -1;
+        }
+        
+        /* Resolve element type */
+        GpcType *element_type = NULL;
+        int element_type_tag = alias->array_element_type;
+        
+        if (element_type_tag != UNKNOWN_TYPE) {
+            /* Direct primitive type tag */
+            element_type = create_primitive_type(element_type_tag);
+        } else if (alias->array_element_type_id != NULL && symtab != NULL) {
+            /* Type reference - try to resolve it */
+            HashNode_t *element_node = NULL;
+            if (FindIdent(&element_node, symtab, alias->array_element_type_id) >= 0 &&
+                element_node != NULL && element_node->type != NULL) {
+                /* Use the resolved type (don't clone, just reference) */
+                element_type = element_node->type;
+            } else {
+                /* Forward reference - create NULL element type for now
+                 * This will be resolved when the array is actually used */
+                element_type = NULL;
+            }
+        }
+        
+        /* Create array type even if element type is NULL (forward reference) */
+        result = create_array_type(element_type, start, end);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle pointer type aliases: type PInteger = ^Integer */
+    if (alias->is_pointer) {
+        GpcType *pointee_type = NULL;
+        int pointer_type_tag = alias->pointer_type;
+        
+        if (pointer_type_tag != UNKNOWN_TYPE) {
+            /* Direct primitive type tag */
+            pointee_type = create_primitive_type(pointer_type_tag);
+        } else if (alias->pointer_type_id != NULL && symtab != NULL) {
+            /* Type reference - try to resolve it */
+            HashNode_t *pointee_node = NULL;
+            if (FindIdent(&pointee_node, symtab, alias->pointer_type_id) >= 0 &&
+                pointee_node != NULL && pointee_node->type != NULL) {
+                /* Use the resolved type (don't clone, just reference) */
+                pointee_type = pointee_node->type;
+            } else {
+                /* Forward reference or unresolved type
+                 * Create a pointer to NULL - this is valid in Pascal
+                 * The pointee type will be resolved later during usage */
+                pointee_type = NULL;
+            }
+        }
+        
+        /* Create pointer type even if pointee is NULL (forward reference) */
+        result = create_pointer_type(pointee_type);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle set type aliases: type TCharSet = set of Char */
+    if (alias->is_set) {
+        /* For sets, we should ideally have alias->gpc_type already populated
+         * But if not, we can create a primitive SET_TYPE */
+        result = create_primitive_type(SET_TYPE);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle enum type aliases: type TColor = (Red, Green, Blue) */
+    if (alias->is_enum) {
+        /* For enums, we should ideally have alias->gpc_type already populated
+         * But if not, we can create a primitive ENUM_TYPE */
+        result = create_primitive_type(ENUM_TYPE);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle file type aliases: type TTextFile = file of Char */
+    if (alias->is_file) {
+        /* For files, create a primitive FILE_TYPE */
+        result = create_primitive_type(FILE_TYPE);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle simple type aliases: type MyInt = Integer */
+    if (alias->base_type != UNKNOWN_TYPE && alias->target_type_id == NULL) {
+        /* Simple primitive type alias */
+        result = create_primitive_type(alias->base_type);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle type reference aliases: type MyType = SomeOtherType */
+    if (alias->target_type_id != NULL && symtab != NULL) {
+        HashNode_t *target_node = NULL;
+        if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+            target_node != NULL && target_node->type != NULL) {
+            /* Return the target's GpcType (reference, not clone) */
+            return target_node->type;
+        }
+    }
+    
+    /* If we couldn't resolve the type, return NULL */
+    return NULL;
+}
+
 // --- Destructor Implementation ---
 
 void destroy_gpc_type(GpcType *type) {

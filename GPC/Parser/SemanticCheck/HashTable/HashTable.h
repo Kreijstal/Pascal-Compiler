@@ -46,8 +46,21 @@ typedef struct HashNode
     char *mangled_id;
     enum HashType hash_type;
     
-    /* NEW: Unified type system - this one pointer replaces var_type, type_alias, 
-     * record_type, is_array, array_start, array_end, and other scattered type info */
+    /* Unified type system - this one pointer replaces var_type, type_alias, 
+     * record_type, is_array, array_start, array_end, and other scattered type info.
+     * 
+     * When type != NULL: GpcType contains all type information
+     * When type == NULL: Node is UNTYPED (untyped procedure parameters in Pascal)
+     * 
+     * ALL type information queries MUST use helper functions:
+     * - hashnode_get_var_type()
+     * - hashnode_get_record_type()
+     * - hashnode_get_type_alias()
+     * - hashnode_is_array()
+     * - hashnode_get_array_bounds()
+     * - hashnode_get_element_size()
+     * - hashnode_is_dynamic_array()
+     */
     GpcType *type;
 
     /* Symbol table resources */
@@ -58,18 +71,6 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
-    
-    /* Legacy fields kept for backward compatibility during migration
-     * These are populated from legacy API calls when GpcType is not provided
-     * Helper functions should prefer GpcType when available */
-    enum VarType var_type;
-    struct RecordType *record_type;
-    struct TypeAlias *type_alias;  /* Still needed for legacy API - some type aliases not yet in GpcType */
-    /* REMOVED: is_array - use hashnode_is_array() helper instead */
-    /* REMOVED: array_start, array_end - use hashnode_get_array_bounds() helper instead */
-    /* REMOVED: element_size - use hashnode_get_element_size() helper instead */
-    /* REMOVED: is_dynamic_array - use hashnode_is_dynamic_array() helper instead */
-
 
 } HashNode_t;
 
@@ -87,11 +88,6 @@ HashTable_t *InitHashTable();
 /* Returns 0 if successfully added, 1 if the identifier already exists */
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
     enum HashType hash_type, GpcType *type);
-
-/* DEPRECATED: Old signature kept for backward compatibility during migration */
-int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
-    struct TypeAlias *type_alias);
 
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
@@ -112,10 +108,6 @@ void DestroyBuiltin(HashNode_t *);
 /* Prints all entries in the HashTable */
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent);
 
-/* Helper functions to query HashNode type information via GpcType */
-/* These functions prefer GpcType but fall back to legacy fields when necessary */
-/* TODO Phase 6: Remove fallbacks once all HashNodes have GpcType populated */
-
 /* Check if node represents an array */
 static inline int hashnode_is_array(const HashNode_t *node)
 {
@@ -123,10 +115,11 @@ static inline int hashnode_is_array(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_array(node->type);
     }
-    /* No fallback - is_array field has been removed */
-    /* Array status must come from GpcType */
+    /* UNTYPED nodes are not arrays */
     return 0;
 }
+
+/* Helper functions to query HashNode type information via GpcType */
 
 /* Check if node represents a record */
 static inline int hashnode_is_record(const HashNode_t *node)
@@ -135,8 +128,8 @@ static inline int hashnode_is_record(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_is_record(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
-    return node->var_type == HASHVAR_RECORD;
+    /* UNTYPED nodes are not records */
+    return 0;
 }
 
 /* Check if node represents a dynamic array */
@@ -191,8 +184,8 @@ static inline struct RecordType* hashnode_get_record_type(const HashNode_t *node
     if (node->type != NULL && gpc_type_is_record(node->type)) {
         return gpc_type_get_record(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
-    return node->record_type;
+    /* UNTYPED nodes have no record type */
+    return NULL;
 }
 
 /* Get type alias from node */
@@ -202,9 +195,8 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
     if (node->type != NULL) {
         return gpc_type_get_type_alias(node->type);
     }
-    /* TODO: Remove fallback once all HashNodes have GpcType */
-    /* For now, needed because legacy API still creates HashNodes without GpcType */
-    return node->type_alias;
+    /* UNTYPED nodes have no type alias */
+    return NULL;
 }
 
 /* Get VarType equivalent from node (for legacy code compatibility) */

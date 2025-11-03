@@ -790,7 +790,8 @@ int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num)
         /* If not a list of declarations, must be a list of strings */
         assert(cur->type == LIST_STRING);
 
-        func_return = PushVarOntoScope(symtab, HASHVAR_UNTYPED, (char *)cur->cur);
+        /* UNTYPED procedure parameters - use NULL GpcType */
+        func_return = PushVarOntoScope_Typed(symtab, (char *)cur->cur, NULL);
 
         /* Greater than 0 signifies an error */
         if(func_return > 0)
@@ -984,15 +985,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 gpc_type_set_type_alias(var_gpc_type, type_alias);
                             }
                             
-                            if (var_gpc_type != NULL)
-                            {
-                                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
-                            }
-                            else
-                            {
-                                /* Last resort fallback */
-                                func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
-                            }
+                            /* Always use _Typed variant, even if GpcType is NULL (UNTYPED) */
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
                         }
                         
                         if (func_return == 0)
@@ -1054,12 +1048,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
-                if (var_gpc_type != NULL) {
-                    func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
-                } else {
-                    /* For UNTYPED variables, use legacy API */
-                    func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
-                }
+                /* Always use _Typed variant, even if GpcType is NULL (UNTYPED) */
+                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                
                 if (func_return == 0)
                 {
                     HashNode_t *var_node = NULL;
@@ -1368,15 +1359,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushScope(symtab);
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with GpcType
-        if (return_gpc_type != NULL)
-        {
-            PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
-        }
-        else
-        {
-            PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
-                var_type, subprogram->tree_data.subprogram_data.args_var);
-        }
+        // Always use _Typed variant, even if GpcType is NULL
+        PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
 

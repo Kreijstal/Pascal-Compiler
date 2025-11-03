@@ -165,27 +165,6 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
     return add_ident_to_table_internal(table, &params);
 }
 
-int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
-    struct TypeAlias *type_alias)
-{
-    /* NOTE: args parameter is ignored - it's kept only for API compatibility.
-     * The legacy system doesn't store args in HashNode anymore. */
-    (void)args;  // Suppress unused parameter warning
-    
-    HashTableParams params = {
-        .id = id,
-        .mangled_id = mangled_id,
-        .hash_type = hash_type,
-        .type = NULL,  // Legacy function doesn't use GpcType
-        .var_type = var_type,
-        .record_type = record_type,
-        .type_alias = type_alias
-    };
-    
-    return add_ident_to_table_internal(table, &params);
-}
-
 HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
 {
     ListNode_t *list, *cur;
@@ -401,26 +380,15 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         return NULL;
     }
     
-    /* Handle type information */
-    if (type != NULL)
-    {
-        /* New API with GpcType - assert that legacy parameters are not set */
+    /* Legacy parameters are no longer used - assert they're not set */
+    if (type != NULL) {
+        /* When GpcType is provided, legacy parameters should not be set */
         assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
         assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
-        
-        /* Initialize legacy fields to safe defaults - they should not be used when GpcType is present */
-        hash_node->var_type = HASHVAR_UNTYPED;
-        hash_node->record_type = NULL;
-        hash_node->type_alias = NULL;
     }
-    else
-    {
-        /* Legacy API - populate legacy fields from parameters */
-        hash_node->var_type = var_type;
-        hash_node->record_type = record_type;
-        hash_node->type_alias = type_alias;
-    }
+    /* If type is NULL, this is an UNTYPED node (valid for untyped procedure parameters) */
+    /* No legacy fields to populate - they've been removed */
     
     return hash_node;
 }
@@ -470,7 +438,6 @@ enum VarType hashnode_get_var_type(const HashNode_t *node)
         }
     }
     
-    /* Fall back to legacy field when GpcType is not available */
-    /* TODO: This fallback should be removed once all HashNodes have GpcType */
-    return node->var_type;
+    /* If type is NULL, this is an UNTYPED node */
+    return HASHVAR_UNTYPED;
 }
