@@ -1900,7 +1900,7 @@ static int semcheck_pointer_deref(int *type_return,
         {
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 && target_node != NULL)
-                expr->record_type = target_node->record_type;
+                expr->record_type = get_record_type_from_node(target_node);
         }
     }
 
