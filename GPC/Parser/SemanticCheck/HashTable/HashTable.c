@@ -72,8 +72,40 @@ enum VarType primitive_tag_to_var_type(int tag)
             return HASHVAR_PCHAR;
         case SET_TYPE:
             return HASHVAR_SET;
+        case ENUM_TYPE:
+            return HASHVAR_ENUM;
         case FILE_TYPE:
             return HASHVAR_FILE;
+        case POINTER_TYPE:
+            return HASHVAR_POINTER;
+        default:
+            return HASHVAR_UNTYPED;
+    }
+}
+
+/* Helper to convert GpcType to VarType for legacy compatibility */
+static enum VarType gpctype_to_vartype(GpcType *type)
+{
+    if (type == NULL)
+        return HASHVAR_UNTYPED;
+    
+    switch (type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+            return primitive_tag_to_var_type(gpc_type_get_primitive_tag(type));
+        
+        case TYPE_KIND_POINTER:
+            return HASHVAR_POINTER;
+        
+        case TYPE_KIND_ARRAY:
+            return HASHVAR_ARRAY;
+        
+        case TYPE_KIND_RECORD:
+            return HASHVAR_RECORD;
+        
+        case TYPE_KIND_PROCEDURE:
+            return HASHVAR_PROCEDURE;
+        
         default:
             return HASHVAR_UNTYPED;
     }
@@ -408,8 +440,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
         
-        /* Initialize legacy fields to safe defaults (0/NULL) */
-        hash_node->var_type = HASHVAR_UNTYPED;
+        /* Derive var_type from GpcType for compatibility with legacy code */
+        hash_node->var_type = gpctype_to_vartype(type);
         hash_node->record_type = NULL;
         hash_node->type_alias = NULL;
         hash_node->is_array = 0;
