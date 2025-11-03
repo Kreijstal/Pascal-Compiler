@@ -948,13 +948,46 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 var_gpc_type = create_record_type(clone_record_type(record_type));
                             }
+                            else if (var_type == HASHVAR_POINTER)
+                            {
+                                /* For pointer types, we need to create a pointer GpcType */
+                                /* Get the TypeAlias to find what the pointer points to */
+                                struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
+                                if (type_alias != NULL && type_alias->is_pointer)
+                                {
+                                    GpcType *points_to = NULL;
+                                    
+                                    /* Try to resolve the target type */
+                                    if (type_alias->pointer_type_id != NULL)
+                                    {
+                                        HashNode_t *target_node = NULL;
+                                        if (FindIdent(&target_node, symtab, type_alias->pointer_type_id) >= 0 &&
+                                            target_node != NULL && target_node->type != NULL)
+                                        {
+                                            points_to = target_node->type;
+                                        }
+                                    }
+                                    
+                                    /* If we couldn't resolve it, create a placeholder based on pointer_type */
+                                    if (points_to == NULL && type_alias->pointer_type != UNKNOWN_TYPE)
+                                    {
+                                        points_to = create_primitive_type(type_alias->pointer_type);
+                                    }
+                                    
+                                    if (points_to != NULL)
+                                    {
+                                        var_gpc_type = create_pointer_type(points_to);
+                                        gpc_type_set_type_alias(var_gpc_type, type_alias);
+                                    }
+                                }
+                            }
                             else
                             {
                                 var_gpc_type = gpc_type_from_var_type(var_type);
                             }
                             
                             struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
-                            if (var_gpc_type != NULL && type_alias != NULL)
+                            if (var_gpc_type != NULL && type_alias != NULL && var_type != HASHVAR_POINTER)
                             {
                                 gpc_type_set_type_alias(var_gpc_type, type_alias);
                             }
