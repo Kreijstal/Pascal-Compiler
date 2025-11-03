@@ -43,22 +43,6 @@ static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, in
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev);
 
-/* Helper function to get RecordType from HashNode via GpcType */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    if (node == NULL)
-        return NULL;
-    
-    /* Get RecordType from GpcType */
-    if (node->type != NULL && gpc_type_is_record(node->type))
-    {
-        return gpc_type_get_record(node->type);
-    }
-    
-    /* No GpcType or not a record */
-    return NULL;
-}
-
 static int var_type_to_expr_type(enum VarType var_type)
 {
     switch (var_type)
@@ -87,37 +71,6 @@ static int var_type_to_expr_type(enum VarType var_type)
             return RECORD_TYPE;
         case HASHVAR_PROCEDURE:
             return PROCEDURE;
-        default:
-            return UNKNOWN_TYPE;
-    }
-}
-
-/* Helper to convert GpcType to expression type tag */
-static int gpctype_to_expr_type(GpcType *type)
-{
-    if (type == NULL)
-        return UNKNOWN_TYPE;
-    
-    switch (type->kind)
-    {
-        case TYPE_KIND_PRIMITIVE:
-            return gpc_type_get_primitive_tag(type);
-        
-        case TYPE_KIND_POINTER:
-            return POINTER_TYPE;
-        
-        case TYPE_KIND_ARRAY:
-            /* For arrays, we typically want the element type */
-            if (type->info.array_info.element_type != NULL)
-                return gpctype_to_expr_type(type->info.array_info.element_type);
-            return UNKNOWN_TYPE;
-        
-        case TYPE_KIND_RECORD:
-            return RECORD_TYPE;
-        
-        case TYPE_KIND_PROCEDURE:
-            return PROCEDURE;
-        
         default:
             return UNKNOWN_TYPE;
     }
@@ -303,9 +256,14 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
             
             /* Check if it's a dynamic array using GpcType first, then legacy field */
             int is_dynamic = 0;
-            /* Check if array is dynamic - must have GpcType */
-            assert(array_node->type != NULL && "Array node must have GpcType");
-            is_dynamic = gpc_type_is_dynamic_array(array_node->type);
+            if (array_node->type != NULL)
+            {
+                is_dynamic = gpc_type_is_dynamic_array(array_node->type);
+            }
+            else
+            {
+                is_dynamic = array_node->is_dynamic_array;
+            }
             
             if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
             {
@@ -553,7 +511,7 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
     {
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, target_expr->pointer_subtype_id) != -1 && type_node != NULL)
-            target_expr->record_type = get_record_type_from_node(type_node);
+            target_expr->record_type = type_node->record_type;
     }
 
     return return_val;
@@ -1188,7 +1146,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         expected_type_node != NULL)
                     {
 
-                        expected_type = gpctype_to_expr_type(expected_type_node->type);
+                        expected_type = var_type_to_expr_type(expected_type_node->var_type);
                         expected_gpc_type = expected_type_node->type;
 
                     }

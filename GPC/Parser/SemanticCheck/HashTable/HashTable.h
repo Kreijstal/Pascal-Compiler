@@ -57,6 +57,20 @@ typedef struct HashNode
     long long const_int_value;
 
     int is_var_parameter;
+    
+    /* PHASE 6: Legacy fields temporarily enabled for debugging test failures
+     * Will be removed once all tests pass with GpcType-only infrastructure */
+    #define ENABLE_LEGACY_FIELDS_PHASE6 1
+    #ifdef ENABLE_LEGACY_FIELDS_PHASE6
+    enum VarType var_type;
+    struct RecordType *record_type;
+    int is_array;
+    int array_start;
+    int array_end;
+    int element_size;
+    int is_dynamic_array;
+    struct TypeAlias *type_alias;
+    #endif
 
 } HashNode_t;
 

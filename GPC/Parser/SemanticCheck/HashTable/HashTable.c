@@ -432,18 +432,43 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Handle type information based on which API is being used */
     if (type != NULL)
     {
-        /* New API with GpcType - this is the only path now */
+        /* New API with GpcType - Initialize legacy fields to safe defaults
+         * All type information accessed through GpcType */
         
         /* Assert that we're not accidentally using both APIs */
         assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
         assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
+        
+        /* Derive var_type from GpcType for compatibility with legacy code */
+        hash_node->var_type = gpctype_to_vartype(type);
+        hash_node->record_type = NULL;
+        hash_node->type_alias = NULL;
+        hash_node->is_array = 0;
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
     }
     else
     {
-        /* Legacy API path - should not be used, all callers must provide GpcType */
+        #ifdef ENABLE_LEGACY_FIELDS_PHASE6
+        /* Legacy API - use provided values */
+        hash_node->var_type = var_type;
+        hash_node->record_type = record_type;
+        hash_node->type_alias = type_alias;
+        
+        /* Set array-specific fields to defaults - will be set later by caller if needed */
+        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
+        hash_node->array_start = 0;
+        hash_node->array_end = 0;
+        hash_node->element_size = 0;
+        hash_node->is_dynamic_array = 0;
+        #else
+        /* Phase 6: Legacy fields removed - this path should not be used */
         (void)var_type; (void)record_type; (void)type_alias; /* Suppress unused warnings */
-        assert(0 && "Legacy API path - all callers must use typed API with GpcType");
+        assert(0 && "Legacy API path - should use typed API with GpcType");
+        #endif
     }
     
     return hash_node;

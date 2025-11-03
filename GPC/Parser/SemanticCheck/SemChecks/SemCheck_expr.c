@@ -50,36 +50,36 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 
-/* Helper function to get TypeAlias from HashNode via GpcType */
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     if (node == NULL)
         return NULL;
     
-    /* Get TypeAlias from GpcType */
+    /* Prefer GpcType if available */
     if (node->type != NULL)
     {
         return gpc_type_get_type_alias(node->type);
     }
     
-    /* No GpcType means no type alias */
-    return NULL;
+    /* Fall back to legacy field for nodes without GpcType */
+    return node->type_alias;
 }
 
-/* Helper function to get RecordType from HashNode via GpcType */
+/* Helper function to get RecordType from HashNode, preferring GpcType when available */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     if (node == NULL)
         return NULL;
     
-    /* Get RecordType from GpcType */
+    /* Prefer GpcType if available */
     if (node->type != NULL && gpc_type_is_record(node->type))
     {
         return gpc_type_get_record(node->type);
     }
     
-    /* No GpcType or not a record */
-    return NULL;
+    /* Fall back to legacy field */
+    return node->record_type;
 }
 
 /* Helper function to check if a node is a record type */
@@ -88,14 +88,14 @@ static inline int node_is_record_type(HashNode_t *node)
     if (node == NULL)
         return 0;
     
-    /* Check GpcType */
+    /* Check GpcType if available */
     if (node->type != NULL)
     {
         return gpc_type_is_record(node->type);
     }
     
-    /* No GpcType means not a record */
-    return 0;
+    /* Fall back to legacy field */
+    return node->var_type == HASHVAR_RECORD;
 }
 
 static int semcheck_pointer_deref(int *type_return,
