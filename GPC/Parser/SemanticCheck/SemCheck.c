@@ -50,25 +50,15 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     if (node == NULL)
         return NULL;
     
-    /* GpcType is the single source of truth */
-    assert(node->type != NULL && "HashNode must have GpcType populated");
-    return gpc_type_get_type_alias(node->type);
+    /* Use hashnode helper which handles NULL GpcType */
+    return hashnode_get_type_alias(node);
 }
 
-/* Helper function to get RecordType from HashNode, preferring GpcType when available */
+/* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return NULL;
-    
-    /* GpcType is the single source of truth */
-    assert(node->type != NULL && "HashNode must have GpcType populated");
-    if (gpc_type_is_record(node->type))
-    {
-        return gpc_type_get_record(node->type);
-    }
-    
-    return NULL;
+    /* Use hashnode helper which handles NULL GpcType */
+    return hashnode_get_record_type(node);
 }
 
 /* Helper function to get VarType from HashNode */

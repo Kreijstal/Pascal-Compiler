@@ -280,10 +280,37 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     assert(symtab->stack_head != NULL);
     assert(id != NULL);
 
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
+    /* Create GpcType from legacy parameters */
+    GpcType *gpc_type = NULL;
+    
+    if (record_type != NULL)
+    {
+        /* Create record type */
+        gpc_type = create_record_type(record_type);
+    }
+    else if (type_alias != NULL)
+    {
+        /* Type alias case - for now, pass NULL and rely on SemCheck to populate GpcType */
+        /* The actual GpcType will be created in SemCheck when processing the type declaration */
+        /* This is a temporary workaround - ideally we'd create the full GpcType here */
+        gpc_type = NULL;
+    }
+    else if (var_type != HASHVAR_UNTYPED)
+    {
+        /* Create from var_type */
+        gpc_type = gpc_type_from_var_type(var_type);
+    }
+    
+    if (gpc_type != NULL)
+    {
+        return PushTypeOntoScope_Typed(symtab, id, gpc_type);
+    }
+    else
+    {
+        /* Fallback to legacy API for cases we can't convert yet */
+        HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+        return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
+    }
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING GpcType ===== */

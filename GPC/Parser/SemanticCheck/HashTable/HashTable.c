@@ -401,12 +401,16 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         return NULL;
     }
     
-    /* GpcType is the single source of truth for type information */
-    /* Assert that we're not accidentally using legacy parameters */
-    assert(type != NULL && "GpcType must be provided");
-    assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
-    assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
-    assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
+    /* GpcType is the preferred source of truth for type information */
+    if (type != NULL)
+    {
+        /* When GpcType is provided, legacy parameters should not be set */
+        assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
+        assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
+        assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
+    }
+    /* else: Legacy API still in use - type is NULL but may be populated later */
+    /* TODO: Eventually all code paths should provide GpcType at creation time */
     
     return hash_node;
 }
