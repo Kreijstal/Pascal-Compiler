@@ -69,12 +69,10 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     /* Prefer GpcType if available */
     if (node->type != NULL)
     {
-        struct TypeAlias *alias = gpc_type_get_type_alias(node->type);
-        if (alias != NULL)
-            return alias;
+        return gpc_type_get_type_alias(node->type);
     }
     
-    /* Fall back to legacy field */
+    /* Fall back to legacy field for nodes without GpcType */
     return node->type_alias;
 }
 
