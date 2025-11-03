@@ -30,34 +30,6 @@ SymTab_t *InitSymTab()
     return new_symtab;
 }
 
-/* Adds a built-in procedure call */
-/* NOTE: Built-ins reflected on all scope levels */
-/* Returns 1 if failed, 0 otherwise */
-int AddBuiltinProc(SymTab_t *symtab, char *id, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    return AddIdentToTable_Legacy(symtab->builtins, id, NULL, HASHVAR_PROCEDURE, HASHTYPE_BUILTIN_PROCEDURE, args, NULL, NULL);
-}
-
-int AddBuiltinFunction(SymTab_t *symtab, char *id, enum VarType return_type)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    return AddIdentToTable_Legacy(symtab->builtins, id, NULL, return_type, HASHTYPE_FUNCTION, NULL, NULL, NULL);
-}
-
-/* Adds a built-in type */
-int AddBuiltinType(SymTab_t *symtab, char *id, enum VarType var_type)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    return AddIdentToTable_Legacy(symtab->builtins, id, NULL, var_type, HASHTYPE_TYPE, NULL, NULL, NULL);
-}
-
 /* Pushes a new scope onto the stack (FIFO) */
 void PushScope(SymTab_t *symtab)
 {
@@ -71,32 +43,6 @@ void PushScope(SymTab_t *symtab)
     else
         symtab->stack_head = PushListNodeFront(symtab->stack_head,
             CreateListNode(new_hash, LIST_UNSPECIFIED));
-}
-
-/* Pushes a new variable onto the current scope (head) */
-int PushVarOntoScope(SymTab_t *symtab, enum VarType var_type, char *id)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_VAR, NULL, NULL, NULL);
-}
-
-/* Pushes a new array onto the current scope (head) */
-int PushArrayOntoScope(SymTab_t *symtab, enum VarType var_type, char *id, int start, int end, int element_size)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    int result = AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_ARRAY, NULL, NULL, NULL);
-    return result;
 }
 
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
@@ -160,46 +106,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, GpcTyp
 
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
-int PushProcedureOntoScope(SymTab_t *symtab, char *id, char *mangled_id, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, mangled_id, HASHVAR_PROCEDURE, HASHTYPE_PROCEDURE, args, NULL, NULL);
-}
-
-/* Pushes a new function onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushFunctionOntoScope(SymTab_t *symtab, char *id, char *mangled_id, enum VarType var_type, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, mangled_id, var_type, HASHTYPE_FUNCTION, args, NULL, NULL);
-}
-
-/* Pushes a new function return type var onto the current scope (head) */
-/* NOTE: args can be NULL to represent no args */
-int PushFuncRetOntoScope(SymTab_t *symtab, char *id, enum VarType var_type, ListNode_t *args)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-    assert(id != NULL);
-
-    HashTable_t *cur_hash;
-
-    cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_FUNCTION_RETURN, args, NULL, NULL);
-}
-
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
@@ -302,19 +208,10 @@ int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
         gpc_type = gpc_type_from_var_type(var_type);
     }
     
-    if (gpc_type != NULL)
-    {
-        return PushTypeOntoScope_Typed(symtab, id, gpc_type);
-    }
-    else
-    {
-        /* Fallback to legacy API only for truly unresolvable cases:
-         * - UNTYPED parameters
-         * - Forward references that can't be resolved yet
-         * This should be VERY rare now with the comprehensive converter */
-        HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
-        return AddIdentToTable_Legacy(cur_hash, id, NULL, var_type, HASHTYPE_TYPE, NULL, record_type, type_alias);
-    }
+    /* All cases should create a GpcType now. If gpc_type is NULL, it means:
+     * - Truly UNTYPED (var_type == HASHVAR_UNTYPED)
+     * - This is valid and we use NULL GpcType */
+    return PushTypeOntoScope_Typed(symtab, id, gpc_type);
 }
 
 /* ===== NEW TYPE SYSTEM FUNCTIONS USING GpcType ===== */

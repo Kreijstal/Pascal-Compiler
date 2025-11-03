@@ -89,11 +89,6 @@ HashTable_t *InitHashTable();
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
     enum HashType hash_type, GpcType *type);
 
-/* DEPRECATED: Old signature kept for backward compatibility during migration */
-int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
-    struct TypeAlias *type_alias);
-
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, char *id);

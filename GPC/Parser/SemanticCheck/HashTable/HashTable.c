@@ -165,27 +165,6 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
     return add_ident_to_table_internal(table, &params);
 }
 
-int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
-    struct TypeAlias *type_alias)
-{
-    /* NOTE: args parameter is ignored - it's kept only for API compatibility.
-     * The legacy system doesn't store args in HashNode anymore. */
-    (void)args;  // Suppress unused parameter warning
-    
-    HashTableParams params = {
-        .id = id,
-        .mangled_id = mangled_id,
-        .hash_type = hash_type,
-        .type = NULL,  // Legacy function doesn't use GpcType
-        .var_type = var_type,
-        .record_type = record_type,
-        .type_alias = type_alias
-    };
-    
-    return add_ident_to_table_internal(table, &params);
-}
-
 HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
 {
     ListNode_t *list, *cur;
