@@ -28,13 +28,6 @@
 
 /* Helper functions for transitioning from legacy type fields to GpcType */
 
-/* Helper function to check if a node is a record type, preferring GpcType when available */
-static inline int node_is_record_type(HashNode_t *node)
-{
-    if (node == NULL)
-        return 0;
-    
-    /* GpcType must be present for typed nodes */
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
 {

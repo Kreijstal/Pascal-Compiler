@@ -14,6 +14,8 @@
 #include "SymTab.h"
 #include "../HashTable/HashTable.h"
 #include "../../List/List.h"
+#include "../../ParseTree/GpcType.h"
+#include "../../ParseTree/type_tags.h"
 
 /* Initializes the SymTab with stack_head pointing to NULL */
 SymTab_t *InitSymTab()
@@ -106,10 +108,17 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
     HashTable_t *cur_hash;
 
     cur_hash = (HashTable_t *)symtab->stack_head->cur;
-    enum VarType stored_type = HASHVAR_INTEGER;
+    
+    /* Determine type based on value range and create GpcType */
+    int type_tag = INT_TYPE;
     if (value > INT_MAX || value < INT_MIN)
-        stored_type = HASHVAR_LONGINT;
-    int result = AddIdentToTable_Legacy(cur_hash, id, NULL, stored_type, HASHTYPE_CONST, NULL, NULL, NULL);
+        type_tag = LONGINT_TYPE;
+    
+    GpcType *gpc_type = create_primitive_type(type_tag);
+    if (gpc_type == NULL)
+        return 1; /* Failed to create type */
+    
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, gpc_type);
     if (result == 0)
     {
         HashNode_t *node = FindIdentInTable(cur_hash, id);
@@ -118,6 +127,11 @@ int PushConstOntoScope(SymTab_t *symtab, char *id, long long value)
             node->is_constant = 1;
             node->const_int_value = value;
         }
+    }
+    else
+    {
+        /* Failed to add, clean up GpcType */
+        destroy_gpc_type(gpc_type);
     }
     return result;
 }

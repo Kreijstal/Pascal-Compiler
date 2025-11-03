@@ -1199,7 +1199,7 @@ next_identifier:
                                 if (inferred_gpc_type != NULL)
                                 {
                                     /* Free old type and replace with inferred type */
-                                    gpc_type_free(var_node->type);
+                                    destroy_gpc_type(var_node->type);
                                     var_node->type = inferred_gpc_type;
                                 }
                             }

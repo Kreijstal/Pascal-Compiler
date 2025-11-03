@@ -28,13 +28,6 @@
 
 /* Helper functions for transitioning from legacy type fields to GpcType */
 
-/* Helper function to check if a node is a record type, preferring GpcType when available */
-static inline int node_is_record_type(HashNode_t *node)
-{
-    if (node == NULL)
-        return 0;
-    
-    /* Prefer GpcType if available */
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
 {
@@ -206,8 +199,9 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
             }
             else
             {
-                /* Legacy fallback */
-                long long base = codegen_sizeof_var_type(node->var_type);
+                /* Use hashnode helper */
+                enum VarType var_type = hashnode_get_var_type(node);
+                long long base = codegen_sizeof_var_type(var_type);
                 if (base < 0)
                 {
                     codegen_report_error(ctx,
@@ -576,12 +570,7 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     /* LEGACY PATH: GpcType not available or couldn't determine size */
 
     /* Check if this is an array */
-    int is_array;
-    if (node->type != NULL) {
-        is_array = gpc_type_is_array(node->type);
-    } else {
-        is_array = node->is_array;
-    }
+    int is_array = hashnode_is_array(node);
     
     if (is_array)
         return codegen_sizeof_array_node(ctx, node, size_out, depth);
@@ -618,8 +607,9 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         }
     }
     
-    /* Legacy fallback */
-    long long base = codegen_sizeof_var_type(node->var_type);
+    /* Use hashnode helper */
+    enum VarType var_type = hashnode_get_var_type(node);
+    long long base = codegen_sizeof_var_type(var_type);
     if (base >= 0)
     {
         *size_out = base;
