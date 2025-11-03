@@ -49,6 +49,27 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+
+/* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    return hashnode_get_type_alias(node);
+}
+
+/* Helper function to get RecordType from HashNode */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    return hashnode_get_record_type(node);
+}
+
+/* Helper function to check if a node is a record type */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    return hashnode_is_record(node);
+}
+
+static int semcheck_pointer_deref(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_recordaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_addressof(int *type_return,
@@ -150,16 +171,18 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
     if (FindIdent(&type_node, symtab, (char *)type_id) == -1 || type_node == NULL)
         return NULL;
 
-    if (type_node->record_type != NULL)
-        return type_node->record_type;
+    struct RecordType *record = get_record_type_from_node(type_node);
+    if (record != NULL)
+        return record;
 
-    if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL && alias->target_type_id != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
+        if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
             target_node != NULL)
         {
-            return target_node->record_type;
+            return get_record_type_from_node(target_node);
         }
     }
 
@@ -224,10 +247,16 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         return;
 
     expr->is_array_expr = 1;
-    int node_lower_bound = node->array_start;
-    int node_upper_bound = node->array_end;
-    int node_element_size = node->element_size;
-    int node_is_dynamic = node->is_dynamic_array;
+    
+    /* Get array bounds from GpcType */
+    int node_lower_bound, node_upper_bound;
+    hashnode_get_array_bounds(node, &node_lower_bound, &node_upper_bound);
+    
+    /* Get element size from GpcType */
+    long long node_element_size = hashnode_get_element_size(node);
+    
+    /* Check if array is dynamic */
+    int node_is_dynamic = hashnode_is_dynamic_array(node);
 
     expr->array_lower_bound = node_lower_bound;
     expr->array_upper_bound = node_upper_bound;
@@ -237,22 +266,23 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     expr->array_element_type = UNKNOWN_TYPE;
     set_type_from_hashtype(&expr->array_element_type, node);
 
-    if (node->type_alias != NULL && node->type_alias->is_array)
+    struct TypeAlias *type_alias = get_type_alias_from_node(node);
+    if (type_alias != NULL && type_alias->is_array)
     {
-        semcheck_set_array_info_from_alias(expr, symtab, node->type_alias, line_num);
+        semcheck_set_array_info_from_alias(expr, symtab, type_alias, line_num);
 
         if (expr->array_element_size <= 0 && node_element_size > 0)
             expr->array_element_size = node_element_size;
         else if (expr->array_element_size <= 0 &&
-            node->type_alias->array_end >= node->type_alias->array_start)
+            type_alias->array_end >= type_alias->array_start)
         {
-            long long count = (long long)node->type_alias->array_end -
-                (long long)node->type_alias->array_start + 1;
-            if (count > 0 && node->type_alias->array_element_type != UNKNOWN_TYPE)
+            long long count = (long long)type_alias->array_end -
+                (long long)type_alias->array_start + 1;
+            if (count > 0 && type_alias->array_element_type != UNKNOWN_TYPE)
             {
                 long long element_size = 0;
-                if (sizeof_from_type_ref(symtab, node->type_alias->array_element_type,
-                        node->type_alias->array_element_type_id, &element_size,
+                if (sizeof_from_type_ref(symtab, type_alias->array_element_type,
+                        type_alias->array_element_type_id, &element_size,
                         0, line_num) == 0)
                 {
                     expr->array_element_size = (int)element_size;
@@ -270,7 +300,7 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     }
     else
     {
-        expr->array_element_record_type = node->record_type;
+        expr->array_element_record_type = get_record_type_from_node(node);
     }
 }
 
@@ -486,7 +516,7 @@ static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
-                record_info = target_node->record_type;
+                record_info = get_record_type_from_node(target_node);
         }
         return record_info;
     }
@@ -1346,16 +1376,38 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         return 1;
     }
 
+    /* PREFERRED PATH: Try using GpcType directly if available */
+    if (node->type != NULL)
+    {
+        long long size = gpc_type_sizeof(node->type);
+        if (size > 0)
+        {
+            *size_out = size;
+            return 0;
+        }
+        else if (size == 0)
+        {
+            /* Zero-sized type (e.g., empty record or zero-length array) */
+            *size_out = 0;
+            return 0;
+        }
+        /* else size < 0: gpc_type_sizeof couldn't determine size, fall through to legacy path */
+    }
+
+    /* LEGACY PATH: GpcType not available or couldn't determine size */
+    
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        if (node->record_type != NULL)
-            return sizeof_from_record(symtab, node->record_type, size_out,
-                depth + 1, line_num);
-        if (node->type_alias != NULL)
-            return sizeof_from_alias(symtab, node->type_alias, size_out,
-                depth + 1, line_num);
+        struct RecordType *record = get_record_type_from_node(node);
+        if (record != NULL)
+            return sizeof_from_record(symtab, record, size_out, depth + 1, line_num);
+            
+        struct TypeAlias *alias = get_type_alias_from_node(node);
+        if (alias != NULL)
+            return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
-        long long base = sizeof_from_var_type(node->var_type);
+        enum VarType var_type = hashnode_get_var_type(node);
+        long long base = sizeof_from_var_type(var_type);
         if (base >= 0)
         {
             *size_out = base;
@@ -1363,29 +1415,34 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         }
     }
 
-    if (node->is_array)
+    /* For array size calculation */
+    int is_array = hashnode_is_array(node);
+    
+    if (is_array)
     {
-        if (node->is_dynamic_array || node->array_end < node->array_start)
+        int is_dynamic = hashnode_is_dynamic_array(node);
+        
+        if (is_dynamic)
         {
             fprintf(stderr, "Error on line %d, SizeOf cannot determine size of dynamic array %s.\n",
                 line_num, node->id);
             return 1;
         }
 
-        long long element_size = node->element_size;
+        /* Get element size */
+        long long element_size = hashnode_get_element_size(node);
         if (element_size <= 0)
         {
-            long long base = sizeof_from_var_type(node->var_type);
-            if (base < 0)
-            {
-                fprintf(stderr, "Error on line %d, SizeOf cannot determine element size for array %s.\n",
-                    line_num, node->id);
-                return 1;
-            }
-            element_size = base;
+            fprintf(stderr, "Error on line %d, cannot determine element size for array %s.\n",
+                line_num, node->id);
+            return 1;
         }
-
-        long long count = (long long)node->array_end - (long long)node->array_start + 1;
+        
+        /* Get array bounds */
+        int array_start, array_end;
+        hashnode_get_array_bounds(node, &array_start, &array_end);
+        
+        long long count = (long long)array_end - (long long)array_start + 1;
         if (count < 0)
         {
             fprintf(stderr, "Error on line %d, invalid bounds for array %s in SizeOf.\n",
@@ -1397,15 +1454,19 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         return 0;
     }
 
-    if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
-        return sizeof_from_record(symtab, node->record_type, size_out,
-            depth + 1, line_num);
+    if (node_is_record_type(node))
+    {
+        struct RecordType *record = get_record_type_from_node(node);
+        if (record != NULL)
+            return sizeof_from_record(symtab, record, size_out, depth + 1, line_num);
+    }
 
-    if (node->type_alias != NULL)
-        return sizeof_from_alias(symtab, node->type_alias, size_out,
-            depth + 1, line_num);
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (alias != NULL)
+        return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
-    long long base = sizeof_from_var_type(node->var_type);
+    enum VarType var_type = hashnode_get_var_type(node);
+    long long base = sizeof_from_var_type(var_type);
     if (base >= 0)
     {
         *size_out = base;
@@ -1625,9 +1686,9 @@ static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
 
     set_type_from_hashtype(out_type, type_node);
 
-    if (type_node->type_alias != NULL)
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL)
     {
-        struct TypeAlias *alias = type_node->type_alias;
         if (alias->base_type != UNKNOWN_TYPE)
             *out_type = alias->base_type;
 
@@ -1739,9 +1800,9 @@ static int semcheck_pointer_deref(int *type_return,
             target_node != NULL)
         {
             set_type_from_hashtype(&target_type, target_node);
-            if (target_node->type_alias != NULL)
+            struct TypeAlias *alias = get_type_alias_from_node(target_node);
+            if (alias != NULL)
             {
-                struct TypeAlias *alias = target_node->type_alias;
                 if (alias->base_type != UNKNOWN_TYPE)
                     target_type = alias->base_type;
                 else if (alias->is_pointer)
@@ -1768,17 +1829,20 @@ static int semcheck_pointer_deref(int *type_return,
         {
             HashNode_t *target_node = NULL;
             if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != -1 && target_node != NULL)
-                expr->record_type = target_node->record_type;
+                expr->record_type = get_record_type_from_node(target_node);
         }
     }
 
     if (pointer_expr->pointer_subtype_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != -1 && type_node != NULL &&
-            type_node->type_alias != NULL && type_node->type_alias->is_array)
+        if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != -1 && type_node != NULL)
         {
-            semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL && alias->is_array)
+            {
+                semcheck_set_array_info_from_alias(expr, symtab, alias, expr->line_num);
+            }
         }
     }
 
@@ -1824,7 +1888,7 @@ static int semcheck_recordaccess(int *type_return,
             if (FindIdent(&target_node, symtab, record_expr->pointer_subtype_id) != -1 &&
                 target_node != NULL)
             {
-                record_info = target_node->record_type;
+                record_info = get_record_type_from_node(target_node);
             }
         }
 
@@ -1923,20 +1987,26 @@ static int semcheck_recordaccess(int *type_return,
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 && type_node != NULL)
         {
-            if (type_node->record_type != NULL)
-                field_record = type_node->record_type;
-            else if (type_node->type_alias != NULL && type_node->type_alias->target_type_id != NULL)
+            struct RecordType *record_type = get_record_type_from_node(type_node);
+            if (record_type != NULL)
+                field_record = record_type;
+            else
             {
-                HashNode_t *target_node = NULL;
-                if (FindIdent(&target_node, symtab, type_node->type_alias->target_type_id) != -1 &&
-                    target_node != NULL && target_node->record_type != NULL)
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->target_type_id != NULL)
                 {
-                    field_record = target_node->record_type;
+                    HashNode_t *target_node = NULL;
+                    if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
+                        target_node != NULL)
+                    {
+                        field_record = get_record_type_from_node(target_node);
+                    }
                 }
             }
 
-            if (type_node->type_alias != NULL && type_node->type_alias->is_array)
-                array_alias = type_node->type_alias;
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL && alias->is_array)
+                array_alias = alias;
         }
 
         if (field_record != NULL && field_type == UNKNOWN_TYPE)
@@ -2013,13 +2083,78 @@ static int semcheck_addressof(int *type_return,
     *type_return = POINTER_TYPE;
     return error_count;
 }
-/* Sets a type based on a hash_type */
+/* Sets a type based on a hash_type - uses GpcType when available */
 int set_type_from_hashtype(int *type, HashNode_t *hash_node)
 {
     assert(type != NULL);
     assert(hash_node != NULL);
 
-    switch(hash_node->var_type)
+    /* Try GpcType first if available */
+    if (hash_node->type != NULL)
+    {
+        if (hash_node->type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            *type = gpc_type_get_primitive_tag(hash_node->type);
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_POINTER)
+        {
+            *type = POINTER_TYPE;
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_RECORD)
+        {
+            *type = RECORD_TYPE;
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            /* For functions, return the return type, not PROCEDURE */
+            GpcType *return_type = gpc_type_get_return_type(hash_node->type);
+            if (return_type != NULL)
+            {
+                if (return_type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    *type = gpc_type_get_primitive_tag(return_type);
+                    return 0;
+                }
+                else if (return_type->kind == TYPE_KIND_RECORD)
+                {
+                    *type = RECORD_TYPE;
+                    return 0;
+                }
+                else if (return_type->kind == TYPE_KIND_POINTER)
+                {
+                    *type = POINTER_TYPE;
+                    return 0;
+                }
+                /* Add other return type kinds as needed */
+                *type = UNKNOWN_TYPE;
+                return 0;
+            }
+            /* No return type means it's a procedure (void) */
+            *type = PROCEDURE;
+            return 0;
+        }
+        else if (hash_node->type->kind == TYPE_KIND_ARRAY)
+        {
+            /* For arrays, return the element type's primitive tag if available */
+            GpcType *elem_type = hash_node->type->info.array_info.element_type;
+            if (elem_type != NULL && elem_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                *type = gpc_type_get_primitive_tag(elem_type);
+                return 0;
+            }
+            *type = UNKNOWN_TYPE;
+            return 0;
+        }
+        *type = UNKNOWN_TYPE;
+        return 0;
+    }
+
+    /* Fallback to legacy var_type */
+    enum VarType var_type = hashnode_get_var_type(hash_node);
+    switch(var_type)
     {
         case HASHVAR_INTEGER:
             *type = INT_TYPE;
@@ -2662,6 +2797,16 @@ int semcheck_varid(int *type_return,
             return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
         }
         
+        /* Don't convert procedure identifiers to function calls when used as values
+         * This allows procedure variables to work correctly */
+        if(hash_return->hash_type == HASHTYPE_PROCEDURE && mutating == NO_MUTATE)
+        {
+            /* Keep as EXPR_VAR_ID so it can be used as a procedure value */
+            set_hash_meta(hash_return, mutating);
+            set_type_from_hashtype(type_return, hash_return);
+            return 0;
+        }
+        
         set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
@@ -2677,6 +2822,10 @@ int semcheck_varid(int *type_return,
             if(hash_return->hash_type == HASHTYPE_CONST && mutating == 0)
             {
                 /* Constants are readable values. */
+            }
+            else if(hash_return->hash_type == HASHTYPE_PROCEDURE && mutating == 0)
+            {
+                /* Procedures can be used as values when not mutating (for procedure variables). */
             }
             else
             {
@@ -2694,23 +2843,36 @@ int semcheck_varid(int *type_return,
         {
             int subtype = UNKNOWN_TYPE;
             const char *type_id = NULL;
-            if (hash_return->type_alias != NULL)
+            struct TypeAlias *alias = get_type_alias_from_node(hash_return);
+            if (alias != NULL)
             {
-                struct TypeAlias *alias = hash_return->type_alias;
                 subtype = alias->pointer_type;
                 type_id = alias->pointer_type_id;
             }
+            
+            /* If subtype is unknown but we have a type_id, resolve it */
+            if (subtype == UNKNOWN_TYPE && type_id != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindIdent(&target_node, symtab, (char*)type_id) != -1 && target_node != NULL)
+                {
+                    set_type_from_hashtype(&subtype, target_node);
+                }
+            }
+            
             semcheck_set_pointer_info(expr, subtype, type_id);
             expr->record_type = NULL;
             if (expr->pointer_subtype_id != NULL)
             {
                 HashNode_t *target_node = NULL;
                 if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) != -1 && target_node != NULL)
-                    expr->record_type = target_node->record_type;
+                    expr->record_type = get_record_type_from_node(target_node);
             }
         }
         if (*type_return == RECORD_TYPE)
-            expr->record_type = hash_return->record_type;
+        {
+            expr->record_type = get_record_type_from_node(hash_return);
+        }
         else
             expr->record_type = NULL;
     }
@@ -2779,10 +2941,13 @@ int semcheck_arrayaccess(int *type_return,
         if (array_expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL &&
-                type_node->type_alias != NULL && type_node->type_alias->is_array)
+            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL)
             {
-                semcheck_set_array_info_from_alias(expr, symtab, type_node->type_alias, expr->line_num);
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_array)
+                {
+                    semcheck_set_array_info_from_alias(expr, symtab, alias, expr->line_num);
+                }
             }
         }
 
@@ -2796,13 +2961,16 @@ int semcheck_arrayaccess(int *type_return,
             {
                 HashNode_t *type_node = NULL;
                 if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
-                    type_node != NULL && type_node->type_alias != NULL && type_node->type_alias->is_pointer)
+                    type_node != NULL)
                 {
-                    struct TypeAlias *alias = type_node->type_alias;
-                    pointer_subtype = alias->pointer_type;
-                    pointer_type_id = alias->pointer_type_id;
-                    if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
-                        pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                    if (alias != NULL && alias->is_pointer)
+                    {
+                        pointer_subtype = alias->pointer_type;
+                        pointer_type_id = alias->pointer_type_id;
+                        if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
+                            pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                    }
                 }
             }
 
@@ -2831,6 +2999,35 @@ int semcheck_arrayaccess(int *type_return,
 
     *type_return = element_type;
     return return_val;
+}
+
+/* Helper to resolve the actual type tag from a TREE_VAR_DECL parameter declaration */
+static int resolve_param_type(Tree_t *var_decl, SymTab_t *symtab)
+{
+    assert(var_decl != NULL && var_decl->type == TREE_VAR_DECL);
+    assert(symtab != NULL);
+    
+    int type_tag = var_decl->tree_data.var_decl_data.type;
+    char *type_id = var_decl->tree_data.var_decl_data.type_id;
+    
+    /* If type is known directly (primitive), return it */
+    if (type_tag != UNKNOWN_TYPE)
+        return type_tag;
+    
+    /* If type_id is provided, resolve it from symbol table */
+    if (type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
+        {
+            /* Get the type tag from the type node */
+            int resolved_type = UNKNOWN_TYPE;
+            set_type_from_hashtype(&resolved_type, type_node);
+            return resolved_type;
+        }
+    }
+    
+    return UNKNOWN_TYPE;
 }
 
 /** FUNC_CALL **/
@@ -2900,20 +3097,24 @@ int semcheck_funccall(int *type_return,
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
 
-            if (ListLength(candidate->args) == ListLength(args_given))
+            /* Get formal arguments from GpcType instead of deprecated args field */
+            ListNode_t *candidate_args = gpc_type_get_procedure_params(candidate->type);
+            
+            if (ListLength(candidate_args) == ListLength(args_given))
             {
                 int current_score = 0;
-                ListNode_t *formal_args = candidate->args;
+                ListNode_t *formal_args = candidate_args;
                 ListNode_t *call_args = args_given;
 
                 while(formal_args != NULL)
                 {
                     Tree_t *formal_decl = (Tree_t *)formal_args->cur;
-                    int formal_type = formal_decl->tree_data.var_decl_data.type;
+                    int formal_type = resolve_param_type(formal_decl, symtab);
 
                     int call_type;
                     semcheck_expr_main(&call_type, symtab, (struct Expression *)call_args->cur, max_scope_lev, NO_MUTATE);
 
+                    fprintf(stderr, "DEBUG overload: formal_type=%d, call_type=%d\n", formal_type, call_type);
                     if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
@@ -2990,8 +3191,9 @@ int semcheck_funccall(int *type_return,
 
         if (*type_return == RECORD_TYPE)
         {
-            if (hash_return->record_type != NULL)
-                expr->record_type = hash_return->record_type;
+            struct RecordType *record_type = get_record_type_from_node(hash_return);
+            if (record_type != NULL)
+                expr->record_type = record_type;
             else
                 expr->record_type = NULL;
         }
@@ -3002,7 +3204,8 @@ int semcheck_funccall(int *type_return,
 
         /***** THEN VERIFY ARGS INSIDE *****/
         cur_arg = 0;
-        true_args = hash_return->args;
+        /* Get formal arguments from GpcType instead of deprecated args field */
+        true_args = gpc_type_get_procedure_params(hash_return->type);
         while(args_given != NULL && true_args != NULL)
         {
             ++cur_arg;
@@ -3017,11 +3220,26 @@ int semcheck_funccall(int *type_return,
 
             while(true_arg_ids != NULL && args_given != NULL)
             {
-                int expected_type = arg_decl->tree_data.var_decl_data.type;
+                int expected_type = resolve_param_type(arg_decl, symtab);
+                fprintf(stderr, "DEBUG: arg_type=%d, expected_type=%d, cur_arg=%d\n", arg_type, expected_type, cur_arg);
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
-                    if (!((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
-                          (arg_type == LONGINT_TYPE && expected_type == INT_TYPE)))
+                    /* Allow integer/longint conversion */
+                    int type_compatible = 0;
+                    if ((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
+                        (arg_type == LONGINT_TYPE && expected_type == INT_TYPE))
+                    {
+                        type_compatible = 1;
+                    }
+                    /* For complex types (records, files, etc.), if both have the same type tag,
+                     * consider them compatible. The overload resolution already ensured we have
+                     * the right function via name mangling. */
+                    else if (arg_type == expected_type)
+                    {
+                        type_compatible = 1;
+                    }
+                    
+                    if (!type_compatible)
                     {
                         fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
                             expr->line_num, id, cur_arg);

@@ -2,252 +2,172 @@
     Damon Gwinn
     Hash table of identifiers
     Used for scoping (semantic checking)
+
+    WARNING: Hash table will NOT free given identifier strings or args when destroyed
+        Remember to free given identifier strings and args manually
 */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <assert.h>
-#include <string.h>
-#include "../../List/List.h"
-#include "../../ParseTree/tree.h"
 #include "../../../identifier_utils.h"
+#include "../../ParseTree/GpcType.h"
+#include "../../ParseTree/type_tags.h"
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+
+#include "../../List/List.h"
 #include "HashTable.h"
 
-/* Gives a new hash tables with NULL'd out list pointers */
+/* Forward declarations for internal helper functions */
+static HashNode_t* create_hash_node(char* id, char* mangled_id, 
+                                   enum HashType hash_type,
+                                   GpcType* type, enum VarType var_type,
+                                   struct RecordType* record_type, 
+                                   struct TypeAlias* type_alias);
+static int is_procedure_or_function(enum HashType hash_type);
+static int check_collision_allowance(HashNode_t* existing_node, enum HashType new_hash_type);
+
+/* Internal parameter structure to unify both APIs */
+typedef struct {
+    char* id;
+    char* mangled_id;
+    enum HashType hash_type;
+    GpcType* type;
+    enum VarType var_type;
+    struct RecordType* record_type;
+    struct TypeAlias* type_alias;
+} HashTableParams;
+
 HashTable_t *InitHashTable()
 {
-    HashTable_t *new_table = (HashTable_t *)malloc(sizeof(HashTable_t));
-    assert(new_table != NULL);
-
+    HashTable_t *table;
     int i;
-    for(i = 0; i < TABLE_SIZE; ++i)
-        new_table->table[i] = NULL;
 
-    return new_table;
+    table = (HashTable_t *)malloc(sizeof(HashTable_t));
+    assert(table != NULL);
+
+    for(i = 0; i < TABLE_SIZE; i++)
+        table->table[i] = NULL;
+
+    return table;
 }
 
-/* Adds an identifier to the table - NEW VERSION with GpcType */
-/* Returns 0 if successfully added, 1 if the identifier already exists */
+enum VarType primitive_tag_to_var_type(int tag)
+{
+    switch(tag)
+    {
+        case INT_TYPE:
+            return HASHVAR_INTEGER;
+        case LONGINT_TYPE:
+            return HASHVAR_LONGINT;
+        case REAL_TYPE:
+            return HASHVAR_REAL;
+        case BOOL:
+            return HASHVAR_BOOLEAN;
+        case CHAR_TYPE:
+            return HASHVAR_CHAR;
+        case STRING_TYPE:
+            return HASHVAR_PCHAR;
+        case SET_TYPE:
+            return HASHVAR_SET;
+        case ENUM_TYPE:
+            return HASHVAR_ENUM;
+        case FILE_TYPE:
+            return HASHVAR_FILE;
+        case POINTER_TYPE:
+            return HASHVAR_POINTER;
+        default:
+            return HASHVAR_UNTYPED;
+    }
+}
+
+/* Unified internal function for adding identifiers to hash table */
+static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams* params)
+{
+    assert(table != NULL);
+    assert(params != NULL);
+    assert(params->id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(params->id);
+    if (canonical_id == NULL)
+        return 1;
+
+    int hash = hashpjw(canonical_id);
+    ListNode_t *list = table->table[hash];
+    
+    if (list == NULL)
+    {
+        /* Empty bucket - create new entry */
+        HashNode_t *hash_node = create_hash_node(params->id, params->mangled_id, 
+                                               params->hash_type,
+                                               params->type, params->var_type,
+                                               params->record_type, params->type_alias);
+        if (hash_node == NULL)
+        {
+            free(canonical_id);
+            return 1;
+        }
+        
+        hash_node->canonical_id = canonical_id;
+        table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
+        return 0;
+    }
+    else
+    {
+        /* Check for collisions */
+        ListNode_t *cur = list;
+        while (cur != NULL)
+        {
+            HashNode_t *existing_node = (HashNode_t *)cur->cur;
+            if (strcmp(existing_node->canonical_id, canonical_id) == 0)
+            {
+                if (!check_collision_allowance(existing_node, params->hash_type))
+                {
+                    free(canonical_id);
+                    return 1;
+                }
+            }
+            cur = cur->next;
+        }
+
+        /* No collision or allowed collision - create new entry */
+        HashNode_t *hash_node = create_hash_node(params->id, params->mangled_id, 
+                                               params->hash_type,
+                                               params->type, params->var_type,
+                                               params->record_type, params->type_alias);
+        if (hash_node == NULL)
+        {
+            free(canonical_id);
+            return 1;
+        }
+        
+        hash_node->canonical_id = canonical_id;
+        table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
+        return 0;
+    }
+}
+
 int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
-    enum HashType hash_type, ListNode_t *args, GpcType *type)
+    enum HashType hash_type, GpcType *type)
 {
-    ListNode_t *list, *cur;
-    HashNode_t *hash_node;
-    int hash;
-
-    assert(table != NULL);
-    assert(id != NULL);
-
-    char *canonical_id = pascal_identifier_lower_dup(id);
-    if (canonical_id == NULL)
-        return 1;
-
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-    if(list == NULL)
-    {
-        hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
-        assert(hash_node != NULL);
-        hash_node->hash_type = hash_type;
-        hash_node->type = type; // NEW: Use unified type system
-        hash_node->id = strdup(id);
-        if (hash_node->id == NULL)
-        {
-            free(hash_node);
-            free(canonical_id);
-            return 1;
-        }
-        hash_node->canonical_id = canonical_id;
-        hash_node->mangled_id = mangled_id;
-        hash_node->args = args;
-        hash_node->referenced = 0;
-        hash_node->mutated = 0;
-        hash_node->is_constant = 0;
-        hash_node->const_int_value = 0;
-        hash_node->is_var_parameter = 0;
-        
-        // Initialize legacy fields to defaults for backward compatibility
-        hash_node->var_type = HASHVAR_UNTYPED;
-        hash_node->record_type = NULL;
-        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
-        hash_node->type_alias = NULL;
-
-        table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
-        return 0;
-    }
-    else
-    {
-        cur = list;
-        while(cur != NULL)
-        {
-            hash_node = (HashNode_t *)cur->cur;
-            if(strcmp(hash_node->canonical_id, canonical_id) == 0)
-            {
-                int is_new_proc_func = (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
-                int is_existing_proc_func = (hash_node->hash_type == HASHTYPE_PROCEDURE || hash_node->hash_type == HASHTYPE_FUNCTION);
-
-                if (!is_new_proc_func || !is_existing_proc_func)
-                {
-                    // If either is not a proc/func, it's a redeclaration error.
-                    free(canonical_id);
-                    return 1;
-                }
-            }
-            cur = cur->next;
-        }
-
-        /* Success if here */
-        hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
-        assert(hash_node != NULL);
-        hash_node->hash_type = hash_type;
-        hash_node->type = type; // NEW: Use unified type system
-        hash_node->id = strdup(id);
-        if (hash_node->id == NULL)
-        {
-            free(hash_node);
-            free(canonical_id);
-            return 1;
-        }
-        hash_node->canonical_id = canonical_id;
-        hash_node->mangled_id = mangled_id;
-        hash_node->args = args;
-        hash_node->referenced = 0;
-        hash_node->mutated = 0;
-        hash_node->is_constant = 0;
-        hash_node->const_int_value = 0;
-        hash_node->is_var_parameter = 0;
-        
-        // Initialize legacy fields to defaults for backward compatibility
-        hash_node->var_type = HASHVAR_UNTYPED;
-        hash_node->record_type = NULL;
-        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
-        hash_node->type_alias = NULL;
-
-        table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
-        return 0;
-    }
+    HashTableParams params = {
+        .id = id,
+        .mangled_id = mangled_id,
+        .hash_type = hash_type,
+        .type = type,
+        .var_type = HASHVAR_UNTYPED,  // Will be set from GpcType
+        .record_type = NULL,
+        .type_alias = NULL
+    };
+    
+    return add_ident_to_table_internal(table, &params);
 }
 
-/* Adds an identifier to the table - LEGACY VERSION */
-/* Returns 1 if successfully added, 0 if the identifier already exists */
-int AddIdentToTable_Legacy(HashTable_t *table, char *id, char *mangled_id, enum VarType var_type,
-    enum HashType hash_type, ListNode_t *args, struct RecordType *record_type,
-    struct TypeAlias *type_alias)
-{
-    ListNode_t *list, *cur;
-    HashNode_t *hash_node;
-    int hash;
-
-    assert(table != NULL);
-    assert(id != NULL);
-
-    char *canonical_id = pascal_identifier_lower_dup(id);
-    if (canonical_id == NULL)
-        return 1;
-
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-    if(list == NULL)
-    {
-        hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
-        assert(hash_node != NULL);
-        hash_node->hash_type = hash_type;
-        hash_node->var_type = var_type;
-        hash_node->type = NULL;
-        hash_node->id = strdup(id);
-        if (hash_node->id == NULL)
-        {
-            free(hash_node);
-            free(canonical_id);
-            return 1;
-        }
-        hash_node->canonical_id = canonical_id;
-        hash_node->mangled_id = mangled_id;
-        hash_node->args = args;
-        hash_node->record_type = record_type;
-        hash_node->referenced = 0;
-        hash_node->mutated = 0;
-        hash_node->is_constant = 0;
-        hash_node->const_int_value = 0;
-        hash_node->is_var_parameter = 0;
-        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
-        hash_node->type_alias = type_alias;
-
-        table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
-        return 0;
-    }
-    else
-    {
-        cur = list;
-        while(cur != NULL)
-        {
-            hash_node = (HashNode_t *)cur->cur;
-            if(strcmp(hash_node->canonical_id, canonical_id) == 0)
-            {
-                int is_new_proc_func = (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
-                int is_existing_proc_func = (hash_node->hash_type == HASHTYPE_PROCEDURE || hash_node->hash_type == HASHTYPE_FUNCTION);
-
-                if (!is_new_proc_func || !is_existing_proc_func)
-                {
-                    // If either is not a proc/func, it's a redeclaration error.
-                    free(canonical_id);
-                    return 1;
-                }
-            }
-            cur = cur->next;
-        }
-
-        /* Success if here */
-        hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
-        assert(hash_node != NULL);
-        hash_node->hash_type = hash_type;
-        hash_node->var_type = var_type;
-        hash_node->type = NULL;
-        hash_node->id = strdup(id);
-        if (hash_node->id == NULL)
-        {
-            free(hash_node);
-            free(canonical_id);
-            return 1;
-        }
-        hash_node->canonical_id = canonical_id;
-        hash_node->mangled_id = mangled_id;
-        hash_node->args = args;
-        hash_node->record_type = record_type;
-        hash_node->referenced = 0;
-        hash_node->mutated = 0;
-        hash_node->is_constant = 0;
-        hash_node->const_int_value = 0;
-        hash_node->is_var_parameter = 0;
-        hash_node->is_array = (hash_type == HASHTYPE_ARRAY);
-        hash_node->array_start = 0;
-        hash_node->array_end = 0;
-        hash_node->element_size = 0;
-        hash_node->is_dynamic_array = 0;
-        hash_node->type_alias = type_alias;
-
-        table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
-        return 0;
-    }
-}
-
-/* Searches for the given identifier in the table. Returns NULL if not found */
-/* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
 {
-    ListNode_t *list;
+    ListNode_t *list, *cur;
     HashNode_t *hash_node;
     int hash;
 
@@ -265,78 +185,83 @@ HashNode_t *FindIdentInTable(HashTable_t *table, char *id)
         free(canonical_id);
         return NULL;
     }
-    else
+
+    cur = list;
+    while(cur != NULL)
     {
-        while(list != NULL)
-        {
-            hash_node = (HashNode_t *)list->cur;
-            if(strcmp(hash_node->canonical_id, canonical_id) == 0)
-            {
-                free(canonical_id);
-                return hash_node;
-            }
-
-            list = list->next;
-        }
-
-        free(canonical_id);
-        return NULL;
-    }
-}
-
-/* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
-ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
-{
-    ListNode_t *list;
-    ListNode_t *matches = NULL;
-    HashNode_t *hash_node;
-    int hash;
-
-    assert(table != NULL);
-    assert(id != NULL);
-
-    char *canonical_id = pascal_identifier_lower_dup(id);
-    if (canonical_id == NULL)
-        return NULL;
-
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-
-    while(list != NULL)
-    {
-        hash_node = (HashNode_t *)list->cur;
+        hash_node = (HashNode_t *)cur->cur;
         if(strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
-            if(matches == NULL)
-                matches = CreateListNode(hash_node, LIST_UNSPECIFIED);
-            else
-                PushListNodeBack(matches, CreateListNode(hash_node, LIST_UNSPECIFIED));
+            free(canonical_id);
+            return hash_node;
         }
-        list = list->next;
+        cur = cur->next;
     }
 
     free(canonical_id);
-    return matches;
+    return NULL;
 }
 
-/* Resets hash node mutation and reference status */
+ListNode_t *FindAllIdentsInTable(HashTable_t *table, char *id)
+{
+    ListNode_t *list, *cur;
+    HashNode_t *hash_node;
+    int hash;
+    ListNode_t *found_list = NULL;
+
+    assert(table != NULL);
+    assert(id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
+    list = table->table[hash];
+    if(list == NULL)
+    {
+        free(canonical_id);
+        return NULL;
+    }
+
+    cur = list;
+    while(cur != NULL)
+    {
+        hash_node = (HashNode_t *)cur->cur;
+        if(strcmp(hash_node->canonical_id, canonical_id) == 0)
+        {
+            if (found_list == NULL)
+            {
+                found_list = CreateListNode(hash_node, LIST_UNSPECIFIED);
+            }
+            else
+            {
+                PushListNodeBack(found_list, CreateListNode(hash_node, LIST_UNSPECIFIED));
+            }
+        }
+        cur = cur->next;
+    }
+
+    free(canonical_id);
+    return found_list;
+}
+
 void ResetHashNodeStatus(HashNode_t *hash_node)
 {
     assert(hash_node != NULL);
-    hash_node->mutated = 0;
     hash_node->referenced = 0;
+    hash_node->mutated = 0;
 }
 
-/* Frees any and all allocated ListNode_t pointers */
 void DestroyHashTable(HashTable_t *table)
 {
     ListNode_t *cur, *temp;
     HashNode_t *hash_node;
+    int i;
 
     assert(table != NULL);
 
-    int i;
-    for(i = 0; i < TABLE_SIZE; ++i)
+    for(i = 0; i < TABLE_SIZE; i++)
     {
         cur = table->table[i];
         while(cur != NULL)
@@ -346,8 +271,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->id);
             if (hash_node->canonical_id != NULL)
                 free(hash_node->canonical_id);
-            if(hash_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
-                DestroyBuiltin(hash_node);
+            /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
+            /* to avoid double-free issues */
 
             free(cur->cur);
             temp = cur->next;
@@ -359,45 +284,39 @@ void DestroyHashTable(HashTable_t *table)
     free(table);
 }
 
-/* Destroys special builtin procedure addons */
-void DestroyBuiltin(HashNode_t *node)
+void DestroyBuiltin(HashNode_t *hash_node)
 {
-    assert(node != NULL);
-    assert(node->hash_type == HASHTYPE_BUILTIN_PROCEDURE);
+    assert(hash_node != NULL);
+    assert(hash_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE);
 
-    destroy_list(node->args);
+    /* Builtin procedure args are owned by the parser and will be destroyed separately */
+    /* Do not destroy args here to avoid double-free issues */
 }
 
-/* Prints all entries in the HashTable */
 void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
 {
-    int i, j;
-    ListNode_t *list;
+    int i;
+    ListNode_t *list, *cur;
     HashNode_t *hash_node;
+    char indent_str[256];
+    int j;
 
     assert(table != NULL);
     assert(f != NULL);
 
-    for(i = 0; i < TABLE_SIZE; ++i)
+    for(j = 0; j < num_indent; j++)
+        indent_str[j] = '\t';
+    indent_str[num_indent] = '\0';
+
+    for(i = 0; i < TABLE_SIZE; i++)
     {
         list = table->table[i];
-        while(list != NULL)
+        cur = list;
+        while(cur != NULL)
         {
-            for(j = 0; j < num_indent; ++j)
-                fprintf(f, "  ");
-            hash_node = (HashNode_t *)list->cur;
-            fprintf(f, "ID: %s  HASH_TYPE: %d  VAR_TYPE: %d  HASH: %d\n",
-            hash_node->id, hash_node->hash_type, hash_node->var_type, i);
-
-            if(hash_node->args != NULL)
-            {
-                for(j = 0; j < num_indent+1; ++j)
-                    fprintf(f, "  ");
-                fprintf(f, "[ARGS]: ");
-                PrintList(hash_node->args, f, 0);
-            }
-
-            list = list->next;
+            hash_node = (HashNode_t *)cur->cur;
+            fprintf(f, "%s%s\n", indent_str, hash_node->id);
+            cur = cur->next;
         }
     }
 }
@@ -410,19 +329,115 @@ void PrintHashTable(HashTable_t *table, FILE *f, int num_indent)
  */
 int hashpjw( char *s )
 {
-	char *p;
-	unsigned h = 0, g;
+    char *p;
+    unsigned h = 0, g;
 
-    assert(s != NULL);
+    for(p = s; *p != '\0'; p++)
+    {
+        h = (h << 4) + (*p);
+        if((g = h & 0xf0000000))
+        {
+            h = h ^ (g >> 24);
+            h = h ^ g;
+        }
+    }
 
-	for ( p = s; *p != '\0'; p++ )
-	{
-		h = (h << 4) + (*p);
-		if ( (g = h & 0xf0000000) )
-		{
-			h = h ^ ( g >> 24 );
-			h = h ^ g;
-		}
-	}
-	return h % TABLE_SIZE;
+    return h % TABLE_SIZE;
+}
+
+/* =============================================================================
+ * Internal Helper Functions
+ * ============================================================================= */
+
+/* Create and initialize a new hash node with default values */
+static HashNode_t* create_hash_node(char* id, char* mangled_id, 
+                                   enum HashType hash_type,
+                                   GpcType* type, enum VarType var_type,
+                                   struct RecordType* record_type, 
+                                   struct TypeAlias* type_alias)
+{
+    HashNode_t *hash_node = (HashNode_t *)malloc(sizeof(HashNode_t));
+    if (hash_node == NULL)
+        return NULL;
+        
+    assert(hash_node != NULL);
+    
+    /* Set basic fields */
+    hash_node->hash_type = hash_type;
+    hash_node->type = type;
+    hash_node->mangled_id = mangled_id;
+    hash_node->referenced = 0;
+    hash_node->mutated = 0;
+    hash_node->is_constant = 0;
+    hash_node->const_int_value = 0;
+    hash_node->is_var_parameter = 0;
+    
+    /* Set identifier */
+    hash_node->id = strdup(id);
+    if (hash_node->id == NULL)
+    {
+        free(hash_node);
+        return NULL;
+    }
+    
+    /* Legacy parameters are no longer used - assert they're not set */
+    if (type != NULL) {
+        /* When GpcType is provided, legacy parameters should not be set */
+        assert(var_type == HASHVAR_UNTYPED && "When GpcType provided, var_type should be HASHVAR_UNTYPED");
+        assert(record_type == NULL && "When GpcType provided, record_type should be NULL");
+        assert(type_alias == NULL && "When GpcType provided, type_alias should be NULL");
+    }
+    /* If type is NULL, this is an UNTYPED node (valid for untyped procedure parameters) */
+    /* No legacy fields to populate - they've been removed */
+    
+    return hash_node;
+}
+
+/* Check if a hash type represents a procedure or function */
+static int is_procedure_or_function(enum HashType hash_type)
+{
+    return (hash_type == HASHTYPE_PROCEDURE || hash_type == HASHTYPE_FUNCTION);
+}
+
+/* Check if a collision between existing and new entries is allowed */
+static int check_collision_allowance(HashNode_t* existing_node, enum HashType new_hash_type)
+{
+    int is_new_proc_func = is_procedure_or_function(new_hash_type);
+    int is_existing_proc_func = is_procedure_or_function(existing_node->hash_type);
+
+    /* Allow collision only if both are procedures/functions */
+    return (is_new_proc_func && is_existing_proc_func);
+}
+
+/* Get VarType equivalent from node (for legacy code compatibility) */
+enum VarType hashnode_get_var_type(const HashNode_t *node)
+{
+    if (node == NULL)
+        return HASHVAR_UNTYPED;
+    
+    /* Prefer GpcType when available */
+    if (node->type != NULL)
+    {
+        switch (node->type->kind)
+        {
+            case TYPE_KIND_PRIMITIVE:
+            {
+                int tag = gpc_type_get_primitive_tag(node->type);
+                return primitive_tag_to_var_type(tag);
+            }
+            case TYPE_KIND_POINTER:
+                return HASHVAR_POINTER;
+            case TYPE_KIND_ARRAY:
+                return HASHVAR_ARRAY;
+            case TYPE_KIND_RECORD:
+                return HASHVAR_RECORD;
+            case TYPE_KIND_PROCEDURE:
+                return HASHVAR_PROCEDURE;
+            default:
+                return HASHVAR_UNTYPED;
+        }
+    }
+    
+    /* If type is NULL, this is an UNTYPED node */
+    return HASHVAR_UNTYPED;
 }

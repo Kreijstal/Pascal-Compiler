@@ -383,6 +383,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_SET:
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
+        case EXPR_ADDR_OF_PROC:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -796,8 +797,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
+        /* For function calls, get the GpcType from the resolved_func if available.
+         * Note: This still has a potential use-after-free if resolved_func points to freed memory.
+         * TODO: Add cached GpcType to FunctionCall structure like we did for ProcedureCall. */
+        struct GpcType *func_type = NULL;
+        if (expr->expr_data.function_call_data.resolved_func != NULL)
+        {
+            func_type = expr->expr_data.function_call_data.resolved_func->type;
+        }
+        
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
-            inst_list, ctx, expr->expr_data.function_call_data.resolved_func, 0);
+            inst_list, ctx, func_type, expr->expr_data.function_call_data.id, 0);
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE ||
@@ -823,6 +833,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     else if (expr->type == EXPR_ADDR)
     {
         return codegen_addressof_leaf(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_ADDR_OF_PROC)
+    {
+        HashNode_t *proc_symbol = expr->expr_data.addr_of_proc_data.procedure_symbol;
+        if (proc_symbol == NULL || proc_symbol->mangled_id == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Missing symbol information for procedure address.");
+            return inst_list;
+        }
+        /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_symbol->mangled_id, target_reg->bit_64);
+        return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_STRING)
     {

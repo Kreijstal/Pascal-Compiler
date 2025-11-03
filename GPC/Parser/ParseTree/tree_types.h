@@ -8,6 +8,10 @@
 
 #include "../List/List.h"
 
+/* Forward declarations to avoid circular dependencies */
+struct GpcType;
+struct HashNode;  /* Forward declare HashNode to avoid circular dependency */
+
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR,
@@ -38,6 +42,10 @@ struct TypeAlias
     int is_file;
     int file_type;
     char *file_type_id;
+    
+    /* GpcType for this type alias - used for enums and sets to provide a shared
+     * type that all literals/members reference. Owned by this structure. */
+    struct GpcType *gpc_type;
 };
 
 struct RecordType;
@@ -111,7 +119,13 @@ struct Statement
             char *id;
             char *mangled_id;
             ListNode_t *expr_args;
-        struct HashNode *resolved_proc;
+            struct HashNode *resolved_proc;  /* DEPRECATED: May point to freed memory! Use fields below instead. */
+            
+            /* Cached information from HashNode to avoid use-after-free.
+             * These are populated during semantic checking and remain valid for codegen. */
+            int call_hash_type;              /* HashType enum value (HASHTYPE_VAR, HASHTYPE_PROCEDURE, etc.) */
+            struct GpcType *call_gpc_type;   /* GpcType for getting formal parameters */
+            int is_call_info_valid;          /* 1 if the above fields are valid, 0 otherwise */
         } procedure_call_data;
 
         /* Compound Statements */
@@ -215,7 +229,8 @@ enum ExprType {
     EXPR_SET,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
-    EXPR_TYPECAST
+    EXPR_TYPECAST,
+    EXPR_ADDR_OF_PROC
 };
 
 /* An expression subtree */
@@ -325,10 +340,20 @@ struct Expression
             char *target_type_id;
             struct Expression *expr;
         } typecast_data;
+
+        /* Address of procedure */
+        struct AddrOfProc
+        {
+            struct HashNode *procedure_symbol;
+        } addr_of_proc_data;
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;
     int resolved_type;
+    
+    /* NEW: Unified type system - resolved GpcType for this expression */
+    struct GpcType *resolved_gpc_type;
+    
     int pointer_subtype;
     char *pointer_subtype_id;
     struct RecordType *record_type;

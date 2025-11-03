@@ -18,12 +18,33 @@
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/ParseTree/GpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
+
+/* Helper functions for transitioning from legacy type fields to GpcType */
+
+/* Helper function to check if a node is a record type */
+static inline int node_is_record_type(HashNode_t *node)
+{
+    return hashnode_is_record(node);
+}
+
+/* Helper function to get RecordType from HashNode */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    return hashnode_get_record_type(node);
+}
+
+/* Helper function to get TypeAlias from HashNode */
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    return hashnode_get_type_alias(node);
+}
 
 static unsigned long codegen_next_record_temp_id(void)
 {
@@ -46,7 +67,7 @@ int codegen_type_uses_qword(int type_tag)
 {
     return (type_tag == LONGINT_TYPE || type_tag == REAL_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
-        type_tag == FILE_TYPE);
+        type_tag == FILE_TYPE || type_tag == PROCEDURE);
 }
 
 int codegen_type_is_signed(int type_tag)
@@ -130,7 +151,10 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    if (node->is_dynamic_array || node->array_end < node->array_start)
+    /* Check if array is dynamic */
+    int is_dynamic = hashnode_is_dynamic_array(node);
+    
+    if (is_dynamic)
     {
         codegen_report_error(ctx,
             "ERROR: Unable to determine size of dynamic array %s.",
@@ -138,37 +162,63 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    long long element_size = node->element_size;
+    /* Get element size from GpcType */
+    long long element_size = hashnode_get_element_size(node);
+    
     if (element_size <= 0)
     {
-        if (node->type_alias != NULL && node->type_alias->is_array)
+        struct TypeAlias *alias = get_type_alias_from_node(node);
+        if (alias != NULL && alias->is_array)
         {
-            if (codegen_sizeof_type(ctx, node->type_alias->array_element_type,
-                    node->type_alias->array_element_type_id, NULL,
+            if (codegen_sizeof_type(ctx, alias->array_element_type,
+                    alias->array_element_type_id, NULL,
                     &element_size, depth + 1) != 0)
                 return 1;
         }
-        else if (node->record_type != NULL && node->var_type == HASHVAR_RECORD)
+        else if (node_is_record_type(node))
         {
-            if (codegen_sizeof_record(ctx, node->record_type, &element_size,
+            struct RecordType *record_type = get_record_type_from_node(node);
+            if (record_type != NULL && codegen_sizeof_record(ctx, record_type, &element_size,
                     depth + 1) != 0)
                 return 1;
         }
         else
         {
-            long long base = codegen_sizeof_var_type(node->var_type);
-            if (base < 0)
+            /* Try GpcType first */
+            if (node->type != NULL)
             {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine element size for array %s.",
-                    node->id != NULL ? node->id : "");
-                return 1;
+                long long base = gpc_type_sizeof(node->type);
+                if (base < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine element size for array %s.",
+                        node->id != NULL ? node->id : "");
+                    return 1;
+                }
+                element_size = base;
             }
-            element_size = base;
+            else
+            {
+                /* Use hashnode helper */
+                enum VarType var_type = hashnode_get_var_type(node);
+                long long base = codegen_sizeof_var_type(var_type);
+                if (base < 0)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine element size for array %s.",
+                        node->id != NULL ? node->id : "");
+                    return 1;
+                }
+                element_size = base;
+            }
         }
     }
 
-    long long count = (long long)node->array_end - (long long)node->array_start + 1;
+    /* Get array bounds from GpcType if available */
+    int array_start, array_end;
+    hashnode_get_array_bounds(node, &array_start, &array_end);
+    
+    long long count = (long long)array_end - (long long)array_start + 1;
     if (count < 0)
     {
         codegen_report_error(ctx,
@@ -499,24 +549,67 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
         return 1;
     }
 
-    if (node->is_array)
+    /* PREFERRED PATH: Try using GpcType directly if available */
+    if (node->type != NULL)
+    {
+        long long size = gpc_type_sizeof(node->type);
+        if (size > 0)
+        {
+            *size_out = size;
+            return 0;
+        }
+        else if (size == 0)
+        {
+            /* Zero-sized type */
+            *size_out = 0;
+            return 0;
+        }
+        /* else size < 0: gpc_type_sizeof couldn't determine size, fall through to legacy path */
+    }
+
+    /* LEGACY PATH: GpcType not available or couldn't determine size */
+
+    /* Check if this is an array */
+    int is_array = hashnode_is_array(node);
+    
+    if (is_array)
         return codegen_sizeof_array_node(ctx, node, size_out, depth);
 
     if (node->hash_type == HASHTYPE_TYPE)
     {
-        if (node->record_type != NULL)
-            return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
-        if (node->type_alias != NULL)
-            return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
+        struct RecordType *record = get_record_type_from_node(node);
+        if (record != NULL)
+            return codegen_sizeof_record(ctx, record, size_out, depth + 1);
+        struct TypeAlias *alias = get_type_alias_from_node(node);
+        if (alias != NULL)
+            return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
     }
 
-    if (node->var_type == HASHVAR_RECORD && node->record_type != NULL)
-        return codegen_sizeof_record(ctx, node->record_type, size_out, depth + 1);
+    if (node_is_record_type(node))
+    {
+        struct RecordType *record_type = get_record_type_from_node(node);
+        if (record_type != NULL)
+            return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
+    }
 
-    if (node->type_alias != NULL)
-        return codegen_sizeof_alias(ctx, node->type_alias, size_out, depth + 1);
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (alias != NULL)
+        return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
 
-    long long base = codegen_sizeof_var_type(node->var_type);
+    /* Try GpcType first */
+    if (node->type != NULL)
+    {
+        long long base = gpc_type_sizeof(node->type);
+        if (base >= 0)
+        {
+            *size_out = base;
+            return 0;
+        }
+    }
+    
+    /* Use hashnode helper */
+    enum VarType var_type = hashnode_get_var_type(node);
+    long long base = codegen_sizeof_var_type(var_type);
     if (base >= 0)
     {
         *size_out = base;
@@ -595,7 +688,7 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     {
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, (char *)type_id) >= 0 && node != NULL)
-            record_type = node->record_type;
+            record_type = get_record_type_from_node(node);
     }
 
     if (record_type == NULL && subtype == RECORD_TYPE && type_id == NULL)
@@ -1729,7 +1822,7 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
-    CodeGenContext *ctx, HashNode_t *proc_node, int arg_start_index)
+    CodeGenContext *ctx, struct GpcType *proc_type, const char *procedure_name, int arg_start_index)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -1743,8 +1836,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     assert(ctx != NULL);
 
     ListNode_t *formal_args = NULL;
-    if(proc_node != NULL)
-        formal_args = proc_node->args;
+    if(proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        /* Get formal parameters from the GpcType.
+         * This avoids use-after-free bugs by not relying on HashNode pointers
+         * that may point to freed memory after PopScope. */
+        formal_args = proc_type->info.proc_info.params;
+        CODEGEN_DEBUG("DEBUG: Using formal_args from GpcType: %p\n", formal_args);
+    }
+    
+    /* CRITICAL VALIDATION: Ensure formal_args is either NULL or properly structured.
+     * This catches any remaining cases of corrupted list pointers. */
+    if (formal_args != NULL)
+    {
+        /* Basic sanity check: formal_args should have a valid list type.
+         * This catches cases where formal_args contains garbage data. */
+        if (formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
+        {
+            codegen_report_error(ctx,
+                "FATAL: Internal compiler error - corrupted formal_args list (invalid type %d). "
+                "This may indicate a bug in the semantic checker or memory corruption.",
+                formal_args->type);
+            return inst_list;
+        }
+    }
 
     typedef struct ArgInfo
     {
@@ -1776,11 +1891,40 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     {
         CODEGEN_DEBUG("DEBUG: In codegen_pass_arguments loop, arg_num = %d\n", arg_num);
         struct Expression *arg_expr = (struct Expression *)args->cur;
+        
+        /* Validate argument expression */
+        if (arg_expr == NULL)
+        {
+            const char *proc_name = procedure_name ? procedure_name : "(unknown)";
+            codegen_report_error(ctx,
+                "ERROR: NULL argument expression in call to %s at argument position %d",
+                proc_name, arg_num);
+            if (arg_infos != NULL)
+                free(arg_infos);
+            return inst_list;
+        }
+        
         CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
 
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL)
+        {
+            /* CRITICAL VALIDATION: Before dereferencing formal_args, verify it's not corrupted.
+             * On Cygwin/MSYS, corrupted list nodes can cause segfaults when accessing ->cur.
+             * We check the list type to detect garbage values early. */
+            if (formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
+            {
+                const char *proc_name = "(unknown)";
+                codegen_report_error(ctx,
+                    "FATAL: Internal compiler error - corrupted formal_args list node (type=%d) at argument %d for procedure %s. "
+                    "This indicates memory corruption or an improperly initialized list.",
+                    formal_args->type, arg_num, proc_name);
+                if (arg_infos != NULL)
+                    free(arg_infos);
+                return inst_list;
+            }
             formal_arg_decl = (Tree_t *)formal_args->cur;
+        }
 
         int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
 
@@ -1919,7 +2063,24 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
         args = args->next;
         if(formal_args != NULL)
+        {
             formal_args = formal_args->next;
+            
+            /* CRITICAL VALIDATION: After advancing formal_args, check if the new node is valid.
+             * On some platforms, corrupted list nodes may have garbage in their 'next' pointer.
+             * We validate the next node before the next iteration to prevent segfaults. */
+            if (formal_args != NULL && formal_args->type != LIST_TREE && formal_args->type != LIST_UNSPECIFIED)
+            {
+                const char *proc_name = procedure_name ? procedure_name : "(unknown)";
+                codegen_report_error(ctx,
+                    "FATAL: Internal compiler error - corrupted formal_args->next (type=%d) at argument %d for procedure %s. "
+                    "This indicates the formal arguments list is not properly NULL-terminated or contains corrupted nodes.",
+                    formal_args->type, arg_num, proc_name);
+                if (arg_infos != NULL)
+                    free(arg_infos);
+                return inst_list;
+            }
+        }
         ++arg_num;
     }
 
@@ -1968,7 +2129,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
         else
         {
-            const char *proc_name = (proc_node != NULL && proc_node->id != NULL) ? proc_node->id : "(unknown)";
+            const char *proc_name = procedure_name ? procedure_name : "(unknown)";
             fprintf(stderr,
                     "ERROR: Missing evaluated value for argument %d in call to %s (%s).\n",
                     i,

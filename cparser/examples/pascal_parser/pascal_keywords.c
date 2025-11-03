@@ -71,9 +71,9 @@ static ParseResult keyword_ci_fn(input_t* in, void* args, char* parser_name) {
 }
 
 // Create word-boundary aware case-insensitive keyword parser
-combinator_t* keyword_ci(char* str) {
+combinator_t* keyword_ci(const char* str) {
     match_args* args = (match_args*)safe_malloc(sizeof(match_args));
-    args->str = str;
+    args->str = (char*)str;  // Safe cast - str is never modified, only read
     combinator_t* comb = new_combinator();
     comb->type = P_CI_KEYWORD;
     comb->fn = keyword_ci_fn;

@@ -28,13 +28,13 @@ static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_na
     char c = read1(in);
 
     // Must start with letter or underscore
-    if (c != '_' && !isalpha(c)) {
+    if (c != '_' && !isalpha((unsigned char)c)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     // Continue with alphanumeric or underscore
-    while (isalnum(c = read1(in)) || c == '_');
+    while (isalnum((unsigned char)(c = read1(in))) || c == '_');
     if (c != EOF) in->start--;
 
     // Extract the identifier text
@@ -101,13 +101,13 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
     char c = read1(in);
 
     // Must start with letter or underscore
-    if (c != '_' && !isalpha(c)) {
+    if (c != '_' && !isalpha((unsigned char)c)) {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
     }
 
     // Continue with alphanumeric or underscore
-    while (isalnum(c = read1(in)) || c == '_');
+    while (isalnum((unsigned char)(c = read1(in))) || c == '_');
     if (c != EOF) in->start--;
 
     // Extract the identifier text
@@ -461,7 +461,7 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
 
     // Skip whitespace manually
     char c;
-    while (isspace(c = read1(in)));
+    while (isspace((unsigned char)(c = read1(in))));
     if (c != EOF) in->start--;
 
     // Check for empty set
@@ -480,7 +480,7 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
 
     while (true) {
         // Skip whitespace
-        while (isspace(c = read1(in)));
+        while (isspace((unsigned char)(c = read1(in))));
         if (c != EOF) in->start--;
 
         ParseResult elem_result = parse(in, expr_parser);
@@ -502,7 +502,7 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
         }
 
         // Skip whitespace
-        while (isspace(c = read1(in)));
+        while (isspace((unsigned char)(c = read1(in))));
         if (c != EOF) in->start--;
 
         // Check for comma or closing bracket

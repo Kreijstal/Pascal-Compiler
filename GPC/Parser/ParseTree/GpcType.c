@@ -61,6 +61,146 @@ GpcType* create_record_type(struct RecordType *record_info) {
     return type;
 }
 
+/* Create GpcType from TypeAlias structure
+ * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
+ * Returns NULL if conversion fails (e.g., unresolvable type reference)
+ */
+GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab *symtab) {
+    if (alias == NULL) return NULL;
+    
+    /* If alias already has a GpcType (enums, sets), use it */
+    if (alias->gpc_type != NULL) {
+        return alias->gpc_type;
+    }
+    
+    GpcType *result = NULL;
+    
+    /* Handle array type aliases: type TIntArray = array[1..10] of Integer */
+    if (alias->is_array) {
+        int start = alias->array_start;
+        int end = alias->array_end;
+        
+        if (alias->is_open_array) {
+            start = 0;
+            end = -1;
+        }
+        
+        /* Resolve element type */
+        GpcType *element_type = NULL;
+        int element_type_tag = alias->array_element_type;
+        
+        if (element_type_tag != UNKNOWN_TYPE) {
+            /* Direct primitive type tag */
+            element_type = create_primitive_type(element_type_tag);
+        } else if (alias->array_element_type_id != NULL && symtab != NULL) {
+            /* Type reference - try to resolve it */
+            HashNode_t *element_node = NULL;
+            if (FindIdent(&element_node, symtab, alias->array_element_type_id) >= 0 &&
+                element_node != NULL && element_node->type != NULL) {
+                /* Use the resolved type (don't clone, just reference) */
+                element_type = element_node->type;
+            } else {
+                /* Forward reference - create NULL element type for now
+                 * This will be resolved when the array is actually used */
+                element_type = NULL;
+            }
+        }
+        
+        /* Create array type even if element type is NULL (forward reference) */
+        result = create_array_type(element_type, start, end);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle pointer type aliases: type PInteger = ^Integer */
+    if (alias->is_pointer) {
+        GpcType *pointee_type = NULL;
+        int pointer_type_tag = alias->pointer_type;
+        
+        if (pointer_type_tag != UNKNOWN_TYPE) {
+            /* Direct primitive type tag */
+            pointee_type = create_primitive_type(pointer_type_tag);
+        } else if (alias->pointer_type_id != NULL && symtab != NULL) {
+            /* Type reference - try to resolve it */
+            HashNode_t *pointee_node = NULL;
+            if (FindIdent(&pointee_node, symtab, alias->pointer_type_id) >= 0 &&
+                pointee_node != NULL && pointee_node->type != NULL) {
+                /* Use the resolved type (don't clone, just reference) */
+                pointee_type = pointee_node->type;
+            } else {
+                /* Forward reference or unresolved type
+                 * Create a pointer to NULL - this is valid in Pascal
+                 * The pointee type will be resolved later during usage */
+                pointee_type = NULL;
+            }
+        }
+        
+        /* Create pointer type even if pointee is NULL (forward reference) */
+        result = create_pointer_type(pointee_type);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle set type aliases: type TCharSet = set of Char */
+    if (alias->is_set) {
+        /* For sets, we should ideally have alias->gpc_type already populated
+         * But if not, we can create a primitive SET_TYPE */
+        result = create_primitive_type(SET_TYPE);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle enum type aliases: type TColor = (Red, Green, Blue) */
+    if (alias->is_enum) {
+        /* For enums, we should ideally have alias->gpc_type already populated
+         * But if not, we can create a primitive ENUM_TYPE */
+        result = create_primitive_type(ENUM_TYPE);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle file type aliases: type TTextFile = file of Char */
+    if (alias->is_file) {
+        /* For files, create a primitive FILE_TYPE */
+        result = create_primitive_type(FILE_TYPE);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle simple type aliases: type MyInt = Integer */
+    if (alias->base_type != UNKNOWN_TYPE && alias->target_type_id == NULL) {
+        /* Simple primitive type alias */
+        result = create_primitive_type(alias->base_type);
+        if (result != NULL) {
+            gpc_type_set_type_alias(result, alias);
+        }
+        return result;
+    }
+    
+    /* Handle type reference aliases: type MyType = SomeOtherType */
+    if (alias->target_type_id != NULL && symtab != NULL) {
+        HashNode_t *target_node = NULL;
+        if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+            target_node != NULL && target_node->type != NULL) {
+            /* Return the target's GpcType (reference, not clone) */
+            return target_node->type;
+        }
+    }
+    
+    /* If we couldn't resolve the type, return NULL */
+    return NULL;
+}
+
 // --- Destructor Implementation ---
 
 void destroy_gpc_type(GpcType *type) {
@@ -201,10 +341,13 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
             ProcedureTypeInfo *lhs_proc = &lhs_type->info.proc_info;
             ProcedureTypeInfo *rhs_proc = &rhs_type->info.proc_info;
 
+            /* DEBUG: Log parameter counts */
+
             /* 1. Check function vs procedure compatibility 
              * A procedure variable can only hold a procedure, not a function, and vice versa */
             int lhs_is_function = (lhs_proc->return_type != NULL);
             int rhs_is_function = (rhs_proc->return_type != NULL);
+            
             
             if (lhs_is_function != rhs_is_function)
                 return 0; /* Cannot assign function to procedure var or vice versa */
@@ -222,14 +365,17 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
             int lhs_param_count = ListLength(lhs_proc->params);
             int rhs_param_count = ListLength(rhs_proc->params);
             
+            
             if (lhs_param_count != rhs_param_count)
                 return 0;
 
             /* 4. Check each parameter's type and var status */
             ListNode_t *lhs_p = lhs_proc->params;
             ListNode_t *rhs_p = rhs_proc->params;
+            int param_position = 0;
             
             while (lhs_p != NULL && rhs_p != NULL) {
+                ++param_position;
                 if (lhs_p->type != LIST_TREE || rhs_p->type != LIST_TREE)
                     return 0; /* Invalid parameter node */
 
@@ -347,4 +493,225 @@ const char* gpc_type_to_string(GpcType *type) {
         default:
             return "unknown";
     }
+}
+
+// --- Helper Function Implementations ---
+
+long long gpc_type_sizeof(GpcType *type)
+{
+    if (type == NULL)
+        return -1;
+    
+    switch (type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+            switch (type->info.primitive_type_tag)
+            {
+                case INT_TYPE:
+                case BOOL:
+                case SET_TYPE:
+                case ENUM_TYPE:
+                    return 4;
+                case LONGINT_TYPE:
+                case REAL_TYPE:
+                    return 8;
+                case STRING_TYPE:
+                case POINTER_TYPE:
+                case PROCEDURE:
+                case FILE_TYPE:
+                    return 8; /* Pointers are 8 bytes on x86-64 */
+                case CHAR_TYPE:
+                    return 1;
+                default:
+                    return -1;
+            }
+        
+        case TYPE_KIND_POINTER:
+            return 8; /* Pointers are 8 bytes on x86-64 */
+        
+        case TYPE_KIND_ARRAY:
+        {
+            long long element_size = gpc_type_sizeof(type->info.array_info.element_type);
+            if (element_size < 0)
+                return -1;
+            int count = type->info.array_info.end_index - type->info.array_info.start_index + 1;
+            if (count < 0)
+                return -1;
+            return element_size * count;
+        }
+        
+        case TYPE_KIND_RECORD:
+            /* Record size would need to be computed by iterating fields
+             * For now, we return -1 to indicate it needs special handling */
+            return -1;
+        
+        case TYPE_KIND_PROCEDURE:
+            return 8; /* Procedure pointers are 8 bytes */
+        
+        default:
+            return -1;
+    }
+}
+
+int gpc_type_is_array(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_ARRAY);
+}
+
+int gpc_type_is_record(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_RECORD);
+}
+
+int gpc_type_is_procedure(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
+}
+
+int gpc_type_get_array_bounds(GpcType *type, int *start_out, int *end_out)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return -1;
+    
+    if (start_out != NULL)
+        *start_out = type->info.array_info.start_index;
+    if (end_out != NULL)
+        *end_out = type->info.array_info.end_index;
+    
+    return 0;
+}
+
+struct RecordType* gpc_type_get_record(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_RECORD)
+        return NULL;
+    return type->info.record_info;
+}
+
+int gpc_type_get_primitive_tag(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE)
+        return -1;
+    return type->info.primitive_type_tag;
+}
+
+GpcType* gpc_type_get_array_element_type(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return NULL;
+    return type->info.array_info.element_type;
+}
+
+ListNode_t* gpc_type_get_procedure_params(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+        return NULL;
+    return type->info.proc_info.params;
+}
+
+GpcType* gpc_type_get_return_type(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)
+        return NULL;
+    return type->info.proc_info.return_type;
+}
+
+int gpc_type_is_dynamic_array(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return 0;
+    /* Dynamic/open arrays are represented with end < start (e.g., [0..-1]) */
+    return (type->info.array_info.end_index < type->info.array_info.start_index);
+}
+
+long long gpc_type_get_array_element_size(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return -1;
+    
+    GpcType *element_type = type->info.array_info.element_type;
+    if (element_type == NULL)
+        return -1;
+    
+    return gpc_type_sizeof(element_type);
+}
+
+/* Helper function to convert VarType enum to primitive type tag */
+static int var_type_to_primitive_tag(enum VarType var_type)
+{
+    switch(var_type)
+    {
+        case HASHVAR_INTEGER:
+            return INT_TYPE;
+        case HASHVAR_LONGINT:
+            return LONGINT_TYPE;
+        case HASHVAR_REAL:
+            return REAL_TYPE;
+        case HASHVAR_BOOLEAN:
+            return BOOL;
+        case HASHVAR_CHAR:
+            return CHAR_TYPE;
+        case HASHVAR_PCHAR:
+            return STRING_TYPE;
+        case HASHVAR_SET:
+            return SET_TYPE;
+        case HASHVAR_FILE:
+            return FILE_TYPE;
+        case HASHVAR_ENUM:
+            return ENUM_TYPE;
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
+
+/* Create a GpcType from a VarType enum value.
+ * This is a helper for migrating from legacy type system.
+ * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE
+ * require additional information and cannot be created from VarType alone.
+ * Returns NULL for these types - caller must use appropriate create_*_type() function.
+ */
+GpcType* gpc_type_from_var_type(enum VarType var_type)
+{
+    switch(var_type)
+    {
+        case HASHVAR_INTEGER:
+        case HASHVAR_LONGINT:
+        case HASHVAR_REAL:
+        case HASHVAR_BOOLEAN:
+        case HASHVAR_CHAR:
+        case HASHVAR_PCHAR:
+        case HASHVAR_SET:
+        case HASHVAR_FILE:
+        case HASHVAR_ENUM:
+        {
+            int tag = var_type_to_primitive_tag(var_type);
+            return create_primitive_type(tag);
+        }
+        
+        case HASHVAR_ARRAY:
+        case HASHVAR_RECORD:
+        case HASHVAR_POINTER:
+        case HASHVAR_PROCEDURE:
+        case HASHVAR_UNTYPED:
+            /* These require additional information beyond VarType */
+            return NULL;
+            
+        default:
+            return NULL;
+    }
+}
+
+/* Get the type alias metadata from a GpcType */
+struct TypeAlias* gpc_type_get_type_alias(GpcType *type)
+{
+    if (type == NULL)
+        return NULL;
+    return type->type_alias;
+}
+
+/* Set the type alias metadata on a GpcType */
+void gpc_type_set_type_alias(GpcType *type, struct TypeAlias *alias)
+{
+    assert(type != NULL && "Cannot set type_alias on NULL GpcType");
+    type->type_alias = alias;
 }
