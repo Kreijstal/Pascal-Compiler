@@ -337,6 +337,18 @@ int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, Gp
     return AddIdentToTable(cur_hash, id, mangled_id, HASHTYPE_FUNCTION, type);
 }
 
+/* Pushes a new function return value with a GpcType onto the current scope */
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+
+    HashTable_t *cur_hash;
+    cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    return AddIdentToTable(cur_hash, id, NULL, HASHTYPE_FUNCTION_RETURN, type);
+}
+
 /* Pushes a new type declaration with a GpcType onto the current scope */
 int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type)
 {

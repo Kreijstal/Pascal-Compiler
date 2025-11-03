@@ -462,17 +462,32 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
             ++return_val;
         }
-        else if (PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value) > 0)
+        else
         {
-            fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
-                    tree->line_num, tree->tree_data.const_decl_data.id);
-            ++return_val;
-        }
-        else if (value_expr != NULL && value_expr->type == EXPR_SET)
-        {
-            HashNode_t *const_node = NULL;
-            if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
-                const_node->var_type = HASHVAR_SET;
+            /* Create GpcType if this is a set constant */
+            GpcType *const_type = NULL;
+            if (value_expr != NULL && value_expr->type == EXPR_SET)
+            {
+                const_type = create_primitive_type(SET_TYPE);
+            }
+            
+            /* Use typed or legacy API depending on whether we have a GpcType */
+            int push_result;
+            if (const_type != NULL)
+            {
+                push_result = PushConstOntoScope_Typed(symtab, tree->tree_data.const_decl_data.id, value, const_type);
+            }
+            else
+            {
+                push_result = PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value);
+            }
+            
+            if (push_result > 0)
+            {
+                fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                        tree->line_num, tree->tree_data.const_decl_data.id);
+                ++return_val;
+            }
         }
 
         cur = cur->next;
@@ -862,22 +877,48 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             goto next_identifier;
                         }
                         
-                        /* For non-array type references (e.g., enum, set, file), use legacy API to preserve type_alias */
-                        func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                        /* For non-array type references (e.g., enum, set, file, record), create GpcType from type_node */
+                        GpcType *var_gpc_type = NULL;
+                        if (type_node->type != NULL)
+                        {
+                            /* Type node already has a GpcType - reference it (don't clone) */
+                            var_gpc_type = type_node->type;
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                        }
+                        else
+                        {
+                            /* Fallback: create GpcType from legacy fields */
+                            if (type_node->record_type != NULL)
+                            {
+                                var_gpc_type = create_record_type(clone_record_type(type_node->record_type));
+                            }
+                            else
+                            {
+                                var_gpc_type = gpc_type_from_var_type(var_type);
+                            }
+                            
+                            if (var_gpc_type != NULL && type_node->type_alias != NULL)
+                            {
+                                gpc_type_set_type_alias(var_gpc_type, type_node->type_alias);
+                            }
+                            
+                            if (var_gpc_type != NULL)
+                            {
+                                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
+                            }
+                            else
+                            {
+                                /* Last resort fallback */
+                                func_return = PushVarOntoScope(symtab, var_type, (char *)ids->cur);
+                            }
+                        }
+                        
                         if (func_return == 0)
                         {
                             HashNode_t *var_node = NULL;
                             if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                                if (type_node->type_alias != NULL)
-                                    var_node->type_alias = type_node->type_alias;
-                                if (type_node->record_type != NULL)
-                                {
-                                    if (var_node->record_type != NULL)
-                                        destroy_record_type(var_node->record_type);
-                                    var_node->record_type = clone_record_type(type_node->record_type);
-                                }
                             }
                         }
                         goto next_identifier;
@@ -901,7 +942,31 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_REAL;
                 
                 /* Create GpcType for typed variables */
-                GpcType *var_gpc_type = gpc_type_from_var_type(var_type);
+                GpcType *var_gpc_type = NULL;
+                if (resolved_type != NULL && resolved_type->type != NULL)
+                {
+                    /* Use GpcType from resolved type if available */
+                    var_gpc_type = resolved_type->type;
+                }
+                else
+                {
+                    /* Create GpcType from var_type */
+                    var_gpc_type = gpc_type_from_var_type(var_type);
+                    
+                    /* Add metadata from resolved_type if present */
+                    if (var_gpc_type != NULL && resolved_type != NULL)
+                    {
+                        if (resolved_type->type_alias != NULL)
+                        {
+                            gpc_type_set_type_alias(var_gpc_type, resolved_type->type_alias);
+                        }
+                        if (resolved_type->record_type != NULL && var_gpc_type->kind == TYPE_KIND_RECORD)
+                        {
+                            var_gpc_type->info.record_info = clone_record_type(resolved_type->record_type);
+                        }
+                    }
+                }
+                
                 if (var_gpc_type != NULL) {
                     func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
                 } else {
@@ -914,27 +979,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
-                        if (resolved_type != NULL)
-                        {
-                            if (resolved_type->type_alias != NULL)
-                                var_node->type_alias = resolved_type->type_alias;
-                            if (resolved_type->record_type != NULL)
-                            {
-                                if (var_node->record_type != NULL)
-                                    destroy_record_type(var_node->record_type);
-                                var_node->record_type = clone_record_type(resolved_type->record_type);
-                            }
-                            
-                            /* Phase 3: For procedure types, copy the GpcType
-                             * This enables procedure variable support */
-                            if (resolved_type->type != NULL && 
-                                resolved_type->type->kind == TYPE_KIND_PROCEDURE)
-                            {
-                                /* For procedure types, we share the type pointer
-                                 * This is safe because procedure types in the symbol table are persistent */
-                                var_node->type = resolved_type->type;
-                            }
-                        }
                     }
                 }
             }
@@ -1054,7 +1098,17 @@ next_identifier:
                             if (inferred_var_type != HASHVAR_UNTYPED)
                             {
                                 tree->tree_data.var_decl_data.type = normalized_type;
-                                var_node->var_type = inferred_var_type;
+                                /* Update GpcType if present, otherwise update legacy field */
+                                if (var_node->type != NULL)
+                                {
+                                    /* TODO: Update GpcType - requires modifying existing GpcType or replacing it */
+                                    /* For now, keep legacy field write until GpcType modification API exists */
+                                    var_node->var_type = inferred_var_type;
+                                }
+                                else
+                                {
+                                    var_node->var_type = inferred_var_type;
+                                }
                             }
                         }
                         else
@@ -1229,6 +1283,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
         }
         
+        /* Add type metadata from return_type_node to return_gpc_type */
+        if (return_gpc_type != NULL && return_type_node != NULL)
+        {
+            if (return_type_node->type_alias != NULL)
+            {
+                gpc_type_set_type_alias(return_gpc_type, return_type_node->type_alias);
+            }
+            if (return_type_node->record_type != NULL && return_gpc_type->kind == TYPE_KIND_RECORD)
+            {
+                return_gpc_type->info.record_info = clone_record_type(return_type_node->record_type);
+            }
+        }
+        
         /* Create GpcType for the function (which is also a procedure type with a return value) */
         GpcType *func_type = create_procedure_type(
             subprogram->tree_data.subprogram_data.args_var,
@@ -1240,45 +1307,22 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                         subprogram->tree_data.subprogram_data.mangled_id,
                         func_type);
 
-        if (return_type_node != NULL && func_return == 0)
-        {
-            HashNode_t *function_symbol = NULL;
-            if (FindIdent(&function_symbol, symtab, id_to_use_for_lookup) != -1 &&
-                function_symbol != NULL && function_symbol->hash_type == HASHTYPE_FUNCTION)
-            {
-                if (return_type_node->type_alias != NULL)
-                    function_symbol->type_alias = return_type_node->type_alias;
-                if (return_type_node->record_type != NULL)
-                {
-                    if (function_symbol->record_type != NULL)
-                        destroy_record_type(function_symbol->record_type);
-                    function_symbol->record_type = clone_record_type(return_type_node->record_type);
-                }
-            }
-        }
+        /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
         PushScope(symtab);
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
-        // Use the ORIGINAL name for the internal return variable.
-        PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
-            var_type, subprogram->tree_data.subprogram_data.args_var);
-
-        if (return_type_node != NULL)
+        // Use the ORIGINAL name for the internal return variable with GpcType
+        if (return_gpc_type != NULL)
         {
-            HashNode_t *return_symbol = NULL;
-            if (FindIdent(&return_symbol, symtab, subprogram->tree_data.subprogram_data.id) != -1 &&
-                return_symbol != NULL && return_symbol->hash_type == HASHTYPE_FUNCTION_RETURN)
-            {
-                if (return_type_node->type_alias != NULL)
-                    return_symbol->type_alias = return_type_node->type_alias;
-                if (return_type_node->record_type != NULL)
-                {
-                    if (return_symbol->record_type != NULL)
-                        destroy_record_type(return_symbol->record_type);
-                    return_symbol->record_type = clone_record_type(return_type_node->record_type);
-                }
-            }
+            PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
         }
+        else
+        {
+            PushFuncRetOntoScope(symtab, subprogram->tree_data.subprogram_data.id,
+                var_type, subprogram->tree_data.subprogram_data.args_var);
+        }
+
+        /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
         new_max_scope = max_scope_lev+1;
     }

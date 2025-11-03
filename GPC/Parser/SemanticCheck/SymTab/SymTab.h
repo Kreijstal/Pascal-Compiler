@@ -83,6 +83,9 @@ int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, G
 /* Pushes a new function with a GpcType onto the current scope */
 int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, GpcType *type);
 
+/* Pushes a new function return value with a GpcType onto the current scope */
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
+
 /* Pushes a new type declaration with a GpcType onto the current scope */
 int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, GpcType *type);
 
