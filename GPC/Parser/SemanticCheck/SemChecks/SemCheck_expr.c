@@ -313,7 +313,8 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
             {
                 expr->array_element_type = element_type->info.primitive_type_tag;
             }
-            /* Handle other element types as needed */
+            /* Other element types (pointers, nested arrays, etc.) can be added here
+             * when needed. For now, primitive and record types cover the common cases. */
         }
     }
     else
