@@ -731,6 +731,36 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
 
         mangled_name = "gpc_ord_string";
     }
+    else if (arg_type == BOOL)
+    {
+        /* Constant fold boolean literals */
+        if (arg_expr != NULL && arg_expr->type == EXPR_BOOL)
+        {
+            int ordinal_value = arg_expr->expr_data.bool_value ? 1 : 0;
+
+            destroy_list(expr->expr_data.function_call_data.args_expr);
+            expr->expr_data.function_call_data.args_expr = NULL;
+            if (expr->expr_data.function_call_data.id != NULL)
+            {
+                free(expr->expr_data.function_call_data.id);
+                expr->expr_data.function_call_data.id = NULL;
+            }
+            if (expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                free(expr->expr_data.function_call_data.mangled_id);
+                expr->expr_data.function_call_data.mangled_id = NULL;
+            }
+            expr->expr_data.function_call_data.resolved_func = NULL;
+
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = ordinal_value;
+            expr->resolved_type = LONGINT_TYPE;
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
+        mangled_name = "gpc_ord_longint";
+    }
     else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
     {
         mangled_name = "gpc_ord_longint";
@@ -758,7 +788,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    fprintf(stderr, "Error on line %d, Ord expects an integer or character argument.\\n",
+    fprintf(stderr, "Error on line %d, Ord expects an integer, character, or boolean argument.\\n",
         expr->line_num);
     *type_return = UNKNOWN_TYPE;
     return 1;
