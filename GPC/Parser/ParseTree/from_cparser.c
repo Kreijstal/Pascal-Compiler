@@ -571,6 +571,12 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return PROCEDURE;
     }
 
+    if (spec_node->typ == PASCAL_T_REFERENCE_TO_TYPE) {
+        // Reference to type wraps a procedure/function type
+        // For now, treat it the same as PROCEDURE_TYPE/FUNCTION_TYPE
+        return PROCEDURE;
+    }
+
     if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
         struct RecordType *record = convert_record_type(spec_node);
         if (record_out != NULL) {
@@ -746,6 +752,16 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
         }
         
         return create_procedure_type(params, return_type);
+    }
+
+    /* Handle reference to types (wraps procedure/function types) */
+    if (spec_node->typ == PASCAL_T_REFERENCE_TO_TYPE) {
+        // The child should be a PROCEDURE_TYPE or FUNCTION_TYPE
+        ast_t *wrapped_type = spec_node->child;
+        if (wrapped_type != NULL) {
+            return convert_type_spec_to_gpctype(wrapped_type, symtab);
+        }
+        return NULL;
     }
 
     /* Handle record types */
@@ -2337,6 +2353,13 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));
     case PASCAL_T_ADDR:
         return mk_addressof(expr_node->line, convert_expression(expr_node->child));
+    case PASCAL_T_ANONYMOUS_FUNCTION:
+    case PASCAL_T_ANONYMOUS_PROCEDURE:
+        // Anonymous functions/procedures are not yet fully supported in code generation
+        // For now, return NULL to avoid crashes, but this should be implemented
+        fprintf(stderr, "WARNING: Anonymous functions are not yet supported in code generation at line %d\n", 
+                expr_node->line);
+        return NULL;
     default: {
         const char *name = tag_name(expr_node->typ);
         fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
