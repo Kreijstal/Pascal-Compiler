@@ -730,7 +730,10 @@ int gpc_type_get_legacy_tag(GpcType *type)
             return POINTER_TYPE;
         
         case TYPE_KIND_ARRAY:
-            /* Arrays don't have a single type tag - they're identified by is_array_expr */
+            /* Arrays don't have a single legacy type tag in the old system.
+             * They were identified by the is_array_expr flag on expressions.
+             * Return UNKNOWN_TYPE to indicate this is an array type that needs
+             * special handling via GpcType helpers like gpc_type_is_array(). */
             return UNKNOWN_TYPE;
         
         case TYPE_KIND_RECORD:
