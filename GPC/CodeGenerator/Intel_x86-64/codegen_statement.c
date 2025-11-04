@@ -1786,7 +1786,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
-        if (var_expr->resolved_type == STRING_TYPE)
+        if (expr_get_type_tag(var_expr) == STRING_TYPE)
         {
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
@@ -2052,18 +2052,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        if (var_expr->resolved_type == STRING_TYPE)
+        int var_type_3 = expr_get_type_tag(var_expr);
+        if (var_type_3 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
-        else if (codegen_type_uses_qword(var_expr->resolved_type))
+        else if (codegen_type_uses_qword(var_type_3))
         {
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
             inst_list = add_inst(inst_list, buffer);
         }
         else
         {
-            if (var_expr->resolved_type == CHAR_TYPE)
+            if (var_type_3 == CHAR_TYPE)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)
@@ -2536,7 +2537,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 
     limit_temp = codegen_alloc_temp_slot("for_to_temp");
 
-    const int limit_is_qword = codegen_type_uses_qword(expr->resolved_type);
+    const int limit_is_qword = codegen_type_uses_qword(expr_get_type_tag(expr));
     const int limit_is_signed = codegen_expr_is_signed(expr);
     if (limit_is_qword)
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", limit_reg->bit_64, limit_temp->offset);
@@ -2579,7 +2580,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
         snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", limit_temp->offset, limit_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
-    const int var_is_qword = codegen_type_uses_qword(for_var->resolved_type);
+    const int var_is_qword = codegen_type_uses_qword(expr_get_type_tag(for_var));
     const int var_is_signed = codegen_expr_is_signed(for_var);
     const int compare_as_qword = var_is_qword || limit_is_qword;
     if (compare_as_qword && !limit_is_qword)
@@ -2654,7 +2655,7 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     if (selector_reg == NULL)
         return inst_list;
 
-    int selector_is_qword = codegen_type_uses_qword(selector->resolved_type);
+    int selector_is_qword = codegen_type_uses_qword(expr_get_type_tag(selector));
 
     /* Generate code for each case branch */
     ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
