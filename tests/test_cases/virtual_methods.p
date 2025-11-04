@@ -20,4 +20,3 @@ begin
   C.MyInt := 10;
   C.MyVirtualMethod;
 end.
-
