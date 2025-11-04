@@ -322,6 +322,10 @@ void test_multi_prefers_furthest_error(void) {
 
     TEST_ASSERT(!res.is_success);
     TEST_ASSERT(res.value.error != NULL);
+    
+    // Create context before asserting it exists (optimization defers context creation)
+    ensure_parse_error_contexts(res.value.error, input);
+    
     TEST_ASSERT(res.value.error->context != NULL);
     TEST_ASSERT(res.value.error->index >= 5);
     TEST_ASSERT(strstr(res.value.error->message, "expected world") != NULL);

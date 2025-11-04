@@ -273,7 +273,9 @@ ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char*
     err->message = message;
     err->parser_name = parser_name ? strdup(parser_name) : NULL;
     err->unexpected = unexpected;
-    err->context = create_error_context(in, err->line, err->col, err->index);
+    // Don't create context here - it's expensive and most errors are discarded during backtracking
+    // Context will be created on-demand when error is displayed
+    err->context = NULL;
     err->cause = NULL;
     err->partial_ast = NULL;
     err->committed = false;
@@ -291,7 +293,7 @@ ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast
     err->index = in ? in->start : -1;
     err->message = message;
     err->cause = NULL;
-    err->context = create_error_context(in, err->line, err->col, err->index);
+    err->context = NULL;  // Don't create context - expensive and usually discarded
     err->partial_ast = partial_ast;
     err->parser_name = NULL;
     err->unexpected = NULL;
@@ -350,7 +352,7 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
         err->line = in ? in->line : 0;
         err->col = in ? in->col : 0;
         err->index = in ? in->start : -1;
-        err->context = create_error_context(in, err->line, err->col, err->index);
+        err->context = NULL;  // Don't create context - expensive
         err->committed = false;
     }
     err->message = message;
@@ -1555,5 +1557,15 @@ static void release_extra_nodes(extra_node** extras, visited_set* visited) {
         }
         free(node->ptr);
         free(node);
+    }
+}
+
+// Create context for an error and all its causes (if not already created)
+void ensure_parse_error_contexts(ParseError* err, input_t* in) {
+    while (err != NULL) {
+        if (err->context == NULL && in != NULL) {
+            err->context = create_error_context(in, err->line, err->col, err->index);
+        }
+        err = err->cause;
     }
 }
