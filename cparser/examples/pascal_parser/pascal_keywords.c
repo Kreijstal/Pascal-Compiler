@@ -23,6 +23,8 @@ const char* pascal_reserved_keywords[] = {
     "property", "inherited", "self", "constructor", "destructor",
     // Additional Pascal keywords
     "function", "procedure", "program", "unit", "uses", "interface", "implementation",
+    // Anonymous function support
+    "reference",
     NULL
 };
 
