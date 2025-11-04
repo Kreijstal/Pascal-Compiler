@@ -163,6 +163,7 @@ void parser_walk_ast(ast_t* ast, ast_visitor_fn visitor, void* context);
 ast_t* new_ast();
 void free_ast(ast_t* ast);
 void free_error(ParseError* err);
+void ensure_parse_error_contexts(ParseError* err, input_t* in);
 ast_t* ast1(tag_t typ, ast_t* a1);
 ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2);
 ast_t* copy_ast(ast_t* orig);

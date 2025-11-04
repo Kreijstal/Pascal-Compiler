@@ -358,41 +358,135 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
     }
 
     int literal_start = state.start;
-
+    
+    // Buffer to accumulate multiple consecutive character codes
+    char* result = NULL;
+    int result_len = 0;
+    int result_capacity = 0;
+    
+    // Parse first char code (we already consumed the '#')
     char c = read1(in);
+    int value = 0;
+    
     if (c == '$') {
         c = read1(in);
         if (c == EOF || !isxdigit((unsigned char)c)) {
             restore_input_state(in, &state);
             return make_failure_v2(in, parser_name, strdup("Expected hex digits after '#$'"), NULL);
         }
-        while ((c = read1(in)) != EOF && isxdigit((unsigned char)c));
+        value = (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
+        while ((c = read1(in)) != EOF && isxdigit((unsigned char)c)) {
+            value = value * 16 + (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
+        }
     } else if (c != EOF && isdigit((unsigned char)c)) {
+        value = c - '0';
         do {
             c = read1(in);
+            if (c != EOF && isdigit((unsigned char)c)) {
+                value = value * 10 + (c - '0');
+            }
         } while (c != EOF && isdigit((unsigned char)c));
     } else {
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Expected digits after '#'"), NULL);
     }
-
+    
     if (c != EOF && in->start > 0) {
         in->start--;
     }
+    
+    // Store first character value
+    if (result_capacity == 0) {
+        result_capacity = 256;  // Start with reasonable capacity
+        result = (char*)safe_malloc(result_capacity);
+    }
+    if (result_len >= result_capacity) {
+        result_capacity *= 2;
+        result = (char*)realloc(result, result_capacity);
+    }
+    result[result_len++] = (char)(value & 0xFF);
+    
+    // Try to consume additional consecutive character codes
+    while (1) {
+        InputState char_state;
+        save_input_state(in, &char_state);
+        
+        // Skip whitespace (Pascal allows it between char codes)
+        while ((c = read1(in)) != EOF && isspace((unsigned char)c));
+        
+        if (c != '#') {
+            // Not another char code, restore and break
+            restore_input_state(in, &char_state);
+            break;
+        }
+        
+        // Parse the next char code value
+        c = read1(in);
+        value = 0;
+        
+        if (c == '$') {
+            c = read1(in);
+            if (c == EOF || !isxdigit((unsigned char)c)) {
+                // Invalid char code, restore and break
+                restore_input_state(in, &char_state);
+                break;
+            }
+            value = (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
+            while ((c = read1(in)) != EOF && isxdigit((unsigned char)c)) {
+                value = value * 16 + (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
+            }
+        } else if (c != EOF && isdigit((unsigned char)c)) {
+            value = c - '0';
+            do {
+                c = read1(in);
+                if (c != EOF && isdigit((unsigned char)c)) {
+                    value = value * 10 + (c - '0');
+                }
+            } while (c != EOF && isdigit((unsigned char)c));
+        } else {
+            // Invalid char code, restore and break
+            restore_input_state(in, &char_state);
+            break;
+        }
+        
+        if (c != EOF && in->start > 0) {
+            in->start--;
+        }
+        
+        // Add this character to result
+        if (result_len >= result_capacity) {
+            result_capacity *= 2;
+            result = (char*)realloc(result, result_capacity);
+        }
+        result[result_len++] = (char)(value & 0xFF);
+    }
 
-    int len = in->start - literal_start;
-    char* text = (char*)safe_malloc(len + 1);
-    memcpy(text, in->buffer + literal_start, len);
-    text[len] = '\0';
-
+    // Create AST node with the combined string
+    // For a string of char codes, we store it as a STRING type rather than CHAR_CODE
     ast_t* ast = new_ast();
-    ast->typ = pargs->tag;
-    ast->sym = sym_lookup(text);
+    if (result_len == 1) {
+        // Single character - use original CHAR_CODE type
+        ast->typ = pargs->tag;
+        char* text = (char*)safe_malloc(in->start - literal_start + 1);
+        memcpy(text, in->buffer + literal_start, in->start - literal_start);
+        text[in->start - literal_start] = '\0';
+        ast->sym = sym_lookup(text);
+        free(text);
+    } else {
+        // Multiple characters - store as a STRING
+        // Need to create a null-terminated copy
+        char* str_copy = (char*)safe_malloc(result_len + 1);
+        memcpy(str_copy, result, result_len);
+        str_copy[result_len] = '\0';
+        ast->typ = PASCAL_T_STRING;
+        ast->sym = sym_lookup(str_copy);
+        free(str_copy);
+    }
     ast->child = NULL;
     ast->next = NULL;
     set_ast_position(ast, in);
 
-    free(text);
+    free(result);
     return make_success(ast);
 }
 
