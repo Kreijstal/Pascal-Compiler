@@ -18,4 +18,10 @@ struct SymTab;
  */
 GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab);
 
+/* Get method information for a class.
+ * Returns a list of methods (virtual/override) registered for the given class.
+ * Caller should NOT free the returned list - it's owned by the parser.
+ */
+void get_class_methods(const char *class_name, ListNode_t **methods_out, int *count_out);
+
 #endif /* FROM_CPARSER_H */

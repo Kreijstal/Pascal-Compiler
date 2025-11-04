@@ -23,6 +23,7 @@
 #include "../ParseTree/tree_types.h"
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/GpcType.h"
+#include "../ParseTree/from_cparser.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"

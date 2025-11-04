@@ -152,6 +152,36 @@ static char *mangle_method_name(const char *class_name, const char *method_name)
     return result;
 }
 
+/* Get method information for a class */
+void get_class_methods(const char *class_name, ListNode_t **methods_out, int *count_out) {
+    if (methods_out != NULL)
+        *methods_out = NULL;
+    if (count_out != NULL)
+        *count_out = 0;
+    
+    if (class_name == NULL || methods_out == NULL || count_out == NULL)
+        return;
+    
+    ListBuilder builder;
+    list_builder_init(&builder);
+    int count = 0;
+    
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0) {
+            /* Found a method for this class */
+            list_builder_append(&builder, binding, LIST_UNSPECIFIED);
+            count++;
+        }
+        cur = cur->next;
+    }
+    
+    *methods_out = list_builder_finish(&builder);
+    *count_out = count;
+}
+
 static char *dup_symbol(ast_t *node) {
     while (node != NULL) {
         if (node->sym != NULL && node->sym->name != NULL)
