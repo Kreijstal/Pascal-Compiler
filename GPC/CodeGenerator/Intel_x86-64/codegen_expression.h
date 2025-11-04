@@ -44,6 +44,14 @@ int codegen_expr_is_signed(const struct Expression *expr);
  * This is a migration helper for moving from legacy type fields to GpcType. */
 int expr_get_type_tag(const struct Expression *expr);
 
+/* Helper to get array lower bound from expression, preferring resolved_gpc_type.
+ * Returns the lower bound, or 0 if not an array. */
+int expr_get_array_lower_bound(const struct Expression *expr);
+
+/* Helper to get array element size from expression, preferring resolved_gpc_type.
+ * Returns the element size in bytes, or -1 if not determinable. */
+long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx);
+
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);
 

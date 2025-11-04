@@ -96,6 +96,42 @@ int expr_get_type_tag(const struct Expression *expr)
     return expr->resolved_type;
 }
 
+/* Helper to get array lower bound from expression, preferring resolved_gpc_type */
+int expr_get_array_lower_bound(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* Prefer GpcType if available */
+    if (expr->resolved_gpc_type != NULL && gpc_type_is_array(expr->resolved_gpc_type))
+    {
+        int start = 0;
+        if (gpc_type_get_array_bounds(expr->resolved_gpc_type, &start, NULL) == 0)
+            return start;
+    }
+    
+    /* Fall back to legacy field */
+    return expr->array_lower_bound;
+}
+
+/* Helper to get array element size from expression, preferring resolved_gpc_type */
+long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return -1;
+    
+    /* Prefer GpcType if available */
+    if (expr->resolved_gpc_type != NULL && gpc_type_is_array(expr->resolved_gpc_type))
+    {
+        long long size = gpc_type_get_array_element_size(expr->resolved_gpc_type);
+        if (size > 0)
+            return size;
+    }
+    
+    /* Fall back to legacy field */
+    return expr->array_element_size;
+}
+
 int codegen_expr_is_signed(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -1467,7 +1503,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int lower_bound = base_is_string ? 1 : array_expr->array_lower_bound;
+    int lower_bound = base_is_string ? 1 : expr_get_array_lower_bound(array_expr);
     if (lower_bound > 0)
     {
         snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
@@ -1481,7 +1517,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
-    long long element_size_ll = base_is_string ? 1 : array_expr->array_element_size;
+    long long element_size_ll = base_is_string ? 1 : expr_get_array_element_size(array_expr, ctx);
     if (!base_is_string)
     {
         int need_element_size = 0;
