@@ -1247,6 +1247,9 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
     clone->array_is_open = field->array_is_open;
+    clone->is_method = field->is_method;
+    clone->is_virtual = field->is_virtual;
+    clone->is_override = field->is_override;
     return clone;
 }
 

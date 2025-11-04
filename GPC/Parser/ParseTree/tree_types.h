@@ -62,6 +62,9 @@ struct RecordField
     int array_element_type;
     char *array_element_type_id;
     int array_is_open;
+    int is_method;              /* 1 if this field represents a method declaration */
+    int is_virtual;             /* 1 if method is virtual */
+    int is_override;            /* 1 if method is override */
 };
 
 struct RecordType

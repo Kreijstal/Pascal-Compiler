@@ -812,6 +812,9 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type = UNKNOWN_TYPE;
             field_desc->array_element_type_id = NULL;
             field_desc->array_is_open = 0;
+            field_desc->is_method = 0;
+            field_desc->is_virtual = 0;
+            field_desc->is_override = 0;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
             free(field_name);
@@ -965,6 +968,9 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_is_open = field_info.is_open_array;
+            field_desc->is_method = 0;
+            field_desc->is_virtual = 0;
+            field_desc->is_override = 0;
             field_info.element_type_id = NULL;
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
