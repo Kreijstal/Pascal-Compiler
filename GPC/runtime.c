@@ -321,6 +321,32 @@ void gpc_write_string(GPCTextFile *file, int width, const char *value)
         fprintf(dest, "%s", value);
 }
 
+/* Write a char array with specified maximum length (for Pascal char arrays) */
+void gpc_write_char_array(GPCTextFile *file, int width, const char *value, size_t max_len)
+{
+    FILE *dest = gpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
+    if (value == NULL)
+        return;
+    
+    /* Find the actual length: either max_len or until first null, whichever comes first */
+    size_t actual_len = 0;
+    while (actual_len < max_len && value[actual_len] != '\0')
+        actual_len++;
+    
+    /* Use precision specifier to limit output */
+    if (width > 1024 || width < -1024)
+        width = 0;
+    if (width > 0)
+        fprintf(dest, "%*.*s", width, (int)actual_len, value);
+    else if (width < 0)
+        fprintf(dest, "%-*.*s", -width, (int)actual_len, value);
+    else
+        fprintf(dest, "%.*s", (int)actual_len, value);
+}
+
 void gpc_write_newline(GPCTextFile *file)
 {
     FILE *dest = gpc_text_output_stream(file);
@@ -518,6 +544,26 @@ void gpc_string_assign(char **target, const char *value)
 
     char *copy = gpc_string_duplicate(value);
     *target = copy;
+}
+
+/* Copy a string literal to a char array (fixed-size buffer)
+ * Fills the entire array. If the string is shorter, pads with nulls.
+ * If the string is longer, truncates to fit.
+ * Note: May NOT be null-terminated if string exactly fills the array!
+ */
+void gpc_string_to_char_array(char *dest, const char *src, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size == 0)
+        return;
+    
+    size_t src_len = strlen(src);
+    size_t copy_len = (src_len < dest_size) ? src_len : dest_size;
+    
+    memcpy(dest, src, copy_len);
+    
+    /* Pad remaining space with zeros if string is shorter than array */
+    if (copy_len < dest_size)
+        memset(dest + copy_len, 0, dest_size - copy_len);
 }
 
 

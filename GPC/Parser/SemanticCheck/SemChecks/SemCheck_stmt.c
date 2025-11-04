@@ -905,6 +905,32 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 coerced_rhs_type = CHAR_TYPE;
                 expr->resolved_type = CHAR_TYPE;
             }
+            /* Allow string literal assignment to char arrays */
+            else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
+                var != NULL && var->is_array_expr && var->array_element_type == CHAR_TYPE &&
+                expr != NULL && expr->type == EXPR_STRING)
+            {
+                /* Verify string fits in array (including null terminator) */
+                size_t string_len = expr->expr_data.string != NULL ? strlen(expr->expr_data.string) : 0;
+                int array_size = var->array_upper_bound - var->array_lower_bound + 1;
+                
+                if (string_len > (size_t)array_size)
+                {
+                    const char *lhs_name = (var->type == EXPR_VAR_ID) ? var->expr_data.id : "<expression>";
+                    fprintf(stderr,
+                        "Error on line %d, string literal too long for array %s (string length: %zu, array size: %d)!\n\n",
+                        stmt->line_num,
+                        lhs_name,
+                        string_len,
+                        array_size);
+                    ++return_val;
+                }
+                else
+                {
+                    types_compatible = 1;
+                    /* Keep the type as STRING_TYPE to signal code generator to emit string-to-array copy */
+                }
+            }
         }
 
         if (!types_compatible)

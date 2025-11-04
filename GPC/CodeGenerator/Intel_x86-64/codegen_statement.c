@@ -477,6 +477,89 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     return inst_list;
 }
 
+/* Call gpc_string_to_char_array(dest, src, size) to copy string to char array */
+static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int array_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64 ABI: first arg in %rcx, second in %rdx, third in %r8 */
+        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
+        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+
+        if (value_in_rcx && addr_in_rdx)
+        {
+            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+        }
+        else if (value_in_rcx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rdx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V ABI: first arg in %rdi, second in %rsi, third in %rdx */
+        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
+        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+
+        if (value_in_rdi && addr_in_rsi)
+        {
+            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+        }
+        else if (value_in_rdi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rsi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_to_char_array\n");
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
@@ -1422,6 +1505,14 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         struct Expression *expr = (struct Expression *)args->cur;
 
         int expr_type = (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
+        
+        /* Treat char arrays as strings for printing */
+        int treat_as_string = (expr_type == STRING_TYPE);
+        if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+        {
+            treat_as_string = 1;
+        }
+        
         const int expr_is_real = (expr_type == REAL_TYPE);
         const char *file_dest64 = current_arg_reg64(0);
         const char *width_dest64 = current_arg_reg64(1);
@@ -1462,12 +1553,27 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             has_precision_reg = 1;
         }
 
-        expr_node_t *expr_tree = build_expr_tree(expr);
+        /* For char arrays being treated as strings, we need to load the address */
         Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
-        inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
-        free_expr_tree(expr_tree);
+        if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+        {
+            /* Load address of char array */
+            inst_list = codegen_address_for_expr(expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx))
+            {
+                free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+        }
+        else
+        {
+            /* Load value normally */
+            expr_node_t *expr_tree = build_expr_tree(expr);
+            inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
+            free_expr_tree(expr_tree);
+        }
 
-        if (expr_type == STRING_TYPE)
+        if (treat_as_string)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
@@ -1514,8 +1620,23 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
 
         const char *call_target = "gpc_write_integer";
-        if (expr_type == STRING_TYPE)
-            call_target = "gpc_write_string";
+        int is_char_array = 0;
+        int char_array_size = 0;
+        
+        if (treat_as_string)
+        {
+            /* Check if it's a char array (not a regular string) */
+            if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+            {
+                call_target = "gpc_write_char_array";
+                is_char_array = 1;
+                char_array_size = expr->array_upper_bound - expr->array_lower_bound + 1;
+            }
+            else
+            {
+                call_target = "gpc_write_string";
+            }
+        }
         else if (expr_type == BOOL)
             call_target = "gpc_write_boolean";
         else if (expr_is_real)
@@ -1541,6 +1662,14 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         else
         {
             snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        /* For char arrays, pass the size as the 4th argument */
+        if (is_char_array)
+        {
+            const char *size_dest64 = current_arg_reg64(3);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %s\n", char_array_size, size_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
 
@@ -1785,6 +1914,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* Handle string assignment to string variables */
         if (expr_get_type_tag(var_expr) == STRING_TYPE)
         {
             Register_t *addr_reg = NULL;
@@ -1798,6 +1928,29 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
 
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+        
+        /* Handle string literal assignment to char arrays */
+        if (expr_get_type_tag(var_expr) == CHAR_TYPE && 
+            var_expr->is_array_expr && 
+            var_expr->array_element_type == CHAR_TYPE &&
+            expr_get_type_tag(assign_expr) == STRING_TYPE)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), value_reg);
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            int array_size = var_expr->array_upper_bound - var_expr->array_lower_bound + 1;
+            inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
