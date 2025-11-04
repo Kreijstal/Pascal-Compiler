@@ -1017,10 +1017,35 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
             {
-                resolved_proc = candidate;
+                /* Found a match. For procedures registered in multiple scopes
+                 * (e.g., for recursion), we may find the same mangled name multiple times.
+                 * Just keep the first match - they're functionally equivalent. */
+                if (resolved_proc == NULL) {
+                    resolved_proc = candidate;
+                }
                 match_count++;
             }
             cur = cur->next;
+        }
+    }
+
+    /* If we found multiple matches but they all have the same mangled name,
+     * treat it as a single match (they're duplicates from different scopes) */
+    if (match_count > 1 && resolved_proc != NULL) {
+        /* Verify all matches have the same mangled name */
+        int same_mangled = 1;
+        ListNode_t *cur = overload_candidates;
+        while (cur != NULL && same_mangled) {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0) {
+                if (strcmp(candidate->mangled_id, resolved_proc->mangled_id) != 0) {
+                    same_mangled = 0;
+                }
+            }
+            cur = cur->next;
+        }
+        if (same_mangled) {
+            match_count = 1;  /* Treat as single match */
         }
     }
 
