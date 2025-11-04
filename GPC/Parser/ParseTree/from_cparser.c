@@ -2537,8 +2537,28 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (method_name == NULL)
         return NULL;
 
+    /* For method calls, we should ideally use the object's type to determine
+     * which class's method to call. However, at parse time we don't have full
+     * type information. For now, we use find_class_for_method which returns
+     * the first registered class. This works for non-override methods, but
+     * for override methods, the semantic checker will need to handle multiple
+     * candidates.
+     * 
+     * TODO: Consider not mangling the name here, and instead resolve it during
+     * semantic checking when we have full type information.
+     */
     const char *class_name = find_class_for_method(method_name);
-    char *proc_name = mangle_method_name(class_name, method_name);
+    
+    /* Build mangled name, but mark this as a method call that may need 
+     * override resolution during semantic checking */
+    char *proc_name = NULL;
+    if (class_name != NULL) {
+        proc_name = mangle_method_name(class_name, method_name);
+    } else {
+        /* No class found, just use the method name as-is */
+        proc_name = strdup(method_name);
+    }
+    
     free(method_name);
 
     if (proc_name == NULL)
@@ -2880,7 +2900,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     const char *registered_class = find_class_for_method(method_name);
-    const char *effective_class = registered_class != NULL ? registered_class : class_name;
+    /* Prefer the explicitly specified class name from the qualified identifier,
+     * falling back to the registered class if no explicit class was given */
+    const char *effective_class = class_name != NULL ? class_name : registered_class;
     if (effective_class != NULL)
         register_class_method(effective_class, method_name);
     char *proc_name = mangle_method_name(effective_class, method_name);
