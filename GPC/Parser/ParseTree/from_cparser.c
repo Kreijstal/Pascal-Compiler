@@ -78,11 +78,14 @@ static char *pop_last_identifier(ListNode_t **ids);
 typedef struct ClassMethodBinding {
     char *class_name;
     char *method_name;
+    int is_virtual;     /* 1 if method is declared virtual */
+    int is_override;    /* 1 if method is declared override */
 } ClassMethodBinding;
 
 static ListNode_t *class_method_bindings = NULL;
 
-static void register_class_method(const char *class_name, const char *method_name) {
+static void register_class_method_ex(const char *class_name, const char *method_name, 
+                                      int is_virtual, int is_override) {
     if (class_name == NULL || method_name == NULL)
         return;
 
@@ -92,6 +95,8 @@ static void register_class_method(const char *class_name, const char *method_nam
 
     binding->class_name = strdup(class_name);
     binding->method_name = strdup(method_name);
+    binding->is_virtual = is_virtual;
+    binding->is_override = is_override;
 
     ListNode_t *node = NULL;
     if (binding->class_name != NULL && binding->method_name != NULL)
@@ -106,6 +111,10 @@ static void register_class_method(const char *class_name, const char *method_nam
 
     node->next = class_method_bindings;
     class_method_bindings = node;
+}
+
+static void register_class_method(const char *class_name, const char *method_name) {
+    register_class_method_ex(class_name, method_name, 0, 0);
 }
 
 static const char *find_class_for_method(const char *method_name) {
@@ -812,9 +821,6 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type = UNKNOWN_TYPE;
             field_desc->array_element_type_id = NULL;
             field_desc->array_is_open = 0;
-            field_desc->is_method = 0;
-            field_desc->is_virtual = 0;
-            field_desc->is_override = 0;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
             free(field_name);
@@ -849,11 +855,38 @@ static void collect_class_members(ast_t *node, const char *class_name, ListBuild
                 break;
             }
             case PASCAL_T_METHOD_DECL: {
+                /* Extract method name */
                 ast_t *name_node = unwrapped->child;
                 while (name_node != NULL && name_node->typ != PASCAL_T_IDENTIFIER)
                     name_node = name_node->next;
-                if (name_node != NULL && name_node->sym != NULL && name_node->sym->name != NULL)
-                    register_class_method(class_name, name_node->sym->name);
+                
+                if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
+                    break;
+                
+                /* Look for virtual/override directive after the method declaration */
+                int is_virtual = 0;
+                int is_override = 0;
+                
+                ast_t *directive_node = unwrapped->child;
+                while (directive_node != NULL) {
+                    if (directive_node->typ == PASCAL_T_METHOD_DIRECTIVE) {
+                        /* Check if it's virtual or override */
+                        ast_t *keyword = directive_node->child;
+                        while (keyword != NULL) {
+                            if (keyword->sym != NULL && keyword->sym->name != NULL) {
+                                if (strcasecmp(keyword->sym->name, "virtual") == 0)
+                                    is_virtual = 1;
+                                else if (strcasecmp(keyword->sym->name, "override") == 0)
+                                    is_override = 1;
+                            }
+                            keyword = keyword->next;
+                        }
+                        break;
+                    }
+                    directive_node = directive_node->next;
+                }
+                
+                register_class_method_ex(class_name, name_node->sym->name, is_virtual, is_override);
                 break;
             }
             default:
@@ -894,6 +927,7 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
 
     record->fields = list_builder_finish(&builder);
     record->parent_class_name = parent_class_name;
+    record->methods = NULL;  /* Methods list will be populated during semantic checking */
     return record;
 }
 
@@ -968,9 +1002,6 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_is_open = field_info.is_open_array;
-            field_desc->is_method = 0;
-            field_desc->is_virtual = 0;
-            field_desc->is_override = 0;
             field_info.element_type_id = NULL;
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
@@ -1154,6 +1185,7 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
     }
     record->fields = list_builder_finish(&fields_builder);
     record->parent_class_name = NULL;  /* Regular records don't have parent classes */
+    record->methods = NULL;  /* Regular records don't have methods */
     return record;
 }
 
