@@ -17,6 +17,8 @@ static ast_t* wrap_pointer_suffix(ast_t* parsed);
 static ast_t* wrap_array_suffix(ast_t* parsed);
 static ast_t* build_array_or_pointer_chain(ast_t* parsed);
 static ast_t* wrap_nil_literal(ast_t* parsed);
+static ast_t* wrap_true_literal(ast_t* parsed);
+static ast_t* wrap_false_literal(ast_t* parsed);
 static combinator_t* create_suffix_choice(combinator_t** expr_parser_ref);
 
 // Helper to discard parse failures
@@ -874,14 +876,8 @@ void init_pascal_expression_parser(combinator_t** p) {
     );
 
     // Boolean literal parsers
-    combinator_t* boolean_true = seq(new_combinator(), PASCAL_T_BOOLEAN,
-        match_ci("true"),
-        NULL
-    );
-    combinator_t* boolean_false = seq(new_combinator(), PASCAL_T_BOOLEAN,
-        match_ci("false"),
-        NULL
-    );
+    combinator_t* boolean_true = map(token(keyword_ci("true")), wrap_true_literal);
+    combinator_t* boolean_false = map(token(keyword_ci("false")), wrap_false_literal);
 
     // Tuple constructor: (expr, expr, ...) - for nested array constants like ((1,2),(3,4))
     combinator_t* tuple = seq(new_combinator(), PASCAL_T_TUPLE,
@@ -1096,6 +1092,30 @@ static ast_t* wrap_nil_literal(ast_t* parsed) {
     node->child = NULL;
     node->next = NULL;
     node->sym = sym_lookup("nil");
+    return node;
+}
+
+static ast_t* wrap_true_literal(ast_t* parsed) {
+    if (parsed != NULL && parsed != ast_nil) {
+        free_ast(parsed);
+    }
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_BOOLEAN;
+    node->child = NULL;
+    node->next = NULL;
+    node->sym = sym_lookup("true");
+    return node;
+}
+
+static ast_t* wrap_false_literal(ast_t* parsed) {
+    if (parsed != NULL && parsed != ast_nil) {
+        free_ast(parsed);
+    }
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_BOOLEAN;
+    node->child = NULL;
+    node->next = NULL;
+    node->sym = sym_lookup("false");
     return node;
 }
 
