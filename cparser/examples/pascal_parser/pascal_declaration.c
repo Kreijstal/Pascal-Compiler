@@ -52,6 +52,13 @@ static ast_t* discard_ast(ast_t* ast) {
     return ast_nil;
 }
 
+// Helper to discard parse failures
+static inline void discard_failure(ParseResult result) {
+    if (!result.is_success) {
+        free_error(result.value.error);
+    }
+}
+
 static bool is_modifier_keyword(ast_t* node) {
     if (node == NULL || node->sym == NULL || node->sym->name == NULL)
         return false;
@@ -201,6 +208,72 @@ static combinator_t* create_simple_param_list(void) {
         token(match(")")),
         sep_by(param, token(match(";")))
     ));
+}
+
+// Parser for operator names - supports both FPC-style symbols (+, *, etc.) and Delphi-style names (Add, Multiply, etc.)
+static ParseResult operator_name_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    // Try to parse operator symbol first
+    const char* operator_symbols[] = {
+        "+", "-", "*", "/", "=", "<>", "<", ">", "<=", ">=",
+        ":=", "**", "div", "mod", "and", "or", "xor", "shl", "shr",
+        "in", "is", "as", NULL
+    };
+
+    for (int i = 0; operator_symbols[i] != NULL; i++) {
+        InputState symbol_state;
+        save_input_state(in, &symbol_state);
+        
+        const char* symbol = operator_symbols[i];
+        int len = strlen(symbol);
+        bool matches = true;
+        
+        for (int j = 0; j < len; j++) {
+            char c = read1(in);
+            if (c == EOF || tolower((unsigned char)c) != tolower((unsigned char)symbol[j])) {
+                matches = false;
+                break;
+            }
+        }
+        
+        if (matches) {
+            // Create AST node for operator symbol
+            ast_t* ast = new_ast();
+            ast->typ = pargs->tag;
+            ast->sym = sym_lookup(symbol);
+            ast->child = NULL;
+            ast->next = NULL;
+            set_ast_position(ast, in);
+            return make_success(ast);
+        }
+        
+        restore_input_state(in, &symbol_state);
+    }
+
+    // If no symbol matched, try parsing as identifier (Delphi-style: Add, Multiply, etc.)
+    combinator_t* ident_parser = cident(pargs->tag);
+    ParseResult ident_res = parse(in, ident_parser);
+    free_combinator(ident_parser);
+    
+    if (ident_res.is_success) {
+        return ident_res;
+    }
+    
+    discard_failure(ident_res);
+    restore_input_state(in, &state);
+    return make_failure_v2(in, parser_name, strdup("Expected operator name or symbol"), NULL);
+}
+
+combinator_t* operator_name(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->fn = operator_name_fn;
+    comb->args = args;
+    return comb;
 }
 
 // Helper function to create parameter parser (reduces code duplication)
@@ -571,6 +644,14 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    // Operator name with class qualification (Class.+)
+    combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+        token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
+        token(match(".")),                           // dot
+        token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name
+        NULL
+    );
+
     // Return type for functions: : type
     combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         token(match(":")),                           // colon
@@ -645,7 +726,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("operator")),
-        method_name_with_class,
+        operator_name_with_class,
         optional(param_list),
         return_type,
         token(match(";")),
@@ -1075,6 +1156,14 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Use the nested function body parser for complete programs to support nested functions
     combinator_t* program_function_body = nested_function_body;
 
+    // Create a method body parser that supports local var sections
+    // This is simpler than program_function_body since methods don't support nested functions
+    combinator_t* method_body = seq(new_combinator(), PASCAL_T_NONE,
+        many(local_var_section),                     // zero or more local var sections
+        lazy(stmt_parser),                           // begin-end block handled by statement parser
+        NULL
+    );
+
     // Create simple working function and procedure parsers based on the nested version
     // These work because they use the recursive statement parser for bodies
 
@@ -1118,7 +1207,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         constructor_param_list,                      // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1129,7 +1218,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         destructor_param_list,                       // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1140,7 +1229,28 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         method_procedure_param_list,                 // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
+        optional(token(match(";"))),                 // optional terminating semicolon
+        NULL
+    );
+
+    // Operator name with class qualification (Class.+ or Class.Add)
+    combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
+        token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
+        token(match(".")),                           // dot
+        token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name
+        NULL
+    );
+
+    combinator_t* operator_param_list = create_simple_param_list();
+    combinator_t* operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class keyword
+        token(keyword_ci("operator")),               // operator keyword
+        operator_name_with_class,                    // ClassName.OperatorName
+        operator_param_list,                         // parameter list
+        return_type,                                 // return type
+        token(match(";")),                           // semicolon
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1150,6 +1260,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         constructor_impl,
         destructor_impl,
         procedure_impl,
+        operator_impl,
         NULL
     );
 

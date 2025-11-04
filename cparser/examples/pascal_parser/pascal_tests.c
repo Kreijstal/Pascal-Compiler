@@ -4024,6 +4024,200 @@ void test_pascal_interspersed_decls_in_procedure(void) {
     free(input);
 }
 
+void test_pascal_fpc_operator_overload_symbols(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program Test;\n"
+        "type\n"
+        "  TVector = record\n"
+        "    X, Y: Integer;\n"
+        "    class operator +(const A, B: TVector): TVector;\n"
+        "    class operator *(const V: TVector; S: Integer): TVector;\n"
+        "  end;\n"
+        "class operator TVector.+(const A, B: TVector): TVector;\n"
+        "begin\n"
+        "end;\n"
+        "class operator TVector.*(const V: TVector; S: Integer): TVector;\n"
+        "begin\n"
+        "end;\n"
+        "begin\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_delphi_operator_overload_names(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program Test;\n"
+        "type\n"
+        "  TVector = record\n"
+        "    X, Y: Integer;\n"
+        "    class operator Add(const A, B: TVector): TVector;\n"
+        "    class operator Multiply(const V: TVector; S: Integer): TVector;\n"
+        "  end;\n"
+        "class operator TVector.Add(const A, B: TVector): TVector;\n"
+        "begin\n"
+        "end;\n"
+        "class operator TVector.Multiply(const V: TVector; S: Integer): TVector;\n"
+        "begin\n"
+        "end;\n"
+        "begin\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_method_with_var_section(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program Test;\n"
+        "type\n"
+        "  TTest = record\n"
+        "    X: Integer;\n"
+        "  end;\n"
+        "procedure TTest.SetX(Value: Integer);\n"
+        "var\n"
+        "  Temp: Integer;\n"
+        "begin\n"
+        "  Temp := Value;\n"
+        "  X := Temp;\n"
+        "end;\n"
+        "begin\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_operator_with_var_section(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program Test;\n"
+        "type\n"
+        "  TVector = record\n"
+        "    X, Y: Integer;\n"
+        "  end;\n"
+        "class operator TVector.+(const A, B: TVector): TVector;\n"
+        "var\n"
+        "  Result: TVector;\n"
+        "begin\n"
+        "  Result.X := A.X + B.X;\n"
+        "  Result.Y := A.Y + B.Y;\n"
+        "end;\n"
+        "begin\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_constructor_destructor_with_var_section(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program Test;\n"
+        "type\n"
+        "  TTest = class\n"
+        "    X: Integer;\n"
+        "  end;\n"
+        "constructor TTest.Create;\n"
+        "var\n"
+        "  InitValue: Integer;\n"
+        "begin\n"
+        "  InitValue := 42;\n"
+        "  X := InitValue;\n"
+        "end;\n"
+        "destructor TTest.Destroy;\n"
+        "var\n"
+        "  FinalValue: Integer;\n"
+        "begin\n"
+        "  FinalValue := X;\n"
+        "end;\n"
+        "begin\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
@@ -4161,5 +4355,10 @@ TEST_LIST = {
     { "test_deprecated_on_const", test_deprecated_on_const },
     { "test_variant_record_field_attributes", test_variant_record_field_attributes },
     { "test_pascal_interspersed_decls_in_procedure", test_pascal_interspersed_decls_in_procedure },
+    { "test_pascal_fpc_operator_overload_symbols", test_pascal_fpc_operator_overload_symbols },
+    { "test_pascal_delphi_operator_overload_names", test_pascal_delphi_operator_overload_names },
+    { "test_pascal_method_with_var_section", test_pascal_method_with_var_section },
+    { "test_pascal_operator_with_var_section", test_pascal_operator_with_var_section },
+    { "test_pascal_constructor_destructor_with_var_section", test_pascal_constructor_destructor_with_var_section },
     { NULL, NULL }
 };

@@ -284,11 +284,11 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    // Class operator declaration: operator Name; [override];
+    // Class operator declaration: operator Name/Symbol(params): ReturnType; [override];
     combinator_t* class_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("operator")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
         token(cident(PASCAL_T_IDENTIFIER)),
