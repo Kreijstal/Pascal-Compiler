@@ -339,7 +339,7 @@ static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, 
     
     /* Look up parent class */
     HashNode_t *parent_node = NULL;
-    if (FindIdent(&parent_node, symtab, parent_name) == -1 || parent_node == NULL)
+    if (FindIdent(&parent_node, symtab, (char *)parent_name) == -1 || parent_node == NULL)
         return 0;  /* Parent not found yet, not necessarily circular */
     
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
@@ -1401,20 +1401,54 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                if(tree->tree_data.arr_decl_data.type == INT_TYPE)
-                    var_type = HASHVAR_INTEGER;
-                else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
-                    var_type = HASHVAR_LONGINT;
-                else if(tree->tree_data.arr_decl_data.type == BOOL)
-                    var_type = HASHVAR_BOOLEAN;
-                else if(tree->tree_data.arr_decl_data.type == STRING_TYPE)
-                    var_type = HASHVAR_PCHAR;
-                else
-                    var_type = HASHVAR_REAL;
-
-                /* Create GpcType for the array */
-                GpcType *element_type = gpc_type_from_var_type(var_type);
-                assert(element_type != NULL && "Array element type must be createable from VarType");
+                
+                GpcType *element_type = NULL;
+                
+                /* If type_id is specified, resolve it to get the element type */
+                if (tree->tree_data.arr_decl_data.type_id != NULL)
+                {
+                    HashNode_t *element_type_node = NULL;
+                    if (FindIdent(&element_type_node, symtab, tree->tree_data.arr_decl_data.type_id) >= 0)
+                    {
+                        /* Use the GpcType from the resolved type node */
+                        element_type = element_type_node->type;
+                        if (element_type == NULL)
+                        {
+                            /* Fallback for migration: some nodes may not have GpcType populated yet.
+                             * Try to construct GpcType from legacy record type information. */
+                            struct RecordType *record_type = get_record_type_from_node(element_type_node);
+                            if (record_type != NULL)
+                            {
+                                /* Clone the record type since create_record_type takes ownership */
+                                element_type = create_record_type(clone_record_type(record_type));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        fprintf(stderr, "Error on line %d, undefined type %s!\n",
+                            tree->line_num, tree->tree_data.arr_decl_data.type_id);
+                        return_val++;
+                    }
+                }
+                
+                /* If element type not resolved from type_id, use primitive type */
+                if (element_type == NULL)
+                {
+                    if(tree->tree_data.arr_decl_data.type == INT_TYPE)
+                        var_type = HASHVAR_INTEGER;
+                    else if(tree->tree_data.arr_decl_data.type == LONGINT_TYPE)
+                        var_type = HASHVAR_LONGINT;
+                    else if(tree->tree_data.arr_decl_data.type == BOOL)
+                        var_type = HASHVAR_BOOLEAN;
+                    else if(tree->tree_data.arr_decl_data.type == STRING_TYPE)
+                        var_type = HASHVAR_PCHAR;
+                    else
+                        var_type = HASHVAR_REAL;
+                    
+                    element_type = gpc_type_from_var_type(var_type);
+                    assert(element_type != NULL && "Array element type must be createable from VarType");
+                }
                 
                 GpcType *array_type = create_array_type(
                     element_type,
@@ -1557,7 +1591,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 {
     int return_val, func_return;
     int new_max_scope;
-    enum VarType var_type;
     enum TreeType sub_type;
     struct Statement *body;
     HashNode_t *hash_return;
@@ -1635,29 +1668,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 fprintf(stderr, "Error on line %d, undefined type %s!\n",
                     subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
                 return_val++;
-                var_type = HASHVAR_UNTYPED;
             }
             else
             {
-                var_type = get_var_type_from_node(type_node);
                 return_type_node = type_node;
                 /* Get GpcType for the return type */
                 assert(type_node->type != NULL && "Type node must have GpcType");
                 return_gpc_type = type_node->type;
             }
         }
-        else if(subprogram->tree_data.subprogram_data.return_type == INT_TYPE)
-            var_type = HASHVAR_INTEGER;
-        else if(subprogram->tree_data.subprogram_data.return_type == LONGINT_TYPE)
-            var_type = HASHVAR_LONGINT;
-        else if(subprogram->tree_data.subprogram_data.return_type == REAL_TYPE)
-            var_type = HASHVAR_REAL;
-        else if(subprogram->tree_data.subprogram_data.return_type == STRING_TYPE)
-            var_type = HASHVAR_PCHAR;
-        else if(subprogram->tree_data.subprogram_data.return_type == BOOL)
-            var_type = HASHVAR_BOOLEAN;
-        else
-            var_type = HASHVAR_REAL;
 
         /* Create a primitive GpcType for the return type if we don't have one */
         if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)

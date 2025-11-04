@@ -143,6 +143,7 @@ static inline int get_var_storage_size(HashNode_t *node)
 }
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree);
 
 gpc_target_abi_t g_current_codegen_abi = GPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
