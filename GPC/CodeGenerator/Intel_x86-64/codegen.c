@@ -634,6 +634,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx);
+    codegen_vmt(ctx, symtab, tree);
 
     prgm_name = codegen_program(tree, ctx, symtab);
     codegen_main(prgm_name, ctx);
@@ -680,6 +681,68 @@ void codegen_rodata(CodeGenContext *ctx)
     fprintf(ctx->output_file, ".format_str_n:\n");
     fprintf(ctx->output_file, ".string \"\\n\"\n");
     fprintf(ctx->output_file, ".text\n");
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+}
+
+/* Generate Virtual Method Tables (VMT) for classes with virtual methods */
+void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+    assert(tree != NULL);
+    
+    if (tree->type != TREE_PROGRAM_TYPE)
+        return;
+    
+    ListNode_t *type_decls = tree->tree_data.program_data.type_declaration;
+    if (type_decls == NULL)
+        return;
+    
+    /* VMTs are generated as read-only data structures */
+    fprintf(ctx->output_file, "\n");
+    fprintf(ctx->output_file, "# Virtual Method Tables (VMT)\n");
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    
+    /* Iterate through all type declarations */
+    ListNode_t *cur = type_decls;
+    while (cur != NULL) {
+        Tree_t *type_tree = (Tree_t *)cur->cur;
+        if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
+            /* Check if this is a record/class type with methods */
+            if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
+                struct RecordType *record_info = type_tree->tree_data.type_decl_data.info.record;
+                const char *type_name = type_tree->tree_data.type_decl_data.id;
+                
+                /* Generate VMT if this class has virtual methods */
+                if (record_info != NULL && record_info->methods != NULL && type_name != NULL) {
+                    fprintf(ctx->output_file, "\n# VMT for class %s\n", type_name);
+                    fprintf(ctx->output_file, "\t.align 8\n");
+                    fprintf(ctx->output_file, ".globl %s_VMT\n", type_name);
+                    fprintf(ctx->output_file, "%s_VMT:\n", type_name);
+                    
+                    /* Generate VMT entries for each method */
+                    ListNode_t *method_node = record_info->methods;
+                    while (method_node != NULL) {
+                        struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                        if (method != NULL && method->mangled_name != NULL) {
+                            /* Each VMT entry is a pointer to the method */
+                            fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
+                        }
+                        method_node = method_node->next;
+                    }
+                }
+            }
+        }
+        cur = cur->next;
+    }
+    
+    fprintf(ctx->output_file, ".text\n");
+    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif

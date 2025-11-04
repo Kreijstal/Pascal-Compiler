@@ -492,6 +492,7 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     int method_count = 0;
     get_class_methods(class_name, &class_methods, &method_count);
     
+    
     /* Start with parent's VMT if this class has a parent */
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
@@ -616,6 +617,7 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     
     /* Store VMT in record */
     record_info->methods = vmt;
+    
     
     /* Clean up class_methods list (shallow - we don't own the bindings) */
     while (class_methods != NULL) {
