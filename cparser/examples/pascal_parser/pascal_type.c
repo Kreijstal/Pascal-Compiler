@@ -235,7 +235,11 @@ combinator_t* class_type(tag_t tag) {
         create_pascal_param_parser(),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),
+            multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+                token(keyword_ci("virtual")),
+                token(keyword_ci("override")),
+                NULL
+            ),
             optional(token(match(";"))),
             NULL
         )),
@@ -249,7 +253,11 @@ combinator_t* class_type(tag_t tag) {
         create_pascal_param_parser(),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),
+            multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+                token(keyword_ci("virtual")),
+                token(keyword_ci("override")),
+                NULL
+            ),
             optional(token(match(";"))),
             NULL
         )),
@@ -265,7 +273,11 @@ combinator_t* class_type(tag_t tag) {
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("override")),
+            multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+                token(keyword_ci("virtual")),
+                token(keyword_ci("override")),
+                NULL
+            ),
             optional(token(match(";"))),
             NULL
         )),

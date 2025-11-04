@@ -15,6 +15,11 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#endif
 #include "SemCheck.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
@@ -23,6 +28,7 @@
 #include "../ParseTree/tree_types.h"
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/GpcType.h"
+#include "../ParseTree/from_cparser.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
@@ -317,6 +323,312 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
     return errors;
 }
 
+/* Helper function to check for circular inheritance */
+static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, const char *parent_name, int max_depth)
+{
+    if (class_name == NULL || parent_name == NULL)
+        return 0;
+    
+    /* Check if parent is the same as this class (direct circular reference) */
+    if (strcmp(class_name, parent_name) == 0)
+        return 1;
+    
+    /* Prevent infinite recursion by limiting depth */
+    if (max_depth <= 0)
+        return 1;
+    
+    /* Look up parent class */
+    HashNode_t *parent_node = NULL;
+    if (FindIdent(&parent_node, symtab, parent_name) == -1 || parent_node == NULL)
+        return 0;  /* Parent not found yet, not necessarily circular */
+    
+    struct RecordType *parent_record = get_record_type_from_node(parent_node);
+    if (parent_record == NULL || parent_record->parent_class_name == NULL)
+        return 0;  /* Parent has no parent, no circular reference */
+    
+    /* Recursively check parent's parent */
+    return check_circular_inheritance(symtab, class_name, parent_record->parent_class_name, max_depth - 1);
+}
+
+/* Helper function to merge parent class fields into derived class */
+static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, const char *class_name, int line_num)
+{
+    if (record_info == NULL || record_info->parent_class_name == NULL)
+        return 0;  /* No parent class to merge */
+    
+    /* Check for circular inheritance */
+    if (check_circular_inheritance(symtab, class_name, record_info->parent_class_name, 100))
+    {
+        fprintf(stderr, "Error on line %d, circular inheritance detected for class '%s'!\n",
+                line_num, class_name ? class_name : "<unknown>");
+        return 1;
+    }
+    
+    /* Look up parent class in symbol table */
+    HashNode_t *parent_node = NULL;
+    if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 || parent_node == NULL)
+    {
+        fprintf(stderr, "Error on line %d, parent class '%s' not found!\n", 
+                line_num, record_info->parent_class_name);
+        return 1;
+    }
+    
+    /* Get parent's RecordType */
+    struct RecordType *parent_record = get_record_type_from_node(parent_node);
+    if (parent_record == NULL)
+    {
+        fprintf(stderr, "Error on line %d, parent class '%s' is not a class/record type!\n",
+                line_num, record_info->parent_class_name);
+        return 1;
+    }
+    
+    /* Clone parent's fields and prepend them to this record's fields */
+    ListNode_t *parent_fields = parent_record->fields;
+    if (parent_fields != NULL)
+    {
+        /* We need to clone the parent's field list and prepend it */
+        ListNode_t *cloned_parent_fields = NULL;
+        ListNode_t *cur = parent_fields;
+        ListNode_t *last_cloned = NULL;
+        
+        while (cur != NULL)
+        {
+            assert(cur->type == LIST_RECORD_FIELD);
+            struct RecordField *original_field = (struct RecordField *)cur->cur;
+            
+            /* Clone the field */
+            struct RecordField *cloned_field = (struct RecordField *)malloc(sizeof(struct RecordField));
+            if (cloned_field == NULL)
+            {
+                /* Clean up previously allocated fields */
+                while (cloned_parent_fields != NULL)
+                {
+                    ListNode_t *temp = cloned_parent_fields;
+                    cloned_parent_fields = cloned_parent_fields->next;
+                    struct RecordField *field = (struct RecordField *)temp->cur;
+                    free(field->name);
+                    free(field->type_id);
+                    free(field->array_element_type_id);
+                    free(field);
+                    free(temp);
+                }
+                return 1;
+            }
+            
+            cloned_field->name = original_field->name ? strdup(original_field->name) : NULL;
+            cloned_field->type = original_field->type;
+            cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
+            cloned_field->nested_record = original_field->nested_record;  /* Share the nested record */
+            cloned_field->is_array = original_field->is_array;
+            cloned_field->array_start = original_field->array_start;
+            cloned_field->array_end = original_field->array_end;
+            cloned_field->array_element_type = original_field->array_element_type;
+            cloned_field->array_element_type_id = original_field->array_element_type_id ? 
+                strdup(original_field->array_element_type_id) : NULL;
+            cloned_field->array_is_open = original_field->array_is_open;
+            
+            /* Create list node for cloned field */
+            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            if (new_node == NULL)
+            {
+                free(cloned_field->name);
+                free(cloned_field->type_id);
+                free(cloned_field->array_element_type_id);
+                free(cloned_field);
+                
+                /* Clean up previously allocated fields */
+                while (cloned_parent_fields != NULL)
+                {
+                    ListNode_t *temp = cloned_parent_fields;
+                    cloned_parent_fields = cloned_parent_fields->next;
+                    struct RecordField *field = (struct RecordField *)temp->cur;
+                    free(field->name);
+                    free(field->type_id);
+                    free(field->array_element_type_id);
+                    free(field);
+                    free(temp);
+                }
+                return 1;
+            }
+            
+            new_node->type = LIST_RECORD_FIELD;
+            new_node->cur = cloned_field;
+            new_node->next = NULL;
+            
+            /* Append to cloned list */
+            if (cloned_parent_fields == NULL)
+            {
+                cloned_parent_fields = new_node;
+                last_cloned = new_node;
+            }
+            else
+            {
+                last_cloned->next = new_node;
+                last_cloned = new_node;
+            }
+            
+            cur = cur->next;
+        }
+        
+        /* Prepend cloned parent fields to this record's fields */
+        if (last_cloned != NULL)
+        {
+            last_cloned->next = record_info->fields;
+            record_info->fields = cloned_parent_fields;
+        }
+    }
+    
+    return 0;
+}
+
+/* Build Virtual Method Table for a class */
+static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
+                            const char *class_name, int line_num) {
+    if (record_info == NULL || class_name == NULL)
+        return 0;
+    
+    /* Get methods registered for this class */
+    ListNode_t *class_methods = NULL;
+    int method_count = 0;
+    get_class_methods(class_name, &class_methods, &method_count);
+    
+    
+    /* Start with parent's VMT if this class has a parent */
+    ListNode_t *vmt = NULL;
+    int vmt_size = 0;
+    
+    if (record_info->parent_class_name != NULL) {
+        /* Look up parent class */
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, record_info->parent_class_name) != -1 && 
+            parent_node != NULL) {
+            struct RecordType *parent_record = get_record_type_from_node(parent_node);
+            if (parent_record != NULL && parent_record->methods != NULL) {
+                /* Clone parent's VMT */
+                ListNode_t *parent_vmt = parent_record->methods;
+                ListNode_t **tail = &vmt;
+                
+                while (parent_vmt != NULL) {
+                    struct MethodInfo *parent_method = (struct MethodInfo *)parent_vmt->cur;
+                    if (parent_method != NULL) {
+                        struct MethodInfo *cloned = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
+                        if (cloned != NULL) {
+                            cloned->name = parent_method->name ? strdup(parent_method->name) : NULL;
+                            cloned->mangled_name = parent_method->mangled_name ? strdup(parent_method->mangled_name) : NULL;
+                            cloned->is_virtual = parent_method->is_virtual;
+                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
+                            cloned->vmt_index = parent_method->vmt_index;
+                            
+                            ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+                            if (node != NULL) {
+                                node->type = LIST_UNSPECIFIED;
+                                node->cur = cloned;
+                                node->next = NULL;
+                                *tail = node;
+                                tail = &node->next;
+                                vmt_size++;
+                            } else {
+                                free(cloned->name);
+                                free(cloned->mangled_name);
+                                free(cloned);
+                            }
+                        }
+                    }
+                    parent_vmt = parent_vmt->next;
+                }
+            }
+        }
+    }
+    
+    /* Process this class's methods */
+    ListNode_t *cur_method = class_methods;
+    while (cur_method != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
+        if (binding != NULL && binding->method_name != NULL) {
+            /* Build mangled name: ClassName__MethodName */
+            size_t class_len = strlen(class_name);
+            size_t method_len = strlen(binding->method_name);
+            char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+            if (mangled != NULL) {
+                snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s", 
+                         class_name, binding->method_name);
+            }
+            
+            if (binding->is_override) {
+                /* Find and replace parent's VMT entry */
+                ListNode_t *vmt_entry = vmt;
+                int found = 0;
+                while (vmt_entry != NULL) {
+                    struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
+                    if (info != NULL && info->name != NULL &&
+                        strcasecmp(info->name, binding->method_name) == 0) {
+                        /* Replace with derived class's version */
+                        free(info->mangled_name);
+                        info->mangled_name = mangled ? strdup(mangled) : NULL;
+                        info->is_override = 1;
+                        found = 1;
+                        break;
+                    }
+                    vmt_entry = vmt_entry->next;
+                }
+                
+                if (!found) {
+                    fprintf(stderr, "Error on line %d, override method '%s' has no virtual parent method\n",
+                            line_num, binding->method_name);
+                }
+            } else if (binding->is_virtual) {
+                /* Add new virtual method to VMT */
+                struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
+                if (new_method != NULL) {
+                    new_method->name = binding->method_name ? strdup(binding->method_name) : NULL;
+                    new_method->mangled_name = mangled ? strdup(mangled) : NULL;
+                    new_method->is_virtual = 1;
+                    new_method->is_override = 0;
+                    new_method->vmt_index = vmt_size;
+                    
+                    ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+                    if (node != NULL) {
+                        node->type = LIST_UNSPECIFIED;
+                        node->cur = new_method;
+                        node->next = NULL;
+                        
+                        /* Append to end */
+                        if (vmt == NULL) {
+                            vmt = node;
+                        } else {
+                            ListNode_t *last = vmt;
+                            while (last->next != NULL)
+                                last = last->next;
+                            last->next = node;
+                        }
+                        vmt_size++;
+                    } else {
+                        free(new_method->name);
+                        free(new_method->mangled_name);
+                        free(new_method);
+                    }
+                }
+            }
+            
+            free(mangled);
+        }
+        cur_method = cur_method->next;
+    }
+    
+    /* Store VMT in record */
+    record_info->methods = vmt;
+    
+    
+    /* Clean up class_methods list (shallow - we don't own the bindings) */
+    while (class_methods != NULL) {
+        ListNode_t *next = class_methods->next;
+        free(class_methods);
+        class_methods = next;
+    }
+    
+    return 0;
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -345,6 +657,31 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
                 record_info = tree->tree_data.type_decl_data.info.record;
+                
+                /* Handle class inheritance - merge parent fields */
+                if (record_info != NULL && record_info->parent_class_name != NULL)
+                {
+                    int merge_result = merge_parent_class_fields(symtab, record_info, 
+                                                                  tree->tree_data.type_decl_data.id, 
+                                                                  tree->line_num);
+                    if (merge_result > 0)
+                    {
+                        return_val += merge_result;
+                        /* Continue processing other type declarations even if this one failed */
+                    }
+                }
+                
+                /* Build VMT for classes with virtual methods */
+                if (record_info != NULL)
+                {
+                    int vmt_result = build_class_vmt(symtab, record_info,
+                                                      tree->tree_data.type_decl_data.id,
+                                                      tree->line_num);
+                    if (vmt_result > 0)
+                    {
+                        return_val += vmt_result;
+                    }
+                }
                 break;
             case TYPE_DECL_ALIAS:
             {

@@ -64,9 +64,21 @@ struct RecordField
     int array_is_open;
 };
 
+/* Method information for classes */
+struct MethodInfo
+{
+    char *name;               /* Method name (unmangled) */
+    char *mangled_name;       /* Mangled name (ClassName__MethodName) */
+    int is_virtual;           /* 1 if declared virtual */
+    int is_override;          /* 1 if declared override */
+    int vmt_index;            /* Index in VMT (-1 if not virtual) */
+};
+
 struct RecordType
 {
     ListNode_t *fields;
+    char *parent_class_name;  /* For class inheritance */
+    ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
 };
 
 struct VariantBranch

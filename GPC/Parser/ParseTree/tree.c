@@ -1210,6 +1210,24 @@ void destroy_record_type(struct RecordType *record_type)
         return;
 
     destroy_list(record_type->fields);
+    free(record_type->parent_class_name);
+    
+    /* Free methods list */
+    if (record_type->methods != NULL) {
+        ListNode_t *cur = record_type->methods;
+        while (cur != NULL) {
+            struct MethodInfo *method = (struct MethodInfo *)cur->cur;
+            if (method != NULL) {
+                free(method->name);
+                free(method->mangled_name);
+                free(method);
+            }
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+    }
+    
     free(record_type);
 }
 
@@ -1221,6 +1239,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     struct RecordType *clone = (struct RecordType *)malloc(sizeof(struct RecordType));
     assert(clone != NULL);
     clone->fields = NULL;
+    clone->parent_class_name = record_type->parent_class_name ? strdup(record_type->parent_class_name) : NULL;
+    clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
 
     clone->fields = clone_member_list(record_type->fields);
 
