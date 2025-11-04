@@ -233,7 +233,7 @@ static ParseResult operator_name_fn(input_t* in, void* args, char* parser_name) 
         
         for (int j = 0; j < len; j++) {
             char c = read1(in);
-            if (tolower((unsigned char)c) != tolower((unsigned char)symbol[j])) {
+            if (c == EOF || tolower((unsigned char)c) != tolower((unsigned char)symbol[j])) {
                 matches = false;
                 break;
             }
