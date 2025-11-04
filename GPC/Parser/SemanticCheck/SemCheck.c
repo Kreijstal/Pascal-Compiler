@@ -1419,6 +1419,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             struct RecordType *record_type = get_record_type_from_node(element_type_node);
                             if (record_type != NULL)
                             {
+                                /* Clone the record type since create_record_type takes ownership */
                                 element_type = create_record_type(clone_record_type(record_type));
                             }
                         }

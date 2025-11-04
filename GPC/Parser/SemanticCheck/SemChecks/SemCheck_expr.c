@@ -306,8 +306,11 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         {
             if (element_type->kind == TYPE_KIND_RECORD)
             {
-                expr->array_element_record_type = element_type->info.record_info;
-                expr->array_element_type = RECORD_TYPE;
+                if (element_type->info.record_info != NULL)
+                {
+                    expr->array_element_record_type = element_type->info.record_info;
+                    expr->array_element_type = RECORD_TYPE;
+                }
             }
             else if (element_type->kind == TYPE_KIND_PRIMITIVE)
             {
