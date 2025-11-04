@@ -317,11 +317,46 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
     return errors;
 }
 
+/* Helper function to check for circular inheritance */
+static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, const char *parent_name, int max_depth)
+{
+    if (class_name == NULL || parent_name == NULL)
+        return 0;
+    
+    /* Check if parent is the same as this class (direct circular reference) */
+    if (strcmp(class_name, parent_name) == 0)
+        return 1;
+    
+    /* Prevent infinite recursion by limiting depth */
+    if (max_depth <= 0)
+        return 1;
+    
+    /* Look up parent class */
+    HashNode_t *parent_node = NULL;
+    if (FindIdent(&parent_node, symtab, parent_name) == -1 || parent_node == NULL)
+        return 0;  /* Parent not found yet, not necessarily circular */
+    
+    struct RecordType *parent_record = get_record_type_from_node(parent_node);
+    if (parent_record == NULL || parent_record->parent_class_name == NULL)
+        return 0;  /* Parent has no parent, no circular reference */
+    
+    /* Recursively check parent's parent */
+    return check_circular_inheritance(symtab, class_name, parent_record->parent_class_name, max_depth - 1);
+}
+
 /* Helper function to merge parent class fields into derived class */
-static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, int line_num)
+static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, const char *class_name, int line_num)
 {
     if (record_info == NULL || record_info->parent_class_name == NULL)
         return 0;  /* No parent class to merge */
+    
+    /* Check for circular inheritance */
+    if (check_circular_inheritance(symtab, class_name, record_info->parent_class_name, 100))
+    {
+        fprintf(stderr, "Error on line %d, circular inheritance detected for class '%s'!\n",
+                line_num, class_name ? class_name : "<unknown>");
+        return 1;
+    }
     
     /* Look up parent class in symbol table */
     HashNode_t *parent_node = NULL;
@@ -358,7 +393,21 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             /* Clone the field */
             struct RecordField *cloned_field = (struct RecordField *)malloc(sizeof(struct RecordField));
             if (cloned_field == NULL)
+            {
+                /* Clean up previously allocated fields */
+                while (cloned_parent_fields != NULL)
+                {
+                    ListNode_t *temp = cloned_parent_fields;
+                    cloned_parent_fields = cloned_parent_fields->next;
+                    struct RecordField *field = (struct RecordField *)temp->cur;
+                    free(field->name);
+                    free(field->type_id);
+                    free(field->array_element_type_id);
+                    free(field);
+                    free(temp);
+                }
                 return 1;
+            }
             
             cloned_field->name = original_field->name ? strdup(original_field->name) : NULL;
             cloned_field->type = original_field->type;
@@ -380,6 +429,19 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 free(cloned_field->type_id);
                 free(cloned_field->array_element_type_id);
                 free(cloned_field);
+                
+                /* Clean up previously allocated fields */
+                while (cloned_parent_fields != NULL)
+                {
+                    ListNode_t *temp = cloned_parent_fields;
+                    cloned_parent_fields = cloned_parent_fields->next;
+                    struct RecordField *field = (struct RecordField *)temp->cur;
+                    free(field->name);
+                    free(field->type_id);
+                    free(field->array_element_type_id);
+                    free(field);
+                    free(temp);
+                }
                 return 1;
             }
             
@@ -445,7 +507,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
                 {
-                    int merge_result = merge_parent_class_fields(symtab, record_info, tree->line_num);
+                    int merge_result = merge_parent_class_fields(symtab, record_info, 
+                                                                  tree->tree_data.type_decl_data.id, 
+                                                                  tree->line_num);
                     if (merge_result > 0)
                     {
                         return_val += merge_result;
