@@ -15,6 +15,11 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#endif
 #include "SemCheck.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
@@ -476,6 +481,152 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     return 0;
 }
 
+/* Build Virtual Method Table for a class */
+static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
+                            const char *class_name, int line_num) {
+    if (record_info == NULL || class_name == NULL)
+        return 0;
+    
+    /* Get methods registered for this class */
+    ListNode_t *class_methods = NULL;
+    int method_count = 0;
+    get_class_methods(class_name, &class_methods, &method_count);
+    
+    /* Start with parent's VMT if this class has a parent */
+    ListNode_t *vmt = NULL;
+    int vmt_size = 0;
+    
+    if (record_info->parent_class_name != NULL) {
+        /* Look up parent class */
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, record_info->parent_class_name) != -1 && 
+            parent_node != NULL) {
+            struct RecordType *parent_record = get_record_type_from_node(parent_node);
+            if (parent_record != NULL && parent_record->methods != NULL) {
+                /* Clone parent's VMT */
+                ListNode_t *parent_vmt = parent_record->methods;
+                ListNode_t **tail = &vmt;
+                
+                while (parent_vmt != NULL) {
+                    struct MethodInfo *parent_method = (struct MethodInfo *)parent_vmt->cur;
+                    if (parent_method != NULL) {
+                        struct MethodInfo *cloned = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
+                        if (cloned != NULL) {
+                            cloned->name = parent_method->name ? strdup(parent_method->name) : NULL;
+                            cloned->mangled_name = parent_method->mangled_name ? strdup(parent_method->mangled_name) : NULL;
+                            cloned->is_virtual = parent_method->is_virtual;
+                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
+                            cloned->vmt_index = parent_method->vmt_index;
+                            
+                            ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+                            if (node != NULL) {
+                                node->type = LIST_UNSPECIFIED;
+                                node->cur = cloned;
+                                node->next = NULL;
+                                *tail = node;
+                                tail = &node->next;
+                                vmt_size++;
+                            } else {
+                                free(cloned->name);
+                                free(cloned->mangled_name);
+                                free(cloned);
+                            }
+                        }
+                    }
+                    parent_vmt = parent_vmt->next;
+                }
+            }
+        }
+    }
+    
+    /* Process this class's methods */
+    ListNode_t *cur_method = class_methods;
+    while (cur_method != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
+        if (binding != NULL && binding->method_name != NULL) {
+            /* Build mangled name: ClassName__MethodName */
+            size_t class_len = strlen(class_name);
+            size_t method_len = strlen(binding->method_name);
+            char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+            if (mangled != NULL) {
+                snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s", 
+                         class_name, binding->method_name);
+            }
+            
+            if (binding->is_override) {
+                /* Find and replace parent's VMT entry */
+                ListNode_t *vmt_entry = vmt;
+                int found = 0;
+                while (vmt_entry != NULL) {
+                    struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
+                    if (info != NULL && info->name != NULL &&
+                        strcasecmp(info->name, binding->method_name) == 0) {
+                        /* Replace with derived class's version */
+                        free(info->mangled_name);
+                        info->mangled_name = mangled ? strdup(mangled) : NULL;
+                        info->is_override = 1;
+                        found = 1;
+                        break;
+                    }
+                    vmt_entry = vmt_entry->next;
+                }
+                
+                if (!found) {
+                    fprintf(stderr, "Error on line %d, override method '%s' has no virtual parent method\n",
+                            line_num, binding->method_name);
+                }
+            } else if (binding->is_virtual) {
+                /* Add new virtual method to VMT */
+                struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
+                if (new_method != NULL) {
+                    new_method->name = binding->method_name ? strdup(binding->method_name) : NULL;
+                    new_method->mangled_name = mangled ? strdup(mangled) : NULL;
+                    new_method->is_virtual = 1;
+                    new_method->is_override = 0;
+                    new_method->vmt_index = vmt_size;
+                    
+                    ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+                    if (node != NULL) {
+                        node->type = LIST_UNSPECIFIED;
+                        node->cur = new_method;
+                        node->next = NULL;
+                        
+                        /* Append to end */
+                        if (vmt == NULL) {
+                            vmt = node;
+                        } else {
+                            ListNode_t *last = vmt;
+                            while (last->next != NULL)
+                                last = last->next;
+                            last->next = node;
+                        }
+                        vmt_size++;
+                    } else {
+                        free(new_method->name);
+                        free(new_method->mangled_name);
+                        free(new_method);
+                    }
+                }
+            }
+            
+            free(mangled);
+        }
+        cur_method = cur_method->next;
+    }
+    
+    /* Store VMT in record */
+    record_info->methods = vmt;
+    
+    /* Clean up class_methods list (shallow - we don't own the bindings) */
+    while (class_methods != NULL) {
+        ListNode_t *next = class_methods->next;
+        free(class_methods);
+        class_methods = next;
+    }
+    
+    return 0;
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -515,6 +666,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         return_val += merge_result;
                         /* Continue processing other type declarations even if this one failed */
+                    }
+                }
+                
+                /* Build VMT for classes with virtual methods */
+                if (record_info != NULL)
+                {
+                    int vmt_result = build_class_vmt(symtab, record_info,
+                                                      tree->tree_data.type_decl_data.id,
+                                                      tree->line_num);
+                    if (vmt_result > 0)
+                    {
+                        return_val += vmt_result;
                     }
                 }
                 break;

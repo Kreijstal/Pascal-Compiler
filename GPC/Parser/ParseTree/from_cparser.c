@@ -75,12 +75,7 @@ static int extract_constant_int(struct Expression *expr, long long *out_value);
 static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
 
-typedef struct ClassMethodBinding {
-    char *class_name;
-    char *method_name;
-    int is_virtual;     /* 1 if method is declared virtual */
-    int is_override;    /* 1 if method is declared override */
-} ClassMethodBinding;
+/* ClassMethodBinding typedef moved to from_cparser.h */
 
 static ListNode_t *class_method_bindings = NULL;
 
@@ -162,8 +157,8 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
     
-    ListBuilder builder;
-    list_builder_init(&builder);
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
     int count = 0;
     
     ListNode_t *cur = class_method_bindings;
@@ -171,14 +166,21 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0) {
-            /* Found a method for this class */
-            list_builder_append(&builder, binding, LIST_UNSPECIFIED);
-            count++;
+            /* Found a method for this class - create a copy of the list node */
+            ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            if (node != NULL) {
+                node->type = LIST_UNSPECIFIED;
+                node->cur = binding;
+                node->next = NULL;
+                *tail = node;
+                tail = &node->next;
+                count++;
+            }
         }
         cur = cur->next;
     }
     
-    *methods_out = list_builder_finish(&builder);
+    *methods_out = head;
     *count_out = count;
 }
 
