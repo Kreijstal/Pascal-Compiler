@@ -765,6 +765,11 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     {
         mangled_name = "gpc_ord_longint";
     }
+    else if (arg_type == ENUM_TYPE)
+    {
+        /* Enumerated types are already stored as integers, so just pass through */
+        mangled_name = "gpc_ord_longint";
+    }
 
     if (mangled_name != NULL)
     {
@@ -788,7 +793,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    fprintf(stderr, "Error on line %d, Ord expects an integer, character, or boolean argument.\\n",
+    fprintf(stderr, "Error on line %d, Ord expects an integer, character, boolean, or enumerated type argument.\\n",
         expr->line_num);
     *type_return = UNKNOWN_TYPE;
     return 1;
