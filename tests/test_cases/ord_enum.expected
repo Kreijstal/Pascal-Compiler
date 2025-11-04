@@ -1,0 +1,15 @@
+Testing Ord with enum constants:
+Ord(Red) = 0
+Ord(Green) = 1
+Ord(Blue) = 2
+Ord(Yellow) = 3
+Ord(Small) = 0
+Ord(Medium) = 1
+Ord(Large) = 2
+Testing Ord with enum variables:
+Ord(color) = 1
+Ord(size) = 2
+Ord(Blue) + Ord(Medium) = 3
+Red is first enum value (ordinal 0)
+Large is third enum value (ordinal 2)
+All Ord tests completed successfully!
