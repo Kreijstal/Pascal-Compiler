@@ -317,6 +317,102 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
     return errors;
 }
 
+/* Helper function to merge parent class fields into derived class */
+static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, int line_num)
+{
+    if (record_info == NULL || record_info->parent_class_name == NULL)
+        return 0;  /* No parent class to merge */
+    
+    /* Look up parent class in symbol table */
+    HashNode_t *parent_node = NULL;
+    if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 || parent_node == NULL)
+    {
+        fprintf(stderr, "Error on line %d, parent class '%s' not found!\n", 
+                line_num, record_info->parent_class_name);
+        return 1;
+    }
+    
+    /* Get parent's RecordType */
+    struct RecordType *parent_record = get_record_type_from_node(parent_node);
+    if (parent_record == NULL)
+    {
+        fprintf(stderr, "Error on line %d, parent class '%s' is not a class/record type!\n",
+                line_num, record_info->parent_class_name);
+        return 1;
+    }
+    
+    /* Clone parent's fields and prepend them to this record's fields */
+    ListNode_t *parent_fields = parent_record->fields;
+    if (parent_fields != NULL)
+    {
+        /* We need to clone the parent's field list and prepend it */
+        ListNode_t *cloned_parent_fields = NULL;
+        ListNode_t *cur = parent_fields;
+        ListNode_t *last_cloned = NULL;
+        
+        while (cur != NULL)
+        {
+            assert(cur->type == LIST_RECORD_FIELD);
+            struct RecordField *original_field = (struct RecordField *)cur->cur;
+            
+            /* Clone the field */
+            struct RecordField *cloned_field = (struct RecordField *)malloc(sizeof(struct RecordField));
+            if (cloned_field == NULL)
+                return 1;
+            
+            cloned_field->name = original_field->name ? strdup(original_field->name) : NULL;
+            cloned_field->type = original_field->type;
+            cloned_field->type_id = original_field->type_id ? strdup(original_field->type_id) : NULL;
+            cloned_field->nested_record = original_field->nested_record;  /* Share the nested record */
+            cloned_field->is_array = original_field->is_array;
+            cloned_field->array_start = original_field->array_start;
+            cloned_field->array_end = original_field->array_end;
+            cloned_field->array_element_type = original_field->array_element_type;
+            cloned_field->array_element_type_id = original_field->array_element_type_id ? 
+                strdup(original_field->array_element_type_id) : NULL;
+            cloned_field->array_is_open = original_field->array_is_open;
+            
+            /* Create list node for cloned field */
+            ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
+            if (new_node == NULL)
+            {
+                free(cloned_field->name);
+                free(cloned_field->type_id);
+                free(cloned_field->array_element_type_id);
+                free(cloned_field);
+                return 1;
+            }
+            
+            new_node->type = LIST_RECORD_FIELD;
+            new_node->cur = cloned_field;
+            new_node->next = NULL;
+            
+            /* Append to cloned list */
+            if (cloned_parent_fields == NULL)
+            {
+                cloned_parent_fields = new_node;
+                last_cloned = new_node;
+            }
+            else
+            {
+                last_cloned->next = new_node;
+                last_cloned = new_node;
+            }
+            
+            cur = cur->next;
+        }
+        
+        /* Prepend cloned parent fields to this record's fields */
+        if (last_cloned != NULL)
+        {
+            last_cloned->next = record_info->fields;
+            record_info->fields = cloned_parent_fields;
+        }
+    }
+    
+    return 0;
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -345,6 +441,17 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
                 record_info = tree->tree_data.type_decl_data.info.record;
+                
+                /* Handle class inheritance - merge parent fields */
+                if (record_info != NULL && record_info->parent_class_name != NULL)
+                {
+                    int merge_result = merge_parent_class_fields(symtab, record_info, tree->line_num);
+                    if (merge_result > 0)
+                    {
+                        return_val += merge_result;
+                        /* Continue processing other type declarations even if this one failed */
+                    }
+                }
                 break;
             case TYPE_DECL_ALIAS:
             {
