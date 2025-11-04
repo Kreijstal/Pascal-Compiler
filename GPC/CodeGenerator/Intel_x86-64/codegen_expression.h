@@ -44,6 +44,14 @@ int codegen_expr_is_signed(const struct Expression *expr);
  * This is a migration helper for moving from legacy type fields to GpcType. */
 int expr_get_type_tag(const struct Expression *expr);
 
+/* Check if expression type matches a specific type tag, using GpcType when available.
+ * Returns 1 if match, 0 otherwise. */
+int expr_has_type_tag(const struct Expression *expr, int type_tag);
+
+/* Check if expression uses qword (64-bit) operations, using GpcType when available.
+ * Returns 1 if qword, 0 otherwise. */
+int expr_uses_qword_gpctype(const struct Expression *expr);
+
 /* Helper to get array lower bound from expression, preferring resolved_gpc_type.
  * Returns the lower bound, or 0 if not an array. */
 int expr_get_array_lower_bound(const struct Expression *expr);

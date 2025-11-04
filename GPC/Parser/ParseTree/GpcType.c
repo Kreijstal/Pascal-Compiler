@@ -766,3 +766,63 @@ int gpc_type_get_pointer_subtype_tag(GpcType *type)
     /* Recursively get the type tag of what we point to */
     return gpc_type_get_legacy_tag(points_to);
 }
+
+/* Check if a GpcType requires qword (64-bit) operations */
+int gpc_type_uses_qword(GpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    
+    switch (type->kind) {
+        case TYPE_KIND_PRIMITIVE:
+            switch (type->info.primitive_type_tag) {
+                case LONGINT_TYPE:
+                case REAL_TYPE:
+                case STRING_TYPE:
+                case FILE_TYPE:
+                    return 1;
+                default:
+                    return 0;
+            }
+        
+        case TYPE_KIND_POINTER:
+            return 1;  /* Pointers are always 64-bit */
+        
+        case TYPE_KIND_PROCEDURE:
+            return 1;  /* Procedure pointers are 64-bit */
+        
+        case TYPE_KIND_ARRAY:
+        case TYPE_KIND_RECORD:
+        default:
+            return 0;
+    }
+}
+
+/* Check if a GpcType represents a signed integer type */
+int gpc_type_is_signed(GpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    
+    if (type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+    
+    switch (type->info.primitive_type_tag) {
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Check if a GpcType matches a specific legacy type tag */
+int gpc_type_equals_tag(GpcType *type, int type_tag)
+{
+    if (type == NULL)
+        return (type_tag == UNKNOWN_TYPE);
+    
+    /* For primitives, pointers, records, and procedures, use legacy tag comparison */
+    int legacy_tag = gpc_type_get_legacy_tag(type);
+    return (legacy_tag == type_tag);
+}

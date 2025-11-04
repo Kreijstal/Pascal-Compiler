@@ -181,4 +181,19 @@ int gpc_type_is_pointer(GpcType *type);
  * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex. */
 int gpc_type_get_pointer_subtype_tag(GpcType *type);
 
+/* Check if a GpcType requires qword (64-bit) operations.
+ * Returns 1 if the type uses qword, 0 otherwise.
+ * This replaces codegen_type_uses_qword() for GpcType-based code. */
+int gpc_type_uses_qword(GpcType *type);
+
+/* Check if a GpcType represents a signed integer type.
+ * Returns 1 if signed, 0 otherwise.
+ * This replaces codegen_type_is_signed() for GpcType-based code. */
+int gpc_type_is_signed(GpcType *type);
+
+/* Check if a GpcType matches a specific legacy type tag.
+ * This is a helper for transitioning code that compares types.
+ * Returns 1 if the type matches the tag, 0 otherwise. */
+int gpc_type_equals_tag(GpcType *type, int type_tag);
+
 #endif // GPC_TYPE_H

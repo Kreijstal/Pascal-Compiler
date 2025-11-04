@@ -82,6 +82,51 @@ int codegen_type_is_signed(int type_tag)
     }
 }
 
+/* Helper to get GpcType from expression, preferring resolved_gpc_type.
+ * Returns the GpcType if available, or creates a temporary one from legacy fields.
+ * Returns NULL if type cannot be determined.
+ * Note: The returned GpcType should NOT be freed - it's either owned by the expression
+ * or is a static/temporary type. */
+static GpcType* expr_get_gpc_type(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    
+    /* Prefer GpcType if available */
+    if (expr->resolved_gpc_type != NULL)
+        return expr->resolved_gpc_type;
+    
+    /* For legacy compatibility, create GpcType from resolved_type tag.
+     * resolved_type is a type tag (INT_TYPE, REAL_TYPE, etc.), not VarType.
+     * For simple types, we can create a primitive GpcType. */
+    int type_tag = expr->resolved_type;
+    
+    /* Handle primitive types */
+    switch (type_tag) {
+        case INT_TYPE:
+        case LONGINT_TYPE:
+        case REAL_TYPE:
+        case CHAR_TYPE:
+        case BOOL:
+        case STRING_TYPE:
+        case SET_TYPE:
+        case ENUM_TYPE:
+        case FILE_TYPE:
+            /* These can be represented as primitive GpcTypes, but we can't
+             * create them here without memory management issues.
+             * Better to just return NULL and let callers fall back to legacy logic */
+            return NULL;
+        
+        case POINTER_TYPE:
+        case RECORD_TYPE:
+        case PROCEDURE:
+        case UNKNOWN_TYPE:
+        default:
+            /* Complex types or unknown - can't create GpcType */
+            return NULL;
+    }
+}
+
 /* Helper to get type tag from expression, preferring resolved_gpc_type */
 int expr_get_type_tag(const struct Expression *expr)
 {
@@ -134,11 +179,51 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     return expr->array_element_size;
 }
 
-int codegen_expr_is_signed(const struct Expression *expr)
+/* Check if expression is signed, working with GpcType */
+static int expr_is_signed_gpctype(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
-    return codegen_type_is_signed(expr_get_type_tag(expr));
+    
+    GpcType *type = expr_get_gpc_type(expr);
+    if (type != NULL)
+        return gpc_type_is_signed(type);
+    
+    /* Ultimate fallback for legacy compatibility */
+    return codegen_type_is_signed(expr->resolved_type);
+}
+
+/* Check if expression uses qword, working with GpcType */
+int expr_uses_qword_gpctype(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    GpcType *type = expr_get_gpc_type(expr);
+    if (type != NULL)
+        return gpc_type_uses_qword(type);
+    
+    /* Ultimate fallback for legacy compatibility */
+    return codegen_type_uses_qword(expr->resolved_type);
+}
+
+/* Check if expression has a specific type tag, working with GpcType */
+int expr_has_type_tag(const struct Expression *expr, int type_tag)
+{
+    if (expr == NULL)
+        return (type_tag == UNKNOWN_TYPE);
+    
+    GpcType *type = expr_get_gpc_type(expr);
+    if (type != NULL)
+        return gpc_type_equals_tag(type, type_tag);
+    
+    /* Ultimate fallback for legacy compatibility */
+    return (expr->resolved_type == type_tag);
+}
+
+int codegen_expr_is_signed(const struct Expression *expr)
+{
+    return expr_is_signed_gpctype(expr);
 }
 
 static inline const char *register_name_for_type(const Register_t *reg, int type_tag)
@@ -152,12 +237,13 @@ static inline const char *register_name_for_expr(const Register_t *reg, const st
 {
     if (expr == NULL)
         return register_name_for_type(reg, UNKNOWN_TYPE);
-    return register_name_for_type(reg, expr_get_type_tag(expr));
+    /* Use GpcType-based helper instead of converting to tag */
+    return expr_uses_qword_gpctype(expr) ? reg->bit_64 : reg->bit_32;
 }
 
 static inline int expression_uses_qword(const struct Expression *expr)
 {
-    return expr != NULL && codegen_type_uses_qword(expr_get_type_tag(expr));
+    return expr_uses_qword_gpctype(expr);
 }
 
 static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
@@ -888,12 +974,11 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     free_expr_tree(pointer_tree);
 
     char buffer[64];
-    int expr_type = expr_get_type_tag(expr);
-    if (codegen_type_uses_qword(expr_type))
+    if (expr_uses_qword_gpctype(expr))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
     {
-        if (expr_type == CHAR_TYPE)
+        if (expr_has_type_tag(expr, CHAR_TYPE))
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         else
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
@@ -1019,8 +1104,7 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     if (expr == NULL || ctx == NULL || target_reg == NULL)
         return inst_list;
 
-    int expr_type = expr_get_type_tag(expr);
-    if (expr_type == RECORD_TYPE)
+    if (expr_has_type_tag(expr, RECORD_TYPE))
     {
         codegen_report_error(ctx, "ERROR: Record-valued expressions are unsupported in this context.");
         return inst_list;
@@ -1032,11 +1116,11 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
 
     char buffer[64];
-    if (codegen_type_uses_qword(expr_type))
+    if (expr_uses_qword_gpctype(expr))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
     {
-        if (expr_type == CHAR_TYPE)
+        if (expr_has_type_tag(expr, CHAR_TYPE))
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         else
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
@@ -1296,7 +1380,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     assert(ctx != NULL);
     CODEGEN_DEBUG("DEBUG: Generating code for expression type %d\n", expr->type);
 
-    if (expr_get_type_tag(expr) == SET_TYPE)
+    if (expr_has_type_tag(expr, SET_TYPE))
     {
         Register_t *set_reg = NULL;
         inst_list = codegen_set_expr(expr, inst_list, ctx, &set_reg);
@@ -1464,7 +1548,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
     }
 
-    int base_is_string = (expr_get_type_tag(array_expr) == STRING_TYPE && !array_expr->is_array_expr);
+    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
 
     if (!array_expr->is_array_expr && !base_is_string)
     {
@@ -1594,15 +1678,14 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
 
     char buffer[100];
-    int expr_type = expr_get_type_tag(expr);
-    if (codegen_type_uses_qword(expr_type))
+    if (expr_uses_qword_gpctype(expr))
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        if (expr_type == CHAR_TYPE)
+        if (expr_has_type_tag(expr, CHAR_TYPE))
         {
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
@@ -1611,7 +1694,7 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
         inst_list = add_inst(inst_list, buffer);
-        if (expr_type == LONGINT_TYPE)
+        if (expr_has_type_tag(expr, LONGINT_TYPE))
             inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
     }
 
@@ -1680,8 +1763,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     char buffer[128];
 
-    int left_is_string = (left_expr != NULL && expr_get_type_tag(left_expr) == STRING_TYPE);
-    int right_is_string = (right_expr != NULL && expr_get_type_tag(right_expr) == STRING_TYPE);
+    int left_is_string = (left_expr != NULL && expr_has_type_tag(left_expr, STRING_TYPE));
+    int right_is_string = (right_expr != NULL && expr_has_type_tag(right_expr, STRING_TYPE));
     if (left_is_string && right_is_string)
     {
         const char *lhs_arg = current_arg_reg64(0);
@@ -1748,7 +1831,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
-    if (left_expr != NULL && expr_get_type_tag(left_expr) == REAL_TYPE)
+    if (left_expr != NULL && expr_has_type_tag(left_expr, REAL_TYPE))
     {
         const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
         const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
@@ -2005,7 +2088,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 arg_infos[arg_num].expr = arg_expr;
             }
         }
-        else if (arg_expr != NULL && expr_get_type_tag(arg_expr) == RECORD_TYPE)
+        else if (arg_expr != NULL && expr_has_type_tag(arg_expr, RECORD_TYPE))
         {
             if (!codegen_expr_is_addressable(arg_expr))
             {
