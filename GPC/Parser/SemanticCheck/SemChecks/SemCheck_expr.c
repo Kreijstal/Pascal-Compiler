@@ -767,7 +767,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     }
     else if (arg_type == ENUM_TYPE)
     {
-        /* Enumerated types are already stored as integers, so just pass through */
+        /* For enumerative types, Ord returns the ordinal value (0-based index) */
         mangled_name = "gpc_ord_longint";
     }
 
