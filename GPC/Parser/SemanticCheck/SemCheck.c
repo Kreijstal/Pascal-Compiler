@@ -1590,7 +1590,7 @@ next_identifier:
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 {
     int return_val, func_return;
-    int new_max_scope;
+    int new_max_scope = max_scope_lev;  /* Initialize to current level */
     enum TreeType sub_type;
     struct Statement *body;
     HashNode_t *hash_return;
@@ -1607,52 +1607,86 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val = 0;
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
+    /* Track if this is implementing a forward declaration */
+    int is_forward_impl = 0;
+    
     if (subprogram->tree_data.subprogram_data.statement_list == NULL)
     {
         subprogram->tree_data.subprogram_data.cname_flag = 1;
     }
+    else
+    {
+        /* This is an implementation (has a body), check for forward declaration
+         * and use its mangled name to ensure they match */
+        HashNode_t *forward_decl = NULL;
+        if (FindIdent(&forward_decl, symtab, subprogram->tree_data.subprogram_data.id) >= 0 &&
+            forward_decl != NULL && forward_decl->hash_type == HASHTYPE_PROCEDURE &&
+            forward_decl->mangled_id != NULL)
+        {
+            /* Use the forward declaration's mangled name */
+            subprogram->tree_data.subprogram_data.mangled_id = strdup(forward_decl->mangled_id);
+            subprogram->tree_data.subprogram_data.cname_flag = 
+                (strcmp(forward_decl->id, forward_decl->mangled_id) == 0);
+            is_forward_impl = 1;  /* Mark that this implements a forward declaration */
+        }
+    }
 
     // --- Name Mangling Logic ---
-    if (subprogram->tree_data.subprogram_data.cname_flag) {
-        subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
-    } else {
-        // Pass the symbol table to the mangler
-        subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
-            subprogram->tree_data.subprogram_data.id,
-            subprogram->tree_data.subprogram_data.args_var,
-            symtab); // <-- PASS symtab HERE
+    if (subprogram->tree_data.subprogram_data.mangled_id == NULL)
+    {
+        if (subprogram->tree_data.subprogram_data.cname_flag) {
+            subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
+        } else {
+            // Pass the symbol table to the mangler
+            subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
+                subprogram->tree_data.subprogram_data.id,
+                subprogram->tree_data.subprogram_data.args_var,
+                symtab); // <-- PASS symtab HERE
+        }
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
 
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
+    /* Skip the initial push if implementing a forward declaration */
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
-        /* Create GpcType for the procedure */
-        GpcType *proc_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            NULL  /* procedures have no return type */
-        );
-        
-        // Use the typed version to properly set the GpcType
-        func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
-                        subprogram->tree_data.subprogram_data.mangled_id,
-                        proc_type);
+        if (!is_forward_impl)
+        {
+            /* Create GpcType for the procedure */
+            GpcType *proc_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                NULL  /* procedures have no return type */
+            );
+            
+            // Use the typed version to properly set the GpcType
+            func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
+                            subprogram->tree_data.subprogram_data.mangled_id,
+                            proc_type);
+        }
+        else
+        {
+            func_return = 0;  /* No error when implementing forward declaration */
+        }
 
-        PushScope(symtab);
-        
-        /* Create another GpcType for the recursive scope (they're separate) */
-        GpcType *proc_type_recursive = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            NULL
-        );
-        
-        // Push it again in the new scope to allow recursion
-        PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
-            subprogram->tree_data.subprogram_data.mangled_id,
-            proc_type_recursive);
+        /* Only create internal scope if there's a body */
+        if (subprogram->tree_data.subprogram_data.statement_list != NULL)
+        {
+            PushScope(symtab);
+            
+            /* Create another GpcType for the recursive scope (they're separate) */
+            GpcType *proc_type_recursive = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                NULL
+            );
+            
+            // Push it again in the new scope to allow recursion
+            PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id,
+                proc_type_recursive);
 
-        new_max_scope = max_scope_lev+1;
+            new_max_scope = max_scope_lev+1;
+        }
     }
     else // Function
     {
@@ -1699,28 +1733,39 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
         
-        /* Create GpcType for the function (which is also a procedure type with a return value) */
-        GpcType *func_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            return_gpc_type  /* functions have a return type */
-        );
-        
-        // Use the typed version to properly set the GpcType
-        func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
-                        subprogram->tree_data.subprogram_data.mangled_id,
-                        func_type);
+        if (!is_forward_impl)
+        {
+            /* Create GpcType for the function (which is also a procedure type with a return value) */
+            GpcType *func_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                return_gpc_type  /* functions have a return type */
+            );
+            
+            // Use the typed version to properly set the GpcType
+            func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
+                            subprogram->tree_data.subprogram_data.mangled_id,
+                            func_type);
 
-        /* Note: Type metadata now in GpcType, no post-creation writes needed */
+            /* Note: Type metadata now in GpcType, no post-creation writes needed */
+        }
+        else
+        {
+            func_return = 0;  /* No error when implementing forward declaration */
+        }
 
-        PushScope(symtab);
-        // **THIS IS THE FIX FOR THE RETURN VALUE**:
-        // Use the ORIGINAL name for the internal return variable with GpcType
-        // Always use _Typed variant, even if GpcType is NULL
-        PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
+        /* Only create internal scope if there's a body */
+        if (subprogram->tree_data.subprogram_data.statement_list != NULL)
+        {
+            PushScope(symtab);
+            // **THIS IS THE FIX FOR THE RETURN VALUE**:
+            // Use the ORIGINAL name for the internal return variable with GpcType
+            // Always use _Typed variant, even if GpcType is NULL
+            PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
 
-        /* Note: Type metadata now in GpcType, no post-creation writes needed */
+            /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
-        new_max_scope = max_scope_lev+1;
+            new_max_scope = max_scope_lev+1;
+        }
     }
 
     /**** Check the subprogram internals now ****/
