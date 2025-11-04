@@ -1156,6 +1156,14 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Use the nested function body parser for complete programs to support nested functions
     combinator_t* program_function_body = nested_function_body;
 
+    // Create a method body parser that supports local var sections
+    // This is simpler than program_function_body since methods don't support nested functions
+    combinator_t* method_body = seq(new_combinator(), PASCAL_T_NONE,
+        many(local_var_section),                     // zero or more local var sections
+        lazy(stmt_parser),                           // begin-end block handled by statement parser
+        NULL
+    );
+
     // Create simple working function and procedure parsers based on the nested version
     // These work because they use the recursive statement parser for bodies
 
@@ -1199,7 +1207,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         constructor_param_list,                      // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1210,7 +1218,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         destructor_param_list,                       // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1221,7 +1229,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         method_procedure_param_list,                 // optional parameter list
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
@@ -1242,7 +1250,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         operator_param_list,                         // parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon
-        lazy(stmt_parser),                           // use statement parser for method body
+        method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
     );
