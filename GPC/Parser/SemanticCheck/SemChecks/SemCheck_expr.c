@@ -298,6 +298,24 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
         if (node_upper_bound != 0)
             expr->array_upper_bound = node_upper_bound;
     }
+    else if (node->type != NULL && node->type->kind == TYPE_KIND_ARRAY)
+    {
+        /* For inline array declarations (no TypeAlias), extract info from GpcType */
+        GpcType *element_type = node->type->info.array_info.element_type;
+        if (element_type != NULL)
+        {
+            if (element_type->kind == TYPE_KIND_RECORD)
+            {
+                expr->array_element_record_type = element_type->info.record_info;
+                expr->array_element_type = RECORD_TYPE;
+            }
+            else if (element_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                expr->array_element_type = element_type->info.primitive_type_tag;
+            }
+            /* Handle other element types as needed */
+        }
+    }
     else
     {
         expr->array_element_record_type = get_record_type_from_node(node);
