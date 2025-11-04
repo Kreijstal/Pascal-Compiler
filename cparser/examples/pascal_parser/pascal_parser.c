@@ -251,6 +251,9 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_RECORD_TYPE: return "RECORD_TYPE";
         case PASCAL_T_PROCEDURE_TYPE: return "PROCEDURE_TYPE";
         case PASCAL_T_FUNCTION_TYPE: return "FUNCTION_TYPE";
+        case PASCAL_T_REFERENCE_TO_TYPE: return "REFERENCE_TO_TYPE";
+        case PASCAL_T_ANONYMOUS_FUNCTION: return "ANONYMOUS_FUNCTION";
+        case PASCAL_T_ANONYMOUS_PROCEDURE: return "ANONYMOUS_PROCEDURE";
         case PASCAL_T_ENUMERATED_TYPE: return "ENUMERATED_TYPE";
         case PASCAL_T_CLASS_TYPE: return "CLASS_TYPE";
         case PASCAL_T_CLASS_MEMBER: return "CLASS_MEMBER";

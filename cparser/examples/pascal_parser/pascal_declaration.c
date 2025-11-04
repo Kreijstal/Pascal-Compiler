@@ -167,6 +167,7 @@ static combinator_t* create_param_name_list(void) {
 
 static combinator_t* create_param_type_spec(void) {
     combinator_t* type_reference = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
         array_type(PASCAL_T_ARRAY_TYPE),
         procedure_type(PASCAL_T_PROCEDURE_TYPE),
         function_type(PASCAL_T_FUNCTION_TYPE),
@@ -361,6 +362,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t* type_definition = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         type_helper_type,
+        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end (try first)
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
@@ -921,6 +923,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Enhanced Variable declaration: var1, var2, var3 : type;
     combinator_t* var_identifier_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)

@@ -997,3 +997,66 @@ combinator_t* function_type(tag_t tag) {
     comb->fn = subroutine_type_fn;
     return comb;
 }
+
+// Reference to type parser: "reference to procedure/function"
+static ParseResult reference_to_type_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    // Parse "reference" keyword
+    combinator_t* reference_keyword = token(keyword_ci("reference"));
+    ParseResult reference_res = parse(in, reference_keyword);
+    free_combinator(reference_keyword);
+    
+    if (!reference_res.is_success) {
+        discard_failure(reference_res);
+        return fail_with_message("Expected 'reference'", in, &state, parser_name);
+    }
+    free_ast(reference_res.value.ast);
+
+    // Parse "to" keyword
+    combinator_t* to_keyword = token(keyword_ci("to"));
+    ParseResult to_res = parse(in, to_keyword);
+    free_combinator(to_keyword);
+    
+    if (!to_res.is_success) {
+        discard_failure(to_res);
+        return fail_with_message("Expected 'to' after 'reference'", in, &state, parser_name);
+    }
+    free_ast(to_res.value.ast);
+
+    // Parse the procedure or function type
+    combinator_t* subroutine_parser = multi(new_combinator(), PASCAL_T_NONE,
+        procedure_type(PASCAL_T_PROCEDURE_TYPE),
+        function_type(PASCAL_T_FUNCTION_TYPE),
+        NULL
+    );
+    
+    ParseResult subroutine_res = parse(in, subroutine_parser);
+    free_combinator(subroutine_parser);
+    
+    if (!subroutine_res.is_success) {
+        discard_failure(subroutine_res);
+        return fail_with_message("Expected procedure or function type after 'reference to'", 
+                                in, &state, parser_name);
+    }
+
+    // Create reference to type AST node wrapping the subroutine type
+    ast_t* reference_ast = new_ast();
+    reference_ast->typ = pargs->tag;
+    reference_ast->child = subroutine_res.value.ast;
+    reference_ast->next = NULL;
+    set_ast_position(reference_ast, in);
+
+    return make_success(reference_ast);
+}
+
+combinator_t* reference_to_type(tag_t tag) {
+    combinator_t* comb = new_combinator();
+    prim_args* args = safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    comb->args = args;
+    comb->fn = reference_to_type_fn;
+    return comb;
+}

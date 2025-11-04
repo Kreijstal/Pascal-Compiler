@@ -117,6 +117,9 @@ typedef enum {
     PASCAL_T_RECORD_TYPE,
     PASCAL_T_PROCEDURE_TYPE,
     PASCAL_T_FUNCTION_TYPE,
+    PASCAL_T_REFERENCE_TO_TYPE,      // "reference to" type modifier
+    PASCAL_T_ANONYMOUS_FUNCTION,     // Anonymous function literal
+    PASCAL_T_ANONYMOUS_PROCEDURE,    // Anonymous procedure literal
     PASCAL_T_ENUMERATED_TYPE,
     PASCAL_T_CLASS_TYPE,
     PASCAL_T_CLASS_MEMBER,
