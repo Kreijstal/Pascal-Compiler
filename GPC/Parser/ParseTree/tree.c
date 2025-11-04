@@ -1210,6 +1210,7 @@ void destroy_record_type(struct RecordType *record_type)
         return;
 
     destroy_list(record_type->fields);
+    free(record_type->parent_class_name);
     free(record_type);
 }
 
@@ -1221,6 +1222,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     struct RecordType *clone = (struct RecordType *)malloc(sizeof(struct RecordType));
     assert(clone != NULL);
     clone->fields = NULL;
+    clone->parent_class_name = record_type->parent_class_name ? strdup(record_type->parent_class_name) : NULL;
 
     clone->fields = clone_member_list(record_type->fields);
 

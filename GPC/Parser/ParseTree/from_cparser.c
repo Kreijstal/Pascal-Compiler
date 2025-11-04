@@ -867,13 +867,30 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
 
     ListBuilder builder;
     list_builder_init(&builder);
-    collect_class_members(class_node->child, class_name, &builder);
+    
+    // Check if first child is a parent class identifier
+    char *parent_class_name = NULL;
+    ast_t *body_start = class_node->child;
+    
+    if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
+        // First child is parent class name, extract it
+        if (body_start->sym != NULL && body_start->sym->name != NULL) {
+            parent_class_name = strdup(body_start->sym->name);
+        }
+        // Move to the actual class body (next sibling)
+        body_start = body_start->next;
+    }
+    
+    collect_class_members(body_start, class_name, &builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
-    if (record == NULL)
+    if (record == NULL) {
+        free(parent_class_name);
         return NULL;
+    }
 
     record->fields = list_builder_finish(&builder);
+    record->parent_class_name = parent_class_name;
     return record;
 }
 
@@ -1130,6 +1147,7 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
         return NULL;
     }
     record->fields = list_builder_finish(&fields_builder);
+    record->parent_class_name = NULL;  /* Regular records don't have parent classes */
     return record;
 }
 
