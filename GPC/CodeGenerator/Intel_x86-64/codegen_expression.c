@@ -82,11 +82,25 @@ int codegen_type_is_signed(int type_tag)
     }
 }
 
+/* Helper to get type tag from expression, preferring resolved_gpc_type */
+int expr_get_type_tag(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return UNKNOWN_TYPE;
+    
+    /* Prefer GpcType if available */
+    if (expr->resolved_gpc_type != NULL)
+        return gpc_type_get_legacy_tag(expr->resolved_gpc_type);
+    
+    /* Fall back to legacy field */
+    return expr->resolved_type;
+}
+
 int codegen_expr_is_signed(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
-    return codegen_type_is_signed(expr->resolved_type);
+    return codegen_type_is_signed(expr_get_type_tag(expr));
 }
 
 static inline const char *register_name_for_type(const Register_t *reg, int type_tag)
@@ -100,12 +114,12 @@ static inline const char *register_name_for_expr(const Register_t *reg, const st
 {
     if (expr == NULL)
         return register_name_for_type(reg, UNKNOWN_TYPE);
-    return register_name_for_type(reg, expr->resolved_type);
+    return register_name_for_type(reg, expr_get_type_tag(expr));
 }
 
 static inline int expression_uses_qword(const struct Expression *expr)
 {
-    return expr != NULL && codegen_type_uses_qword(expr->resolved_type);
+    return expr != NULL && codegen_type_uses_qword(expr_get_type_tag(expr));
 }
 
 static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
@@ -836,11 +850,12 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     free_expr_tree(pointer_tree);
 
     char buffer[64];
-    if (codegen_type_uses_qword(expr->resolved_type))
+    int expr_type = expr_get_type_tag(expr);
+    if (codegen_type_uses_qword(expr_type))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
     {
-        if (expr->resolved_type == CHAR_TYPE)
+        if (expr_type == CHAR_TYPE)
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         else
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
@@ -966,7 +981,8 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     if (expr == NULL || ctx == NULL || target_reg == NULL)
         return inst_list;
 
-    if (expr->resolved_type == RECORD_TYPE)
+    int expr_type = expr_get_type_tag(expr);
+    if (expr_type == RECORD_TYPE)
     {
         codegen_report_error(ctx, "ERROR: Record-valued expressions are unsupported in this context.");
         return inst_list;
@@ -978,11 +994,11 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
 
     char buffer[64];
-    if (codegen_type_uses_qword(expr->resolved_type))
+    if (codegen_type_uses_qword(expr_type))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
     {
-        if (expr->resolved_type == CHAR_TYPE)
+        if (expr_type == CHAR_TYPE)
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         else
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
@@ -1242,7 +1258,7 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     assert(ctx != NULL);
     CODEGEN_DEBUG("DEBUG: Generating code for expression type %d\n", expr->type);
 
-    if (expr->resolved_type == SET_TYPE)
+    if (expr_get_type_tag(expr) == SET_TYPE)
     {
         Register_t *set_reg = NULL;
         inst_list = codegen_set_expr(expr, inst_list, ctx, &set_reg);
@@ -1410,7 +1426,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
     }
 
-    int base_is_string = (array_expr->resolved_type == STRING_TYPE && !array_expr->is_array_expr);
+    int base_is_string = (expr_get_type_tag(array_expr) == STRING_TYPE && !array_expr->is_array_expr);
 
     if (!array_expr->is_array_expr && !base_is_string)
     {
@@ -1540,14 +1556,15 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
 
     char buffer[100];
-    if (codegen_type_uses_qword(expr->resolved_type))
+    int expr_type = expr_get_type_tag(expr);
+    if (codegen_type_uses_qword(expr_type))
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        if (expr->resolved_type == CHAR_TYPE)
+        if (expr_type == CHAR_TYPE)
         {
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
@@ -1556,7 +1573,7 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
         inst_list = add_inst(inst_list, buffer);
-        if (expr->resolved_type == LONGINT_TYPE)
+        if (expr_type == LONGINT_TYPE)
             inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
     }
 
@@ -1625,8 +1642,8 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     char buffer[128];
 
-    int left_is_string = (left_expr != NULL && left_expr->resolved_type == STRING_TYPE);
-    int right_is_string = (right_expr != NULL && right_expr->resolved_type == STRING_TYPE);
+    int left_is_string = (left_expr != NULL && expr_get_type_tag(left_expr) == STRING_TYPE);
+    int right_is_string = (right_expr != NULL && expr_get_type_tag(right_expr) == STRING_TYPE);
     if (left_is_string && right_is_string)
     {
         const char *lhs_arg = current_arg_reg64(0);
@@ -1693,7 +1710,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
-    if (left_expr != NULL && left_expr->resolved_type == REAL_TYPE)
+    if (left_expr != NULL && expr_get_type_tag(left_expr) == REAL_TYPE)
     {
         const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
         const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
@@ -1950,7 +1967,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 arg_infos[arg_num].expr = arg_expr;
             }
         }
-        else if (arg_expr != NULL && arg_expr->resolved_type == RECORD_TYPE)
+        else if (arg_expr != NULL && expr_get_type_tag(arg_expr) == RECORD_TYPE)
         {
             if (!codegen_expr_is_addressable(arg_expr))
             {

@@ -166,4 +166,19 @@ struct TypeAlias* gpc_type_get_type_alias(GpcType *type);
  * The TypeAlias is owned by the AST, not by GpcType. */
 void gpc_type_set_type_alias(GpcType *type, struct TypeAlias *alias);
 
+/* Get the legacy type tag from a GpcType for compatibility with codegen.
+ * This is a migration helper that allows code to work with both old and new type systems.
+ * Returns a type tag (INT_TYPE, REAL_TYPE, etc.) for primitives, or specialized tags
+ * like RECORD_TYPE, POINTER_TYPE, PROCEDURE for complex types.
+ * Returns UNKNOWN_TYPE if the type cannot be mapped. */
+int gpc_type_get_legacy_tag(GpcType *type);
+
+/* Check if a GpcType represents a pointer type.
+ * Returns 1 if it's a pointer, 0 otherwise. */
+int gpc_type_is_pointer(GpcType *type);
+
+/* For pointer types, get the type tag of what it points to.
+ * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex. */
+int gpc_type_get_pointer_subtype_tag(GpcType *type);
+
 #endif // GPC_TYPE_H

@@ -148,7 +148,7 @@ static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
     if (ctx == NULL || exc_expr == NULL || value_reg == NULL)
         return inst_list;
 
-    if (!codegen_type_uses_qword(exc_expr->resolved_type))
+    if (!codegen_type_uses_qword(expr_get_type_tag(exc_expr)))
     {
         if (codegen_expr_is_signed(exc_expr))
             inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
@@ -338,11 +338,25 @@ static int codegen_expr_is_mp_integer(struct Expression *expr)
     if (expr == NULL)
         return 0;
 
-    if (expr->resolved_type == RECORD_TYPE)
+    int expr_type = expr_get_type_tag(expr);
+    if (expr_type == RECORD_TYPE)
         return record_type_is_mp_integer(expr->record_type);
 
-    if (expr->resolved_type == POINTER_TYPE && expr->pointer_subtype == RECORD_TYPE)
-        return record_type_is_mp_integer(expr->record_type);
+    if (expr_type == POINTER_TYPE)
+    {
+        /* For pointers, check what they point to via GpcType if available */
+        if (expr->resolved_gpc_type != NULL && gpc_type_is_pointer(expr->resolved_gpc_type))
+        {
+            int subtype = gpc_type_get_pointer_subtype_tag(expr->resolved_gpc_type);
+            if (subtype == RECORD_TYPE)
+                return record_type_is_mp_integer(expr->record_type);
+        }
+        /* Fallback to legacy field */
+        else if (expr->pointer_subtype == RECORD_TYPE)
+        {
+            return record_type_is_mp_integer(expr->record_type);
+        }
+    }
 
     return 0;
 }
@@ -497,7 +511,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
     if (!codegen_expr_is_addressable(src_expr))
     {
-        if (src_expr->type == EXPR_FUNCTION_CALL && src_expr->resolved_type == RECORD_TYPE)
+        if (src_expr->type == EXPR_FUNCTION_CALL && expr_get_type_tag(src_expr) == RECORD_TYPE)
         {
             const char *ret_ptr_reg = current_arg_reg64(0);
             if (ret_ptr_reg == NULL)
@@ -1068,7 +1082,7 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         goto cleanup;
 
     const char *call_target = NULL;
-    switch (value_expr != NULL ? value_expr->resolved_type : UNKNOWN_TYPE)
+    switch (value_expr != NULL ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE)
     {
         case INT_TYPE:
             call_target = "gpc_val_integer";
@@ -1131,7 +1145,7 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", code_result_spill->offset);
         inst_list = add_inst(inst_list, buffer);
-        if (codegen_type_uses_qword(code_expr->resolved_type))
+        if (codegen_type_uses_qword(expr_get_type_tag(code_expr)))
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", code_result_spill->offset);
             inst_list = add_inst(inst_list, buffer);
@@ -1189,7 +1203,7 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int target_is_long = (target_expr != NULL && target_expr->resolved_type == LONGINT_TYPE);
+    int target_is_long = (target_expr != NULL && expr_get_type_tag(target_expr) == LONGINT_TYPE);
     if (target_is_long)
         inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32, increment_reg->bit_64);
 
@@ -1377,7 +1391,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     if (args != NULL)
     {
         struct Expression *first_expr = (struct Expression *)args->cur;
-        if (first_expr != NULL && first_expr->resolved_type == FILE_TYPE)
+        if (first_expr != NULL && expr_get_type_tag(first_expr) == FILE_TYPE)
         {
             expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -1408,7 +1422,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     {
         struct Expression *expr = (struct Expression *)args->cur;
 
-        int expr_type = (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
+        int expr_type = (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
         const int expr_is_real = (expr_type == REAL_TYPE);
         const char *file_dest64 = current_arg_reg64(0);
         const char *width_dest64 = current_arg_reg64(1);
@@ -1755,7 +1769,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         return inst_list;
     }
 
-    if (var_expr->resolved_type == RECORD_TYPE)
+    if (expr_get_type_tag(var_expr) == RECORD_TYPE)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     if (var_expr->type == EXPR_VAR_ID)
@@ -1878,14 +1892,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
-        if (var_expr->resolved_type == STRING_TYPE)
+        int var_type = expr_get_type_tag(var_expr);
+        int use_qword = codegen_type_uses_qword(var_type);
+        if (var_type == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if (use_qword)
         {
-            int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
+            int value_is_qword = codegen_type_uses_qword(expr_get_type_tag(assign_expr));
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
@@ -1893,7 +1908,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            if (var_expr->resolved_type == CHAR_TYPE)
+            if (var_type == CHAR_TYPE)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)
@@ -1950,14 +1965,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        int use_qword = codegen_type_uses_qword(var_expr->resolved_type);
-        if (var_expr->resolved_type == STRING_TYPE)
+        int var_type_2 = expr_get_type_tag(var_expr);
+        int use_qword = codegen_type_uses_qword(var_type_2);
+        if (var_type_2 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if (use_qword)
         {
-            int value_is_qword = codegen_type_uses_qword(assign_expr->resolved_type);
+            int value_is_qword = codegen_type_uses_qword(expr_get_type_tag(assign_expr));
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
@@ -1965,7 +1981,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            if (var_expr->resolved_type == CHAR_TYPE)
+            if (var_type_2 == CHAR_TYPE)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)

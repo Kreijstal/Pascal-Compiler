@@ -715,3 +715,51 @@ void gpc_type_set_type_alias(GpcType *type, struct TypeAlias *alias)
     assert(type != NULL && "Cannot set type_alias on NULL GpcType");
     type->type_alias = alias;
 }
+
+/* Get the legacy type tag from a GpcType */
+int gpc_type_get_legacy_tag(GpcType *type)
+{
+    if (type == NULL)
+        return UNKNOWN_TYPE;
+    
+    switch (type->kind) {
+        case TYPE_KIND_PRIMITIVE:
+            return type->info.primitive_type_tag;
+        
+        case TYPE_KIND_POINTER:
+            return POINTER_TYPE;
+        
+        case TYPE_KIND_ARRAY:
+            /* Arrays don't have a single type tag - they're identified by is_array_expr */
+            return UNKNOWN_TYPE;
+        
+        case TYPE_KIND_RECORD:
+            return RECORD_TYPE;
+        
+        case TYPE_KIND_PROCEDURE:
+            return PROCEDURE;
+        
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
+
+/* Check if a GpcType represents a pointer type */
+int gpc_type_is_pointer(GpcType *type)
+{
+    return type != NULL && type->kind == TYPE_KIND_POINTER;
+}
+
+/* For pointer types, get the type tag of what it points to */
+int gpc_type_get_pointer_subtype_tag(GpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_POINTER)
+        return UNKNOWN_TYPE;
+    
+    GpcType *points_to = type->info.points_to;
+    if (points_to == NULL)
+        return UNKNOWN_TYPE;
+    
+    /* Recursively get the type tag of what we point to */
+    return gpc_type_get_legacy_tag(points_to);
+}

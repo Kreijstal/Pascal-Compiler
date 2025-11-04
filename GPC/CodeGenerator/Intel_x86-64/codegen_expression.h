@@ -39,6 +39,11 @@ ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_re
 int codegen_type_uses_qword(int type_tag);
 int codegen_type_is_signed(int type_tag);
 int codegen_expr_is_signed(const struct Expression *expr);
+
+/* Helper to get type tag from expression, preferring resolved_gpc_type.
+ * This is a migration helper for moving from legacy type fields to GpcType. */
+int expr_get_type_tag(const struct Expression *expr);
+
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);
 
