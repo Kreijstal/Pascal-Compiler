@@ -610,6 +610,46 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t* routine_directives = many(routine_directive);
 
+    // Directives that indicate no body should follow
+    combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("forward")),
+        token(keyword_ci("external")),
+        token(keyword_ci("assembler")),
+        NULL
+    );
+
+    // Forward/external/assembler declaration parsers for interface and implementation sections
+    // These match procedure/function headers with special directives and NO body
+    combinator_t* headeronly_procedure_decl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("procedure")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        optional(param_list),
+        token(match(";")),
+        no_body_directive,                           // forward/external/assembler directive
+        optional(directive_argument),                // optional argument (for external)
+        token(match(";")),                           // semicolon after directive
+        many(routine_directive),                     // additional directives (overload, etc.)
+        NULL
+    );
+    set_combinator_name(headeronly_procedure_decl, "headeronly_procedure_decl");
+
+    combinator_t* headeronly_function_decl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("function")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        optional(param_list),
+        token(match(":")),
+        token(cident(PASCAL_T_RETURN_TYPE)),
+        token(match(";")),
+        no_body_directive,                           // forward/external/assembler directive
+        optional(directive_argument),                // optional argument (for external)
+        token(match(";")),                           // semicolon after directive
+        many(routine_directive),                     // additional directives (overload, etc.)
+        NULL
+    );
+    set_combinator_name(headeronly_function_decl, "headeronly_function_decl");
+
     combinator_t* procedure_header = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -628,7 +668,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         routine_directives,
         NULL);
 
-    // Simple procedure implementation for unit
+    // Simple procedure implementation for unit (with required body)
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list), token(match(";")),
@@ -659,7 +699,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    // Constructor implementation: constructor ClassName.MethodName[(params)]; body
+    // Constructor implementation (with required body)
     combinator_t* constructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         token(keyword_ci("constructor")),            // constructor keyword
         method_name_with_class,                      // ClassName.MethodName
@@ -672,7 +712,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(constructor_impl, "constructor_impl");
 
-    // Destructor implementation: destructor ClassName.MethodName[(params)]; body
+    // Destructor implementation (with required body)
     combinator_t* destructor_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         token(keyword_ci("destructor")),             // destructor keyword
         method_name_with_class,                      // ClassName.MethodName
@@ -685,7 +725,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(destructor_impl, "destructor_impl");
 
-    // Method procedure implementation: procedure ClassName.MethodName[(params)]; body
+    // Method procedure implementation (with required body)
     combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("procedure")),              // procedure keyword
@@ -699,7 +739,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(method_procedure_impl, "method_procedure_impl");
 
-    // Method function implementation: function ClassName.MethodName[(params)]: ReturnType; body
+    // Method function implementation (with required body)
     combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("function")),               // function keyword
@@ -714,7 +754,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(method_function_impl, "method_function_impl");
 
-    // Simple function implementation for unit
+    // Simple function implementation for unit (with required body)
     combinator_t* function_impl = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list),
@@ -723,6 +763,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         function_body, optional(token(match(";"))), NULL);
     set_combinator_name(function_impl, "function_impl");
 
+    // Class operator implementation (with required body)
     combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("operator")),
@@ -754,6 +795,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     
     // Implementation section can contain both simple implementations and method implementations
     // as well as uses, const, type, and var sections
+    // Try header-only declarations (forward/external/assembler) before full implementations
     combinator_t* implementation_definition = multi(new_combinator(), PASCAL_T_NONE,
         uses_section,                                // uses clauses in implementation
         const_section,                               // const declarations in implementation
@@ -761,6 +803,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         type_section,                                // type declarations in implementation
         threadvar_section,
         var_section,                                 // var declarations in implementation
+        headeronly_procedure_decl,                   // forward/external/assembler procedure declarations
+        headeronly_function_decl,                    // forward/external/assembler function declarations
         constructor_impl,                            // constructor Class.Method implementations
         destructor_impl,                             // destructor Class.Method implementations
         method_procedure_impl,                       // procedure Class.Method implementations
@@ -1167,7 +1211,79 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Create simple working function and procedure parsers based on the nested version
     // These work because they use the recursive statement parser for bodies
 
-    // Working function parser: function name [(params)] : return_type ; body ;
+    // Routine directives like inline; overload; forward; etc.
+    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("inline")),
+        token(keyword_ci("overload")),
+        token(keyword_ci("cdecl")),
+        token(keyword_ci("stdcall")),
+        token(keyword_ci("register")),
+        token(keyword_ci("export")),
+        token(keyword_ci("external")),
+        token(keyword_ci("assembler")),
+        token(keyword_ci("far")),
+        token(keyword_ci("near")),
+        token(keyword_ci("platform")),
+        token(keyword_ci("deprecated")),
+        token(keyword_ci("library")),
+        token(keyword_ci("local")),
+        token(keyword_ci("forward")),
+        NULL
+    );
+
+    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+        token(string(PASCAL_T_STRING)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+
+    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
+        directive_keyword,
+        directive_argument,
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* program_routine_directives = many(routine_directive);
+
+    // Directives that indicate no body should follow
+    combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("forward")),
+        token(keyword_ci("external")),
+        token(keyword_ci("assembler")),
+        NULL
+    );
+
+    // Header-only declaration parsers - these match procedure/function with forward/external/assembler directive and NO body
+    combinator_t* headeronly_procedure_param_list = create_simple_param_list();
+    combinator_t* headeronly_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
+        token(keyword_ci("procedure")),                // procedure keyword
+        token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
+        headeronly_procedure_param_list,             // optional parameter list
+        token(match(";")),                           // semicolon after signature
+        program_no_body_directive,                   // forward/external/assembler directive
+        optional(directive_argument),                // optional argument (for external)
+        token(match(";")),                           // semicolon after directive
+        many(routine_directive),                     // additional directives (overload, etc.)
+        NULL
+    );
+
+    combinator_t* headeronly_function_param_list = create_simple_param_list();
+    combinator_t* headeronly_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        token(keyword_ci("function")),               // function keyword
+        token(cident(PASCAL_T_IDENTIFIER)),          // function name
+        headeronly_function_param_list,              // optional parameter list
+        return_type,                                 // return type
+        token(match(";")),                           // semicolon after signature
+        program_no_body_directive,                   // forward/external/assembler directive
+        optional(directive_argument),                // optional argument (for external)
+        token(match(";")),                           // semicolon after directive
+        many(routine_directive),                     // additional directives (overload, etc.)
+        NULL
+    );
+
+    // Working function parser: function name [(params)] : return_type ; [directives] body ;
+    // Does NOT support forward (that's handled by forward_function)
     combinator_t* working_function_param_list = create_simple_param_list();
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         token(keyword_ci("function")),               // function keyword (with word boundary check)
@@ -1175,19 +1291,22 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         working_function_param_list,                 // optional parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon after signature
-        program_function_body,                       // function body with VAR section support
+        program_routine_directives,                  // routine directives (inline, overload, etc. but NOT forward)
+        program_function_body,                       // function body (required for non-forward declarations)
         optional(token(match(";"))),                 // optional terminating semicolon after function body
         NULL
     );
 
-    // Working procedure parser: procedure name [(params)] ; body ;
+    // Working procedure parser: procedure name [(params)] ; [directives] body ;
+    // Does NOT support forward (that's handled by forward_procedure)
     combinator_t* working_procedure_param_list = create_simple_param_list();
     combinator_t* working_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         token(keyword_ci("procedure")),                // procedure keyword (case-insensitive)
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
         working_procedure_param_list,               // optional parameter list
         token(match(";")),                           // semicolon after signature
-        program_function_body,                       // procedure body with VAR section support
+        program_routine_directives,                  // routine directives (inline, overload, etc. but NOT forward)
+        program_function_body,                       // procedure body (required for non-forward declarations)
         optional(token(match(";"))),                 // optional terminating semicolon after procedure body
         NULL
     );
@@ -1207,6 +1326,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         constructor_param_list,                      // optional parameter list
         token(match(";")),                           // semicolon
+        program_routine_directives,                  // routine directives (inline, overload, etc.)
         method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
@@ -1218,6 +1338,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         destructor_param_list,                       // optional parameter list
         token(match(";")),                           // semicolon
+        program_routine_directives,                  // routine directives (inline, overload, etc.)
         method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
@@ -1229,6 +1350,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         method_name_with_class,                      // ClassName.MethodName
         method_procedure_param_list,                 // optional parameter list
         token(match(";")),                           // semicolon
+        program_routine_directives,                  // routine directives (inline, overload, etc.)
         method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
@@ -1250,6 +1372,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         operator_param_list,                         // parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon
+        program_routine_directives,                  // routine directives (inline, overload, etc.)
         method_body,                                 // method body with var section support
         optional(token(match(";"))),                 // optional terminating semicolon
         NULL
@@ -1265,9 +1388,12 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Standard Pascal procedure or function definitions
+    // Try header-only declarations (forward/external/assembler) first, then implementations
     combinator_t* proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
-        working_function,                            // working function parser
-        working_procedure,                           // working procedure parser
+        headeronly_function,                         // forward/external/assembler function declarations
+        headeronly_procedure,                        // forward/external/assembler procedure declarations
+        working_function,                            // function implementations
+        working_procedure,                           // procedure implementations
         NULL
     );
 
@@ -1280,9 +1406,12 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Set up the nested function parser to point to the working function/procedure parsers
     // This allows nested function/procedure declarations within function bodies
+    // Nested functions can also have forward/external/assembler declarations
     multi(*nested_proc_or_func, PASCAL_T_NONE,
-        working_function,                            // nested functions
-        working_procedure,                           // nested procedures
+        headeronly_function,                         // forward/external/assembler nested function declarations
+        headeronly_procedure,                        // forward/external/assembler nested procedure declarations
+        working_function,                            // nested function implementations
+        working_procedure,                           // nested procedure implementations
         NULL
     );
 
