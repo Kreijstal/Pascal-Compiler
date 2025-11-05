@@ -329,6 +329,29 @@ GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int 
     return NULL;
 }
 
+/* Helper function to check if a record type is a subclass of another */
+static int is_record_subclass(struct RecordType *subclass, struct RecordType *superclass, struct SymTab *symtab) {
+    if (subclass == superclass)
+        return 1;  /* Same type */
+
+    /* Follow inheritance chain */
+    struct RecordType *current = subclass;
+    while (current != NULL && current->parent_class_name != NULL) {
+        /* Look up parent class in symbol table */
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
+            struct RecordType *parent_record = hashnode_get_record_type(parent_node);
+            if (parent_record == superclass)
+                return 1;
+            current = parent_record;
+        } else {
+            break;
+        }
+    }
+
+    return 0;
+}
+
 int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab) {
     /* NULL types are incompatible */
     if (lhs_type == NULL || rhs_type == NULL)
@@ -398,8 +421,16 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
 
         case TYPE_KIND_RECORD:
             /* Records are compatible if they are the same record type 
-             * For now, we do pointer equality on record_info */
-            return lhs_type->info.record_info == rhs_type->info.record_info;
+             * or if one is a subclass of the other */
+            if (lhs_type->info.record_info == rhs_type->info.record_info)
+                return 1;
+
+            /* Check inheritance: rhs_type should be assignable to lhs_type if
+             * rhs_type is a subclass of lhs_type */
+            if (is_record_subclass(rhs_type->info.record_info, lhs_type->info.record_info, symtab))
+                return 1;
+
+            return 0;
 
         case TYPE_KIND_PROCEDURE: {
             ProcedureTypeInfo *lhs_proc = &lhs_type->info.proc_info;
