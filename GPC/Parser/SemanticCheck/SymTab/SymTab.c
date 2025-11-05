@@ -135,6 +135,44 @@ int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value)
     return result;
 }
 
+/* Pushes a string constant onto the current scope (head) */
+int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+    assert(value != NULL);
+
+    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    
+    GpcType *gpc_type = create_primitive_type(STRING_TYPE);
+    if (gpc_type == NULL)
+        return 1; /* Failed to create type */
+    
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, gpc_type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(cur_hash, id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_string_value = strdup(value);
+            if (node->const_string_value == NULL)
+            {
+                /* Memory allocation failed, clean up */
+                destroy_gpc_type(gpc_type);
+                return 1;
+            }
+        }
+    }
+    else
+    {
+        /* Failed to add, clean up GpcType */
+        destroy_gpc_type(gpc_type);
+    }
+    return result;
+}
+
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
