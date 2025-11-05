@@ -1950,6 +1950,65 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
+    char buffer[128];
+
+    if (relop_kind == IN && right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx))
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+
+        Register_t *left_reg = NULL;
+        inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &left_reg);
+        if (codegen_had_error(ctx) || left_reg == NULL)
+            return inst_list;
+
+        Register_t *set_addr_reg = NULL;
+        inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
+        if (codegen_had_error(ctx) || set_addr_reg == NULL)
+        {
+            free_reg(get_reg_stack(), left_reg);
+            return inst_list;
+        }
+
+        Register_t *dword_reg = codegen_try_get_reg(&inst_list, ctx, "char set dword");
+        Register_t *bit_mask_reg = codegen_try_get_reg(&inst_list, ctx, "char set bit mask");
+        if (dword_reg == NULL || bit_mask_reg == NULL)
+        {
+            if (dword_reg != NULL) free_reg(get_reg_stack(), dword_reg);
+            if (bit_mask_reg != NULL) free_reg(get_reg_stack(), bit_mask_reg);
+            free_reg(get_reg_stack(), set_addr_reg);
+            free_reg(get_reg_stack(), left_reg);
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, bit_mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", left_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_sign_extend32_to64(inst_list, left_reg->bit_32, left_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n",
+            set_addr_reg->bit_64, left_reg->bit_64, dword_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", bit_mask_reg->bit_32, dword_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), bit_mask_reg);
+        free_reg(get_reg_stack(), dword_reg);
+        free_reg(get_reg_stack(), set_addr_reg);
+        free_reg(get_reg_stack(), left_reg);
+        return inst_list;
+    }
+
     inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
     Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
     inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
@@ -1957,8 +2016,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     if (left_reg == NULL || right_reg == NULL)
         return inst_list;
-
-    char buffer[128];
 
     int left_is_string = (left_expr != NULL && expr_has_type_tag(left_expr, STRING_TYPE));
     int right_is_string = (right_expr != NULL && expr_has_type_tag(right_expr, STRING_TYPE));
@@ -2000,80 +2057,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     {
         if (relop_type != NULL)
             *relop_type = NE;
-
-        /* Check if this is a character set IN operation */
-        if (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx))
-        {
-            /* For character sets: right operand is 32-byte array, left is char value (0-255) 
-             * Algorithm:
-             * 1. dword_index = value / 32  (which of 8 dwords)
-             * 2. bit_index = value % 32    (which bit in that dword)
-             * 3. Load the appropriate dword from set variable
-             * 4. Test the appropriate bit
-             */
-            
-            /* Get address of the set variable */
-            Register_t *set_addr_reg = NULL;
-            inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
-            if (codegen_had_error(ctx) || set_addr_reg == NULL)
-            {
-                if (set_addr_reg != NULL)
-                    free_reg(get_reg_stack(), set_addr_reg);
-                free_reg(get_reg_stack(), left_reg);
-                free_reg(get_reg_stack(), right_reg);
-                return inst_list;
-            }
-            
-            /* Calculate dword index: value / 32 (shift right by 5) */
-            /* Calculate bit index: value % 32 (mask with 31) */
-            Register_t *bit_mask_reg = codegen_try_get_reg(&inst_list, ctx, "char set bit mask");
-            if (bit_mask_reg == NULL)
-            {
-                free_reg(get_reg_stack(), set_addr_reg);
-                free_reg(get_reg_stack(), left_reg);
-                free_reg(get_reg_stack(), right_reg);
-                return inst_list;
-            }
-            
-            /* Save the value for bit index calculation */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Calculate dword index in left_reg: value >> 5 */
-            snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", left_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Multiply by 4 to get byte offset */
-            snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", left_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Load the appropriate dword: right_reg = [set_addr + offset] */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n", 
-                set_addr_reg->bit_64, left_reg->bit_64, right_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Calculate bit index: value & 31 */
-            snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Create bit mask: 1 << bit_index */
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_mask_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            /* Test the bit */
-            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", bit_mask_reg->bit_32, right_reg->bit_32);
-            inst_list = add_inst(inst_list, buffer);
-            
-            free_reg(get_reg_stack(), bit_mask_reg);
-            free_reg(get_reg_stack(), set_addr_reg);
-            free_reg(get_reg_stack(), left_reg);
-            free_reg(get_reg_stack(), right_reg);
-            return inst_list;
-        }
 
         /* Regular 32-bit sets */
         StackNode_t *set_spill = add_l_t("set_relop");
