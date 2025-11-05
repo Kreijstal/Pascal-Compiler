@@ -40,6 +40,8 @@ typedef struct {
     int is_file;
     int file_type;
     char *file_type_id;
+    int is_record;
+    struct RecordType *record_type;
 } TypeInfo;
 
 static void destroy_type_info_contents(TypeInfo *info) {
@@ -69,6 +71,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->array_dimensions != NULL) {
         destroy_list(info->array_dimensions);
         info->array_dimensions = NULL;
+    }
+    if (info->record_type != NULL) {
+        destroy_record_type(info->record_type);
+        info->record_type = NULL;
     }
 }
 
@@ -506,6 +512,8 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->is_file = 0;
         type_info->file_type = UNKNOWN_TYPE;
         type_info->file_type_id = NULL;
+        type_info->is_record = 0;
+        type_info->record_type = NULL;
     }
 
     if (type_spec == NULL)
@@ -673,12 +681,15 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
 
     if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
         struct RecordType *record = convert_record_type(spec_node);
-        if (record_out != NULL) {
+        if (type_info != NULL) {
+            type_info->is_record = 1;
+            type_info->record_type = record;
+        } else if (record_out != NULL) {
             *record_out = record;
         } else {
             destroy_record_type(record);
         }
-        return UNKNOWN_TYPE;
+        return RECORD_TYPE;
     }
 
     return UNKNOWN_TYPE;
@@ -1440,7 +1451,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         }
         else
         {
-            param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL);
+            param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL, NULL);
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
@@ -1542,6 +1553,8 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         var_type = ENUM_TYPE;
     } else if (type_info.is_file) {
         var_type = FILE_TYPE;
+    } else if (type_info.is_record) {
+        var_type = RECORD_TYPE;
     }
 
     int inferred = 0;
@@ -1583,7 +1596,14 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         }
     }
 
-    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt);
+    /* Transfer ownership of inline record type from type_info to the vardecl */
+    struct RecordType *inline_record = NULL;
+    if (type_info.is_record && type_info.record_type != NULL) {
+        inline_record = type_info.record_type;
+        type_info.record_type = NULL;  /* Transfer ownership */
+    }
+
+    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt, inline_record);
 
     destroy_type_info_contents(&type_info);
 
@@ -1902,7 +1922,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         
         /* Create variable declaration for the record const */
         ListNode_t *var_ids = CreateListNode(id, LIST_STRING);
-        Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type, type_id, 0, 0, initializer);
+        Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type, type_id, 0, 0, initializer, NULL);
         
         if (var_builder != NULL)
             list_builder_append(var_builder, var_decl, LIST_TREE);
@@ -3323,7 +3343,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     char *self_type_id = NULL;
     if (effective_class != NULL)
         self_type_id = strdup(effective_class);
-    Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE, self_type_id, 1, 0, NULL);
+    Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE, self_type_id, 1, 0, NULL, NULL);
     list_builder_append(&params_builder, self_param, LIST_TREE);
 
     cur = qualified->next;

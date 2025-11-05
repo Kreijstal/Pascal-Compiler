@@ -1867,6 +1867,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_ENUM;
                 else if(tree->tree_data.var_decl_data.type == STRING_TYPE)
                     var_type = HASHVAR_PCHAR;
+                else if(tree->tree_data.var_decl_data.type == RECORD_TYPE)
+                    var_type = HASHVAR_RECORD;
                 else
                     var_type = HASHVAR_REAL;
                 
@@ -1876,6 +1878,11 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     /* Use GpcType from resolved type if available */
                     var_gpc_type = resolved_type->type;
+                }
+                else if (tree->tree_data.var_decl_data.inline_record_type != NULL)
+                {
+                    /* Handle inline record type declarations */
+                    var_gpc_type = create_record_type(clone_record_type(tree->tree_data.var_decl_data.inline_record_type));
                 }
                 else
                 {

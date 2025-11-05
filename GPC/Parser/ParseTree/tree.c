@@ -911,6 +911,8 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.var_decl_data.type_id);
           if (tree->tree_data.var_decl_data.initializer != NULL)
               destroy_stmt(tree->tree_data.var_decl_data.initializer);
+          if (tree->tree_data.var_decl_data.inline_record_type != NULL)
+              destroy_record_type(tree->tree_data.var_decl_data.inline_record_type);
           break;
 
         case TREE_ARR_DECL:
@@ -1542,7 +1544,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
 
 /*enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_STATEMENT_TYPE};*/
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer)
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer, struct RecordType *inline_record_type)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1556,6 +1558,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
+    new_tree->tree_data.var_decl_data.inline_record_type = inline_record_type;
 
     return new_tree;
 }

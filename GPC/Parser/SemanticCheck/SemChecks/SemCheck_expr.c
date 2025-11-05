@@ -1949,6 +1949,72 @@ static int semcheck_recordaccess(int *type_return,
         return 1;
     }
 
+    /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
+     * When we detect this pattern (record access on a sign term), we restructure the AST
+     * to have the correct operator precedence: the sign term should wrap the record access. */
+    if (record_expr->type == EXPR_SIGN_TERM || record_expr->type == EXPR_ADDOP ||
+        record_expr->type == EXPR_MULOP)
+    {
+        /* We have a pattern like (-r).x or (+r).x or (r*2).x which doesn't make sense
+         * for record access. Transform it to -(r.x) or +(r.x) or (r*2).x respectively.
+         * 
+         * For unary operators (SIGN_TERM), this is a clear fix.
+         * For binary operators (ADDOP, MULOP), this would only make sense if they're
+         * part of a more complex expression, so we only handle SIGN_TERM for now. */
+        if (record_expr->type == EXPR_SIGN_TERM)
+        {
+            /* Current structure: RECORD_ACCESS(SIGN_TERM(inner_expr), field)
+             * Desired structure: SIGN_TERM(RECORD_ACCESS(inner_expr, field)) */
+            struct Expression *inner_expr = record_expr->expr_data.sign_term;
+            if (inner_expr != NULL)
+            {
+                /* Create a new RECORD_ACCESS for inner_expr.field */
+                struct Expression *new_record_access = (struct Expression *)malloc(sizeof(struct Expression));
+                if (new_record_access == NULL)
+                {
+                    fprintf(stderr, "Error: failed to allocate expression for AST transformation.\n");
+                    *type_return = UNKNOWN_TYPE;
+                    return 1;
+                }
+                
+                new_record_access->line_num = expr->line_num;
+                new_record_access->type = EXPR_RECORD_ACCESS;
+                new_record_access->expr_data.record_access_data.record_expr = inner_expr;
+                new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
+                new_record_access->expr_data.record_access_data.field_offset = 0;
+                new_record_access->record_type = NULL;
+                new_record_access->resolved_type = UNKNOWN_TYPE;
+                new_record_access->is_array_expr = 0;
+                new_record_access->array_element_type = UNKNOWN_TYPE;
+                new_record_access->array_element_type_id = NULL;
+                new_record_access->array_element_record_type = NULL;
+                new_record_access->array_element_size = 0;
+                new_record_access->array_lower_bound = 0;
+                new_record_access->array_upper_bound = -1;
+                new_record_access->array_is_dynamic = 0;
+                new_record_access->pointer_subtype = UNKNOWN_TYPE;
+                new_record_access->pointer_subtype_id = NULL;
+                
+                /* Restructure: make the current expr be the SIGN_TERM wrapping the new RECORD_ACCESS */
+                record_expr->expr_data.sign_term = new_record_access;
+                
+                /* Now swap the types so expr becomes SIGN_TERM and the original SIGN_TERM content is preserved */
+                enum ExprType temp_type = expr->type;
+                expr->type = record_expr->type;
+                record_expr->type = temp_type;
+                
+                /* Swap the data unions */
+                union expr_data temp_data = expr->expr_data;
+                expr->expr_data = record_expr->expr_data;
+                record_expr->expr_data = temp_data;
+                
+                /* Now expr is SIGN_TERM wrapping new_record_access, and we can process it as a sign term */
+                /* Redirect to semcheck_signterm for the transformed expression */
+                return semcheck_signterm(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+        }
+    }
+
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&record_type, symtab, record_expr, max_scope_lev, mutating);

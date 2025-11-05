@@ -109,6 +109,7 @@ typedef struct Tree
             int is_var_param;
             int inferred_type;
             struct Statement *initializer;
+            struct RecordType *inline_record_type;  /* For inline record declarations */
         } var_decl_data;
 
         /* An array declaration */
@@ -191,7 +192,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, int cname_flag, int overload_flag);
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer);
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer, struct RecordType *inline_record_type);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
     struct Statement *initializer);
