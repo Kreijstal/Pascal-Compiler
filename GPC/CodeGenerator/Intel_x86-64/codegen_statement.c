@@ -2109,6 +2109,27 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Handle string assignment to string variables */
         if (var_type == STRING_TYPE)
         {
+            /* If assigning a char to string, promote it first */
+            int assign_type = expr_get_type_tag(assign_expr);
+            if (assign_type == CHAR_TYPE)
+            {
+                /* Call gpc_char_to_string to convert char to string */
+                const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                char buffer[128];
+                
+                /* Move char value to argument register (32-bit, zero-extended) */
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+                inst_list = add_inst(inst_list, buffer);
+                
+                /* Call the conversion function */
+                inst_list = add_inst(inst_list, "\tcall\tgpc_char_to_string\n");
+                
+                /* Move result (string pointer) back to value register */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
             if (codegen_had_error(ctx) || addr_reg == NULL)

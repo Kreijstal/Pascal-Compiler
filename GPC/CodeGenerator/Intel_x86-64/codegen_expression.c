@@ -1659,6 +1659,13 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_CHAR_CODE:
+            CODEGEN_DEBUG("DEBUG: Processing character code literal expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         case EXPR_POINTER_DEREF:
             CODEGEN_DEBUG("DEBUG: Processing pointer dereference expression\n");
             inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
