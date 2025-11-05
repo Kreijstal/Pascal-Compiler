@@ -74,6 +74,7 @@ static void destroy_type_info_contents(TypeInfo *info) {
 static int extract_constant_int(struct Expression *expr, long long *out_value);
 static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
+static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
 
@@ -386,6 +387,55 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
+
+/* Helper function to resolve enum literal identifier to its ordinal value
+ * by searching through AST type section.
+ * Returns 1 if found (and sets *ordinal), 0 if not found.
+ */
+static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
+    if (identifier == NULL || type_section == NULL)
+        return 0;
+    
+    /* Iterate through type declarations */
+    ast_t *type_decl = type_section->child;
+    while (type_decl != NULL) {
+        if (type_decl->typ == PASCAL_T_TYPE_DECL) {
+            /* Find the type spec within the type declaration */
+            ast_t *type_spec_node = type_decl->child;
+            if (type_spec_node != NULL)
+                type_spec_node = type_spec_node->next; /* Skip the identifier */
+            
+            while (type_spec_node != NULL && 
+                   type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
+                   type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                type_spec_node = type_spec_node->next;
+            }
+            
+            /* Unwrap TYPE_SPEC if needed */
+            ast_t *spec = type_spec_node;
+            if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+                spec = spec->child;
+            
+            /* Check if it's an enumerated type */
+            if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+                int ordinal = 0;
+                ast_t *literal = spec->child;
+                while (literal != NULL) {
+                    if (literal->typ == PASCAL_T_IDENTIFIER && literal->sym != NULL) {
+                        if (strcmp(literal->sym->name, identifier) == 0) {
+                            return ordinal; /* Found it! Return the ordinal value */
+                        }
+                    }
+                    ordinal++;
+                    literal = literal->next;
+                }
+            }
+        }
+        type_decl = type_decl->next;
+    }
+    
+    return -1; /* Not found */
+}
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
@@ -1512,7 +1562,7 @@ static ListNode_t *convert_var_section(ast_t *section_node) {
 }
 
 static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *type_info,
-                             ast_t *value_node, ListBuilder *var_builder) {
+                             ast_t *value_node, ListBuilder *var_builder, ast_t *type_section) {
     if (id_ptr == NULL || *id_ptr == NULL || type_info == NULL)
         return -1;
 
@@ -1542,6 +1592,45 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     int start = type_info->start;
     int end = type_info->end;
+    
+    /* If both start and end are 0, check if we need to resolve enum identifiers.
+     * The array_dimensions list contains the range as a string like "January..December".
+     */
+    if (start == 0 && end == 0 && type_info->array_dimensions != NULL && 
+        type_info->array_dimensions->cur != NULL && type_section != NULL) {
+        char *range_str = (char *)type_info->array_dimensions->cur;
+        /* Parse the range string to extract identifiers */
+        char *range_copy = strdup(range_str);
+        if (range_copy != NULL) {
+            char *sep = strstr(range_copy, "..");
+            if (sep != NULL) {
+                *sep = '\0';
+                char *start_id = range_copy;
+                char *end_id = sep + 2;
+                
+                /* Try to resolve as enum literals */
+                int start_ordinal = resolve_enum_ordinal_from_ast(start_id, type_section);
+                int end_ordinal = resolve_enum_ordinal_from_ast(end_id, type_section);
+                
+                if (start_ordinal >= 0 && end_ordinal >= 0) {
+                    /* Successfully resolved as enum literals */
+                    start = start_ordinal;
+                    end = end_ordinal;
+                } else {
+                    /* Try to parse as numeric literals (already handled by atoi, but verify) */
+                    char *endptr1, *endptr2;
+                    long start_num = strtol(start_id, &endptr1, 10);
+                    long end_num = strtol(end_id, &endptr2, 10);
+                    if (*endptr1 == '\0' && *endptr2 == '\0') {
+                        start = (int)start_num;
+                        end = (int)end_num;
+                    }
+                }
+            }
+            free(range_copy);
+        }
+    }
+    
     int expected_count = -1;
     if (end >= start)
         expected_count = end - start + 1;
@@ -1615,7 +1704,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     return 0;
 }
 
-static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_builder) {
+static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_builder, ast_t *type_section) {
     if (const_decl_node == NULL)
         return NULL;
 
@@ -1647,7 +1736,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     }
 
     if (type_info.is_array) {
-        if (lower_const_array(const_decl_node, &id, &type_info, value_node, var_builder) != 0)
+        if (lower_const_array(const_decl_node, &id, &type_info, value_node, var_builder, type_section) != 0)
             free(id);
 
         if (type_id != NULL)
@@ -1673,7 +1762,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
 }
 
 static void append_const_decls_from_section(ast_t *const_section, ListNode_t **dest,
-                                            ListBuilder *var_builder) {
+                                            ListBuilder *var_builder, ast_t *type_section) {
     if (const_section == NULL || dest == NULL)
         return;
 
@@ -1684,7 +1773,7 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
     ast_t *const_decl = const_section->child;
     while (const_decl != NULL) {
         if (const_decl->typ == PASCAL_T_CONST_DECL) {
-            Tree_t *decl = convert_const_decl(const_decl, var_builder);
+            Tree_t *decl = convert_const_decl(const_decl, var_builder, type_section);
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;
@@ -1824,13 +1913,18 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
             nested_tail = &(*nested_tail)->next;
     }
 
+    ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
+    
     ast_t *cursor = body_node->child;
     while (cursor != NULL) {
         ast_t *node = unwrap_pascal_node(cursor);
         if (node != NULL) {
             switch (node->typ) {
+            case PASCAL_T_TYPE_SECTION:
+                type_section_ast = node;  /* Save for const array enum resolution */
+                break;
             case PASCAL_T_CONST_SECTION:
-                append_const_decls_from_section(node, const_decls, var_builder);
+                append_const_decls_from_section(node, const_decls, var_builder, type_section_ast);
                 break;
             case PASCAL_T_VAR_SECTION:
                 list_builder_extend(var_builder, convert_var_section(node));
@@ -3057,6 +3151,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     list_builder_init(&label_builder);
     ListNode_t *nested_subs = NULL;
     struct Statement *body = NULL;
+    ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
 
     ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
     char *self_type_id = NULL;
@@ -3085,8 +3180,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                 list_builder_extend(&params_builder, extra_params);
             break;
         }
+        case PASCAL_T_TYPE_SECTION:
+            type_section_ast = node;  /* Save for const array enum resolution */
+            break;
         case PASCAL_T_CONST_SECTION:
-            append_const_decls_from_section(node, &const_decls, &var_builder);
+            append_const_decls_from_section(node, &const_decls, &var_builder, type_section_ast);
             break;
         case PASCAL_T_VAR_SECTION:
             list_builder_extend(&var_builder, convert_var_section(node));
@@ -3162,11 +3260,15 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
     int is_external = 0;
+    ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
 
     while (cur != NULL) {
         switch (cur->typ) {
+        case PASCAL_T_TYPE_SECTION:
+            type_section_ast = cur;  /* Save for const array enum resolution */
+            break;
         case PASCAL_T_CONST_SECTION:
-            append_const_decls_from_section(cur, &const_decls, &var_decls_builder);
+            append_const_decls_from_section(cur, &const_decls, &var_decls_builder, type_section_ast);
             break;
         case PASCAL_T_VAR_SECTION:
             list_builder_extend(&var_decls_builder, convert_var_section(cur));
@@ -3277,11 +3379,15 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
     int is_external = 0;
+    ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
 
     while (cur != NULL) {
         switch (cur->typ) {
+        case PASCAL_T_TYPE_SECTION:
+            type_section_ast = cur;  /* Save for const array enum resolution */
+            break;
         case PASCAL_T_CONST_SECTION:
-            append_const_decls_from_section(cur, &const_decls, &var_decls_builder);
+            append_const_decls_from_section(cur, &const_decls, &var_decls_builder, type_section_ast);
             break;
         case PASCAL_T_VAR_SECTION:
             list_builder_extend(&var_decls_builder, convert_var_section(cur));
@@ -3378,6 +3484,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListBuilder label_builder;
         list_builder_init(&label_builder);
         ListNode_t *type_decls = NULL;
+        ast_t *type_section_ast = NULL;  /* Keep AST for enum resolution */
         ListNode_t *subprograms = NULL;
         ListNode_t **subprograms_tail = &subprograms;
         struct Statement *body = NULL;
@@ -3386,12 +3493,13 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         while (section != NULL) {
             switch (section->typ) {
             case PASCAL_T_CONST_SECTION:
-                append_const_decls_from_section(section, &const_decls, &var_decls_builder);
+                append_const_decls_from_section(section, &const_decls, &var_decls_builder, type_section_ast);
                 break;
             case PASCAL_T_VAR_SECTION:
                 list_builder_extend(&var_decls_builder, convert_var_section(section));
                 break;
             case PASCAL_T_TYPE_SECTION:
+                type_section_ast = section;  /* Save for enum resolution */
                 append_type_decls_from_section(section, &type_decls);
                 break;
             case PASCAL_T_USES_SECTION:
@@ -3446,11 +3554,13 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t *interface_type_decls = NULL;
         ListBuilder interface_var_builder;
         list_builder_init(&interface_var_builder);
+        ast_t *interface_type_section_ast = NULL;  /* Track interface types for enum resolution */
         ListNode_t *implementation_uses = NULL;
         ListNode_t *implementation_const_decls = NULL;
         ListNode_t *implementation_type_decls = NULL;
         ListBuilder implementation_var_builder;
         list_builder_init(&implementation_var_builder);
+        ast_t *implementation_type_section_ast = NULL;  /* Track implementation types for enum resolution */
         ListNode_t *subprograms = NULL;
         ListNode_t **subprograms_tail = &subprograms;
         struct Statement *initialization = NULL;
@@ -3468,12 +3578,13 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     case PASCAL_T_USES_SECTION:
                         append_uses_from_section(node, &interface_uses);
                         break;
+                    case PASCAL_T_TYPE_SECTION:
+                        interface_type_section_ast = node;  /* Save for const array enum resolution */
+                        append_type_decls_from_section(node, &interface_type_decls);
+                        break;
                     case PASCAL_T_CONST_SECTION:
                         append_const_decls_from_section(node, &interface_const_decls,
-                                                        &interface_var_builder);
-                        break;
-                    case PASCAL_T_TYPE_SECTION:
-                        append_type_decls_from_section(node, &interface_type_decls);
+                                                        &interface_var_builder, interface_type_section_ast);
                         break;
                     case PASCAL_T_VAR_SECTION:
                         list_builder_extend(&interface_var_builder, convert_var_section(node));
@@ -3495,12 +3606,13 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     case PASCAL_T_USES_SECTION:
                         append_uses_from_section(node, &implementation_uses);
                         break;
+                    case PASCAL_T_TYPE_SECTION:
+                        implementation_type_section_ast = node;  /* Save for const array enum resolution */
+                        append_type_decls_from_section(node, &implementation_type_decls);
+                        break;
                     case PASCAL_T_CONST_SECTION:
                         append_const_decls_from_section(node, &implementation_const_decls,
-                                                        &implementation_var_builder);
-                        break;
-                    case PASCAL_T_TYPE_SECTION:
-                        append_type_decls_from_section(node, &implementation_type_decls);
+                                                        &implementation_var_builder, implementation_type_section_ast);
                         break;
                     case PASCAL_T_VAR_SECTION:
                         list_builder_extend(&implementation_var_builder, convert_var_section(node));
