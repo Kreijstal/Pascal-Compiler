@@ -1961,6 +1961,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (expr_get_type_tag(var_expr) == RECORD_TYPE)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
+    /* Character sets (set of char) need special handling like records due to 32-byte size */
+    if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set(var_expr))
+        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+
     if (var_expr->type == EXPR_VAR_ID)
     {
         int scope_depth = 0;

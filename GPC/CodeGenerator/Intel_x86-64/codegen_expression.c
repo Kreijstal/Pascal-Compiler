@@ -160,7 +160,7 @@ int expr_get_array_lower_bound(const struct Expression *expr)
 }
 
 /* Helper to check if an expression represents a character set (set of char) */
-static int expr_is_char_set(const struct Expression *expr)
+int expr_is_char_set(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;

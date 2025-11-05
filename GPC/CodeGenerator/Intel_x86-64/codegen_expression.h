@@ -60,6 +60,10 @@ int expr_get_array_lower_bound(const struct Expression *expr);
  * Returns the element size in bytes, or -1 if not determinable. */
 long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx);
 
+/* Check if an expression represents a character set (set of char).
+ * Returns 1 if it's a character set, 0 otherwise. */
+int expr_is_char_set(const struct Expression *expr);
+
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);
 
