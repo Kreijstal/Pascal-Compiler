@@ -2350,6 +2350,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
     case PASCAL_T_TUPLE:
         return convert_expression(expr_node->child);
+    case PASCAL_T_RECORD_CONSTRUCTOR:
+        // For now, return NULL for record constructors - they need proper implementation
+        fprintf(stderr, "WARNING: Record constructors are not yet supported in code generation at line %d\n", 
+                expr_node->line);
+        return NULL;
     case PASCAL_T_FIELD_WIDTH:
         return convert_field_width_expr(expr_node);
     case PASCAL_T_TYPECAST:

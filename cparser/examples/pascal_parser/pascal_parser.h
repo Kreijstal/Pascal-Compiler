@@ -58,6 +58,7 @@ typedef enum {
     PASCAL_T_MEMBER_ACCESS, // Member access: obj.field
     PASCAL_T_ARG_LIST,
     PASCAL_T_TUPLE,         // Tuple/Array constant: (1,2,3) or ((1,2),(3,4))
+    PASCAL_T_RECORD_CONSTRUCTOR, // Record constructor: (field: value; field: value)
     // Procedure/Function Declaration types
     PASCAL_T_PROCEDURE_DECL,
     PASCAL_T_FUNCTION_DECL,
