@@ -1083,7 +1083,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if (candidate->hash_type == HASHTYPE_PROCEDURE && 
-                candidate->id != NULL && strcmp(candidate->id, proc_id) == 0)
+                candidate->id != NULL && pascal_identifier_equals(candidate->id, proc_id))
             {
                 /* Check if parameter count matches */
                 int candidate_param_count = 0;
