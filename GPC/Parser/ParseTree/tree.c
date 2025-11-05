@@ -234,7 +234,7 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
 
         print_indent(f, num_indent);
         fprintf(f, "[CONST_DECLS]:\n");
-          list_print(tree->tree_data.program_data.const_declaration, f, num_indent+1);
+        list_print(tree->tree_data.program_data.const_declaration, f, num_indent+1);
 
           print_indent(f, num_indent);
           fprintf(f, "[TYPE_DECLS]:\n");
