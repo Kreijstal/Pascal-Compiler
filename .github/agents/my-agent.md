@@ -10,4 +10,4 @@ you may ungraft/unshallow your git history for better debugging if necessary
 test failing unrelated to your problem should be fixed, it is your responsibility to fix them
 When a custom agent has completed work, DO run any linters, builds, and tests on their changes. Do not Accept their work as final.
 Do not be minimal, be excellent, think not what the simplest solution is, but what the BEST solution is. 
-Prefer architectural changes over tactical fixes.
+Prefer architectural changes and refactors over tactical fixes.
