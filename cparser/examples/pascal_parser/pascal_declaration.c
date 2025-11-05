@@ -45,6 +45,19 @@ static ast_t* map_out_modifier(ast_t* ast) {
     return make_modifier_node(ast, "out");
 }
 
+// Maps directive keywords (forward, external, assembler) to AST nodes
+static ast_t* map_forward_directive(ast_t* ast) {
+    return make_modifier_node(ast, "forward");
+}
+
+static ast_t* map_external_directive(ast_t* ast) {
+    return make_modifier_node(ast, "external");
+}
+
+static ast_t* map_assembler_directive(ast_t* ast) {
+    return make_modifier_node(ast, "assembler");
+}
+
 static ast_t* discard_ast(ast_t* ast) {
     if (ast != NULL && ast != ast_nil) {
         free_ast(ast);
@@ -610,11 +623,11 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t* routine_directives = many(routine_directive);
 
-    // Directives that indicate no body should follow
-    combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("forward")),
-        token(keyword_ci("external")),
-        token(keyword_ci("assembler")),
+    // Directives that indicate no body should follow - preserve the directive keyword in AST
+    combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
+        map(token(keyword_ci("forward")), map_forward_directive),
+        map(token(keyword_ci("external")), map_external_directive),
+        map(token(keyword_ci("assembler")), map_assembler_directive),
         NULL
     );
 
@@ -1246,11 +1259,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* program_routine_directives = many(routine_directive);
 
-    // Directives that indicate no body should follow
-    combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("forward")),
-        token(keyword_ci("external")),
-        token(keyword_ci("assembler")),
+    // Directives that indicate no body should follow - preserve the directive keyword in AST
+    combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
+        map(token(keyword_ci("forward")), map_forward_directive),
+        map(token(keyword_ci("external")), map_external_directive),
+        map(token(keyword_ci("assembler")), map_assembler_directive),
         NULL
     );
 

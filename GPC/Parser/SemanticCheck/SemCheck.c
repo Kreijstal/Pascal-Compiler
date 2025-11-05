@@ -1607,11 +1607,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val = 0;
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
-    if (subprogram->tree_data.subprogram_data.statement_list == NULL)
-    {
-        subprogram->tree_data.subprogram_data.cname_flag = 1;
-    }
-
     // --- Name Mangling Logic ---
     if (subprogram->tree_data.subprogram_data.cname_flag) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);

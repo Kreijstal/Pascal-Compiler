@@ -3070,6 +3070,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *nested_subs = NULL;
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
+    int is_external = 0;
 
     while (cur != NULL) {
         switch (cur->typ) {
@@ -3118,6 +3119,18 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
             break;
         }
+        case PASCAL_T_IDENTIFIER: {
+            /* Check if this is a directive keyword (external/forward/assembler) */
+            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
+                char *directive = dup_symbol(cur->child);
+                if (directive != NULL && strcasecmp(directive, "external") == 0) {
+                    is_external = 1;
+                }
+                free(directive);
+            }
+            break;
+        }
         default:
             break;
         }
@@ -3125,7 +3138,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     }
 
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
-                                list_builder_finish(&var_decls_builder), nested_subs, body, 0, 0);
+                                list_builder_finish(&var_decls_builder), nested_subs, body, is_external, 0);
     return tree;
 }
 
@@ -3166,6 +3179,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *nested_subs = NULL;
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
+    int is_external = 0;
 
     while (cur != NULL) {
         switch (cur->typ) {
@@ -3214,6 +3228,18 @@ static Tree_t *convert_function(ast_t *func_node) {
             body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
             break;
         }
+        case PASCAL_T_IDENTIFIER: {
+            /* Check if this is a directive keyword (external/forward/assembler) */
+            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
+                char *directive = dup_symbol(cur->child);
+                if (directive != NULL && strcasecmp(directive, "external") == 0) {
+                    is_external = 1;
+                }
+                free(directive);
+            }
+            break;
+        }
         default:
             break;
         }
@@ -3222,7 +3248,7 @@ static Tree_t *convert_function(ast_t *func_node) {
 
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                list_builder_finish(&var_decls_builder), nested_subs, body,
-                               return_type, return_type_id, 0, 0);
+                               return_type, return_type_id, is_external, 0);
     return tree;
 }
 
