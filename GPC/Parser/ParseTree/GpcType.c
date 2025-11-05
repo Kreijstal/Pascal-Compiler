@@ -509,9 +509,22 @@ long long gpc_type_sizeof(GpcType *type)
             {
                 case INT_TYPE:
                 case BOOL:
-                case SET_TYPE:
                 case ENUM_TYPE:
                     return 4;
+                case SET_TYPE:
+                {
+                    /* Check if this is a character set (set of char) */
+                    if (type->type_alias != NULL && type->type_alias->is_set)
+                    {
+                        if (type->type_alias->set_element_type == CHAR_TYPE)
+                        {
+                            /* Character sets need 256 bits = 32 bytes */
+                            return 32;
+                        }
+                    }
+                    /* Regular sets (0-31 range) use 32 bits = 4 bytes */
+                    return 4;
+                }
                 case LONGINT_TYPE:
                 case REAL_TYPE:
                     return 8;

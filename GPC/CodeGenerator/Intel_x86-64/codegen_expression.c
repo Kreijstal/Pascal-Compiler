@@ -159,6 +159,69 @@ int expr_get_array_lower_bound(const struct Expression *expr)
     return expr->array_lower_bound;
 }
 
+/* Check if an expression represents a character set (set of char) */
+int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* Check if expression has a GpcType with type_alias */
+    if (expr->resolved_gpc_type != NULL)
+    {
+        struct TypeAlias *alias = expr->resolved_gpc_type->type_alias;
+        if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+            return 1;
+    }
+    
+    /* For variable references, look up the type in the symbol table */
+    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            if (node->type != NULL)
+            {
+                struct TypeAlias *alias = node->type->type_alias;
+                if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+                    return 1;
+            }
+        }
+    }
+    
+    /* For set literals, check if elements are characters or single-char strings */
+    if (expr->type == EXPR_SET && expr->expr_data.set_data.elements != NULL)
+    {
+        /* Check the first element to determine type */
+        ListNode_t *first = expr->expr_data.set_data.elements;
+        if (first != NULL && first->cur != NULL)
+        {
+            struct SetElement *element = (struct SetElement *)first->cur;
+            if (element->lower != NULL)
+            {
+                int elem_type = element->lower->resolved_type;
+                /* Character sets can have CHAR_TYPE or STRING_TYPE (single char) elements */
+                if (elem_type == CHAR_TYPE)
+                    return 1;
+                if (elem_type == STRING_TYPE && element->lower->type == EXPR_STRING)
+                {
+                    /* Single-character string literal */
+                    if (element->lower->expr_data.string != NULL &&
+                        strlen(element->lower->expr_data.string) == 1)
+                        return 1;
+                }
+            }
+        }
+    }
+    
+    return 0;
+}
+
+/* Wrapper that doesn't need context - for backward compatibility */
+int expr_is_char_set(const struct Expression *expr)
+{
+    return expr_is_char_set_ctx(expr, NULL);
+}
+
 /* Helper to get array element size from expression, preferring resolved_gpc_type
  * ctx parameter reserved for future use in computing complex type sizes */
 long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx)
@@ -1260,6 +1323,140 @@ static ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst
     if (expr == NULL)
         return inst_list;
 
+    /* Check if this is a character set literal */
+    int is_char_set = expr_is_char_set_ctx(expr, ctx);
+    
+    if (is_char_set)
+    {
+        /* Character sets need 32 bytes in memory, not a register */
+        /* Allocate a temporary 32-byte buffer on the stack */
+        StackNode_t *char_set_temp = codegen_alloc_record_temp(32);
+        if (char_set_temp == NULL)
+        {
+            if (out_reg != NULL)
+                *out_reg = NULL;
+            return inst_list;
+        }
+        
+        /* Zero-initialize all 32 bytes */
+        char buffer[128];
+        for (int i = 0; i < 8; i++)
+        {
+            int offset = char_set_temp->offset - (i * 4);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n", offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        /* Get address register for the set buffer */
+        Register_t *addr_reg = codegen_try_get_reg(&inst_list, ctx, "char set addr");
+        if (addr_reg == NULL)
+        {
+            if (out_reg != NULL)
+                *out_reg = NULL;
+            return inst_list;
+        }
+        
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", 
+            char_set_temp->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* Now set each element in the character set */
+        for (ListNode_t *cur = expr->expr_data.set_data.elements; cur != NULL; cur = cur->next)
+        {
+            struct SetElement *element = (struct SetElement *)cur->cur;
+            if (element == NULL)
+                continue;
+
+            Register_t *value_reg = NULL;
+            inst_list = codegen_expr_tree_value(element->lower, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL)
+            {
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), addr_reg);
+                if (out_reg != NULL)
+                    *out_reg = NULL;
+                return inst_list;
+            }
+            
+            /* For character sets: Calculate dword index and bit index */
+            Register_t *bit_reg = codegen_try_get_reg(&inst_list, ctx, "char set bit");
+            Register_t *dword_reg = codegen_try_get_reg(&inst_list, ctx, "char set dword");
+            if (bit_reg == NULL || dword_reg == NULL)
+            {
+                if (bit_reg != NULL)
+                    free_reg(get_reg_stack(), bit_reg);
+                if (dword_reg != NULL)
+                    free_reg(get_reg_stack(), dword_reg);
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), addr_reg);
+                if (out_reg != NULL)
+                    *out_reg = NULL;
+                return inst_list;
+            }
+            
+            /* Save value for bit calculation */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, bit_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Calculate bit index: value & 31 */
+            snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Calculate dword offset: (value >> 5) * 4 */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, dword_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", dword_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", dword_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Load current dword value */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n", 
+                addr_reg->bit_64, dword_reg->bit_64, value_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Create bit mask: 1 << bit_index */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* OR the bit into the dword */
+            snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", bit_reg->bit_32, value_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Store back to memory */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s,%s,1)\n", 
+                value_reg->bit_32, addr_reg->bit_64, dword_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), dword_reg);
+            free_reg(get_reg_stack(), bit_reg);
+            free_reg(get_reg_stack(), value_reg);
+            
+            /* TODO: Handle ranges (element->upper != NULL) */
+            if (element->upper != NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Character set ranges not yet implemented.");
+                free_reg(get_reg_stack(), addr_reg);
+                if (out_reg != NULL)
+                    *out_reg = NULL;
+                return inst_list;
+            }
+        }
+        
+        /* Return the address register */
+        if (out_reg != NULL)
+            *out_reg = addr_reg;
+        else
+            free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    /* Regular 32-bit sets */
     if (expr->expr_data.set_data.is_constant)
     {
         Register_t *dest_reg = codegen_try_get_reg(&inst_list, ctx, "set literal");
@@ -1804,6 +2001,81 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (relop_type != NULL)
             *relop_type = NE;
 
+        /* Check if this is a character set IN operation */
+        if (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx))
+        {
+            /* For character sets: right operand is 32-byte array, left is char value (0-255) 
+             * Algorithm:
+             * 1. dword_index = value / 32  (which of 8 dwords)
+             * 2. bit_index = value % 32    (which bit in that dword)
+             * 3. Load the appropriate dword from set variable
+             * 4. Test the appropriate bit
+             */
+            
+            /* Get address of the set variable */
+            Register_t *set_addr_reg = NULL;
+            inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
+            if (codegen_had_error(ctx) || set_addr_reg == NULL)
+            {
+                if (set_addr_reg != NULL)
+                    free_reg(get_reg_stack(), set_addr_reg);
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+            
+            /* Calculate dword index: value / 32 (shift right by 5) */
+            /* Calculate bit index: value % 32 (mask with 31) */
+            Register_t *bit_mask_reg = codegen_try_get_reg(&inst_list, ctx, "char set bit mask");
+            if (bit_mask_reg == NULL)
+            {
+                free_reg(get_reg_stack(), set_addr_reg);
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+            
+            /* Save the value for bit index calculation */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", left_reg->bit_32, bit_mask_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Calculate dword index in left_reg: value >> 5 */
+            snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Multiply by 4 to get byte offset */
+            snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Load the appropriate dword: right_reg = [set_addr + offset] */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n", 
+                set_addr_reg->bit_64, left_reg->bit_64, right_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Calculate bit index: value & 31 */
+            snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_mask_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Create bit mask: 1 << bit_index */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_mask_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_mask_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_mask_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Test the bit */
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", bit_mask_reg->bit_32, right_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), bit_mask_reg);
+            free_reg(get_reg_stack(), set_addr_reg);
+            free_reg(get_reg_stack(), left_reg);
+            free_reg(get_reg_stack(), right_reg);
+            return inst_list;
+        }
+
+        /* Regular 32-bit sets */
         StackNode_t *set_spill = add_l_t("set_relop");
         if (set_spill != NULL)
         {

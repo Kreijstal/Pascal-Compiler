@@ -111,6 +111,14 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case STRING_TYPE:  /* PCHAR */
                 case FILE_TYPE:
                     return 8;
+                case SET_TYPE:
+                {
+                    /* Check if this is a character set */
+                    long long size = gpc_type_sizeof(node->type);
+                    if (size > 0)
+                        return (int)size;
+                    return DOUBLEWORD;  /* Default for non-char sets */
+                }
                 default:
                     return DOUBLEWORD;  /* 4 bytes for most primitives */
             }
