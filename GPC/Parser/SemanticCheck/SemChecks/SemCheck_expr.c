@@ -666,8 +666,8 @@ static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
         }
 
         expr->expr_data.function_call_data.resolved_func = NULL;
-        *type_return = STRING_TYPE;
-        expr->resolved_type = STRING_TYPE;
+        *type_return = CHAR_TYPE;
+        expr->resolved_type = CHAR_TYPE;
         return 0;
     }
 

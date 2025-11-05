@@ -850,6 +850,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     {
         int coerced_rhs_type = type_second;
         int types_compatible = (type_first == type_second);
+        
+        /* Reject assignment of scalar to array or vice versa */
+        /* Arrays must be assigned from arrays, scalars from scalars */
+        if (types_compatible && var != NULL && expr != NULL &&
+            var->is_array_expr != expr->is_array_expr)
+        {
+            types_compatible = 0;
+        }
 
         if (!types_compatible)
         {
@@ -881,6 +889,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 types_compatible = 1;
                 coerced_rhs_type = CHAR_TYPE;
                 expr->resolved_type = CHAR_TYPE;
+            }
+            /* Allow char to string assignment - char will be promoted to single-character string */
+            /* Only for actual string variables, not char arrays */
+            else if (type_first == STRING_TYPE && type_second == CHAR_TYPE &&
+                var != NULL && !var->is_array_expr)
+            {
+                types_compatible = 1;
+                /* Keep CHAR_TYPE so code generator knows to promote */
             }
             /* Allow string literal assignment to char arrays */
             else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
