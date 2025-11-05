@@ -335,7 +335,7 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
 
         print_indent(f, num_indent);
         fprintf(f, "[VAR_DECLS]:\n");
-          list_print(tree->tree_data.subprogram_data.declarations, f, num_indent+1);
+        list_print(tree->tree_data.subprogram_data.declarations, f, num_indent+1);
 
           print_indent(f, num_indent);
           fprintf(f, "[SUBPROGRAMS]:\n");
