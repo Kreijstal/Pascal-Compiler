@@ -41,6 +41,3 @@ begin
     { Test 6: Direct access with enum constant }
     writeln('Green value: ', RGBValues[Green]);
 end.
-
-
-
