@@ -2019,6 +2019,13 @@ static int extract_constant_int(struct Expression *expr, long long *out_value) {
     case EXPR_CHAR_CODE:
         *out_value = expr->expr_data.char_code;
         return 0;
+    case EXPR_STRING:
+        /* Handle single-character string literals as char values */
+        if (expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1) {
+            *out_value = (unsigned char)expr->expr_data.string[0];
+            return 0;
+        }
+        return 1;
     case EXPR_SIGN_TERM:
         if (extract_constant_int(expr->expr_data.sign_term, out_value) != 0)
             return 1;
@@ -2112,6 +2119,8 @@ static struct Expression *convert_set_literal(ast_t *set_node) {
             for (long long value = start_value; value <= end_value; ++value) {
                 if (value >= 0 && value < 32)
                     mask |= (uint32_t)1u << value;
+                else
+                    all_constant = 0;  /* Value outside bitmask range */
             }
         } else {
             struct Expression *value_expr = convert_expression(unwrapped);
@@ -2125,6 +2134,8 @@ static struct Expression *convert_set_literal(ast_t *set_node) {
 
             if (value >= 0 && value < 32)
                 mask |= (uint32_t)1u << value;
+            else
+                all_constant = 0;  /* Value outside bitmask range */
         }
     }
 
