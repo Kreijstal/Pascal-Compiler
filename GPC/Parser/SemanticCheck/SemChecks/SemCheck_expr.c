@@ -316,8 +316,25 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
             {
                 expr->array_element_type = element_type->info.primitive_type_tag;
             }
-            /* Other element types (pointers, nested arrays, etc.) can be added here
-             * when needed. For now, primitive and record types cover the common cases. */
+            else if (element_type->kind == TYPE_KIND_ARRAY)
+            {
+                /* Element is itself an array (nested array) - get its type alias if available */
+                struct TypeAlias *element_alias = element_type->type_alias;
+                if (element_alias != NULL && element_alias->is_array)
+                {
+                    /* Propagate the element array's information to this expression
+                     * so that further indexing works correctly */
+                    if (element_alias->array_element_type_id != NULL)
+                    {
+                        expr->array_element_type_id = strdup(element_alias->array_element_type_id);
+                        if (expr->array_element_type_id == NULL)
+                            fprintf(stderr, "Error: failed to allocate array element type identifier.\n");
+                    }
+                    expr->array_element_type = element_alias->array_element_type;
+                }
+            }
+            /* Other element types (pointers, etc.) can be added here
+             * when needed. For now, primitive, record, and array types cover the common cases. */
         }
     }
     else

@@ -76,6 +76,22 @@ begin
     end
 end;
 
+procedure halt(exitcode: integer);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lhalt_sysv
+        movl %ecx, %edi
+        jmp .Lhalt_call
+.Lhalt_sysv:
+        movl %edi, %edi
+.Lhalt_call:
+        call exit
+    end
+end;
+
 
 procedure assign(var f: text; filename: string);
 begin
