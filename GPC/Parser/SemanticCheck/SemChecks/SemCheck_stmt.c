@@ -882,6 +882,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 coerced_rhs_type = CHAR_TYPE;
                 expr->resolved_type = CHAR_TYPE;
             }
+            /* Allow char to string assignment - char will be promoted to single-character string */
+            else if (type_first == STRING_TYPE && type_second == CHAR_TYPE)
+            {
+                types_compatible = 1;
+                /* Keep CHAR_TYPE so code generator knows to promote */
+            }
             /* Allow string literal assignment to char arrays */
             else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
                 var != NULL && var->is_array_expr && var->array_element_type == CHAR_TYPE &&

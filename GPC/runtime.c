@@ -973,7 +973,19 @@ long long gpc_val_real(const char *text, double *out_value)
     return code;
 }
 
-char *gpc_chr(int64_t value)
+/* Chr function - returns a character value as an integer */
+int64_t gpc_chr(int64_t value)
+{
+    if (value < 0)
+        return 0;
+    else if (value > 255)
+        return 255;
+    
+    return value & 0xFF;
+}
+
+/* Convert a character value to a single-character string */
+char *gpc_char_to_string(int64_t value)
 {
     if (value < 0)
         value = 0;

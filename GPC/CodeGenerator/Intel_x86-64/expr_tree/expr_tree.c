@@ -568,7 +568,7 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_chr\n");
+    inst_list = add_inst(inst_list, "\tcall\tgpc_char_to_string\n");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
