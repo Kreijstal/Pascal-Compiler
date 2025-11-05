@@ -4217,6 +4217,195 @@ void test_pascal_constructor_destructor_with_var_section(void) {
     free(input);
 }
 
+void test_pascal_program_forward_declaration(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program TestForward;\n"
+        "\n"
+        "procedure Second; forward;\n"
+        "\n"
+        "procedure First;\n"
+        "begin\n"
+        "  Second;\n"
+        "end;\n"
+        "\n"
+        "procedure Second;\n"
+        "begin\n"
+        "  writeln('Hello');\n"
+        "end;\n"
+        "\n"
+        "begin\n"
+        "  First;\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        // Verify the AST has three procedure declarations plus main block
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_PROGRAM_DECL);
+        
+        // Count the procedure declarations (should be 3: forward decl + First + Second impl)
+        int proc_count = 0;
+        ast_t* child = ast->child;
+        while (child != NULL) {
+            if (child->typ == PASCAL_T_PROCEDURE_DECL) {
+                proc_count++;
+            }
+            child = child->next;
+        }
+        TEST_ASSERT(proc_count == 3);
+        
+        free_ast(res.value.ast);
+    } else {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0); // Force failure with error message shown
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_program_external_declaration(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program TestExternal;\n"
+        "\n"
+        "uses ctypes;\n"
+        "\n"
+        "function helper_add(a, b: integer): cint; external;\n"
+        "\n"
+        "var\n"
+        "  result: cint;\n"
+        "\n"
+        "begin\n"
+        "  result := helper_add(40, 2);\n"
+        "  writeln(result);\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        // Verify the AST has the external function declaration separate from main block
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_PROGRAM_DECL);
+        
+        // Should have: uses section, function decl, var section, main block
+        int func_count = 0;
+        int main_block_count = 0;
+        ast_t* child = ast->child;
+        while (child != NULL) {
+            if (child->typ == PASCAL_T_FUNCTION_DECL) {
+                func_count++;
+            }
+            if (child->typ == PASCAL_T_MAIN_BLOCK) {
+                main_block_count++;
+            }
+            child = child->next;
+        }
+        TEST_ASSERT(func_count == 1);
+        TEST_ASSERT(main_block_count == 1);
+        
+        free_ast(res.value.ast);
+    } else {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_unit_forward_declaration(void) {
+    combinator_t* p = get_unit_parser();
+    
+    const char* source =
+        "unit TestUnit;\n"
+        "\n"
+        "interface\n"
+        "\n"
+        "implementation\n"
+        "\n"
+        "procedure Second; forward;\n"
+        "\n"
+        "procedure First;\n"
+        "begin\n"
+        "  Second;\n"
+        "end;\n"
+        "\n"
+        "procedure Second;\n"
+        "begin\n"
+        "  writeln('Hello');\n"
+        "end;\n"
+        "\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        // Verify the AST has the implementation section with three procedure declarations
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_UNIT_DECL);
+        
+        // Find the implementation section
+        ast_t* child = ast->child;
+        ast_t* impl_section = NULL;
+        while (child != NULL) {
+            if (child->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
+                impl_section = child;
+                break;
+            }
+            child = child->next;
+        }
+        TEST_ASSERT(impl_section != NULL);
+        
+        // Count procedure declarations in implementation section
+        int proc_count = 0;
+        child = impl_section->child;
+        while (child != NULL) {
+            if (child->typ == PASCAL_T_PROCEDURE_DECL) {
+                proc_count++;
+            }
+            child = child->next;
+        }
+        TEST_ASSERT(proc_count == 3);
+        
+        free_ast(res.value.ast);
+    } else {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -4360,5 +4549,8 @@ TEST_LIST = {
     { "test_pascal_method_with_var_section", test_pascal_method_with_var_section },
     { "test_pascal_operator_with_var_section", test_pascal_operator_with_var_section },
     { "test_pascal_constructor_destructor_with_var_section", test_pascal_constructor_destructor_with_var_section },
+    { "test_pascal_program_forward_declaration", test_pascal_program_forward_declaration },
+    { "test_pascal_program_external_declaration", test_pascal_program_external_declaration },
+    { "test_pascal_unit_forward_declaration", test_pascal_unit_forward_declaration },
     { NULL, NULL }
 };
