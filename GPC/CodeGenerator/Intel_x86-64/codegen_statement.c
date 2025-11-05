@@ -50,6 +50,31 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
     Register_t *value_reg);
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
+    Register_t *value_reg, int source_type);
+static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
+    struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list,
+    int *coerced_to_real);
+
+static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
+{
+    if (record_type == NULL || field_name == NULL)
+        return UNKNOWN_TYPE;
+
+    ListNode_t *field_node = record_type->fields;
+    while (field_node != NULL)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field->name != NULL && strcmp(field->name, field_name) == 0)
+                return field->type;
+        }
+        field_node = field_node->next;
+    }
+
+    return UNKNOWN_TYPE;
+}
 
 static void format_pascal_label(char *buffer, size_t size, const CodeGenContext *ctx, const char *label_text)
 {
@@ -127,6 +152,45 @@ static const char *register_name8(const Register_t *reg)
     }
 
     return NULL;
+}
+
+static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
+    Register_t *value_reg, int source_type)
+{
+    if (inst_list == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (source_type == LONGINT_TYPE)
+        snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", value_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", value_reg->bit_64);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
+    struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list,
+    int *coerced_to_real)
+{
+    if (coerced_to_real != NULL)
+        *coerced_to_real = 0;
+
+    if (inst_list == NULL || source_expr == NULL || value_reg == NULL)
+        return inst_list;
+
+    int source_type = expr_get_type_tag(source_expr);
+    if (target_type == REAL_TYPE &&
+        (source_type == INT_TYPE || source_type == LONGINT_TYPE))
+    {
+        inst_list = codegen_convert_int_like_to_real(inst_list, value_reg, source_type);
+        if (coerced_to_real != NULL)
+            *coerced_to_real = 1;
+    }
+
+    return inst_list;
 }
 
 static unsigned long codegen_next_temp_suffix(void)
@@ -2037,8 +2101,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        int var_type = expr_get_type_tag(var_expr);
+        int coerced_to_real = 0;
+        inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
+            value_reg, inst_list, &coerced_to_real);
+
         /* Handle string assignment to string variables */
-        if (expr_get_type_tag(var_expr) == STRING_TYPE)
+        if (var_type == STRING_TYPE)
         {
             Register_t *addr_reg = NULL;
             inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
@@ -2057,8 +2126,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         
         /* Handle string literal assignment to char arrays */
-        if (expr_get_type_tag(var_expr) == CHAR_TYPE && 
-            var_expr->is_array_expr && 
+        if (var_type == CHAR_TYPE &&
+            var_expr->is_array_expr &&
             var_expr->array_element_type == CHAR_TYPE &&
             expr_get_type_tag(assign_expr) == STRING_TYPE)
         {
@@ -2083,7 +2152,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
         if(var != NULL)
         {
-            int use_qword = (var->size >= 8);
+            int use_qword = codegen_type_uses_qword(var_type) || (var->size >= 8);
+            if (use_qword)
+            {
+                int value_is_qword = expr_uses_qword_gpctype(assign_expr);
+                if (coerced_to_real)
+                    value_is_qword = 1;
+                if (!value_is_qword)
+                    inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
+            }
             if (scope_depth == 0)
             {
                 /* Variable is in current scope, assign normally */
@@ -2120,7 +2197,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
 
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
-            snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
+            if (codegen_type_uses_qword(var_type))
+            {
+                int value_is_qword = expr_uses_qword_gpctype(assign_expr);
+                if (coerced_to_real)
+                    value_is_qword = 1;
+                if (!value_is_qword)
+                    inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
+                snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
+            }
+            else
+            {
+                snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, offset, current_non_local_reg64());
+            }
         }
         else
         {
@@ -2168,6 +2257,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int var_type = expr_get_type_tag(var_expr);
+        int coerced_to_real = 0;
+        inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
+            value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type);
         if (var_type == STRING_TYPE)
         {
@@ -2176,6 +2268,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_gpctype(assign_expr);
+            if (coerced_to_real)
+                value_is_qword = 1;
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
@@ -2241,6 +2335,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int var_type_2 = expr_get_type_tag(var_expr);
+        if (var_type_2 == UNKNOWN_TYPE && var_expr->type == EXPR_RECORD_ACCESS)
+        {
+            const char *field_id = var_expr->expr_data.record_access_data.field_id;
+            int resolved = lookup_record_field_type(var_expr->record_type, field_id);
+            if (resolved != UNKNOWN_TYPE)
+            {
+                var_type_2 = resolved;
+                var_expr->resolved_type = resolved;
+            }
+        }
+        int coerced_to_real = 0;
+        inst_list = codegen_maybe_convert_int_like_to_real(var_type_2, assign_expr,
+            value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type_2);
         if (var_type_2 == STRING_TYPE)
         {
@@ -2249,6 +2356,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_gpctype(assign_expr);
+            if (coerced_to_real)
+                value_is_qword = 1;
             if (!value_is_qword)
                 inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
@@ -2328,12 +2437,20 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
 
         int var_type_3 = expr_get_type_tag(var_expr);
+        int coerced_to_real = 0;
+        inst_list = codegen_maybe_convert_int_like_to_real(var_type_3, assign_expr,
+            value_reg, inst_list, &coerced_to_real);
         if (var_type_3 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
         else if (codegen_type_uses_qword(var_type_3))
         {
+            int value_is_qword = expr_uses_qword_gpctype(assign_expr);
+            if (coerced_to_real)
+                value_is_qword = 1;
+            if (!value_is_qword)
+                inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
             snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", value_reg->bit_64, addr_reload->bit_64);
             inst_list = add_inst(inst_list, buffer);
         }
