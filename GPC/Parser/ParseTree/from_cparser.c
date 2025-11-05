@@ -1433,7 +1433,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
             int element_type = type_info.element_type;
             char *element_type_id = type_info.element_type_id != NULL ? strdup(type_info.element_type_id) : NULL;
             param_decl = mk_arraydecl(param_node->line, id_node, element_type, element_type_id,
-                                      type_info.start, type_info.end, NULL);
+                                      NULL, NULL, NULL);
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
@@ -1523,8 +1523,25 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     if (type_info.is_array) {
         int element_type = type_info.element_type;
         char *element_type_id = type_info.element_type_id;
+
+        struct Expression *start_expr = NULL;
+        struct Expression *end_expr = NULL;
+
+        if (type_node && type_node->typ == PASCAL_T_TYPE_SPEC && type_node->child && type_node->child->typ == PASCAL_T_ARRAY_TYPE) {
+            ast_t* array_node = type_node->child;
+            if (array_node->child && array_node->child->typ == PASCAL_T_RANGE_TYPE) {
+                ast_t* range_node = array_node->child;
+                if (range_node->child) {
+                    start_expr = convert_expression(range_node->child);
+                    if (range_node->child->next) {
+                        end_expr = convert_expression(range_node->child->next);
+                    }
+                }
+            }
+        }
+
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
-                                    type_info.start, type_info.end, NULL);
+                                    start_expr, end_expr, NULL);
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         return decl;
@@ -1785,7 +1802,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     ListNode_t *ids = CreateListNode(*id_ptr, LIST_STRING);
     Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
-                                      type_info->element_type_id, start, end, initializer);
+                                      type_info->element_type_id, NULL, NULL, initializer);
     type_info->element_type_id = NULL;
 
     if (type_info->array_dimensions != NULL) {

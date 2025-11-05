@@ -1616,8 +1616,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     return new_tree;
 }
 
-Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    struct Statement *initializer)
+Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id,
+    struct Expression *start_expr, struct Expression *end_expr, struct Statement *initializer)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1628,8 +1628,10 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.ids = ids;
     new_tree->tree_data.arr_decl_data.type = type;
     new_tree->tree_data.arr_decl_data.type_id = type_id;
-    new_tree->tree_data.arr_decl_data.s_range = start;
-    new_tree->tree_data.arr_decl_data.e_range = end;
+    new_tree->tree_data.arr_decl_data.s_range = 0;
+    new_tree->tree_data.arr_decl_data.e_range = 0;
+    new_tree->tree_data.arr_decl_data.s_range_expr = start_expr;
+    new_tree->tree_data.arr_decl_data.e_range_expr = end_expr;
     new_tree->tree_data.arr_decl_data.initializer = initializer;
     new_tree->tree_data.arr_decl_data.is_typed_const = 0;
     new_tree->tree_data.arr_decl_data.has_static_storage = 0;

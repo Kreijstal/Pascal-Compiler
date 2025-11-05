@@ -1963,13 +1963,34 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     assert(element_type != NULL && "Array element type must be createable from VarType");
                 }
                 
+                long long start_range = tree->tree_data.arr_decl_data.s_range;
+                long long end_range = tree->tree_data.arr_decl_data.e_range;
+
+                if (tree->tree_data.arr_decl_data.s_range_expr != NULL)
+                {
+                    if (evaluate_const_expr(symtab, tree->tree_data.arr_decl_data.s_range_expr, &start_range) != 0)
+                    {
+                        fprintf(stderr, "Error on line %d, could not evaluate constant expression for array start range.\n", tree->line_num);
+                        return_val++;
+                    }
+                }
+
+                if (tree->tree_data.arr_decl_data.e_range_expr != NULL)
+                {
+                    if (evaluate_const_expr(symtab, tree->tree_data.arr_decl_data.e_range_expr, &end_range) != 0)
+                    {
+                        fprintf(stderr, "Error on line %d, could not evaluate constant expression for array end range.\n", tree->line_num);
+                        return_val++;
+                    }
+                }
+
                 GpcType *array_type = create_array_type(
                     element_type,
-                    tree->tree_data.arr_decl_data.s_range,
-                    tree->tree_data.arr_decl_data.e_range
+                    (int)start_range,
+                    (int)end_range
                 );
                 assert(array_type != NULL && "Failed to create array type");
-                
+
                 /* If the element type was specified by a type_id (like TAlfa), preserve that information
                  * by creating a minimal TypeAlias and attaching it to the array_type. This allows
                  * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
@@ -1981,15 +2002,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (temp_alias != NULL)
                     {
                         temp_alias->is_array = 1;
-                        temp_alias->array_start = tree->tree_data.arr_decl_data.s_range;
-                        temp_alias->array_end = tree->tree_data.arr_decl_data.e_range;
+                        temp_alias->array_start = (int)start_range;
+                        temp_alias->array_end = (int)end_range;
                         temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
                         temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
-                        
+
                         gpc_type_set_type_alias(array_type, temp_alias);
                     }
                 }
-                
+
                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
             }
 
