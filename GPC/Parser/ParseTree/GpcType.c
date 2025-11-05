@@ -255,11 +255,51 @@ static int types_numeric_compatible(int lhs, int rhs) {
 /* Helper function to resolve GpcType from a parameter Tree_t node 
  * This is needed for procedure type compatibility checking */
 GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int *owns_type) {
-    if (var_decl == NULL || var_decl->type != TREE_VAR_DECL)
+    if (var_decl == NULL)
         return NULL;
 
     if (owns_type != NULL)
         *owns_type = 0;
+
+    /* Handle inline array declarations: var x: array[1..20] of char */
+    if (var_decl->type == TREE_ARR_DECL)
+    {
+        int start = var_decl->tree_data.arr_decl_data.s_range;
+        int end = var_decl->tree_data.arr_decl_data.e_range;
+        int elem_type_tag = var_decl->tree_data.arr_decl_data.type;
+        char *elem_type_id = var_decl->tree_data.arr_decl_data.type_id;
+        
+        GpcType *elem_type = NULL;
+        
+        /* Resolve element type */
+        if (elem_type_tag != UNKNOWN_TYPE && elem_type_tag != -1)
+        {
+            elem_type = create_primitive_type(elem_type_tag);
+        }
+        else if (elem_type_id != NULL && symtab != NULL)
+        {
+            /* Look up named element type in symbol table */
+            struct HashNode *elem_node = NULL;
+            if (FindIdent(&elem_node, symtab, elem_type_id) != -1 && 
+                elem_node != NULL && elem_node->type != NULL)
+            {
+                elem_type = elem_node->type;
+            }
+        }
+        
+        if (elem_type != NULL)
+        {
+            /* Create a new array GpcType - caller owns this */
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_array_type(elem_type, start, end);
+        }
+        
+        return NULL;
+    }
+    
+    if (var_decl->type != TREE_VAR_DECL)
+        return NULL;
 
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
 
@@ -294,6 +334,20 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
     if (lhs_type == NULL || rhs_type == NULL)
         return 0;
 
+    /* Special case: Allow string (primitive) to be assigned to char array */
+    /* This is a common Pascal idiom: var s: array[1..20] of char; begin s := 'hello'; end; */
+    if (lhs_type->kind == TYPE_KIND_ARRAY &&
+        lhs_type->info.array_info.element_type != NULL &&
+        lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
+        rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == STRING_TYPE)
+    {
+        /* String literals can be assigned to char arrays */
+        /* Size checking should be done at a higher level where we have access to the actual string */
+        return 1;
+    }
+
     /* If kinds are different, generally incompatible */
     /* Exception: we need to check for special cases */
     if (lhs_type->kind != rhs_type->kind) {
@@ -323,10 +377,20 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
 
         case TYPE_KIND_ARRAY:
             /* Arrays are compatible if element types match and dimensions match */
+            fprintf(stderr, "DEBUG ARRAY: lhs [%d..%d] vs rhs [%d..%d]\n",
+                lhs_type->info.array_info.start_index, lhs_type->info.array_info.end_index,
+                rhs_type->info.array_info.start_index, rhs_type->info.array_info.end_index);
             if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
+            {
+                fprintf(stderr, "DEBUG: Start indices don't match!\n");
                 return 0;
+            }
             if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
+            {
+                fprintf(stderr, "DEBUG: End indices don't match!\n");
                 return 0;
+            }
+            fprintf(stderr, "DEBUG: Checking element types...\n");
             return are_types_compatible_for_assignment(
                 lhs_type->info.array_info.element_type,
                 rhs_type->info.array_info.element_type,
