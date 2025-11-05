@@ -159,6 +159,23 @@ int expr_get_array_lower_bound(const struct Expression *expr)
     return expr->array_lower_bound;
 }
 
+/* Helper to check if an expression represents a character set (set of char) */
+static int expr_is_char_set(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* Check if expression has a GpcType with type_alias */
+    if (expr->resolved_gpc_type != NULL)
+    {
+        struct TypeAlias *alias = expr->resolved_gpc_type->type_alias;
+        if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+            return 1;
+    }
+    
+    return 0;
+}
+
 /* Helper to get array element size from expression, preferring resolved_gpc_type
  * ctx parameter reserved for future use in computing complex type sizes */
 long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx)
