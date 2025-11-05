@@ -1560,15 +1560,29 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     int inferred = 0;
     struct Statement *initializer_stmt = NULL;
     if (cur != NULL) {
-        struct Expression *init_expr = convert_expression(cur);
-        if (init_expr != NULL) {
-            if (ids != NULL && ids->next == NULL) {
-                inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
-                char *var_name = (char *)ids->cur;
-                struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
-                initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
-            } else {
-                destroy_expr(init_expr);
+        /* Handle optional initializer wrapper: optional(seq(...)) creates PASCAL_T_NONE node */
+        ast_t *init_node = cur;
+        if (init_node->typ == PASCAL_T_NONE && init_node->child != NULL) {
+            /* The wrapper contains "=" token followed by the expression.
+             * Skip to find the actual expression node (not the "=" token) */
+            ast_t *child = init_node->child;
+            if (child != NULL && child->next != NULL) {
+                /* Skip the first child (the "=" token) and use the second */
+                init_node = child->next;
+            }
+        }
+        
+        if (init_node != NULL) {
+            struct Expression *init_expr = convert_expression(init_node);
+            if (init_expr != NULL) {
+                if (ids != NULL && ids->next == NULL) {
+                    inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
+                    char *var_name = (char *)ids->cur;
+                    struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
+                    initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
+                } else {
+                    destroy_expr(init_expr);
+                }
             }
         }
     }
