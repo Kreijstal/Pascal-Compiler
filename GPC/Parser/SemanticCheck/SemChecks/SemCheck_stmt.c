@@ -43,52 +43,10 @@ static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, in
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev);
 
-static int var_type_to_expr_type(enum VarType var_type)
+static int is_ordinal_type_tag(int type_tag)
 {
-    switch (var_type)
-    {
-        case HASHVAR_INTEGER:
-            return INT_TYPE;
-        case HASHVAR_LONGINT:
-            return LONGINT_TYPE;
-        case HASHVAR_REAL:
-            return REAL_TYPE;
-        case HASHVAR_PCHAR:
-            return STRING_TYPE;
-        case HASHVAR_BOOLEAN:
-            return BOOL;
-        case HASHVAR_CHAR:
-            return CHAR_TYPE;
-        case HASHVAR_POINTER:
-            return POINTER_TYPE;
-        case HASHVAR_SET:
-            return SET_TYPE;
-        case HASHVAR_ENUM:
-            return ENUM_TYPE;
-        case HASHVAR_FILE:
-            return FILE_TYPE;
-        case HASHVAR_RECORD:
-            return RECORD_TYPE;
-        case HASHVAR_PROCEDURE:
-            return PROCEDURE;
-        default:
-            return UNKNOWN_TYPE;
-    }
-}
-
-static int types_numeric_compatible(int lhs, int rhs)
-{
-    if (lhs == rhs)
-        return 1;
-
-    if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
-        return 1;
-
-    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE)) ||
-        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE)))
-        return 1;
-
-    return 0;
+    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
+        type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
 }
 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
@@ -906,6 +864,22 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             {
                 types_compatible = 1;
             }
+            else if (type_first == REAL_TYPE &&
+                (type_second == INT_TYPE || type_second == LONGINT_TYPE))
+            {
+                types_compatible = 1;
+                coerced_rhs_type = REAL_TYPE;
+                if (expr != NULL)
+                {
+                    if (expr->type == EXPR_INUM)
+                    {
+                        double coerced_value = (double)expr->expr_data.i_num;
+                        expr->type = EXPR_RNUM;
+                        expr->expr_data.r_num = coerced_value;
+                    }
+                    expr->resolved_type = REAL_TYPE;
+                }
+            }
             else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
                 expr != NULL && expr->type == EXPR_STRING &&
                 expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1)
@@ -1457,6 +1431,10 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     struct Expression *to_expr;
     struct Statement *do_for;
+    int for_type_owned = 0;
+    int to_type_owned = 0;
+    GpcType *for_gpc_type = NULL;
+    GpcType *to_gpc_type = NULL;
 
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -1466,14 +1444,15 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     assert(for_assign_type == STMT_FOR_VAR || for_assign_type == STMT_FOR_ASSIGN_VAR);
 
     return_val = 0;
+    for_var = NULL;
     if(for_assign_type == STMT_FOR_VAR)
     {
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(for_type != INT_TYPE && for_type != LONGINT_TYPE)
+        if(!is_ordinal_type_tag(for_type))
         {
-            fprintf(stderr, "Error on line %d, expected int in \"for\" assignment!\n\n",
+            fprintf(stderr, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                     stmt->line_num);
             ++return_val;
         }
@@ -1483,23 +1462,91 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_assign = stmt->stmt_data.for_data.for_assign_data.var_assign;
         /* For type checked in here */
         return_val += semcheck_for_assign(symtab, for_assign, max_scope_lev);
+        for_var = NULL;
+        if (for_assign != NULL)
+        {
+            for_var = for_assign->stmt_data.var_assign_data.var;
+            for_type = (for_var != NULL) ? for_var->resolved_type : UNKNOWN_TYPE;
+        }
     }
 
 
     to_expr = stmt->stmt_data.for_data.to;
     do_for = stmt->stmt_data.for_data.do_for;
 
-    return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
-    if(to_type != INT_TYPE && to_type != LONGINT_TYPE)
+    if (for_var != NULL)
     {
-        fprintf(stderr, "Error on line %d, expected int in \"to\" assignment!\n\n",
+        for_gpc_type = semcheck_resolve_expression_gpc_type(symtab, for_var,
+            max_scope_lev, BOTH_MUTATE_REFERENCE, &for_type_owned);
+        if (for_type == UNKNOWN_TYPE && for_gpc_type != NULL)
+            for_type = gpc_type_get_legacy_tag(for_gpc_type);
+    }
+
+    return_val += semcheck_expr_main(&to_type, symtab, to_expr, INT_MAX, NO_MUTATE);
+    to_gpc_type = semcheck_resolve_expression_gpc_type(symtab, to_expr,
+        INT_MAX, NO_MUTATE, &to_type_owned);
+    if (to_type == UNKNOWN_TYPE && to_gpc_type != NULL)
+        to_type = gpc_type_get_legacy_tag(to_gpc_type);
+
+    int bounds_compatible = 1;
+    if (for_type == UNKNOWN_TYPE && for_gpc_type == NULL)
+        bounds_compatible = 0;
+
+    if (bounds_compatible)
+    {
+        if (for_type == to_type)
+        {
+            /* ok */
+        }
+        else if ((for_type == LONGINT_TYPE && to_type == INT_TYPE) ||
+            (for_type == INT_TYPE && to_type == LONGINT_TYPE))
+        {
+            /* ok */
+        }
+        else if (for_type == CHAR_TYPE && to_type == STRING_TYPE &&
+            to_expr != NULL && to_expr->type == EXPR_STRING &&
+            to_expr->expr_data.string != NULL && strlen(to_expr->expr_data.string) == 1)
+        {
+            to_type = CHAR_TYPE;
+            to_expr->resolved_type = CHAR_TYPE;
+        }
+        else if (for_gpc_type != NULL && to_gpc_type != NULL &&
+            are_types_compatible_for_assignment(for_gpc_type, to_gpc_type, symtab))
+        {
+            /* ok */
+        }
+        else
+        {
+            bounds_compatible = 0;
+        }
+    }
+
+    if (!bounds_compatible)
+    {
+        fprintf(stderr, "Error on line %d, type mismatch in \"to\" assignment!\n\n",
                 stmt->line_num);
         ++return_val;
+    }
+
+    if (for_gpc_type != NULL && !is_ordinal_type_tag(for_type))
+    {
+        int legacy = gpc_type_get_legacy_tag(for_gpc_type);
+        if (!is_ordinal_type_tag(legacy))
+        {
+            fprintf(stderr, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
+                stmt->line_num);
+            ++return_val;
+        }
     }
 
     semcheck_loop_depth++;
     return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev);
     semcheck_loop_depth--;
+
+    if (for_type_owned && for_gpc_type != NULL)
+        destroy_gpc_type(for_gpc_type);
+    if (to_type_owned && to_gpc_type != NULL)
+        destroy_gpc_type(to_gpc_type);
 
     return return_val;
 }
@@ -1510,6 +1557,10 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
     int return_val;
     int type_first, type_second;
     struct Expression *var, *expr;
+    int lhs_owned = 0;
+    int rhs_owned = 0;
+    GpcType *lhs_gpc_type = NULL;
+    GpcType *rhs_gpc_type = NULL;
 
     assert(symtab != NULL);
     assert(for_assign != NULL);
@@ -1524,23 +1575,63 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, BOTH_MUTATE_REFERENCE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
-    if(type_first != type_second)
+    lhs_gpc_type = semcheck_resolve_expression_gpc_type(symtab, var, max_scope_lev,
+        BOTH_MUTATE_REFERENCE, &lhs_owned);
+    rhs_gpc_type = semcheck_resolve_expression_gpc_type(symtab, expr, INT_MAX,
+        NO_MUTATE, &rhs_owned);
+
+    if (type_first == UNKNOWN_TYPE && lhs_gpc_type != NULL)
+        type_first = gpc_type_get_legacy_tag(lhs_gpc_type);
+    if (type_second == UNKNOWN_TYPE && rhs_gpc_type != NULL)
+        type_second = gpc_type_get_legacy_tag(rhs_gpc_type);
+
+    int types_compatible = (type_first == type_second);
+    if (!types_compatible)
     {
-        // Allow integer/longint compatibility
-        if (!((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
-              (type_first == INT_TYPE && type_second == LONGINT_TYPE)))
+        if ((type_first == LONGINT_TYPE && type_second == INT_TYPE) ||
+            (type_first == INT_TYPE && type_second == LONGINT_TYPE))
         {
-            fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
-                    for_assign->line_num);
-            ++return_val;
+            types_compatible = 1;
+        }
+        else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
+            expr != NULL && expr->type == EXPR_STRING &&
+            expr->expr_data.string != NULL && strlen(expr->expr_data.string) == 1)
+        {
+            types_compatible = 1;
+            type_second = CHAR_TYPE;
+            expr->resolved_type = CHAR_TYPE;
+        }
+        else if (lhs_gpc_type != NULL && rhs_gpc_type != NULL &&
+            are_types_compatible_for_assignment(lhs_gpc_type, rhs_gpc_type, symtab))
+        {
+            types_compatible = 1;
         }
     }
-    if(type_first != INT_TYPE && type_first != LONGINT_TYPE)
+
+    if (!types_compatible)
     {
-        fprintf(stderr, "Error on line %d, expected int in \"for\" assignment statement!\n\n",
-                for_assign->line_num);
+        fprintf(stderr, "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
+            for_assign->line_num);
         ++return_val;
     }
+
+    if (!is_ordinal_type_tag(type_first))
+    {
+        fprintf(stderr, "Error on line %d, expected ordinal type in \"for\" assignment statement!\n\n",
+            for_assign->line_num);
+        ++return_val;
+    }
+
+    if (return_val == 0)
+    {
+        var->resolved_type = type_first;
+        expr->resolved_type = type_second;
+    }
+
+    if (lhs_owned && lhs_gpc_type != NULL)
+        destroy_gpc_type(lhs_gpc_type);
+    if (rhs_owned && rhs_gpc_type != NULL)
+        destroy_gpc_type(rhs_gpc_type);
 
     return return_val;
 }
