@@ -884,6 +884,11 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     data = &prgm->tree_data.program_data;
     prgm_name = data->program_id;
 
+    const char *prev_id = ctx->current_subprogram_id;
+    const char *prev_mangled = ctx->current_subprogram_mangled;
+    ctx->current_subprogram_id = prgm_name;
+    ctx->current_subprogram_mangled = prgm_name;
+
     push_stackscope();
 
     codegen_function_locals(data->var_declaration, ctx, symtab);
@@ -900,6 +905,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     free_inst_list(inst_list);
 
     pop_stackscope();
+
+    ctx->current_subprogram_id = prev_id;
+    ctx->current_subprogram_mangled = prev_mangled;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

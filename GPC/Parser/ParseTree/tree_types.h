@@ -14,9 +14,9 @@ struct HashNode;  /* Forward declare HashNode to avoid circular dependency */
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
-    STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR, STMT_FOR_ASSIGN_VAR,
-    STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CASE, STMT_WITH, STMT_TRY_FINALLY,
-    STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
+    STMT_LABEL, STMT_GOTO, STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR,
+    STMT_FOR_ASSIGN_VAR, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CASE, STMT_WITH,
+    STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
 
@@ -142,6 +142,19 @@ struct Statement
 
         /* Compound Statements */
         ListNode_t *compound_statement;
+
+        /* Labelled statement */
+        struct LabelStatement
+        {
+            char *label;
+            struct Statement *stmt;
+        } label_data;
+
+        /* Goto statement */
+        struct GotoStatement
+        {
+            char *label;
+        } goto_data;
 
         /* IF THEN ELSE */
         struct IfThenElse

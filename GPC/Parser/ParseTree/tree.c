@@ -224,12 +224,16 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           fprintf(f, "[ARGS]:\n");
           list_print(tree->tree_data.program_data.args_char, f, num_indent+1);
 
-          print_indent(f, num_indent);
-          fprintf(f, "[USES]:\n");
-          list_print(tree->tree_data.program_data.uses_units, f, num_indent+1);
+        print_indent(f, num_indent);
+        fprintf(f, "[USES]:\n");
+        list_print(tree->tree_data.program_data.uses_units, f, num_indent+1);
 
-          print_indent(f, num_indent);
-          fprintf(f, "[CONST_DECLS]:\n");
+        print_indent(f, num_indent);
+        fprintf(f, "[LABELS]:\n");
+        list_print(tree->tree_data.program_data.label_declaration, f, num_indent+1);
+
+        print_indent(f, num_indent);
+        fprintf(f, "[CONST_DECLS]:\n");
           list_print(tree->tree_data.program_data.const_declaration, f, num_indent+1);
 
           print_indent(f, num_indent);
@@ -321,12 +325,16 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           fprintf(f, "[ARGS]:\n");
           list_print(tree->tree_data.subprogram_data.args_var, f, num_indent+1);
 
-          print_indent(f, num_indent);
-          fprintf(f, "[CONST_DECLS]:\n");
-          list_print(tree->tree_data.subprogram_data.const_declarations, f, num_indent+1);
+        print_indent(f, num_indent);
+        fprintf(f, "[CONST_DECLS]:\n");
+        list_print(tree->tree_data.subprogram_data.const_declarations, f, num_indent+1);
 
-          print_indent(f, num_indent);
-          fprintf(f, "[VAR_DECLS]:\n");
+        print_indent(f, num_indent);
+        fprintf(f, "[LABELS]:\n");
+        list_print(tree->tree_data.subprogram_data.label_declarations, f, num_indent+1);
+
+        print_indent(f, num_indent);
+        fprintf(f, "[VAR_DECLS]:\n");
           list_print(tree->tree_data.subprogram_data.declarations, f, num_indent+1);
 
           print_indent(f, num_indent);
@@ -461,6 +469,18 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
         case STMT_COMPOUND_STATEMENT:
           fprintf(f, "[COMPOUND_STMT]:\n");
           list_print(stmt->stmt_data.compound_statement, f, num_indent+1);
+          break;
+
+        case STMT_LABEL:
+          fprintf(f, "[LABEL:%s]:\n", stmt->stmt_data.label_data.label != NULL ?
+              stmt->stmt_data.label_data.label : "<unnamed>");
+          if (stmt->stmt_data.label_data.stmt != NULL)
+              stmt_print(stmt->stmt_data.label_data.stmt, f, num_indent+1);
+          break;
+
+        case STMT_GOTO:
+          fprintf(f, "[GOTO:%s]\n", stmt->stmt_data.goto_data.label != NULL ?
+              stmt->stmt_data.goto_data.label : "<unnamed>");
           break;
 
         case STMT_IF_THEN:
@@ -840,6 +860,8 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.program_data.args_char);
           destroy_list(tree->tree_data.program_data.uses_units);
 
+          destroy_list(tree->tree_data.program_data.label_declaration);
+
           destroy_list(tree->tree_data.program_data.const_declaration);
           destroy_list(tree->tree_data.program_data.type_declaration);
 
@@ -875,6 +897,7 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.subprogram_data.args_var);
 
           destroy_list(tree->tree_data.subprogram_data.const_declarations);
+          destroy_list(tree->tree_data.subprogram_data.label_declarations);
           destroy_list(tree->tree_data.subprogram_data.declarations);
 
           destroy_list(tree->tree_data.subprogram_data.subprograms);
@@ -972,6 +995,15 @@ void destroy_stmt(struct Statement *stmt)
 
         case STMT_COMPOUND_STATEMENT:
           destroy_list(stmt->stmt_data.compound_statement);
+          break;
+
+        case STMT_LABEL:
+          free(stmt->stmt_data.label_data.label);
+          destroy_stmt(stmt->stmt_data.label_data.stmt);
+          break;
+
+        case STMT_GOTO:
+          free(stmt->stmt_data.goto_data.label);
           break;
 
         case STMT_IF_THEN:
@@ -1369,7 +1401,7 @@ static struct VariantPart *clone_variant_part_internal(const struct VariantPart 
 }
 
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
-    ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
+    ListNode_t *labels, ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
     ListNode_t *subprograms, struct Statement *compound_statement)
 {
     Tree_t *new_tree;
@@ -1381,6 +1413,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     new_tree->tree_data.program_data.program_id = id;
     new_tree->tree_data.program_data.args_char = args;
     new_tree->tree_data.program_data.uses_units = uses;
+    new_tree->tree_data.program_data.label_declaration = labels;
     new_tree->tree_data.program_data.const_declaration = const_decl;
     new_tree->tree_data.program_data.var_declaration = var_decl;
     new_tree->tree_data.program_data.type_declaration = type_decl;
@@ -1454,7 +1487,7 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
 
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
@@ -1468,6 +1501,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.mangled_id = NULL;
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.const_declarations = const_decl;
+    new_tree->tree_data.subprogram_data.label_declarations = label_decl;
     new_tree->tree_data.subprogram_data.return_type = -1;
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
@@ -1480,7 +1514,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
 }
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
@@ -1494,6 +1528,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.mangled_id = NULL;
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.const_declarations = const_decl;
+    new_tree->tree_data.subprogram_data.label_declarations = label_decl;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
@@ -1631,6 +1666,31 @@ struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expr
     new_stmt->type = STMT_VAR_ASSIGN;
     new_stmt->stmt_data.var_assign_data.var = var;
     new_stmt->stmt_data.var_assign_data.expr = expr;
+
+    return new_stmt;
+}
+
+struct Statement *mk_label(int line_num, char *label, struct Statement *stmt)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_LABEL;
+    new_stmt->stmt_data.label_data.label = label;
+    new_stmt->stmt_data.label_data.stmt = stmt;
+
+    return new_stmt;
+}
+
+struct Statement *mk_goto(int line_num, char *label)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->type = STMT_GOTO;
+    new_stmt->stmt_data.goto_data.label = label;
 
     return new_stmt;
 }
