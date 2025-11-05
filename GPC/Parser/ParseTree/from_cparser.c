@@ -3120,14 +3120,15 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
-            /* Check if this is the "external" keyword */
-            char *keyword = dup_symbol(cur);
-            fprintf(stderr, "DEBUG convert_procedure: Found PASCAL_T_IDENTIFIER: '%s'\n", keyword ? keyword : "(null)");
-            if (keyword != NULL && strcasecmp(keyword, "external") == 0) {
-                is_external = 1;
-                fprintf(stderr, "DEBUG convert_procedure: Detected external procedure!\n");
+            /* Check if this is a directive keyword (external/forward/assembler) */
+            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
+                char *directive = dup_symbol(cur->child);
+                if (directive != NULL && strcasecmp(directive, "external") == 0) {
+                    is_external = 1;
+                }
+                free(directive);
             }
-            free(keyword);
             break;
         }
         default:
@@ -3228,14 +3229,15 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
-            /* Check if this is the "external" keyword */
-            char *keyword = dup_symbol(cur);
-            fprintf(stderr, "DEBUG convert_function: Found PASCAL_T_IDENTIFIER: '%s'\n", keyword ? keyword : "(null)");
-            if (keyword != NULL && strcasecmp(keyword, "external") == 0) {
-                is_external = 1;
-                fprintf(stderr, "DEBUG convert_function: Detected external function!\n");
+            /* Check if this is a directive keyword (external/forward/assembler) */
+            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
+                char *directive = dup_symbol(cur->child);
+                if (directive != NULL && strcasecmp(directive, "external") == 0) {
+                    is_external = 1;
+                }
+                free(directive);
             }
-            free(keyword);
             break;
         }
         default:
