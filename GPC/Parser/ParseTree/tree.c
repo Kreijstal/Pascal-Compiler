@@ -1582,7 +1582,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->array_end = end;
     alias->array_element_type = UNKNOWN_TYPE;
     alias->array_element_type_id = NULL;
-    alias->is_open_array = (alias->is_array && end < start);
+    alias->is_open_array = 0;  /* Will be determined later based on actual content */
     alias->array_dimensions = NULL;
     alias->is_pointer = 0;
     alias->pointer_type = UNKNOWN_TYPE;
