@@ -539,6 +539,33 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
     return errors;
 }
 
+/* Helper function to check if a statement contains an asm block */
+static int statement_contains_asm_block(struct Statement *stmt)
+{
+    if (stmt == NULL)
+        return 0;
+    
+    if (stmt->type == STMT_ASM_BLOCK)
+        return 1;
+    
+    if (stmt->type == STMT_COMPOUND_STATEMENT)
+    {
+        ListNode_t *cur = stmt->stmt_data.compound_statement;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_STMT && cur->cur != NULL)
+            {
+                struct Statement *child_stmt = (struct Statement *)cur->cur;
+                if (statement_contains_asm_block(child_stmt))
+                    return 1;
+            }
+            cur = cur->next;
+        }
+    }
+    
+    return 0;
+}
+
 /* Helper function to check for circular inheritance */
 static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, const char *parent_name, int max_depth)
 {
@@ -2025,7 +2052,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         ResetHashNodeStatus(hash_return);
         return_val += semcheck_func_stmt(symtab,
                 body, new_max_scope);
-        if(hash_return->mutated == NO_MUTATE)
+        /* Allow functions with asm blocks to skip explicit return assignment */
+        int has_asm = statement_contains_asm_block(body);
+        if(hash_return->mutated == NO_MUTATE && !has_asm)
         {
             fprintf(stderr,
                 "Error in function %s: no return statement declared in function body!\n\n",
