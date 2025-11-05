@@ -271,6 +271,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->id);
             if (hash_node->canonical_id != NULL)
                 free(hash_node->canonical_id);
+            if (hash_node->const_string_value != NULL)
+                free(hash_node->const_string_value);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
@@ -370,6 +372,7 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->mutated = 0;
     hash_node->is_constant = 0;
     hash_node->const_int_value = 0;
+    hash_node->const_string_value = NULL;
     hash_node->is_var_parameter = 0;
     
     /* Set identifier */

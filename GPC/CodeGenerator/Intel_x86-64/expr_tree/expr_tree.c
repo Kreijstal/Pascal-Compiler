@@ -848,6 +848,40 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_symbol->mangled_id, target_reg->bit_64);
         return add_inst(inst_list, buffer);
     }
+    else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        /* Check if this is a string constant reference */
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+            node != NULL && node->hash_type == HASHTYPE_CONST &&
+            node->const_string_value != NULL)
+        {
+            /* String constant - treat it like a string literal */
+            char label[20];
+            snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+            char add_rodata[1024];
+            const char *readonly_section = codegen_readonly_section_directive();
+            
+            /* Escape the string for assembly */
+            char *escaped_string = escape_string_for_assembly(node->const_string_value);
+            if (escaped_string != NULL)
+            {
+                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                    readonly_section, label, escaped_string);
+                free(escaped_string);
+            }
+            else
+            {
+                /* Fallback: use original string if escaping fails */
+                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
+                    readonly_section, label, node->const_string_value);
+            }
+            
+            inst_list = add_inst(inst_list, add_rodata);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
+    }
     else if (expr->type == EXPR_STRING)
     {
         if (expr->resolved_type == CHAR_TYPE)
