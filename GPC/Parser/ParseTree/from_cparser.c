@@ -390,11 +390,11 @@ static struct Statement *build_nested_with_statements(int line,
 
 /* Helper function to resolve enum literal identifier to its ordinal value
  * by searching through AST type section.
- * Returns 1 if found (and sets *ordinal), 0 if not found.
+ * Returns the ordinal value if found (>= 0), -1 if not found.
  */
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
     if (identifier == NULL || type_section == NULL)
-        return 0;
+        return -1;
     
     /* Iterate through type declarations */
     ast_t *type_decl = type_section->child;
@@ -435,6 +435,44 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
     }
     
     return -1; /* Not found */
+}
+
+/* Helper function to resolve a const integer identifier from the same const section.
+ * This is needed for array ranges like [C_Low .. C_High].
+ * Returns the integer value if found, otherwise returns fallback_value.
+ */
+static int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value) {
+    if (identifier == NULL || const_section == NULL)
+        return fallback_value;
+    
+    /* Iterate through const declarations in the section */
+    ast_t *const_decl = const_section->child;
+    while (const_decl != NULL) {
+        if (const_decl->typ == PASCAL_T_CONST_DECL) {
+            ast_t *id_node = const_decl->child;
+            if (id_node != NULL && id_node->sym != NULL) {
+                /* Check if this is the identifier we're looking for */
+                if (strcmp(id_node->sym->name, identifier) == 0) {
+                    /* Get the value node (skip optional type spec) */
+                    ast_t *value_node = id_node->next;
+                    if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
+                        value_node = value_node->next;
+                    
+                    /* Try to extract integer value */
+                    if (value_node != NULL && value_node->sym != NULL) {
+                        char *endptr;
+                        long val = strtol(value_node->sym->name, &endptr, 10);
+                        if (*endptr == '\0') {
+                            return (int)val; /* Successfully parsed as integer */
+                        }
+                    }
+                }
+            }
+        }
+        const_decl = const_decl->next;
+    }
+    
+    return fallback_value; /* Not found */
 }
 
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
@@ -1562,7 +1600,7 @@ static ListNode_t *convert_var_section(ast_t *section_node) {
 }
 
 static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *type_info,
-                             ast_t *value_node, ListBuilder *var_builder, ast_t *type_section) {
+                             ast_t *value_node, ListBuilder *var_builder, ast_t *type_section, ast_t *const_section) {
     if (id_ptr == NULL || *id_ptr == NULL || type_info == NULL)
         return -1;
 
@@ -1593,11 +1631,11 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     int start = type_info->start;
     int end = type_info->end;
     
-    /* If both start and end are 0, check if we need to resolve enum identifiers.
-     * The array_dimensions list contains the range as a string like "January..December".
+    /* If both start and end are 0, check if we need to resolve identifiers.
+     * The array_dimensions list contains the range as a string like "January..December" or "C_Low..C_High".
      */
     if (start == 0 && end == 0 && type_info->array_dimensions != NULL && 
-        type_info->array_dimensions->cur != NULL && type_section != NULL) {
+        type_info->array_dimensions->cur != NULL) {
         char *range_str = (char *)type_info->array_dimensions->cur;
         /* Parse the range string to extract identifiers */
         char *range_copy = strdup(range_str);
@@ -1608,7 +1646,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 char *start_id = range_copy;
                 char *end_id = sep + 2;
                 
-                /* Try to resolve as enum literals */
+                /* Try to resolve as enum literals first */
                 int start_ordinal = resolve_enum_ordinal_from_ast(start_id, type_section);
                 int end_ordinal = resolve_enum_ordinal_from_ast(end_id, type_section);
                 
@@ -1617,13 +1655,29 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     start = start_ordinal;
                     end = end_ordinal;
                 } else {
-                    /* Try to parse as numeric literals (already handled by atoi, but verify) */
-                    char *endptr1, *endptr2;
-                    long start_num = strtol(start_id, &endptr1, 10);
-                    long end_num = strtol(end_id, &endptr2, 10);
-                    if (*endptr1 == '\0' && *endptr2 == '\0') {
-                        start = (int)start_num;
-                        end = (int)end_num;
+                    /* Try to resolve as const integer identifiers */
+                    int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
+                    int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
+                    
+                    /* Check if we got non-zero values or if the original identifiers weren't "0" */
+                    if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
+                        start = resolved_start;
+                    } else {
+                        /* Try numeric parsing as fallback */
+                        char *endptr;
+                        long num = strtol(start_id, &endptr, 10);
+                        if (*endptr == '\0')
+                            start = (int)num;
+                    }
+                    
+                    if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
+                        end = resolved_end;
+                    } else {
+                        /* Try numeric parsing as fallback */
+                        char *endptr;
+                        long num = strtol(end_id, &endptr, 10);
+                        if (*endptr == '\0')
+                            end = (int)num;
                     }
                 }
             }
@@ -1656,18 +1710,55 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     ast_t *element = tuple_node->child;
     while (element != NULL) {
         ast_t *unwrapped = unwrap_pascal_node(element);
-        struct Expression *rhs = convert_expression(unwrapped);
-        if (rhs == NULL) {
-            fprintf(stderr, "ERROR: Unsupported const array element in %s.\n", *id_ptr);
-            destroy_list(stmt_builder.head);
-            return -1;
-        }
+        
+        /* Special handling for record constructors in const arrays */
+        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_RECORD_CONSTRUCTOR) {
+            /* Generate field assignments for each field in the record constructor */
+            ast_t *field_assignment = unwrapped->child;
+            while (field_assignment != NULL) {
+                if (field_assignment->typ == PASCAL_T_ASSIGNMENT) {
+                    ast_t *field_name_node = field_assignment->child;
+                    ast_t *field_value_node = (field_name_node != NULL) ? field_name_node->next : NULL;
+                    
+                    if (field_name_node != NULL && field_value_node != NULL && field_name_node->sym != NULL) {
+                        char *field_name = field_name_node->sym->name;
+                        struct Expression *field_value = convert_expression(field_value_node);
+                        
+                        if (field_value != NULL) {
+                            /* Create expression: array_name[index].field_name */
+                            struct Expression *index_expr = mk_inum(element->line, index);
+                            struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+                            struct Expression *array_elem = mk_arrayaccess(element->line, base_expr, index_expr);
+                            struct Expression *lhs = mk_recordaccess(element->line, array_elem, strdup(field_name));
+                            
+                            /* Generate assignment statement */
+                            struct Statement *field_assign = mk_varassign(element->line, lhs, field_value);
+                            list_builder_append(&stmt_builder, field_assign, LIST_STMT);
+                        } else {
+                            fprintf(stderr, "ERROR: Unsupported field value in record constructor for %s[%d].%s.\n",
+                                    *id_ptr, index, field_name);
+                            destroy_list(stmt_builder.head);
+                            return -1;
+                        }
+                    }
+                }
+                field_assignment = field_assignment->next;
+            }
+        } else {
+            /* Regular expression element */
+            struct Expression *rhs = convert_expression(unwrapped);
+            if (rhs == NULL) {
+                fprintf(stderr, "ERROR: Unsupported const array element in %s.\n", *id_ptr);
+                destroy_list(stmt_builder.head);
+                return -1;
+            }
 
-        struct Expression *index_expr = mk_inum(element->line, index);
-        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-        struct Expression *lhs = mk_arrayaccess(element->line, base_expr, index_expr);
-        struct Statement *assign = mk_varassign(element->line, lhs, rhs);
-        list_builder_append(&stmt_builder, assign, LIST_STMT);
+            struct Expression *index_expr = mk_inum(element->line, index);
+            struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+            struct Expression *lhs = mk_arrayaccess(element->line, base_expr, index_expr);
+            struct Statement *assign = mk_varassign(element->line, lhs, rhs);
+            list_builder_append(&stmt_builder, assign, LIST_STMT);
+        }
 
         ++index;
         element = element->next;
@@ -1704,7 +1795,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     return 0;
 }
 
-static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_builder, ast_t *type_section) {
+static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_builder, ast_t *type_section, ast_t *const_section) {
     if (const_decl_node == NULL)
         return NULL;
 
@@ -1736,13 +1827,74 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     }
 
     if (type_info.is_array) {
-        if (lower_const_array(const_decl_node, &id, &type_info, value_node, var_builder, type_section) != 0)
+        if (lower_const_array(const_decl_node, &id, &type_info, value_node, var_builder, type_section, const_section) != 0)
             free(id);
 
         if (type_id != NULL)
             free(type_id);
         destroy_type_info_contents(&type_info);
         return NULL;
+    }
+
+    /* Handle record constructor constants by lowering to variable with field initializers */
+    if (value_node != NULL && value_node->typ == PASCAL_T_RECORD_CONSTRUCTOR) {
+        /* Lower record const to variable declaration with field-by-field initialization */
+        ListBuilder field_stmts;
+        list_builder_init(&field_stmts);
+        
+        ast_t *field_assignment = value_node->child;
+        while (field_assignment != NULL) {
+            if (field_assignment->typ == PASCAL_T_ASSIGNMENT) {
+                ast_t *field_name_node = field_assignment->child;
+                ast_t *field_value_node = (field_name_node != NULL) ? field_name_node->next : NULL;
+                
+                if (field_name_node != NULL && field_value_node != NULL && field_name_node->sym != NULL) {
+                    char *field_name = field_name_node->sym->name;
+                    struct Expression *field_value = convert_expression(field_value_node);
+                    
+                    if (field_value != NULL) {
+                        /* Create expression: const_name.field_name */
+                        struct Expression *base_expr = mk_varid(const_decl_node->line, strdup(id));
+                        struct Expression *lhs = mk_recordaccess(const_decl_node->line, base_expr, strdup(field_name));
+                        
+                        /* Generate assignment statement */
+                        struct Statement *field_assign = mk_varassign(const_decl_node->line, lhs, field_value);
+                        list_builder_append(&field_stmts, field_assign, LIST_STMT);
+                    } else {
+                        fprintf(stderr, "ERROR: Unsupported field value in record constructor for %s.%s.\n",
+                                id, field_name);
+                        destroy_list(field_stmts.head);
+                        if (type_id != NULL)
+                            free(type_id);
+                        free(id);
+                        destroy_type_info_contents(&type_info);
+                        return NULL;
+                    }
+                }
+            }
+            field_assignment = field_assignment->next;
+        }
+        
+        ListNode_t *field_assignments = list_builder_finish(&field_stmts);
+        struct Statement *initializer = NULL;
+        if (field_assignments != NULL)
+            initializer = mk_compoundstatement(const_decl_node->line, field_assignments);
+        
+        /* Determine the record type from type_id if available */
+        int var_type = UNKNOWN_TYPE;
+        if (type_id != NULL) {
+            var_type = map_type_name(type_id, NULL);
+        }
+        
+        /* Create variable declaration for the record const */
+        ListNode_t *var_ids = CreateListNode(id, LIST_STRING);
+        Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type, type_id, 0, 0, initializer);
+        
+        if (var_builder != NULL)
+            list_builder_append(var_builder, var_decl, LIST_TREE);
+        
+        destroy_type_info_contents(&type_info);
+        return NULL; /* Record const is lowered to variable, no const decl returned */
     }
 
     struct Expression *value_expr = convert_expression(value_node);
@@ -1773,7 +1925,7 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
     ast_t *const_decl = const_section->child;
     while (const_decl != NULL) {
         if (const_decl->typ == PASCAL_T_CONST_DECL) {
-            Tree_t *decl = convert_const_decl(const_decl, var_builder, type_section);
+            Tree_t *decl = convert_const_decl(const_decl, var_builder, type_section, const_section);
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;
