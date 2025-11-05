@@ -54,4 +54,29 @@
 /* Set membership */
 #define IN                  33
 
+/*
+ * Type classification utilities
+ */
+
+/**
+ * Check if a type tag represents an ordinal type in Pascal.
+ * Ordinal types are types with a finite set of ordered values and include:
+ * - Integer types (INT_TYPE, LONGINT_TYPE)
+ * - Enumerated types (ENUM_TYPE)
+ * - Character type (CHAR_TYPE)
+ * - Boolean type (BOOL)
+ * 
+ * Ordinal types can be used as:
+ * - Array index types
+ * - Array bound types
+ * - Loop control variables
+ * - Case statement selectors
+ * - Set base types
+ */
+static inline int is_ordinal_type(int type_tag)
+{
+    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
+            type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
+}
+
 #endif /* TYPE_TAGS_H */
