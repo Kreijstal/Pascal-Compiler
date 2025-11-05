@@ -2575,6 +2575,15 @@ int semcheck_relop(int *type_return,
             int relop_type = expr->expr_data.relop_data.type;
             if (relop_type == IN)
             {
+                /* Coerce single-character string literals to char type */
+                if (type_first == STRING_TYPE && expr1 != NULL && 
+                    expr1->type == EXPR_STRING && expr1->expr_data.string != NULL &&
+                    strlen(expr1->expr_data.string) == 1)
+                {
+                    type_first = CHAR_TYPE;
+                    expr1->resolved_type = CHAR_TYPE;
+                }
+
                 if (type_second != SET_TYPE)
                 {
                     fprintf(stderr, "Error on line %d, expected set operand on right side of IN expression!\n\n",
