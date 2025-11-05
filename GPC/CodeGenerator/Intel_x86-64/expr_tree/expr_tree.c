@@ -20,6 +20,8 @@
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/type_tags.h"
+#include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 
 /* Function to escape string literals for assembly .string directive */
 static char *escape_string_for_assembly(const char *input)
@@ -1111,7 +1113,20 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
                         node != NULL && node->hash_type == HASHTYPE_CONST)
                     {
-                        snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                        /* Check if this is a real constant */
+                        if (node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
+                        {
+                            /* Real constant - encode as bit pattern */
+                            double value = node->const_real_value;
+                            int64_t bits;
+                            memcpy(&bits, &value, sizeof(bits));
+                            snprintf(buffer, buf_len, "$%lld", (long long)bits);
+                        }
+                        else
+                        {
+                            /* Integer constant */
+                            snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                        }
                     }
                     else
                     {
