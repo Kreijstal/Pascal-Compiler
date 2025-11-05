@@ -1,0 +1,4 @@
+pred(integer) works
+succ(integer) works
+pred(longint) works
+succ(longint) works

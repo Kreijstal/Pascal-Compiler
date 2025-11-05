@@ -67,6 +67,16 @@ begin
     succ := i + 1;
 end;
 
+function pred(i: integer): integer;
+begin
+    pred := i - 1;
+end;
+
+function pred(i: longint): longint;
+begin
+    pred := i - 1;
+end;
+
 procedure halt;
 begin
     assembler;
