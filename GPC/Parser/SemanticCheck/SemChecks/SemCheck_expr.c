@@ -782,6 +782,11 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     {
         mangled_name = "gpc_ord_longint";
     }
+    else if (arg_type == CHAR_TYPE)
+    {
+        /* For char variables, Ord returns the character code */
+        mangled_name = "gpc_ord_longint";
+    }
     else if (arg_type == ENUM_TYPE)
     {
         /* For enumerative types, Ord returns the ordinal value (0-based index) */

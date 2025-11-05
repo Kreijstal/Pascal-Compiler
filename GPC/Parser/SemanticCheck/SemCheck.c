@@ -84,6 +84,137 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
 
+/* Helper to check if an expression contains a real number literal */
+static int expression_contains_real_literal(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    if (expr->type == EXPR_RNUM)
+        return 1;
+    
+    if (expr->type == EXPR_SIGN_TERM)
+    {
+        return expression_contains_real_literal(expr->expr_data.sign_term);
+    }
+    
+    if (expr->type == EXPR_ADDOP)
+    {
+        return expression_contains_real_literal(expr->expr_data.addop_data.left_expr) ||
+               expression_contains_real_literal(expr->expr_data.addop_data.right_term);
+    }
+    
+    if (expr->type == EXPR_MULOP)
+    {
+        return expression_contains_real_literal(expr->expr_data.mulop_data.left_term) ||
+               expression_contains_real_literal(expr->expr_data.mulop_data.right_factor);
+    }
+    
+    return 0;
+}
+
+static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return 1;
+
+    switch (expr->type)
+    {
+        case EXPR_RNUM:
+            *out_value = (double)expr->expr_data.r_num;
+            return 0;
+        case EXPR_INUM:
+            /* Integer in real context - promote to real */
+            *out_value = (double)expr->expr_data.i_num;
+            return 0;
+        case EXPR_VAR_ID:
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL && node->hash_type == HASHTYPE_CONST)
+            {
+                /* Check if it's a real constant */
+                if (node->type != NULL)
+                {
+                    enum VarType vtype = hashnode_get_var_type(node);
+                    if (vtype == HASHVAR_REAL)
+                    {
+                        *out_value = node->const_real_value;
+                        return 0;
+                    }
+                    else
+                    {
+                        /* Integer constant promoted to real */
+                        *out_value = (double)node->const_int_value;
+                        return 0;
+                    }
+                }
+                *out_value = (double)node->const_int_value;
+                return 0;
+            }
+            fprintf(stderr, "Error: constant %s is undefined or not a const.\n", expr->expr_data.id);
+            return 1;
+        }
+        case EXPR_SIGN_TERM:
+        {
+            double value;
+            if (evaluate_real_const_expr(symtab, expr->expr_data.sign_term, &value) != 0)
+                return 1;
+            *out_value = -value;
+            return 0;
+        }
+        case EXPR_ADDOP:
+        {
+            double left, right;
+            if (evaluate_real_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
+                return 1;
+            if (evaluate_real_const_expr(symtab, expr->expr_data.addop_data.right_term, &right) != 0)
+                return 1;
+            switch (expr->expr_data.addop_data.addop_type)
+            {
+                case PLUS:
+                    *out_value = left + right;
+                    return 0;
+                case MINUS:
+                    *out_value = left - right;
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        }
+        case EXPR_MULOP:
+        {
+            double left, right;
+            if (evaluate_real_const_expr(symtab, expr->expr_data.mulop_data.left_term, &left) != 0)
+                return 1;
+            if (evaluate_real_const_expr(symtab, expr->expr_data.mulop_data.right_factor, &right) != 0)
+                return 1;
+            switch (expr->expr_data.mulop_data.mulop_type)
+            {
+                case STAR:
+                    *out_value = left * right;
+                    return 0;
+                case SLASH:
+                    if (right == 0.0)
+                    {
+                        fprintf(stderr, "Error: division by zero in const expression.\n");
+                        return 1;
+                    }
+                    *out_value = left / right;
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+
+    fprintf(stderr, "Error: unsupported real const expression.\n");
+    return 1;
+}
+
 static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
 {
     if (expr == NULL || out_value == NULL)
@@ -91,6 +222,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
 
     switch (expr->type)
     {
+        case EXPR_RNUM:
+            /* Real numbers in integer context - truncate or error */
+            fprintf(stderr, "Error: real number constant in integer context.\n");
+            return 1;
         case EXPR_INUM:
             *out_value = expr->expr_data.i_num;
             return 0;
@@ -222,6 +357,87 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
 
             *out_value = (long long)mask;
             return 0;
+        }
+        case EXPR_FUNCTION_CALL:
+        {
+            /* Handle Ord() function for constant expressions */
+            char *id = expr->expr_data.function_call_data.id;
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            
+            if (id != NULL && pascal_identifier_equals(id, "Ord"))
+            {
+                /* Check that we have exactly one argument */
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Ord in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Ord argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* Handle character literal */
+                if (arg->type == EXPR_STRING)
+                {
+                    char *literal = arg->expr_data.string;
+                    if (literal == NULL || literal[0] == '\0')
+                    {
+                        fprintf(stderr, "Error: Ord expects a non-empty character literal.\n");
+                        return 1;
+                    }
+                    if (literal[1] != '\0')
+                    {
+                        fprintf(stderr, "Error: Ord expects a single character literal.\n");
+                        return 1;
+                    }
+                    *out_value = (unsigned char)literal[0];
+                    return 0;
+                }
+                /* Handle boolean literal */
+                else if (arg->type == EXPR_BOOL)
+                {
+                    *out_value = arg->expr_data.bool_value ? 1 : 0;
+                    return 0;
+                }
+                /* Handle integer literal */
+                else if (arg->type == EXPR_INUM)
+                {
+                    *out_value = arg->expr_data.i_num;
+                    return 0;
+                }
+                /* Handle const variable reference */
+                else if (arg->type == EXPR_VAR_ID)
+                {
+                    HashNode_t *node = NULL;
+                    if (FindIdent(&node, symtab, arg->expr_data.id) >= 0 && 
+                        node != NULL && node->hash_type == HASHTYPE_CONST)
+                    {
+                        *out_value = node->const_int_value;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: Ord argument %s is not a constant.\n", arg->expr_data.id);
+                    return 1;
+                }
+                /* Handle nested const expressions */
+                else
+                {
+                    long long arg_value;
+                    if (evaluate_const_expr(symtab, arg, &arg_value) == 0)
+                    {
+                        *out_value = arg_value;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: Ord argument is not a valid const expression.\n");
+                    return 1;
+                }
+            }
+            
+            fprintf(stderr, "Error: only Ord() function calls are supported in const expressions.\n");
+            return 1;
         }
         default:
             break;
@@ -816,37 +1032,65 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
         assert(tree->type == TREE_CONST_DECL);
 
         struct Expression *value_expr = tree->tree_data.const_decl_data.value;
-        long long value = 0;
-        if (evaluate_const_expr(symtab, value_expr, &value) != 0)
+        
+        /* Determine if this is a real or integer constant by checking the expression type */
+        int is_real_const = expression_contains_real_literal(value_expr);
+        
+        if (is_real_const)
         {
-            fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
-            ++return_val;
-        }
-        else
-        {
-            /* Create GpcType if this is a set constant */
-            GpcType *const_type = NULL;
-            if (value_expr != NULL && value_expr->type == EXPR_SET)
+            /* Evaluate as real constant */
+            double real_value = 0.0;
+            if (evaluate_real_const_expr(symtab, value_expr, &real_value) != 0)
             {
-                const_type = create_primitive_type(SET_TYPE);
-            }
-            
-            /* Use typed or legacy API depending on whether we have a GpcType */
-            int push_result;
-            if (const_type != NULL)
-            {
-                push_result = PushConstOntoScope_Typed(symtab, tree->tree_data.const_decl_data.id, value, const_type);
+                fprintf(stderr, "Error on line %d, unsupported real const expression.\n", tree->line_num);
+                ++return_val;
             }
             else
             {
-                push_result = PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value);
+                int push_result = PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, real_value);
+                if (push_result > 0)
+                {
+                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                            tree->line_num, tree->tree_data.const_decl_data.id);
+                    ++return_val;
+                }
             }
-            
-            if (push_result > 0)
+        }
+        else
+        {
+            /* Evaluate as integer constant */
+            long long value = 0;
+            if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
-                fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
-                        tree->line_num, tree->tree_data.const_decl_data.id);
+                fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
+            }
+            else
+            {
+                /* Create GpcType if this is a set constant */
+                GpcType *const_type = NULL;
+                if (value_expr != NULL && value_expr->type == EXPR_SET)
+                {
+                    const_type = create_primitive_type(SET_TYPE);
+                }
+                
+                /* Use typed or legacy API depending on whether we have a GpcType */
+                int push_result;
+                if (const_type != NULL)
+                {
+                    push_result = PushConstOntoScope_Typed(symtab, tree->tree_data.const_decl_data.id, value, const_type);
+                }
+                else
+                {
+                    push_result = PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, value);
+                }
+                
+                if (push_result > 0)
+                {
+                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                            tree->line_num, tree->tree_data.const_decl_data.id);
+                    ++return_val;
+                }
             }
         }
 
