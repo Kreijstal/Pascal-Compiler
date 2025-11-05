@@ -1075,6 +1075,52 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
+    /* If no exact mangled match, try forward declarations with matching parameter count */
+    if (match_count == 0 && overload_candidates != NULL)
+    {
+        ListNode_t *cur = overload_candidates;
+        while (cur != NULL && match_count == 0)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate->hash_type == HASHTYPE_PROCEDURE && 
+                candidate->id != NULL && strcmp(candidate->id, proc_id) == 0)
+            {
+                /* Check if parameter count matches */
+                int candidate_param_count = 0;
+                if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    ListNode_t *param = candidate->type->info.proc_info.params;
+                    while (param != NULL)
+                    {
+                        candidate_param_count++;
+                        param = param->next;
+                    }
+                }
+                
+                ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
+                int call_arg_count = 0;
+                while (call_args != NULL)
+                {
+                    call_arg_count++;
+                    call_args = call_args->next;
+                }
+                
+                if (candidate_param_count == call_arg_count)
+                {
+                    resolved_proc = candidate;
+                    match_count = 1;
+                    /* Use the mangled name from the forward declaration */
+                    if (candidate->mangled_id != NULL)
+                    {
+                        free(mangled_name);
+                        mangled_name = strdup(candidate->mangled_id);
+                    }
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
     if (match_count == 1)
     {
         if (resolved_proc->mangled_id != NULL)
