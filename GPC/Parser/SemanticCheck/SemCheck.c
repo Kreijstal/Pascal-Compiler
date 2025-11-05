@@ -223,6 +223,87 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             *out_value = (long long)mask;
             return 0;
         }
+        case EXPR_FUNCTION_CALL:
+        {
+            /* Handle Ord() function for constant expressions */
+            char *id = expr->expr_data.function_call_data.id;
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            
+            if (id != NULL && pascal_identifier_equals(id, "Ord"))
+            {
+                /* Check that we have exactly one argument */
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Ord in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Ord argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* Handle character literal */
+                if (arg->type == EXPR_STRING)
+                {
+                    char *literal = arg->expr_data.string;
+                    if (literal == NULL || literal[0] == '\0')
+                    {
+                        fprintf(stderr, "Error: Ord expects a non-empty character literal.\n");
+                        return 1;
+                    }
+                    if (literal[1] != '\0')
+                    {
+                        fprintf(stderr, "Error: Ord expects a single character literal.\n");
+                        return 1;
+                    }
+                    *out_value = (unsigned char)literal[0];
+                    return 0;
+                }
+                /* Handle boolean literal */
+                else if (arg->type == EXPR_BOOL)
+                {
+                    *out_value = arg->expr_data.bool_value ? 1 : 0;
+                    return 0;
+                }
+                /* Handle integer literal */
+                else if (arg->type == EXPR_INUM)
+                {
+                    *out_value = arg->expr_data.i_num;
+                    return 0;
+                }
+                /* Handle const variable reference */
+                else if (arg->type == EXPR_VAR_ID)
+                {
+                    HashNode_t *node = NULL;
+                    if (FindIdent(&node, symtab, arg->expr_data.id) >= 0 && 
+                        node != NULL && node->hash_type == HASHTYPE_CONST)
+                    {
+                        *out_value = node->const_int_value;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: Ord argument %s is not a constant.\n", arg->expr_data.id);
+                    return 1;
+                }
+                /* Handle nested const expressions */
+                else
+                {
+                    long long arg_value;
+                    if (evaluate_const_expr(symtab, arg, &arg_value) == 0)
+                    {
+                        *out_value = arg_value;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: Ord argument is not a valid const expression.\n");
+                    return 1;
+                }
+            }
+            
+            fprintf(stderr, "Error: only Ord() function calls are supported in const expressions.\n");
+            return 1;
+        }
         default:
             break;
     }
