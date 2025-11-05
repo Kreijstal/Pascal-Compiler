@@ -3143,9 +3143,9 @@ int semcheck_arrayaccess(int *type_return,
     }
 
     return_val += semcheck_expr_main(&index_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
-    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    if (!is_ordinal_type(index_type))
     {
-        fprintf(stderr, "Error on line %d, expected int in array index expression!\n\n",
+        fprintf(stderr, "Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
             expr->line_num);
         ++return_val;
     }

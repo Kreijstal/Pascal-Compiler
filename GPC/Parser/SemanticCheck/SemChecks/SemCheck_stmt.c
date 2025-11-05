@@ -43,12 +43,6 @@ static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, in
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev);
 
-static int is_ordinal_type_tag(int type_tag)
-{
-    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
-        type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
-}
-
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
 {
@@ -1450,7 +1444,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_expr_main(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(!is_ordinal_type_tag(for_type))
+        if(!is_ordinal_type(for_type))
         {
             fprintf(stderr, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                     stmt->line_num);
@@ -1528,10 +1522,10 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         ++return_val;
     }
 
-    if (for_gpc_type != NULL && !is_ordinal_type_tag(for_type))
+    if (for_gpc_type != NULL && !is_ordinal_type(for_type))
     {
         int legacy = gpc_type_get_legacy_tag(for_gpc_type);
-        if (!is_ordinal_type_tag(legacy))
+        if (!is_ordinal_type(legacy))
         {
             fprintf(stderr, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                 stmt->line_num);
@@ -1615,7 +1609,7 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
         ++return_val;
     }
 
-    if (!is_ordinal_type_tag(type_first))
+    if (!is_ordinal_type(type_first))
     {
         fprintf(stderr, "Error on line %d, expected ordinal type in \"for\" assignment statement!\n\n",
             for_assign->line_num);

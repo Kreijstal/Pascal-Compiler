@@ -3666,10 +3666,39 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     }
 
     if (cur->typ == PASCAL_T_PROGRAM_DECL) {
-        ast_t *program_name_node = cur->child;
-        char *program_id = program_name_node != NULL ? dup_symbol(program_name_node) : strdup("main");
+        /* The structure of PASCAL_T_PROGRAM_DECL is:
+         *   - optional(program_header)       [PASCAL_T_PROGRAM_HEADER or NULL/skipped]
+         *   - optional(uses_section)          [PASCAL_T_USES_SECTION or NULL/skipped]
+         *   - many(declaration_or_section)    [list of sections]
+         *   - optional(main_block)            [PASCAL_T_MAIN_BLOCK or NULL/skipped]
+         *   - "."
+         * We need to check if the first child is a PASCAL_T_PROGRAM_HEADER.
+         */
+        ast_t *first_child = cur->child;
+        ast_t *program_header_node = NULL;
+        char *program_id = NULL;
+        
+        /* Check if the first child is a program header */
+        if (first_child != NULL && first_child->typ == PASCAL_T_PROGRAM_HEADER) {
+            program_header_node = first_child;
+            /* PASCAL_T_PROGRAM_HEADER structure:
+             *   - "program" keyword (discarded by parser)
+             *   - identifier (program name)
+             *   - optional parameter list
+             *   - ";" (discarded)
+             */
+            ast_t *name_node = program_header_node->child;
+            if (name_node != NULL) {
+                program_id = dup_symbol(name_node);
+            }
+        }
+        
+        /* If no program header or no program name, use default */
+        if (program_id == NULL) {
+            program_id = strdup("program");
+        }
 
-        ListNode_t *args = NULL;
+        ListNode_t *args = NULL;  /* Program parameters not currently supported */
         ListNode_t *uses = NULL;
         ListNode_t *const_decls = NULL;
         ListBuilder var_decls_builder;
@@ -3682,7 +3711,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t **subprograms_tail = &subprograms;
         struct Statement *body = NULL;
 
-        ast_t *section = program_name_node != NULL ? program_name_node->next : NULL;
+        /* Start iterating from the first child, or the node after the program header */
+        ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
             switch (section->typ) {
             case PASCAL_T_CONST_SECTION:
