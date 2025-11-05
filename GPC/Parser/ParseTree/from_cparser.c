@@ -1312,6 +1312,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
     ast_t *type_node = cursor;
     char *type_id = NULL;
     int var_type = UNKNOWN_TYPE;
+    TypeInfo type_info = {0};
 
     if (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC) {
         fprintf(stderr, "ERROR: parameter missing type specification.\n");
@@ -1319,7 +1320,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
         return NULL;
     }
 
-    var_type = convert_type_spec(type_node, &type_id, NULL, NULL);
+    /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
+    var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
 
     ListBuilder result_builder;
     list_builder_init(&result_builder);
@@ -1329,13 +1331,32 @@ static ListNode_t *convert_param(ast_t *param_node) {
         ListNode_t *next_id = id_node->next;
         id_node->next = NULL;
         char *type_id_copy = type_id != NULL ? strdup(type_id) : NULL;
-        Tree_t *param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL);
+        
+        Tree_t *param_decl = NULL;
+        /* Create TREE_ARR_DECL for inline array parameters */
+        if (type_info.is_array)
+        {
+            int element_type = type_info.element_type;
+            char *element_type_id = type_info.element_type_id != NULL ? strdup(type_info.element_type_id) : NULL;
+            param_decl = mk_arraydecl(param_node->line, id_node, element_type, element_type_id,
+                                      type_info.start, type_info.end, NULL);
+            /* Set var parameter flag on array declaration */
+            if (is_var_param && param_decl != NULL)
+                param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
+        }
+        else
+        {
+            param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL);
+        }
+        
         list_builder_append(&result_builder, param_decl, LIST_TREE);
         id_node = next_id;
     }
 
     if (type_id != NULL)
         free(type_id);
+    
+    destroy_type_info_contents(&type_info);
 
     return list_builder_finish(&result_builder);
 }
