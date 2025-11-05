@@ -70,6 +70,7 @@ typedef struct HashNode
     int is_constant;
     long long const_int_value;
     double const_real_value;
+    char *const_string_value;  /* Owned by HashNode, must be freed */
 
     int is_var_parameter;
 

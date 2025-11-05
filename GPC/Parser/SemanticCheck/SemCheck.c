@@ -84,8 +84,8 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
 
-/* Helper to check if an expression contains a real number literal */
-static int expression_contains_real_literal(struct Expression *expr)
+/* Helper to check if an expression contains a real number literal or real constant */
+static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -93,24 +93,123 @@ static int expression_contains_real_literal(struct Expression *expr)
     if (expr->type == EXPR_RNUM)
         return 1;
     
+    if (expr->type == EXPR_VAR_ID && symtab != NULL)
+    {
+        /* Check if this variable ID refers to a real constant */
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 &&
+            node != NULL && node->hash_type == HASHTYPE_CONST &&
+            node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
+        {
+            return 1;
+        }
+        return 0;
+    }
+    
     if (expr->type == EXPR_SIGN_TERM)
     {
-        return expression_contains_real_literal(expr->expr_data.sign_term);
+        return expression_contains_real_literal_impl(symtab, expr->expr_data.sign_term);
     }
     
     if (expr->type == EXPR_ADDOP)
     {
-        return expression_contains_real_literal(expr->expr_data.addop_data.left_expr) ||
-               expression_contains_real_literal(expr->expr_data.addop_data.right_term);
+        return expression_contains_real_literal_impl(symtab, expr->expr_data.addop_data.left_expr) ||
+               expression_contains_real_literal_impl(symtab, expr->expr_data.addop_data.right_term);
     }
     
     if (expr->type == EXPR_MULOP)
     {
-        return expression_contains_real_literal(expr->expr_data.mulop_data.left_term) ||
-               expression_contains_real_literal(expr->expr_data.mulop_data.right_factor);
+        return expression_contains_real_literal_impl(symtab, expr->expr_data.mulop_data.left_term) ||
+               expression_contains_real_literal_impl(symtab, expr->expr_data.mulop_data.right_factor);
     }
     
     return 0;
+}
+
+/* Helper to check if an expression is a string expression */
+static int expression_is_string(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    if (expr->type == EXPR_STRING)
+        return 1;
+    
+    if (expr->type == EXPR_ADDOP && expr->expr_data.addop_data.addop_type == PLUS)
+    {
+        /* String concatenation */
+        return expression_is_string(expr->expr_data.addop_data.left_expr) ||
+               expression_is_string(expr->expr_data.addop_data.right_term);
+    }
+    
+    return 0;
+}
+
+/* Evaluates a string constant expression, allocating a new string */
+static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr, char **out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return 1;
+
+    switch (expr->type)
+    {
+        case EXPR_STRING:
+            *out_value = strdup(expr->expr_data.string);
+            return (*out_value == NULL) ? 1 : 0;
+        
+        case EXPR_VAR_ID:
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL && 
+                node->hash_type == HASHTYPE_CONST && node->const_string_value != NULL)
+            {
+                *out_value = strdup(node->const_string_value);
+                return (*out_value == NULL) ? 1 : 0;
+            }
+            fprintf(stderr, "Error: constant %s is undefined or not a string const.\n", expr->expr_data.id);
+            return 1;
+        }
+        
+        case EXPR_ADDOP:
+        {
+            if (expr->expr_data.addop_data.addop_type != PLUS)
+            {
+                fprintf(stderr, "Error: only + operator is supported for string concatenation.\n");
+                return 1;
+            }
+            
+            char *left = NULL, *right = NULL;
+            if (evaluate_string_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
+                return 1;
+            if (evaluate_string_const_expr(symtab, expr->expr_data.addop_data.right_term, &right) != 0)
+            {
+                free(left);
+                return 1;
+            }
+            
+            /* Concatenate strings */
+            size_t len = strlen(left) + strlen(right) + 1;
+            *out_value = (char *)malloc(len);
+            if (*out_value == NULL)
+            {
+                free(left);
+                free(right);
+                return 1;
+            }
+            strcpy(*out_value, left);
+            strcat(*out_value, right);
+            
+            free(left);
+            free(right);
+            return 0;
+        }
+        
+        default:
+            break;
+    }
+
+    fprintf(stderr, "Error: unsupported string const expression.\n");
+    return 1;
 }
 
 static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
@@ -1181,10 +1280,32 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
 
         struct Expression *value_expr = tree->tree_data.const_decl_data.value;
         
-        /* Determine if this is a real or integer constant by checking the expression type */
-        int is_real_const = expression_contains_real_literal(value_expr);
+        /* Determine the type of constant by checking the expression */
+        int is_string_const = expression_is_string(value_expr);
+        int is_real_const = !is_string_const && expression_contains_real_literal_impl(symtab, value_expr);
         
-        if (is_real_const)
+        if (is_string_const)
+        {
+            /* Evaluate as string constant */
+            char *string_value = NULL;
+            if (evaluate_string_const_expr(symtab, value_expr, &string_value) != 0)
+            {
+                fprintf(stderr, "Error on line %d, unsupported string const expression.\n", tree->line_num);
+                ++return_val;
+            }
+            else
+            {
+                int push_result = PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, string_value);
+                free(string_value);  /* PushStringConstOntoScope makes its own copy */
+                if (push_result > 0)
+                {
+                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                            tree->line_num, tree->tree_data.const_decl_data.id);
+                    ++return_val;
+                }
+            }
+        }
+        else if (is_real_const)
         {
             /* Evaluate as real constant */
             double real_value = 0.0;
