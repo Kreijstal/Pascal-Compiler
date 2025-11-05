@@ -589,6 +589,15 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return_val += semcheck_compoundstmt(symtab, stmt, max_scope_lev);
             break;
 
+        case STMT_LABEL:
+            if (stmt->stmt_data.label_data.stmt != NULL)
+                return_val += semcheck_stmt_main(symtab, stmt->stmt_data.label_data.stmt, max_scope_lev);
+            break;
+
+        case STMT_GOTO:
+            /* TODO: Validate that the target label exists within scope */
+            break;
+
         case STMT_IF_THEN:
             return_val += semcheck_ifthen(symtab, stmt, max_scope_lev);
             break;

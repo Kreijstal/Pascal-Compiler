@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <ctype.h>
 #include "register_types.h"
 #include "codegen.h"
 #include "codegen_statement.h"
@@ -49,6 +50,46 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
     Register_t *value_reg);
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
+
+static void format_pascal_label(char *buffer, size_t size, const CodeGenContext *ctx, const char *label_text)
+{
+    if (buffer == NULL || size == 0)
+        return;
+
+    const char *scope = NULL;
+    if (ctx != NULL)
+    {
+        if (ctx->current_subprogram_mangled != NULL && ctx->current_subprogram_mangled[0] != '\0')
+            scope = ctx->current_subprogram_mangled;
+        else if (ctx->current_subprogram_id != NULL && ctx->current_subprogram_id[0] != '\0')
+            scope = ctx->current_subprogram_id;
+    }
+
+    if (scope == NULL)
+        scope = "program";
+
+    char sanitized[128];
+    size_t idx = 0;
+    if (label_text != NULL && label_text[0] != '\0')
+    {
+        for (const char *p = label_text; *p != '\0' && idx + 1 < sizeof(sanitized); ++p)
+        {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '_')
+                sanitized[idx++] = (char)c;
+            else
+                sanitized[idx++] = '_';
+        }
+    }
+    else
+    {
+        sanitized[idx++] = 'L';
+        sanitized[idx++] = '0';
+    }
+
+    sanitized[idx] = '\0';
+    snprintf(buffer, size, "%s__label_%s", scope, sanitized);
+}
 
 static const char *register_name8(const Register_t *reg)
 {
@@ -928,6 +969,26 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_COMPOUND_STATEMENT:
             inst_list = codegen_compound_stmt(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_LABEL:
+        {
+            char label_name[256];
+            format_pascal_label(label_name, sizeof(label_name), ctx, stmt->stmt_data.label_data.label);
+            char buffer[272];
+            snprintf(buffer, sizeof(buffer), "%s:\n", label_name);
+            inst_list = add_inst(inst_list, buffer);
+            if (stmt->stmt_data.label_data.stmt != NULL)
+                inst_list = codegen_stmt(stmt->stmt_data.label_data.stmt, inst_list, ctx, symtab);
+            break;
+        }
+        case STMT_GOTO:
+        {
+            char label_name[256];
+            format_pascal_label(label_name, sizeof(label_name), ctx, stmt->stmt_data.goto_data.label);
+            char buffer[272];
+            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", label_name);
+            inst_list = add_inst(inst_list, buffer);
+            break;
+        }
         case STMT_IF_THEN:
             inst_list = codegen_if_then(stmt, inst_list, ctx, symtab);
             break;

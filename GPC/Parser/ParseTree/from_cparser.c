@@ -1786,8 +1786,11 @@ static Tree_t *convert_function(ast_t *func_node);
 static Tree_t *convert_method_impl(ast_t *method_node);
 static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t *args_start);
 
+static void append_labels_from_section(ast_t *label_node, ListBuilder *builder);
+
 static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                                  ListBuilder *var_builder,
+                                 ListBuilder *label_builder,
                                  ListNode_t **nested_subs,
                                  struct Statement **body_out) {
     if (body_node == NULL)
@@ -1810,6 +1813,9 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                 break;
             case PASCAL_T_VAR_SECTION:
                 list_builder_extend(var_builder, convert_var_section(node));
+                break;
+            case PASCAL_T_LABEL_SECTION:
+                append_labels_from_section(node, label_builder);
                 break;
             case PASCAL_T_PROCEDURE_DECL: {
                 if (nested_tail != NULL) {
@@ -1887,6 +1893,25 @@ static void append_uses_from_section(ast_t *uses_node, ListNode_t **dest) {
             }
         }
         unit = unit->next;
+    }
+}
+
+static void append_labels_from_section(ast_t *label_node, ListBuilder *builder) {
+    if (label_node == NULL || builder == NULL)
+        return;
+
+    ast_t *cur = label_node->child;
+    while (cur != NULL) {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+
+        if (node != NULL && (node->typ == PASCAL_T_INTEGER || node->typ == PASCAL_T_IDENTIFIER)) {
+            char *label = dup_symbol(node);
+            if (label != NULL)
+                list_builder_append(builder, label, LIST_STRING);
+        }
+        cur = cur->next;
     }
 }
 
@@ -2666,6 +2691,27 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     switch (stmt_node->typ) {
     case PASCAL_T_ASSIGNMENT:
         return convert_assignment(stmt_node);
+    case PASCAL_T_LABEL_STMT: {
+        ast_t *label_node = stmt_node->child;
+        ast_t *stmt_part = NULL;
+        if (label_node != NULL && label_node != ast_nil)
+            stmt_part = label_node->next;
+
+        ast_t *unwrapped_label = unwrap_pascal_node(label_node);
+        char *label = NULL;
+        if (unwrapped_label != NULL && unwrapped_label != ast_nil)
+            label = dup_symbol(unwrapped_label);
+
+        struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(stmt_part));
+        return mk_label(stmt_node->line, label, inner_stmt);
+    }
+    case PASCAL_T_GOTO_STMT: {
+        ast_t *label_node = unwrap_pascal_node(stmt_node->child);
+        char *label = NULL;
+        if (label_node != NULL && label_node != ast_nil)
+            label = dup_symbol(label_node);
+        return mk_goto(stmt_node->line, label);
+    }
     case PASCAL_T_STATEMENT: {
         ast_t *inner = unwrap_pascal_node(stmt_node->child);
         if (inner == NULL)
@@ -2970,6 +3016,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ListNode_t *const_decls = NULL;
     ListBuilder var_builder;
     list_builder_init(&var_builder);
+    ListBuilder label_builder;
+    list_builder_init(&label_builder);
     ListNode_t *nested_subs = NULL;
     struct Statement *body = NULL;
 
@@ -3006,8 +3054,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         case PASCAL_T_VAR_SECTION:
             list_builder_extend(&var_builder, convert_var_section(node));
             break;
+        case PASCAL_T_LABEL_SECTION:
+            append_labels_from_section(node, &label_builder);
+            break;
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(node, &const_decls, &var_builder, &nested_subs, &body);
+            convert_routine_body(node, &const_decls, &var_builder, &label_builder, &nested_subs, &body);
             break;
         case PASCAL_T_BEGIN_BLOCK:
             body = convert_block(node);
@@ -3033,8 +3084,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     ListNode_t *params = list_builder_finish(&params_builder);
+    ListNode_t *label_decls = list_builder_finish(&label_builder);
     Tree_t *tree = mk_procedure(method_node->line, proc_name, params, const_decls,
-                                list_builder_finish(&var_builder), nested_subs, body, 0, 0);
+                                label_decls, list_builder_finish(&var_builder), nested_subs, body, 0, 0);
 
     free(class_name);
     free(method_name);
@@ -3067,6 +3119,8 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *const_decls = NULL;
     ListBuilder var_decls_builder;
     list_builder_init(&var_decls_builder);
+    ListBuilder label_decls_builder;
+    list_builder_init(&label_decls_builder);
     ListNode_t *nested_subs = NULL;
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
@@ -3079,6 +3133,9 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         case PASCAL_T_VAR_SECTION:
             list_builder_extend(&var_decls_builder, convert_var_section(cur));
+            break;
+        case PASCAL_T_LABEL_SECTION:
+            append_labels_from_section(cur, &label_decls_builder);
             break;
         case PASCAL_T_PROCEDURE_DECL:
         case PASCAL_T_FUNCTION_DECL: {
@@ -3102,7 +3159,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &nested_subs, &body);
+            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder, &nested_subs, &body);
             nested_tail = &nested_subs;
             while (*nested_tail != NULL)
                 nested_tail = &(*nested_tail)->next;
@@ -3137,8 +3194,9 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         cur = cur->next;
     }
 
+    ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
-                                list_builder_finish(&var_decls_builder), nested_subs, body, is_external, 0);
+                                label_decls, list_builder_finish(&var_decls_builder), nested_subs, body, is_external, 0);
     return tree;
 }
 
@@ -3176,6 +3234,8 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *const_decls = NULL;
     ListBuilder var_decls_builder;
     list_builder_init(&var_decls_builder);
+    ListBuilder label_decls_builder;
+    list_builder_init(&label_decls_builder);
     ListNode_t *nested_subs = NULL;
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
@@ -3188,6 +3248,9 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         case PASCAL_T_VAR_SECTION:
             list_builder_extend(&var_decls_builder, convert_var_section(cur));
+            break;
+        case PASCAL_T_LABEL_SECTION:
+            append_labels_from_section(cur, &label_decls_builder);
             break;
         case PASCAL_T_PROCEDURE_DECL:
         case PASCAL_T_FUNCTION_DECL: {
@@ -3211,7 +3274,7 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &nested_subs, &body);
+            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder, &nested_subs, &body);
             nested_tail = &nested_subs;
             while (*nested_tail != NULL)
                 nested_tail = &(*nested_tail)->next;
@@ -3246,8 +3309,9 @@ static Tree_t *convert_function(ast_t *func_node) {
         cur = cur->next;
     }
 
+    ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
-                               list_builder_finish(&var_decls_builder), nested_subs, body,
+                               label_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                return_type, return_type_id, is_external, 0);
     return tree;
 }
@@ -3274,6 +3338,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t *const_decls = NULL;
         ListBuilder var_decls_builder;
         list_builder_init(&var_decls_builder);
+        ListBuilder label_builder;
+        list_builder_init(&label_builder);
         ListNode_t *type_decls = NULL;
         ListNode_t *subprograms = NULL;
         ListNode_t **subprograms_tail = &subprograms;
@@ -3293,6 +3359,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             case PASCAL_T_USES_SECTION:
                 append_uses_from_section(section, &uses);
+                break;
+            case PASCAL_T_LABEL_SECTION:
+                append_labels_from_section(section, &label_builder);
                 break;
             case PASCAL_T_PROCEDURE_DECL:
             case PASCAL_T_FUNCTION_DECL: {
@@ -3325,7 +3394,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             section = section->next;
         }
 
-        Tree_t *tree = mk_program(cur->line, program_id, args, uses, const_decls,
+        ListNode_t *label_decls = list_builder_finish(&label_builder);
+        Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
                                   list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
         return tree;
     }

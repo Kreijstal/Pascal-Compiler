@@ -215,6 +215,8 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_REPEAT_STMT: return "REPEAT_STMT";
         case PASCAL_T_WITH_STMT: return "WITH_STMT";
         case PASCAL_T_WITH_CONTEXTS: return "WITH_CONTEXTS";
+        case PASCAL_T_LABEL_STMT: return "LABEL_STMT";
+        case PASCAL_T_GOTO_STMT: return "GOTO_STMT";
         case PASCAL_T_DO: return "DO";
         case PASCAL_T_TO: return "TO";
         case PASCAL_T_DOWNTO: return "DOWNTO";
@@ -236,6 +238,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_PROGRAM_DECL: return "PROGRAM_DECL";
         case PASCAL_T_PROGRAM_HEADER: return "PROGRAM_HEADER";
         case PASCAL_T_PROGRAM_PARAMS: return "PROGRAM_PARAMS";
+        case PASCAL_T_LABEL_SECTION: return "LABEL_SECTION";
         case PASCAL_T_VAR_SECTION: return "VAR_SECTION";
         case PASCAL_T_VAR_DECL: return "VAR_DECL";
         case PASCAL_T_TYPE_SPEC: return "TYPE_SPEC";
