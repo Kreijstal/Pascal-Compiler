@@ -461,7 +461,7 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
             ast_t *id_node = const_decl->child;
             if (id_node != NULL && id_node->sym != NULL) {
                 /* Check if this is the identifier we're looking for */
-                if (strcmp(id_node->sym->name, identifier) == 0) {
+                if (strcasecmp(id_node->sym->name, identifier) == 0) {
                     /* Get the value node (skip optional type spec) */
                     ast_t *value_node = id_node->next;
                     if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
@@ -1757,6 +1757,13 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     if (field_name_node != NULL && field_value_node != NULL && field_name_node->sym != NULL) {
                         char *field_name = field_name_node->sym->name;
                         struct Expression *field_value = convert_expression(field_value_node);
+                        
+                        if (field_value == NULL) {
+                            fprintf(stderr, "ERROR: Failed to convert field value for %s[%d].%s.\n",
+                                    *id_ptr, index, field_name);
+                            destroy_list(stmt_builder.head);
+                            return -1;
+                        }
                         
                         if (field_value != NULL) {
                             /* Create expression: array_name[index].field_name */

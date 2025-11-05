@@ -2016,7 +2016,15 @@ next_identifier:
 
         if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.initializer != NULL)
         {
-            if (ids_head == NULL || ids_head->next != NULL)
+            struct Statement *init_stmt = tree->tree_data.var_decl_data.initializer;
+            
+            /* Handle COMPOUND_STATEMENT initializers (from record const lowering) separately */
+            if (init_stmt->type == STMT_COMPOUND_STATEMENT)
+            {
+                /* This is a lowered record const - just semantic check the compound statement */
+                return_val += semcheck_stmt(symtab, init_stmt, INT_MAX);
+            }
+            else if (ids_head == NULL || ids_head->next != NULL)
             {
                 fprintf(stderr, "Error on line %d, type inference initializers must declare a single identifier.\n",
                     tree->line_num);
@@ -2036,6 +2044,13 @@ next_identifier:
                 {
                     struct Statement *init_stmt = tree->tree_data.var_decl_data.initializer;
                     struct Expression *init_expr = init_stmt->stmt_data.var_assign_data.expr;
+                    if (init_expr == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d, initializer expression is NULL for %s.\n",
+                            tree->line_num, var_name);
+                        ++return_val;
+                        continue;
+                    }
                     int expr_type = UNKNOWN_TYPE;
                     return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
 
