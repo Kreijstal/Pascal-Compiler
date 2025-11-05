@@ -95,6 +95,23 @@ static ast_t* create_placeholder_modifier(ast_t* reference) {
     return placeholder;
 }
 
+static combinator_t* create_label_identifier(void) {
+    return multi(new_combinator(), PASCAL_T_NONE,
+        token(integer(PASCAL_T_INTEGER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+}
+
+static combinator_t* create_label_section(void) {
+    return seq(new_combinator(), PASCAL_T_LABEL_SECTION,
+        token(keyword_ci("label")),
+        sep_by(create_label_identifier(), token(match(","))),
+        token(match(";")),
+        NULL
+    );
+}
+
 static combinator_t* create_optional_modifier(void) {
     combinator_t* modifier_choice = multi(new_combinator(), PASCAL_T_NONE,
         map(token(keyword_ci("const")), map_const_modifier),
@@ -1197,6 +1214,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Allow local CONST/TYPE/VAR sections to be interspersed with nested function/procedure declarations
     combinator_t* local_declaration_or_nested_function = multi(new_combinator(), PASCAL_T_NONE,
+        create_label_section(),
         const_section,
         type_section,
         local_var_section,
@@ -1215,8 +1233,14 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Create a method body parser that supports local var sections
     // This is simpler than program_function_body since methods don't support nested functions
+    combinator_t* method_local_section = multi(new_combinator(), PASCAL_T_NONE,
+        create_label_section(),
+        local_var_section,
+        NULL
+    );
+
     combinator_t* method_body = seq(new_combinator(), PASCAL_T_NONE,
-        many(local_var_section),                     // zero or more local var sections
+        many(method_local_section),                  // zero or more local sections
         lazy(stmt_parser),                           // begin-end block handled by statement parser
         NULL
     );
@@ -1432,9 +1456,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Parse them in a single many() to avoid backtracking issues
     // Try declaration sections first (they have distinctive keywords), then procedures/functions
     combinator_t* declaration_or_section = multi(new_combinator(), PASCAL_T_NONE,
+        create_label_section(),    // Label declarations
         const_section,      // Try const first (keyword "const")
         type_section,       // Try type second (keyword "type")
-        var_section,        // Try var third (keyword "var")  
+        var_section,        // Try var third (keyword "var")
         all_declarations,   // Try procedures/functions last (keywords "procedure", "function", etc.)
         NULL
     );

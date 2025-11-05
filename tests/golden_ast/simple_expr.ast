@@ -1,6 +1,7 @@
 [PROGRAM:SimpleExpr]
   [ARGS]:
   [USES]:
+  [LABELS]:
   [CONST_DECLS]:
   [TYPE_DECLS]:
   [VAR_DECLS]:

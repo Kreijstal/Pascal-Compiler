@@ -36,6 +36,7 @@ typedef struct Tree
 
             ListNode_t *args_char;
             ListNode_t *uses_units;
+            ListNode_t *label_declaration;
             ListNode_t *const_declaration;
             ListNode_t *var_declaration;
             ListNode_t *type_declaration;
@@ -86,6 +87,7 @@ typedef struct Tree
             char *mangled_id;
             ListNode_t *args_var;
             ListNode_t *const_declarations;
+            ListNode_t *label_declarations;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
             int cname_flag;
@@ -166,7 +168,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */
 Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
-    ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
+    ListNode_t *labels, ListNode_t *const_decl, ListNode_t *var_decl, ListNode_t *type_decl,
     ListNode_t *subprograms, struct Statement *compound_statement);
 
 Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
@@ -182,11 +184,11 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int cname_flag, int overload_flag);
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, int cname_flag, int overload_flag);
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer);
@@ -198,6 +200,8 @@ Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *v
 
 /* Statement routines */
 struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expression *expr);
+struct Statement *mk_label(int line_num, char *label, struct Statement *stmt);
+struct Statement *mk_goto(int line_num, char *label);
 
 struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args);
 

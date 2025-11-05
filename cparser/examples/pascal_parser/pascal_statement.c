@@ -42,6 +42,76 @@ static ast_t* wrap_array_lvalue_suffix(ast_t* parsed) {
     return node;
 }
 
+static combinator_t* pascal_label_identifier(void) {
+    return multi(new_combinator(), PASCAL_T_NONE,
+        token(integer(PASCAL_T_INTEGER)),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+}
+
+static ast_t* build_label_statement_ast(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return ast_nil;
+
+    ast_t* label_node = parsed;
+    ast_t* stmt_node = NULL;
+
+    if (label_node == ast_nil)
+        label_node = NULL;
+
+    if (label_node != NULL) {
+        stmt_node = label_node->next;
+        label_node->next = NULL;
+    }
+
+    if (stmt_node == ast_nil)
+        stmt_node = NULL;
+    if (stmt_node != NULL)
+        stmt_node->next = NULL;
+
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_LABEL_STMT;
+    node->child = label_node;
+    node->next = NULL;
+    node->line = (label_node != NULL) ? label_node->line : (stmt_node != NULL ? stmt_node->line : 0);
+    node->col = (label_node != NULL) ? label_node->col : (stmt_node != NULL ? stmt_node->col : 0);
+
+    if (label_node != NULL)
+        label_node->next = stmt_node;
+    else
+        node->child = stmt_node;
+
+    return node;
+}
+
+static ast_t* build_goto_ast(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return ast_nil;
+
+    ast_t* label_node = parsed;
+    if (label_node == ast_nil)
+        label_node = NULL;
+
+    ast_t* trailing = NULL;
+    if (label_node != NULL) {
+        trailing = label_node->next;
+        label_node->next = NULL;
+    }
+
+    if (trailing != NULL)
+        free_ast(trailing);
+
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_GOTO_STMT;
+    node->child = label_node;
+    node->next = NULL;
+    node->line = (label_node != NULL) ? label_node->line : 0;
+    node->col = (label_node != NULL) ? label_node->col : 0;
+
+    return node;
+}
+
 static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) {
     InputState state;
     save_input_state(in, &state);
@@ -252,6 +322,21 @@ void init_pascal_statement_parser(combinator_t** p) {
         simple_assignment,
         NULL
     );
+
+    // Goto statement: goto <label>
+    combinator_t* goto_stmt = map(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("goto")),
+        pascal_label_identifier(),
+        NULL
+    ), build_goto_ast);
+
+    // Labeled statement: <label>: statement
+    combinator_t* labeled_stmt = map(seq(new_combinator(), PASCAL_T_NONE,
+        pascal_label_identifier(),
+        token(match(":")),
+        lazy(stmt_parser),
+        NULL
+    ), build_label_statement_ast);
 
     // Simple expression statement: expression (no semicolon here)
     combinator_t* expr_stmt = seq(new_combinator(), PASCAL_T_STATEMENT,
@@ -530,6 +615,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Note: VAR sections are handled by the complete program parser context
     multi(*stmt_parser, PASCAL_T_NONE,
         begin_end_block,                      // compound statements (must come before expr_stmt)
+        labeled_stmt,                         // labeled statements (before other identifier-based statements)
+        goto_stmt,                            // goto statements
         try_finally,                          // try-finally blocks
         try_except,                           // try-except blocks
         case_stmt,                            // case statements (before other keyword statements)
