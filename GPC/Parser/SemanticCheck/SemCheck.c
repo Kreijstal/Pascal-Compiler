@@ -1074,6 +1074,9 @@ static void resolve_array_bounds_in_gpctype(SymTab_t *symtab, GpcType *gpc_type,
                         /* Also update the TypeAlias for consistency */
                         alias->array_start = (int)start_val;
                         alias->array_end = (int)end_val;
+                        
+                        /* Re-evaluate is_open_array based on resolved bounds */
+                        alias->is_open_array = (alias->array_end < alias->array_start);
                     }
                     
                     free(start_str);

@@ -400,20 +400,14 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
 
         case TYPE_KIND_ARRAY:
             /* Arrays are compatible if element types match and dimensions match */
-            fprintf(stderr, "DEBUG ARRAY: lhs [%d..%d] vs rhs [%d..%d]\n",
-                lhs_type->info.array_info.start_index, lhs_type->info.array_info.end_index,
-                rhs_type->info.array_info.start_index, rhs_type->info.array_info.end_index);
             if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
             {
-                fprintf(stderr, "DEBUG: Start indices don't match!\n");
                 return 0;
             }
             if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
             {
-                fprintf(stderr, "DEBUG: End indices don't match!\n");
                 return 0;
             }
-            fprintf(stderr, "DEBUG: Checking element types...\n");
             return are_types_compatible_for_assignment(
                 lhs_type->info.array_info.element_type,
                 rhs_type->info.array_info.element_type,
