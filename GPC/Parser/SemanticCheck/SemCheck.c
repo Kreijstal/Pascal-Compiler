@@ -1457,6 +1457,26 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 );
                 assert(array_type != NULL && "Failed to create array type");
                 
+                /* If the element type was specified by a type_id (like TAlfa), preserve that information
+                 * by creating a minimal TypeAlias and attaching it to the array_type. This allows
+                 * nested array indexing to work correctly (e.g., Keywords[1][1] where Keywords is
+                 * array[1..5] of TAlfa and TAlfa is array[1..10] of char). */
+                if (tree->tree_data.arr_decl_data.type_id != NULL)
+                {
+                    /* Create a minimal TypeAlias just to store the element type ID */
+                    struct TypeAlias *temp_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    if (temp_alias != NULL)
+                    {
+                        temp_alias->is_array = 1;
+                        temp_alias->array_start = tree->tree_data.arr_decl_data.s_range;
+                        temp_alias->array_end = tree->tree_data.arr_decl_data.e_range;
+                        temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
+                        temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
+                        
+                        gpc_type_set_type_alias(array_type, temp_alias);
+                    }
+                }
+                
                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
             }
 
