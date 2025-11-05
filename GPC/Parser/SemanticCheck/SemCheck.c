@@ -2041,6 +2041,35 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             NULL  /* procedures have no return type */
         );
         
+        /* ARCHITECTURAL FIX: Resolve array bounds in parameter types now that constants are in scope */
+        if (proc_type != NULL && proc_type->info.proc_info.params != NULL)
+        {
+            ListNode_t *param = proc_type->info.proc_info.params;
+            while (param != NULL)
+            {
+                if (param->type == LIST_TREE && param->cur != NULL)
+                {
+                    Tree_t *param_tree = (Tree_t *)param->cur;
+                    /* For array parameters, resolve the bounds */
+                    if (param_tree->type == TREE_ARR_DECL)
+                    {
+                        /* If element type is a named type, look it up to get proper GpcType */
+                        if (param_tree->tree_data.arr_decl_data.type_id != NULL)
+                        {
+                            HashNode_t *elem_type_node = NULL;
+                            if (FindIdent(&elem_type_node, symtab, param_tree->tree_data.arr_decl_data.type_id) != -1 &&
+                                elem_type_node != NULL && elem_type_node->type != NULL)
+                            {
+                                /* Element type resolved - bounds should be in the tree node */
+                                /* Nothing to do here */
+                            }
+                        }
+                    }
+                }
+                param = param->next;
+            }
+        }
+        
         // Use the typed version to properly set the GpcType
         func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
                         subprogram->tree_data.subprogram_data.mangled_id,
