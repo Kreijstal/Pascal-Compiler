@@ -1116,11 +1116,13 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         /* Check if this is a real constant */
                         if (node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
                         {
-                            /* Real constant - encode as bit pattern */
-                            double value = node->const_real_value;
-                            int64_t bits;
-                            memcpy(&bits, &value, sizeof(bits));
-                            snprintf(buffer, buf_len, "$%lld", (long long)bits);
+                            /* Real constant - encode as bit pattern using union for safe type punning */
+                            union {
+                                double d;
+                                int64_t i;
+                            } converter;
+                            converter.d = node->const_real_value;
+                            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
                         }
                         else
                         {
@@ -1149,10 +1151,13 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
         case EXPR_RNUM:
         {
-            double value = expr->expr_data.r_num;
-            int64_t bits;
-            memcpy(&bits, &value, sizeof(bits));
-            snprintf(buffer, buf_len, "$%lld", (long long)bits);
+            /* Use union for safe type punning */
+            union {
+                double d;
+                int64_t i;
+            } converter;
+            converter.d = expr->expr_data.r_num;
+            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
             break;
         }
 

@@ -84,6 +84,35 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev);
 
+/* Helper to check if an expression contains a real number literal */
+static int expression_contains_real_literal(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    if (expr->type == EXPR_RNUM)
+        return 1;
+    
+    if (expr->type == EXPR_SIGN_TERM)
+    {
+        return expression_contains_real_literal(expr->expr_data.sign_term);
+    }
+    
+    if (expr->type == EXPR_ADDOP)
+    {
+        return expression_contains_real_literal(expr->expr_data.addop_data.left_expr) ||
+               expression_contains_real_literal(expr->expr_data.addop_data.right_term);
+    }
+    
+    if (expr->type == EXPR_MULOP)
+    {
+        return expression_contains_real_literal(expr->expr_data.mulop_data.left_term) ||
+               expression_contains_real_literal(expr->expr_data.mulop_data.right_factor);
+    }
+    
+    return 0;
+}
+
 static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
 {
     if (expr == NULL || out_value == NULL)
@@ -1005,52 +1034,7 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
         struct Expression *value_expr = tree->tree_data.const_decl_data.value;
         
         /* Determine if this is a real or integer constant by checking the expression type */
-        int is_real_const = 0;
-        if (value_expr != NULL)
-        {
-            if (value_expr->type == EXPR_RNUM)
-            {
-                is_real_const = 1;
-            }
-            else if (value_expr->type == EXPR_ADDOP || value_expr->type == EXPR_MULOP)
-            {
-                /* Check if any operand is real */
-                /* For simplicity, try to evaluate as real first */
-                double test_val;
-                if (evaluate_real_const_expr(symtab, value_expr, &test_val) == 0)
-                {
-                    /* Check if the original expression contained EXPR_RNUM */
-                    if (value_expr->type == EXPR_ADDOP)
-                    {
-                        if ((value_expr->expr_data.addop_data.left_expr && 
-                             value_expr->expr_data.addop_data.left_expr->type == EXPR_RNUM) ||
-                            (value_expr->expr_data.addop_data.right_term && 
-                             value_expr->expr_data.addop_data.right_term->type == EXPR_RNUM))
-                        {
-                            is_real_const = 1;
-                        }
-                    }
-                    else if (value_expr->type == EXPR_MULOP)
-                    {
-                        if ((value_expr->expr_data.mulop_data.left_term && 
-                             value_expr->expr_data.mulop_data.left_term->type == EXPR_RNUM) ||
-                            (value_expr->expr_data.mulop_data.right_factor && 
-                             value_expr->expr_data.mulop_data.right_factor->type == EXPR_RNUM))
-                        {
-                            is_real_const = 1;
-                        }
-                    }
-                }
-            }
-            else if (value_expr->type == EXPR_SIGN_TERM)
-            {
-                if (value_expr->expr_data.sign_term && 
-                    value_expr->expr_data.sign_term->type == EXPR_RNUM)
-                {
-                    is_real_const = 1;
-                }
-            }
-        }
+        int is_real_const = expression_contains_real_literal(value_expr);
         
         if (is_real_const)
         {
