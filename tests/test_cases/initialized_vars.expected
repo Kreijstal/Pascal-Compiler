@@ -1,0 +1,8 @@
+x = 42
+y = 100
+TestArray[0] = 1
+TestArray[1] = 2
+TestArray[2] = 3
+Colors[1] = 255
+Colors[2] = 128
+Colors[3] = 64

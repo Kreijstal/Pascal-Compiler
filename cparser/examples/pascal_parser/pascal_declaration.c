@@ -561,6 +561,11 @@ void init_pascal_unit_parser(combinator_t** p) {
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
         token(match(":")),                          // colon
         type_definition,                             // full type definitions (array, record, etc.)
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match("=")),                       // optional initializer
+            lazy(var_expr_parser),                   // initializer expression
+            NULL
+        )),
         optional(token(match(";"))),                // optional semicolon
         NULL
     );
@@ -1101,6 +1106,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         var_identifier_list,                            // multiple variable names
         token(match(":")),                              // colon
         type_spec,                                      // type specification
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(match("=")),                          // optional initializer
+            lazy(program_expr_parser),                  // initializer expression
+            NULL
+        )),
         token(match(";")),                              // semicolon
         NULL
     );
