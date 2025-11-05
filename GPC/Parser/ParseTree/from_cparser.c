@@ -571,8 +571,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->is_open_array = 1;
                     }
                 } else if (dim->typ == PASCAL_T_IDENTIFIER) {
-                    type_info->is_open_array = 1;
+                    // Single identifier as array dimension (e.g., array[color])
+                    // This is NOT an open array - it's an array indexed by an enum or subrange type
+                    // Store the identifier for semantic resolution
                     list_builder_append(&dims_builder, dup_symbol(dim), LIST_STRING);
+                    // Note: is_open_array is NOT set to 1 here
                 } else {
                     type_info->is_open_array = 1;
                 }
@@ -1726,7 +1729,9 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     int end = type_info->end;
     
     /* If both start and end are 0, check if we need to resolve identifiers.
-     * The array_dimensions list contains the range as a string like "January..December" or "C_Low..C_High".
+     * The array_dimensions list contains:
+     * - A range string like "January..December" or "C_Low..C_High", OR
+     * - A single type identifier like "color" (for array[color] where color is an enum)
      */
     if (start == 0 && end == 0 && type_info->array_dimensions != NULL && 
         type_info->array_dimensions->cur != NULL) {
@@ -1781,6 +1786,16 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
                             end = (int)num;
                     }
+                }
+            } else {
+                /* Single identifier - resolve as an enum type to get its range */
+                int enum_start, enum_end;
+                if (resolve_enum_type_range_from_ast(range_str, type_section, &enum_start, &enum_end) == 0) {
+                    start = enum_start;
+                    end = enum_end;
+                } else {
+                    fprintf(stderr, "ERROR: Could not resolve array index type '%s' for const %s.\n",
+                            range_str, *id_ptr);
                 }
             }
             free(range_copy);

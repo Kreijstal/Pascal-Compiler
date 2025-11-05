@@ -152,19 +152,68 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(of_res.value.ast);
     free_combinator(of_keyword);
 
-    // Parse element type (simplified)
-    combinator_t* element_type = token(cident(PASCAL_T_IDENTIFIER));
-    ParseResult elem_res = parse(in, element_type);
+    // Parse element type - can be a simple identifier or identifier[size] for String[n]
+    combinator_t* base_type_id = token(cident(PASCAL_T_IDENTIFIER));
+    ParseResult base_res = parse(in, base_type_id);
     ast_t* element_ast = NULL;
-    if (elem_res.is_success) {
-        element_ast = elem_res.value.ast;
-    } else {
-        discard_failure(elem_res);
+    if (!base_res.is_success) {
+        discard_failure(base_res);
+        free_combinator(base_type_id);
         free_ast(indices_ast);
-        free_combinator(element_type);
         return fail_with_message("Expected element type after 'OF'", in, &state, parser_name);
     }
-    free_combinator(element_type);
+    element_ast = base_res.value.ast;
+    free_combinator(base_type_id);
+    
+    // Check for optional [size] after type name (e.g., String[7])
+    InputState subscript_state;
+    save_input_state(in, &subscript_state);
+    combinator_t* subscript_open = token(match("["));
+    ParseResult subscript_open_res = parse(in, subscript_open);
+    free_combinator(subscript_open);
+    
+    if (subscript_open_res.is_success) {
+        free_ast(subscript_open_res.value.ast);
+        
+        // Parse the size expression
+        combinator_t* size_expr = new_combinator();
+        init_pascal_expression_parser(&size_expr);
+        ParseResult size_res = parse(in, size_expr);
+        free_combinator(size_expr);
+        
+        if (!size_res.is_success) {
+            discard_failure(size_res);
+            free_ast(element_ast);
+            free_ast(indices_ast);
+            return fail_with_message("Expected size expression in type subscript", in, &subscript_state, parser_name);
+        }
+        
+        // Parse closing ]
+        combinator_t* subscript_close = token(match("]"));
+        ParseResult subscript_close_res = parse(in, subscript_close);
+        free_combinator(subscript_close);
+        
+        if (!subscript_close_res.is_success) {
+            discard_failure(subscript_close_res);
+            free_ast(size_res.value.ast);
+            free_ast(element_ast);
+            free_ast(indices_ast);
+            return fail_with_message("Expected ']' after type subscript", in, &subscript_state, parser_name);
+        }
+        free_ast(subscript_close_res.value.ast);
+        
+        // Create an ARRAY_ACCESS node to represent the subscripted type (String[7])
+        // This will be interpreted as a shortstring type in semantic analysis
+        ast_t* subscripted_type = new_ast();
+        subscripted_type->typ = PASCAL_T_ARRAY_ACCESS;
+        subscripted_type->child = element_ast;
+        element_ast->next = size_res.value.ast;
+        element_ast = subscripted_type;
+        set_ast_position(element_ast, in);
+    } else {
+        discard_failure(subscript_open_res);
+        restore_input_state(in, &subscript_state);
+    }
 
     // Build AST
     ast_t* array_ast = new_ast();
