@@ -41,7 +41,6 @@ end;
 procedure Error(n:integer);
 begin
   Write('Error ',n:1);
-  Halt;
 end;
 
 procedure GetSymbol;

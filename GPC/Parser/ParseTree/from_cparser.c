@@ -1534,8 +1534,62 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     if (type_info.is_array) {
         int element_type = type_info.element_type;
         char *element_type_id = type_info.element_type_id;
+        
+        /* Handle optional initializer for arrays */
+        struct Statement *initializer_stmt = NULL;
+        if (cur != NULL) {
+            /* Handle optional initializer wrapper: optional(seq(...)) creates PASCAL_T_NONE node */
+            ast_t *init_node = cur;
+            if (init_node->typ == PASCAL_T_NONE && init_node->child != NULL) {
+                /* The wrapper contains "=" token followed by the expression.
+                 * Skip to find the actual expression node (not the "=" token) */
+                ast_t *child = init_node->child;
+                if (child != NULL && child->next != NULL) {
+                    /* Skip the first child (the "=" token) and use the second */
+                    init_node = child->next;
+                }
+            }
+            
+            if (init_node != NULL && ids != NULL && ids->next == NULL) {
+                char *var_name = (char *)ids->cur;
+                
+                /* Check if initializer is a tuple (array literal) */
+                if (init_node->typ == PASCAL_T_TUPLE) {
+                    /* Create multiple assignment statements for array elements */
+                    ListBuilder stmt_builder;
+                    list_builder_init(&stmt_builder);
+                    
+                    int index = type_info.start;
+                    for (ast_t *elem = init_node->child; elem != NULL; elem = elem->next) {
+                        struct Expression *elem_expr = convert_expression(elem);
+                        if (elem_expr != NULL) {
+                            struct Expression *index_expr = mk_inum(decl_node->line, index);
+                            struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
+                            struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
+                            struct Statement *assign_stmt = mk_varassign(decl_node->line, array_access, elem_expr);
+                            list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
+                        }
+                        index++;
+                    }
+                    
+                    /* Create compound statement from all assignments */
+                    ListNode_t *stmt_list = list_builder_finish(&stmt_builder);
+                    if (stmt_list != NULL) {
+                        initializer_stmt = mk_compoundstatement(decl_node->line, stmt_list);
+                    }
+                } else {
+                    /* Single expression initializer (not a tuple) */
+                    struct Expression *init_expr = convert_expression(init_node);
+                    if (init_expr != NULL) {
+                        struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
+                        initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
+                    }
+                }
+            }
+        }
+        
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
-                                    type_info.start, type_info.end, NULL);
+                                    type_info.start, type_info.end, initializer_stmt);
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         return decl;
