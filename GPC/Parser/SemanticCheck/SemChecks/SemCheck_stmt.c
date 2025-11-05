@@ -1310,6 +1310,16 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
                     }
                 }
+                /* Special case: String literal to char array parameter */
+                else if (expected_gpc_type != NULL && arg_type == STRING_TYPE &&
+                         expected_gpc_type->kind == TYPE_KIND_ARRAY &&
+                         expected_gpc_type->info.array_info.element_type != NULL &&
+                         expected_gpc_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                         expected_gpc_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                {
+                    /* String literals can be passed to char array parameters */
+                    types_match = 1;
+                }
                 else if (expected_type != BUILTIN_ANY_TYPE &&
                          (arg_type == expected_type || types_numeric_compatible(expected_type, arg_type)))
                 {

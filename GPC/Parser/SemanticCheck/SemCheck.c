@@ -872,6 +872,119 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     return 0;
 }
 
+/* Helper function to resolve constant identifier to integer value
+ * Returns 0 on success, 1 on failure */
+static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
+{
+    if (symtab == NULL || id == NULL || out_value == NULL)
+        return 1;
+    
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, (char *)id) >= 0 && 
+        node != NULL && node->hash_type == HASHTYPE_CONST)
+    {
+        *out_value = node->const_int_value;
+        return 0;
+    }
+    
+    return 1;
+}
+
+/* Resolves array bounds specified as constant identifiers in a GpcType
+ * This is needed because parsing happens before constants are declared */
+static void resolve_array_bounds_in_gpctype(SymTab_t *symtab, GpcType *gpc_type, struct TypeAlias *alias)
+{
+    if (gpc_type == NULL || alias == NULL || symtab == NULL)
+        return;
+    
+    /* Only process array types */
+    if (gpc_type->kind != TYPE_KIND_ARRAY)
+        return;
+    
+    /* Check if we have array_dimensions with symbolic bounds */
+    if (alias->array_dimensions != NULL)
+    {
+        /* Parse the first dimension string (format: "start..end") */
+        ListNode_t *first_dim = alias->array_dimensions;
+        if (first_dim != NULL && first_dim->type == LIST_STRING && first_dim->cur != NULL)
+        {
+            char *dim_str = (char *)first_dim->cur;
+            char *separator = strstr(dim_str, "..");
+            
+            if (separator != NULL)
+            {
+                /* Extract start and end parts */
+                size_t start_len = separator - dim_str;
+                char *start_str = (char *)malloc(start_len + 1);
+                char *end_str = strdup(separator + 2);
+                
+                if (start_str != NULL && end_str != NULL)
+                {
+                    strncpy(start_str, dim_str, start_len);
+                    start_str[start_len] = '\0';
+                    
+                    /* Trim whitespace */
+                    while (*start_str == ' ') start_str++;
+                    while (*end_str == ' ') end_str++;
+                    
+                    /* Try to resolve as constants or parse as integers */
+                    long long start_val = 0;
+                    long long end_val = 0;
+                    int start_resolved = 0;
+                    int end_resolved = 0;
+                    
+                    /* Try constant lookup first */
+                    if (resolve_const_identifier(symtab, start_str, &start_val) == 0)
+                    {
+                        start_resolved = 1;
+                    }
+                    else
+                    {
+                        /* Try parsing as integer */
+                        char *endptr;
+                        long val = strtol(start_str, &endptr, 10);
+                        if (endptr != start_str && *endptr == '\0')
+                        {
+                            start_val = val;
+                            start_resolved = 1;
+                        }
+                    }
+                    
+                    if (resolve_const_identifier(symtab, end_str, &end_val) == 0)
+                    {
+                        end_resolved = 1;
+                    }
+                    else
+                    {
+                        /* Try parsing as integer */
+                        char *endptr;
+                        long val = strtol(end_str, &endptr, 10);
+                        if (endptr != end_str && *endptr == '\0')
+                        {
+                            end_val = val;
+                            end_resolved = 1;
+                        }
+                    }
+                    
+                    /* Update GpcType with resolved bounds */
+                    if (start_resolved && end_resolved)
+                    {
+                        gpc_type->info.array_info.start_index = (int)start_val;
+                        gpc_type->info.array_info.end_index = (int)end_val;
+                        
+                        /* Also update the TypeAlias for consistency */
+                        alias->array_start = (int)start_val;
+                        alias->array_end = (int)end_val;
+                    }
+                    
+                    free(start_str);
+                    free(end_str);
+                }
+            }
+        }
+    }
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -1014,7 +1127,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         if (gpc_type != NULL) {
             /* Set type_alias on GpcType before pushing */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
+            {
                 gpc_type_set_type_alias(gpc_type, alias_info);
+                
+                /* Resolve array bounds from constant identifiers now that constants are in scope */
+                if (alias_info->is_array)
+                {
+                    resolve_array_bounds_in_gpctype(symtab, gpc_type, alias_info);
+                }
+            }
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
                 gpc_type->info.record_info = record_info;
             

@@ -294,6 +294,20 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
     if (lhs_type == NULL || rhs_type == NULL)
         return 0;
 
+    /* Special case: Allow string (primitive) to be assigned to char array */
+    /* This is a common Pascal idiom: var s: array[1..20] of char; begin s := 'hello'; end; */
+    if (lhs_type->kind == TYPE_KIND_ARRAY &&
+        lhs_type->info.array_info.element_type != NULL &&
+        lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
+        rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        rhs_type->info.primitive_type_tag == STRING_TYPE)
+    {
+        /* String literals can be assigned to char arrays */
+        /* Size checking should be done at a higher level where we have access to the actual string */
+        return 1;
+    }
+
     /* If kinds are different, generally incompatible */
     /* Exception: we need to check for special cases */
     if (lhs_type->kind != rhs_type->kind) {
