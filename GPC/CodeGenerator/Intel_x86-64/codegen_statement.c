@@ -670,6 +670,64 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             return inst_list;
         }
 
+        /* Handle character set literals - they generate a temporary buffer address */
+        if (src_expr->type == EXPR_SET && expr_is_char_set_ctx(src_expr, ctx))
+        {
+            /* Generate the set literal, which returns an address register */
+            Register_t *src_reg = NULL;
+            inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+
+            /* src_reg now contains the address of the temporary set buffer */
+            /* Copy 32 bytes from src to dest using memcpy */
+            Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (count_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for set copy size.");
+            }
+
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$32, %s\n", count_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tcall\tgpc_memcpy_wrapper\n");
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), count_reg);
+            free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            free_arg_regs();
+            return inst_list;
+        }
+
         codegen_report_error(ctx,
             "ERROR: Unsupported record-valued source expression.");
         free_reg(get_reg_stack(), dest_reg);
@@ -1962,7 +2020,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     /* Character sets (set of char) need special handling like records due to 32-byte size */
-    if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set(var_expr))
+    if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     if (var_expr->type == EXPR_VAR_ID)
