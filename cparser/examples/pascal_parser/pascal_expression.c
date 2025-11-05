@@ -638,6 +638,143 @@ combinator_t* set_constructor(tag_t tag, combinator_t** expr_parser) {
     return comb;
 }
 
+// Record constructor parser for (field: value; field: value; ...)
+static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_name) {
+    set_args* rargs = (set_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    // Must start with '('
+    if (read1(in) != '(') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '('"), NULL);
+    }
+
+    ast_t* record_node = new_ast();
+    record_node->typ = rargs->tag;
+    record_node->sym = NULL;
+    record_node->child = NULL;
+    record_node->next = NULL;
+    set_ast_position(record_node, in);
+
+    // Skip whitespace manually
+    char c;
+    while (isspace((unsigned char)(c = read1(in))));
+    if (c != EOF) in->start--;
+
+    // Check for empty record constructor
+    c = read1(in);
+    if (c == ')') {
+        return make_success(record_node);
+    }
+    if (c != EOF) in->start--; // Back up
+
+    // Parse field assignments using the provided expression parser
+    combinator_t* expr_parser = lazy(rargs->expr_parser);
+
+    // Parse semicolon-separated field assignments
+    ast_t* first_field = NULL;
+    ast_t* current_field = NULL;
+
+    while (true) {
+        // Skip whitespace
+        while (isspace((unsigned char)(c = read1(in))));
+        if (c != EOF) in->start--;
+
+        // Parse field name (identifier)
+        combinator_t* field_name_parser = token(pascal_identifier(PASCAL_T_IDENTIFIER));
+        ParseResult field_result = parse(in, field_name_parser);
+        if (!field_result.is_success) {
+            free_ast(record_node);
+            free_combinator(expr_parser);
+            free_combinator(field_name_parser);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected field name"), NULL);
+        }
+
+        // Skip whitespace
+        while (isspace((unsigned char)(c = read1(in))));
+        if (c != EOF) in->start--;
+
+        // Expect colon after field name
+        if (read1(in) != ':') {
+            free_ast(record_node);
+            free_combinator(expr_parser);
+            free_combinator(field_name_parser);
+            free_ast(field_result.value.ast);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected ':' after field name"), NULL);
+        }
+
+        // Skip whitespace
+        while (isspace((unsigned char)(c = read1(in))));
+        if (c != EOF) in->start--;
+
+        // Parse field value expression
+        ParseResult value_result = parse(in, expr_parser);
+        if (!value_result.is_success) {
+            free_ast(record_node);
+            free_combinator(expr_parser);
+            free_combinator(field_name_parser);
+            free_ast(field_result.value.ast);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected field value expression"), NULL);
+        }
+
+        // Create field assignment node
+        ast_t* field_assignment = new_ast();
+        field_assignment->typ = PASCAL_T_ASSIGNMENT;
+        field_assignment->sym = NULL;
+        field_assignment->child = field_result.value.ast; // field name
+        field_assignment->child->next = value_result.value.ast; // field value
+        field_assignment->next = NULL;
+        set_ast_position(field_assignment, in);
+
+        // Add field assignment to record
+        if (!first_field) {
+            first_field = field_assignment;
+            current_field = field_assignment;
+            record_node->child = field_assignment;
+        } else {
+            current_field->next = field_assignment;
+            current_field = field_assignment;
+        }
+
+        free_combinator(field_name_parser);
+
+        // Skip whitespace
+        while (isspace((unsigned char)(c = read1(in))));
+        if (c != EOF) in->start--;
+
+        // Check for semicolon or closing parenthesis
+        c = read1(in);
+        if (c == ')') {
+            break;
+        } else if (c == ';') {
+            continue; // Parse next field
+        } else {
+            free_ast(record_node);
+            free_combinator(expr_parser);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected ';' or ')'"), NULL);
+        }
+    }
+
+    free_combinator(expr_parser);
+    return make_success(record_node);
+}
+
+combinator_t* record_constructor(tag_t tag, combinator_t** expr_parser) {
+    set_args* args = (set_args*)safe_malloc(sizeof(set_args));
+    args->tag = tag;
+    args->expr_parser = expr_parser;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY;
+    comb->fn = record_constructor_fn;
+    comb->args = args;
+    return comb;
+}
+
 // Removed unused relational_ops() function that had non-boundary-aware match("in")
 
 // Pascal single-quoted string content parser using combinators - handles '' escaping
@@ -908,6 +1045,7 @@ void init_pascal_expression_parser(combinator_t** p) {
         func_call,                                // Function calls func(x)
         between(token(match("(")), token(match(")")), lazy(p)), // Parenthesized expressions - try before tuple
         tuple,                                    // Tuple constants (a,b,c) - try after parenthesized expressions
+        token(record_constructor(PASCAL_T_RECORD_CONSTRUCTOR, p)), // Record constructors (field: value; field: value)
         identifier,                               // Identifiers (variables, built-ins)
         NULL
     );

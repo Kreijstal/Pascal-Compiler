@@ -196,6 +196,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_MEMBER_ACCESS: return "MEMBER_ACCESS";
         case PASCAL_T_ARG_LIST: return "ARG_LIST";
         case PASCAL_T_TUPLE: return "TUPLE";
+        case PASCAL_T_RECORD_CONSTRUCTOR: return "RECORD_CONSTRUCTOR";
         case PASCAL_T_PROCEDURE_DECL: return "PROCEDURE_DECL";
         case PASCAL_T_FUNCTION_DECL: return "FUNCTION_DECL";
         case PASCAL_T_FUNCTION_BODY: return "FUNCTION_BODY";
