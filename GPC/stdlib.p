@@ -38,6 +38,25 @@ begin
     end
 end;
 
+procedure read(var c: char);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lread_c_sysv
+        movq %rcx, %rdx
+        leaq .format_str_c(%rip), %rcx
+        jmp .Lread_c_args_done
+.Lread_c_sysv:
+        movq %rdi, %rsi
+        leaq .format_str_c(%rip), %rdi
+.Lread_c_args_done:
+        xorl %eax, %eax
+        call gpc_scanf
+    end
+end;
+
 function succ(i: integer): integer;
 begin
     succ := i + 1;

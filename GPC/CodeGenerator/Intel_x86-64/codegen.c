@@ -665,6 +665,8 @@ void codegen_rodata(CodeGenContext *ctx)
     fprintf(ctx->output_file, ".string \"%%s\"\n");
     fprintf(ctx->output_file, ".format_str_d:\n");
     fprintf(ctx->output_file, ".string \"%%d\"\n");
+    fprintf(ctx->output_file, ".format_str_c:\n");
+    fprintf(ctx->output_file, ".string \"%%c\"\n");
     fprintf(ctx->output_file, ".format_str_lld:\n");
     if (codegen_target_is_windows())
     {
