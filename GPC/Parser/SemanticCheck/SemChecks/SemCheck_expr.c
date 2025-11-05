@@ -1951,17 +1951,11 @@ static int semcheck_recordaccess(int *type_return,
 
     /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
      * When we detect this pattern (record access on a sign term), we restructure the AST
-     * to have the correct operator precedence: the sign term should wrap the record access. */
-    if (record_expr->type == EXPR_SIGN_TERM || record_expr->type == EXPR_ADDOP ||
-        record_expr->type == EXPR_MULOP)
-    {
-        /* We have a pattern like (-r).x or (+r).x or (r*2).x which doesn't make sense
-         * for record access. Transform it to -(r.x) or +(r.x) or (r*2).x respectively.
-         * 
-         * For unary operators (SIGN_TERM), this is a clear fix.
-         * For binary operators (ADDOP, MULOP), this would only make sense if they're
-         * part of a more complex expression, so we only handle SIGN_TERM for now. */
-        if (record_expr->type == EXPR_SIGN_TERM)
+     * to have the correct operator precedence: the sign term should wrap the record access. 
+     * 
+     * We only handle EXPR_SIGN_TERM (unary operators) as binary operators (ADDOP, MULOP)
+     * would require more complex transformation logic. */
+    if (record_expr->type == EXPR_SIGN_TERM)
         {
             /* Current structure: RECORD_ACCESS(SIGN_TERM(inner_expr), field)
              * Desired structure: SIGN_TERM(RECORD_ACCESS(inner_expr, field)) */
@@ -1972,7 +1966,8 @@ static int semcheck_recordaccess(int *type_return,
                 struct Expression *new_record_access = (struct Expression *)malloc(sizeof(struct Expression));
                 if (new_record_access == NULL)
                 {
-                    fprintf(stderr, "Error: failed to allocate expression for AST transformation.\n");
+                    fprintf(stderr, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
+                        expr->line_num);
                     *type_return = UNKNOWN_TYPE;
                     return 1;
                 }
@@ -1981,6 +1976,14 @@ static int semcheck_recordaccess(int *type_return,
                 new_record_access->type = EXPR_RECORD_ACCESS;
                 new_record_access->expr_data.record_access_data.record_expr = inner_expr;
                 new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
+                if (new_record_access->expr_data.record_access_data.field_id == NULL)
+                {
+                    fprintf(stderr, "Error on line %d: failed to duplicate field name in AST transformation.\n",
+                        expr->line_num);
+                    free(new_record_access);
+                    *type_return = UNKNOWN_TYPE;
+                    return 1;
+                }
                 new_record_access->expr_data.record_access_data.field_offset = 0;
                 new_record_access->record_type = NULL;
                 new_record_access->resolved_type = UNKNOWN_TYPE;
@@ -2013,7 +2016,6 @@ static int semcheck_recordaccess(int *type_return,
                 return semcheck_signterm(type_return, symtab, expr, max_scope_lev, mutating);
             }
         }
-    }
 
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;

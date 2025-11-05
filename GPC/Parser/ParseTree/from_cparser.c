@@ -460,7 +460,7 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
         if (const_decl->typ == PASCAL_T_CONST_DECL) {
             ast_t *id_node = const_decl->child;
             if (id_node != NULL && id_node->sym != NULL) {
-                /* Check if this is the identifier we're looking for */
+                /* Check if this is the identifier we're looking for (Pascal is case-insensitive) */
                 if (strcasecmp(id_node->sym->name, identifier) == 0) {
                     /* Get the value node (skip optional type spec) */
                     ast_t *value_node = id_node->next;

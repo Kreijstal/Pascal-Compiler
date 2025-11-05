@@ -2049,10 +2049,12 @@ next_identifier:
                         fprintf(stderr, "Error on line %d, initializer expression is NULL for %s.\n",
                             tree->line_num, var_name);
                         ++return_val;
-                        continue;
+                        /* Skip remaining processing for this variable but continue with the loop */
                     }
-                    int expr_type = UNKNOWN_TYPE;
-                    return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
+                    else
+                    {
+                        int expr_type = UNKNOWN_TYPE;
+                        return_val += semcheck_expr_main(&expr_type, symtab, init_expr, INT_MAX, NO_MUTATE);
 
                     if (expr_type == UNKNOWN_TYPE)
                     {
@@ -2127,9 +2129,10 @@ next_identifier:
                             }
                         }
                     }
-                }
-            }
-        }
+                    }  /* Close else at line 2054 */
+                }  /* Close else at line 2043 */
+            }  /* Close else at line 2033 */
+        }  /* Close if at line 2017 */
         else if (tree->type == TREE_ARR_DECL && tree->tree_data.arr_decl_data.initializer != NULL)
         {
             return_val += semcheck_stmt(symtab, tree->tree_data.arr_decl_data.initializer, INT_MAX);
