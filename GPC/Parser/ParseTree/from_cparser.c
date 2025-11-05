@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -440,6 +441,8 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
 /* Helper function to resolve a const integer identifier from the same const section.
  * This is needed for array ranges like [C_Low .. C_High].
  * Returns the integer value if found, otherwise returns fallback_value.
+ * Note: Only resolves simple integer consts; does not handle forward references
+ * or complex const expressions.
  */
 static int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value) {
     if (identifier == NULL || const_section == NULL)
@@ -463,7 +466,10 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
                         char *endptr;
                         long val = strtol(value_node->sym->name, &endptr, 10);
                         if (*endptr == '\0') {
-                            return (int)val; /* Successfully parsed as integer */
+                            /* Check for overflow when casting to int */
+                            if (val >= INT_MIN && val <= INT_MAX) {
+                                return (int)val;
+                            }
                         }
                     }
                 }
@@ -1646,6 +1652,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 char *start_id = range_copy;
                 char *end_id = sep + 2;
                 
+                /* Trim leading/trailing whitespace from identifiers */
+                while (*start_id == ' ' || *start_id == '\t') start_id++;
+                while (*end_id == ' ' || *end_id == '\t') end_id++;
+                char *p = start_id + strlen(start_id) - 1;
+                while (p > start_id && (*p == ' ' || *p == '\t')) *p-- = '\0';
+                p = end_id + strlen(end_id) - 1;
+                while (p > end_id && (*p == ' ' || *p == '\t')) *p-- = '\0';
+                
                 /* Try to resolve as enum literals first */
                 int start_ordinal = resolve_enum_ordinal_from_ast(start_id, type_section);
                 int end_ordinal = resolve_enum_ordinal_from_ast(end_id, type_section);
@@ -1666,7 +1680,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         /* Try numeric parsing as fallback */
                         char *endptr;
                         long num = strtol(start_id, &endptr, 10);
-                        if (*endptr == '\0')
+                        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
                             start = (int)num;
                     }
                     
@@ -1676,7 +1690,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         /* Try numeric parsing as fallback */
                         char *endptr;
                         long num = strtol(end_id, &endptr, 10);
-                        if (*endptr == '\0')
+                        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
                             end = (int)num;
                     }
                 }
