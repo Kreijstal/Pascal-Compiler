@@ -1118,6 +1118,91 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             cur = cur->next;
         }
     }
+    
+    /* If no match found and this is a method call, try parent classes */
+    if (resolved_proc == NULL && proc_id != NULL && strstr(proc_id, "__") != NULL) {
+        char *double_underscore = strstr(proc_id, "__");
+        if (double_underscore != NULL) {
+            /* Extract class name and method name */
+            char *class_name = strndup(proc_id, double_underscore - proc_id);
+            char *method_name = strdup(double_underscore + 2);
+            
+            if (class_name != NULL && method_name != NULL) {
+                /* Look up the class to find its parent */
+                HashNode_t *class_node = NULL;
+                if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL && 
+                    class_node->type != NULL && class_node->type->kind == TYPE_KIND_RECORD &&
+                    class_node->type->info.record_info != NULL) {
+                    
+                    struct RecordType *record_info = class_node->type->info.record_info;
+                    char *parent_class_name = record_info->parent_class_name;
+                    
+                    /* Walk up the inheritance chain */
+                    while (parent_class_name != NULL) {
+                        /* Try to find the method in the parent class */
+                        char *parent_method_name = (char *)malloc(strlen(parent_class_name) + 2 + strlen(method_name) + 1);
+                        if (parent_method_name != NULL) {
+                            snprintf(parent_method_name, strlen(parent_class_name) + 2 + strlen(method_name) + 1,
+                                    "%s__%s", parent_class_name, method_name);
+                            
+                            /* Use the same name mangling function that's used for regular method calls */
+                            char *parent_mangled_name = MangleFunctionNameFromCallSite(parent_method_name, args_given, symtab, INT_MAX);
+                            if (parent_mangled_name != NULL) {
+                                /* Look for the parent method using the base name, then check mangled names */
+                                ListNode_t *parent_candidates = FindAllIdents(symtab, parent_method_name);
+                                
+                                if (parent_candidates != NULL) {
+                                    ListNode_t *cur = parent_candidates;
+                                    while (cur != NULL) {
+                                        HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                        if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, parent_mangled_name) == 0) {
+                                            /* Found the method in parent class - use it */
+                                            resolved_proc = candidate;
+                                            match_count = 1;
+                                            
+                                            /* Update the procedure call to use the parent method */
+                                            free(stmt->stmt_data.procedure_call_data.id);
+                                            stmt->stmt_data.procedure_call_data.id = strdup(parent_mangled_name);
+                                            proc_id = stmt->stmt_data.procedure_call_data.id;
+                                            
+                                            break;
+                                        }
+                                        cur = cur->next;
+                                    }
+                                }
+                                
+                                free(parent_mangled_name);
+                            }
+                            
+                            free(parent_method_name);
+                        }
+                        
+                        if (resolved_proc != NULL) {
+                            break;  /* Found the method, stop walking up the chain */
+                        }
+                        
+                        /* Move to the next parent class */
+                        if (parent_class_name != NULL) {
+                            HashNode_t *parent_class_node = NULL;
+                            if (FindIdent(&parent_class_node, symtab, parent_class_name) != -1 && parent_class_node != NULL &&
+                                parent_class_node->type != NULL && parent_class_node->type->kind == TYPE_KIND_RECORD &&
+                                parent_class_node->type->info.record_info != NULL) {
+                                record_info = parent_class_node->type->info.record_info;
+                                parent_class_name = record_info->parent_class_name;
+                            } else {
+                                break;  /* Parent class not found, stop the chain */
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (class_name != NULL) free(class_name);
+            if (method_name != NULL) free(method_name);
+        }
+    }
 
     /* If we found multiple matches but they all have the same mangled name,
      * treat it as a single match (they're duplicates from different scopes) */

@@ -128,9 +128,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
     class_method_bindings = node;
 }
 
-static void register_class_method(const char *class_name, const char *method_name) {
-    register_class_method_ex(class_name, method_name, 0, 0);
-}
+
 
 static const char *find_class_for_method(const char *method_name) {
     if (method_name == NULL)
