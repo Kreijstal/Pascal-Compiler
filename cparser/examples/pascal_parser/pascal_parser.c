@@ -260,6 +260,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_ANONYMOUS_PROCEDURE: return "ANONYMOUS_PROCEDURE";
         case PASCAL_T_ENUMERATED_TYPE: return "ENUMERATED_TYPE";
         case PASCAL_T_CLASS_TYPE: return "CLASS_TYPE";
+        case PASCAL_T_INTERFACE_TYPE: return "INTERFACE_TYPE";
         // Generic type tags
         case PASCAL_T_GENERIC_TYPE_DECL: return "GENERIC_TYPE_DECL";
         case PASCAL_T_TYPE_PARAM_LIST: return "TYPE_PARAM_LIST";
