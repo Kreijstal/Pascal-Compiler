@@ -153,11 +153,37 @@ begin
     end
 end;
 
+procedure readln(var value: char);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lreadln_char_sysv
+        movq %rcx, %rdx
+        xorq %rcx, %rcx
+        jmp .Lreadln_char_call
+.Lreadln_char_sysv:
+        movq %rdi, %rsi
+        xorq %rdi, %rdi
+.Lreadln_char_call:
+        call gpc_text_readln_into_char
+    end
+end;
+
 procedure readln(f: text; var value: string);
 begin
     assembler;
     asm
         call gpc_text_readln_into
+    end
+end;
+
+procedure readln(f: text; var value: char);
+begin
+    assembler;
+    asm
+        call gpc_text_readln_into_char
     end
 end;
 

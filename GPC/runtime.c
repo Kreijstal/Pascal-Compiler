@@ -780,6 +780,33 @@ void gpc_text_readln_into(GPCTextFile *file, char **target)
     free(line);
 }
 
+void gpc_text_readln_into_char(GPCTextFile *file, char *target)
+{
+    if (target == NULL)
+        return;
+
+    FILE *stream = gpc_text_input_stream(file);
+    if (stream == NULL)
+    {
+        *target = '\0';
+        return;
+    }
+
+    char *line = gpc_text_read_line_from_stream(stream);
+    if (line == NULL)
+    {
+        *target = '\0';
+        return;
+    }
+
+    if (line[0] != '\0')
+        *target = line[0];
+    else
+        *target = '\0';
+
+    free(line);
+}
+
 void gpc_text_readln_discard(GPCTextFile *file)
 {
     FILE *stream = gpc_text_input_stream(file);
