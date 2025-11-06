@@ -220,32 +220,60 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, char *id)
 
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */
 /* Returns NULL if not found */
+/* FIXED: Now searches ALL scopes and returns ALL matches for proper overload resolution */
 ListNode_t *FindAllIdents(SymTab_t *symtab, char *id)
 {
     ListNode_t *cur_scope;
-    ListNode_t *found_nodes = NULL;
+    ListNode_t *all_found_nodes = NULL;
 
     assert(symtab != NULL);
     assert(id != NULL);
 
     cur_scope = symtab->stack_head;
 
-    /* Check scopes first */
+    /* Check all scopes and collect ALL matches */
     while(cur_scope != NULL)
     {
-        found_nodes = FindAllIdentsInTable((HashTable_t *)cur_scope->cur, id);
-        if(found_nodes != NULL)
-            return found_nodes;
+        ListNode_t *scope_matches = FindAllIdentsInTable((HashTable_t *)cur_scope->cur, id);
+        if(scope_matches != NULL)
+        {
+            /* Append scope_matches to all_found_nodes */
+            if (all_found_nodes == NULL)
+            {
+                all_found_nodes = scope_matches;
+            }
+            else
+            {
+                /* Find the end of all_found_nodes and append scope_matches */
+                ListNode_t *tail = all_found_nodes;
+                while(tail->next != NULL)
+                    tail = tail->next;
+                tail->next = scope_matches;
+            }
+        }
 
         cur_scope = cur_scope->next;
     }
 
-    /* Check builtins if not found */
-    found_nodes = FindAllIdentsInTable(symtab->builtins, id);
-    if(found_nodes != NULL)
-        return found_nodes;
+    /* Check builtins and append any matches */
+    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtins, id);
+    if(builtin_matches != NULL)
+    {
+        if (all_found_nodes == NULL)
+        {
+            all_found_nodes = builtin_matches;
+        }
+        else
+        {
+            /* Append builtin_matches to all_found_nodes */
+            ListNode_t *tail = all_found_nodes;
+            while(tail->next != NULL)
+                tail = tail->next;
+            tail->next = builtin_matches;
+        }
+    }
 
-    return NULL;
+    return all_found_nodes;
 }
 
 /* Pushes a new type onto the current scope (head) */

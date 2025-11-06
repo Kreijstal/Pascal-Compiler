@@ -1021,7 +1021,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (handled_builtin)
         return return_val;
 
-    mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, max_scope_lev);
+    mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
     assert(mangled_name != NULL);
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
