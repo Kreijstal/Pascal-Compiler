@@ -1464,6 +1464,13 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, text_name, text_type);
         free(text_name);
     }
+    char *pointer_name = strdup("Pointer");
+    if (pointer_name != NULL) {
+        GpcType *pointer_type = create_pointer_type(NULL); // Untyped pointer
+        assert(pointer_type != NULL && "Failed to create Pointer type");
+        AddBuiltinType_Typed(symtab, pointer_name, pointer_type);
+        free(pointer_name);
+    }
 
     /* Builtin procedures - procedures have no return type */
     char *setlength_name = strdup("SetLength");
