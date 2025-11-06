@@ -334,22 +334,17 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
     if (subclass == superclass)
         return 1;  /* Same type */
 
-    fprintf(stderr, "DEBUG is_record_subclass: subclass=%p, superclass=%p\n", (void*)subclass, (void*)superclass);
-
     /* Follow inheritance chain */
     struct RecordType *current = subclass;
     while (current != NULL && current->parent_class_name != NULL) {
-        fprintf(stderr, "  Checking parent: %s\n", current->parent_class_name);
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
             struct RecordType *parent_record = hashnode_get_record_type(parent_node);
-            fprintf(stderr, "    Found parent RecordType: %p\n", (void*)parent_record);
             if (parent_record == superclass)
                 return 1;
             current = parent_record;
         } else {
-            fprintf(stderr, "    Failed to find parent in symbol table\n");
             break;
         }
     }

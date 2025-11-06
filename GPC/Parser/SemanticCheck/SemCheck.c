@@ -1257,13 +1257,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     resolve_array_bounds_in_gpctype(symtab, gpc_type, alias_info);
                 }
             }
-            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD) {
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
                 gpc_type->info.record_info = record_info;
-                fprintf(stderr, "DEBUG: Declaring record type '%s', RecordType ptr=%p, parent=%s\n",
-                        tree->tree_data.type_decl_data.id,
-                        (void*)record_info,
-                        record_info->parent_class_name ? record_info->parent_class_name : "none");
-            }
             
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
@@ -1721,15 +1716,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         ids = ids_head;
 
         HashNode_t *resolved_type = NULL;
-        if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.type_id != NULL) {
+        if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.type_id != NULL)
             FindIdent(&resolved_type, symtab, tree->tree_data.var_decl_data.type_id);
-            fprintf(stderr, "DEBUG vardecl: type_id='%s', resolved=%p\n",
-                    tree->tree_data.var_decl_data.type_id,
-                    (void*)resolved_type);
-            if (resolved_type && resolved_type->type && resolved_type->type->kind == TYPE_KIND_RECORD) {
-                fprintf(stderr, "  RecordType ptr=%p\n", (void*)resolved_type->type->info.record_info);
-            }
-        }
 
         while(ids != NULL)
         {
@@ -1920,10 +1908,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     /* Use GpcType from resolved type if available */
                     var_gpc_type = resolved_type->type;
-                    if (var_gpc_type->kind == TYPE_KIND_RECORD) {
-                        fprintf(stderr, "DEBUG: Using canonical GpcType for %s, RecordType ptr: %p\n",
-                                (char *)ids->cur, (void*)var_gpc_type->info.record_info);
-                    }
                 }
                 else if (tree->tree_data.var_decl_data.inline_record_type != NULL)
                 {
@@ -1949,8 +1933,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             /* Use the canonical RecordType from the symbol table,
                              * not a clone. This ensures type identity checks work correctly. */
                             var_gpc_type->info.record_info = record_type;
-                            fprintf(stderr, "DEBUG: Created new GpcType for %s with canonical RecordType ptr: %p\n",
-                                    (char *)ids->cur, (void*)record_type);
                         }
                     }
                 }

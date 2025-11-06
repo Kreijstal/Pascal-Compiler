@@ -1158,12 +1158,6 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
     record->fields = list_builder_finish(&builder);
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
-    
-    fprintf(stderr, "DEBUG convert_class_type: class_name='%s', parent_class_name='%s', RecordType ptr=%p\n",
-            class_name ? class_name : "NULL",
-            parent_class_name ? parent_class_name : "none",
-            (void*)record);
-    
     return record;
 }
 
@@ -3175,20 +3169,21 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (method_name == NULL)
         return NULL;
 
-    /* For method calls, we should ideally use the object's type to determine
-     * which class's method to call. However, at parse time we don't have full
-     * type information. For now, we use find_class_for_method which returns
-     * the first registered class. This works for non-override methods, but
-     * for override methods, the semantic checker will need to handle multiple
-     * candidates.
+    /* For method calls, we need the object's type to determine which class's
+     * method to call. However, at parse time we don't have full type information.
      * 
-     * TODO: Consider not mangling the name here, and instead resolve it during
-     * semantic checking when we have full type information.
+     * Solution: Don't mangle the name during parsing. Instead, store the unmangled
+     * method name and let the semantic checker resolve it based on the object's type.
+     * 
+     * For now, we'll use find_class_for_method as a heuristic to try to determine
+     * the correct class. This works when there's only one class with this method,
+     * but fails when multiple classes have the same method name (polymorphism).
+     * 
+     * A proper fix would require semantic analysis to resolve the method name
+     * based on the actual object type.
      */
     const char *class_name = find_class_for_method(method_name);
     
-    /* Build mangled name, but mark this as a method call that may need 
-     * override resolution during semantic checking */
     char *proc_name = NULL;
     if (class_name != NULL) {
         proc_name = mangle_method_name(class_name, method_name);
