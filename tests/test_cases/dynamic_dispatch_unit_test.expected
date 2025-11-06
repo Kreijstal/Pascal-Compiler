@@ -1,11 +1,11 @@
 === Dynamic Dispatch Unit Test ===
-
+ 
 Testing TDog:
 Dog barks: Woof!
 Extra bark!
-
+ 
 Testing TCat:
 Cat meows: Meow!
 Cat sneaks quietly
-
+ 
 === Test Complete ===
