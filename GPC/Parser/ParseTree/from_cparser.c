@@ -966,6 +966,14 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
         return create_primitive_type(ENUM_TYPE);
     }
 
+    /* Handle class types */
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
+        /* Note: We can't get the class name here because we're inside the type spec, not the type decl.
+         * For now, we return NULL to let the class be handled by the legacy path.
+         * The class's RecordType will be properly populated during semantic checking. */
+        return NULL;
+    }
+
     return NULL;
 }
 
@@ -1150,6 +1158,12 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
     record->fields = list_builder_finish(&builder);
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
+    
+    fprintf(stderr, "DEBUG convert_class_type: class_name='%s', parent_class_name='%s', RecordType ptr=%p\n",
+            class_name ? class_name : "NULL",
+            parent_class_name ? parent_class_name : "none",
+            (void*)record);
+    
     return record;
 }
 
@@ -3556,8 +3570,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     /* Prefer the explicitly specified class name from the qualified identifier,
      * falling back to the registered class if no explicit class was given */
     const char *effective_class = class_name != NULL ? class_name : registered_class;
-    if (effective_class != NULL)
-        register_class_method(effective_class, method_name);
+    
+    /* Don't re-register the method here - it was already registered during class declaration */
+    
     char *proc_name = mangle_method_name(effective_class, method_name);
     if (proc_name == NULL) {
         free(class_name);

@@ -1248,7 +1248,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     
                     if (!types_match)
                     {
-                        fprintf(stderr, "DEBUG: Type mismatch - expected %s, got %s\n",
+                        fprintf(stderr, "DEBUG: Type mismatch in %s for arg %d - expected %s, got %s\n",
+                            proc_id ? proc_id : "unknown",
+                            cur_arg,
                             gpc_type_to_string(expected_gpc_type),
                             gpc_type_to_string(arg_gpc_type));
                         if (expected_gpc_type && expected_gpc_type->kind == TYPE_KIND_RECORD && 
