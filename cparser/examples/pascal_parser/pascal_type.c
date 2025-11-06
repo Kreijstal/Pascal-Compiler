@@ -278,6 +278,37 @@ static combinator_t* create_type_ref_parser(void) {
     );
 }
 
+// Helper function to create a method type parameter list parser
+// This supports generic methods like: procedure Foo<T>(X: T);
+static combinator_t* create_method_type_param_list(void) {
+    combinator_t* constraint_keyword = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        token(keyword_ci("class")),
+        token(keyword_ci("record")),
+        token(keyword_ci("constructor")),
+        token(keyword_ci("interface")),
+        NULL
+    );
+    
+    combinator_t* type_constraint = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        constraint_keyword,
+        NULL
+    ));
+    
+    combinator_t* type_param_with_constraint = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        type_constraint,
+        NULL
+    );
+    
+    return optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(type_param_with_constraint, token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+}
+
 combinator_t* class_type(tag_t tag) {
     // Type reference for field declarations, method return types, etc.
     combinator_t* type_ref = create_type_ref_parser();
@@ -322,6 +353,7 @@ combinator_t* class_type(tag_t tag) {
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -340,6 +372,7 @@ combinator_t* class_type(tag_t tag) {
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),  // Support both simple and constructed types
@@ -400,9 +433,6 @@ combinator_t* class_type(tag_t tag) {
     );
     set_combinator_name(class_member, "class_member");
 
-    // Skip comments and whitespace in class body
-    combinator_t* class_element = class_member;
-
     // Access sections: private, public, protected, published
     combinator_t* access_keyword = multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
         token(keyword_ci("private")),
@@ -414,6 +444,93 @@ combinator_t* class_type(tag_t tag) {
 
     // Access section: just the access keyword (members will be parsed individually)
     combinator_t* access_section = access_keyword;
+
+    // Nested type section in class body: type TBar = class ... end;
+    // Type parameter with constraint for nested types
+    combinator_t* nested_constraint_kw = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        token(keyword_ci("class")),
+        token(keyword_ci("record")),
+        token(keyword_ci("constructor")),
+        token(keyword_ci("interface")),
+        NULL
+    );
+    
+    combinator_t* nested_type_constraint = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        nested_constraint_kw,
+        NULL
+    ));
+    
+    combinator_t* nested_type_param_with_constraint = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        nested_type_constraint,
+        NULL
+    );
+    
+    combinator_t* nested_type_param_list_required = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(nested_type_param_with_constraint, token(match(","))),
+        token(match(">")),
+        NULL
+    );
+    
+    // Nested class type (simplified - just empty class for now)
+    combinator_t* nested_class_body = many(multi(new_combinator(), PASCAL_T_NONE,
+        access_section,
+        field_decl,  // Just support fields for now
+        NULL
+    ));
+    
+    combinator_t* nested_class_type = seq(new_combinator(), PASCAL_T_CLASS_TYPE,
+        token(keyword_ci("class")),
+        nested_class_body,
+        token(keyword_ci("end")),
+        NULL
+    );
+    
+    combinator_t* nested_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        nested_class_type,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    
+    combinator_t* nested_generic_type_decl = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
+        optional(token(keyword_ci("generic"))),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        nested_type_param_list_required,
+        token(match("=")),
+        nested_type_spec,
+        optional(token(match(";"))),
+        NULL
+    );
+    
+    combinator_t* nested_regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+        optional(token(keyword_ci("generic"))),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("=")),
+        nested_type_spec,
+        optional(token(match(";"))),
+        NULL
+    );
+    
+    combinator_t* nested_type_decl = multi(new_combinator(), PASCAL_T_NONE,
+        nested_generic_type_decl,
+        nested_regular_type_decl,
+        NULL
+    );
+    
+    combinator_t* nested_type_section = seq(new_combinator(), PASCAL_T_NESTED_TYPE_SECTION,
+        token(keyword_ci("type")),
+        many(nested_type_decl),
+        NULL
+    );
+
+    // Skip comments and whitespace in class body
+    combinator_t* class_element = multi(new_combinator(), PASCAL_T_NONE,
+        nested_type_section,  // Nested type declarations
+        class_member,         // Regular class members
+        NULL
+    );
 
     // Class body: mix of access modifiers and class members  
     combinator_t* class_body_parser = many(multi(new_combinator(), PASCAL_T_NONE,
@@ -446,6 +563,7 @@ combinator_t* interface_type(tag_t tag) {
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(";")),
         NULL
@@ -454,6 +572,7 @@ combinator_t* interface_type(tag_t tag) {
     combinator_t* function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        create_method_type_param_list(),  // Optional type parameters for generic methods
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),  // Support both simple and constructed types
