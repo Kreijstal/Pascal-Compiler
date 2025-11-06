@@ -10,13 +10,43 @@ Any Pascal file in `tests/test_cases/` that has a corresponding `.expected` file
 
 1. Create your Pascal test program: `tests/test_cases/my_new_test.p`
 2. Create the expected output: `tests/test_cases/my_new_test.expected`
-3. Run `meson test -C builddir` - your test will be automatically discovered and run!
+3. (Optional) Create input data: `tests/test_cases/my_new_test.input` (see below)
+4. Run `meson test -C builddir` - your test will be automatically discovered and run!
 
 The test will:
 - Compile `my_new_test.p` to assembly
 - Link it with the runtime library
 - Execute the program
 - Compare the output to `my_new_test.expected`
+
+## Providing Input (stdin)
+
+If your test program reads from stdin (using `read`, `readln`, etc.), you can provide input data by creating a `.input` file:
+
+1. Create `tests/test_cases/my_test.input` with the input data (one value per line)
+2. The test runner will automatically pipe this data to stdin when running your program
+
+**Example:**
+```pascal
+program MyTest;
+var x, y: integer;
+begin
+  read(x);
+  read(y);
+  writeln('Sum: ', x + y);
+end.
+```
+
+Create `my_test.input`:
+```
+5
+10
+```
+
+Create `my_test.expected`:
+```
+Sum: 15
+```
 
 ## Naming Convention
 
