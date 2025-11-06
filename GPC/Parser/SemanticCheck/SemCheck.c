@@ -907,30 +907,38 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
                          class_name, binding->method_name);
             }
             
-            if (binding->is_override) {
-                /* Find and replace parent's VMT entry */
+            /* Check if this method overrides a parent method */
+            int is_actual_override = 0;
+            if (binding->is_virtual || binding->is_override) {
+                /* Check if a method with this name exists in the parent VMT */
                 ListNode_t *vmt_entry = vmt;
-                int found = 0;
                 while (vmt_entry != NULL) {
                     struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
                     if (info != NULL && info->name != NULL &&
                         strcasecmp(info->name, binding->method_name) == 0) {
+                        /* Method exists in parent - this is an override */
+                        is_actual_override = 1;
                         /* Replace with derived class's version */
                         free(info->mangled_name);
                         info->mangled_name = mangled ? strdup(mangled) : NULL;
                         info->is_override = 1;
-                        found = 1;
                         break;
                     }
                     vmt_entry = vmt_entry->next;
                 }
-                
-                if (!found) {
-                    fprintf(stderr, "Error on line %d, override method '%s' has no virtual parent method\n",
+            }
+            
+            if (is_actual_override) {
+                /* Method was found and replaced in parent VMT - nothing more to do */
+            } else if (binding->is_virtual || binding->is_override) {
+                /* Add new virtual method to VMT */
+                /* Note: if binding->is_override is true but no parent method was found,
+                 * this is an error, but we still add it as a new virtual method */
+                if (binding->is_override) {
+                    fprintf(stderr, "Warning on line %d: override method '%s' has no virtual parent method, treating as new virtual method\n",
                             line_num, binding->method_name);
                 }
-            } else if (binding->is_virtual) {
-                /* Add new virtual method to VMT */
+                
                 struct MethodInfo *new_method = (struct MethodInfo *)malloc(sizeof(struct MethodInfo));
                 if (new_method != NULL) {
                     new_method->name = binding->method_name ? strdup(binding->method_name) : NULL;
