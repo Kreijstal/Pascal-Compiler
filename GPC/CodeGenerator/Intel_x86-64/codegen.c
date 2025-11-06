@@ -1250,29 +1250,39 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
     inst_list = NULL;
 
-    /* For now, only support static links for procedures without parameters.
-     * Supporting parameters requires a more complex calling convention.
-     * Check argument count first to decide whether to set up static link. */
+    /* Static links are supported for TRULY nested procedures/functions (depth >= 2), 
+     * but NOT for:
+     * - Top-level procedures (depth 0)
+     * - Program-level procedures (depth 1)  
+     * - Class methods (which have __ in their mangled name)
+     * 
+     * Class methods receive 'self' in the first register and should not use static links.
+     * When there are parameters, the static link is passed in %rdi and all arguments
+     * are shifted by one register position. */
     int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
     ctx->current_subprogram_id = proc->id;
     ctx->current_subprogram_mangled = sub_id;
-    int is_nested = codegen_is_nested_context(ctx);
+    int lexical_depth = codegen_get_lexical_depth(ctx);
+    int is_truly_nested = (lexical_depth >= 2);
+    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
     StackNode_t *static_link = NULL;
 
-    if (is_nested && num_args == 0)
+    if (is_truly_nested && !is_class_method)
     {
         /* Reserve space for static link (parent's frame pointer) as first local variable
          * This ensures it's at a predictable offset regardless of other locals */
         static_link = add_l_x("__static_link__", 8);
-        codegen_register_static_link_proc(ctx, sub_id, codegen_get_lexical_depth(ctx));
+        codegen_register_static_link_proc(ctx, sub_id, lexical_depth);
     }
 
-    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, 0);
+    /* If there are arguments and this is truly nested (not a class method), shift argument registers by 1 to make room for static link */
+    int arg_start_index = (is_truly_nested && !is_class_method && num_args > 0) ? 1 : 0;
+    inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_start_index);
     
     if (static_link != NULL)
     {
         char buffer[64];
-        /* No parameters, static link comes in %rdi */
+        /* Static link always comes in %rdi (first register) */
         snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
         inst_list = add_inst(inst_list, buffer);
     }
@@ -1334,19 +1344,27 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
     inst_list = NULL;
 
-    /* For now, only support static links for functions without parameters.
-     * Supporting parameters requires a more complex calling convention. */
+    /* Static links are supported for TRULY nested functions (depth >= 2), but NOT for:
+     * - Top-level functions (depth 0)
+     * - Program-level functions (depth 1)
+     * - Class methods (which have __ in their mangled name)
+     * 
+     * Class methods receive 'self' in the first register and should not use static links.
+     * When there are parameters, the static link is passed in %rdi (or second register
+     * if function returns a record) and all arguments are shifted accordingly. */
     int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
     ctx->current_subprogram_id = func->id;
     ctx->current_subprogram_mangled = sub_id;
-    int is_nested = codegen_is_nested_context(ctx);
+    int lexical_depth = codegen_get_lexical_depth(ctx);
+    int is_truly_nested = (lexical_depth >= 2);
+    int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
     StackNode_t *static_link = NULL;
 
-    if (is_nested && num_args == 0)
+    if (is_truly_nested && !is_class_method)
     {
         /* Reserve space for static link as first local variable */
         static_link = add_l_x("__static_link__", 8);
-        codegen_register_static_link_proc(ctx, sub_id, codegen_get_lexical_depth(ctx));
+        codegen_register_static_link_proc(ctx, sub_id, lexical_depth);
     }
     
     HashNode_t *func_node = NULL;
@@ -1397,12 +1415,21 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
+    /* Calculate argument start index:
+     * - If function returns record: use index 1 (record pointer in first arg)
+     * - If function is truly nested with args (not a class method): add 1 for static link
+     * - Otherwise: use index 0 */
+    int arg_start_index = has_record_return ? 1 : 0;
+    if (is_truly_nested && !is_class_method && num_args > 0)
+        arg_start_index++;
+    
     inst_list = codegen_subprogram_arguments(func->args_var, inst_list, ctx, symtab,
-        has_record_return ? 1 : 0);
+        arg_start_index);
     
     if (static_link != NULL)
     {
         char link_buffer[64];
+        /* Static link comes in the register right after the record return pointer (if any) */
         const char *link_reg = current_arg_reg64(has_record_return ? 1 : 0);
         if (link_reg == NULL)
             link_reg = "%rdi";
