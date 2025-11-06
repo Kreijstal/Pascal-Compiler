@@ -1697,6 +1697,104 @@ void test_pascal_for_statement_without_assignment(void) {
     free(input);
 }
 
+void test_pascal_for_downto_statement(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);  // Use program parser for terminated statements
+
+    input_t* input = new_input();
+    input->buffer = strdup("for i := 10 downto 1 do x := x + i;");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    // Get the actual statement
+    ast_t* stmt = res.value.ast;
+    if (stmt->typ == PASCAL_T_NONE) {
+        stmt = stmt->child;
+    }
+    TEST_ASSERT(stmt->typ == PASCAL_T_FOR_STMT);
+
+    // Check loop initializer
+    ast_t* initializer = stmt->child;
+    TEST_ASSERT(initializer->typ == PASCAL_T_ASSIGNMENT);
+
+    ast_t* loop_var = initializer->child;
+    TEST_ASSERT(loop_var->typ == PASCAL_T_IDENTIFIER);
+    TEST_ASSERT(strcmp(loop_var->sym->name, "i") == 0);
+
+    ast_t* start_value = loop_var->next;
+    TEST_ASSERT(start_value->typ == PASCAL_T_INTEGER);
+    TEST_ASSERT(strcmp(start_value->sym->name, "10") == 0);
+
+    // Check that the direction is DOWNTO
+    ast_t* direction = initializer->next;
+    TEST_ASSERT(direction != NULL);
+    TEST_ASSERT(direction->typ == PASCAL_T_DOWNTO);
+
+    free_ast(res.value.ast);    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_for_downto_without_assignment(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("for j downto 1 do writeln(j);");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    ast_t* stmt = res.value.ast;
+    if (stmt->typ == PASCAL_T_NONE) {
+        stmt = stmt->child;
+    }
+
+    TEST_ASSERT(stmt->typ == PASCAL_T_FOR_STMT);
+
+    ast_t* initializer = stmt->child;
+    TEST_ASSERT(initializer->typ == PASCAL_T_IDENTIFIER);
+    TEST_ASSERT(strcmp(initializer->sym->name, "j") == 0);
+
+    // Check that the direction is DOWNTO
+    ast_t* direction = initializer->next;
+    TEST_ASSERT(direction != NULL);
+    TEST_ASSERT(direction->typ == PASCAL_T_DOWNTO);
+
+    free_ast(res.value.ast);    free(input->buffer);
+    free(input);
+}
+
+void test_pascal_for_to_direction(void) {
+    combinator_t* p = new_combinator();
+    init_pascal_program_parser(&p);
+
+    input_t* input = new_input();
+    input->buffer = strdup("for i := 1 to 5 do x := i;");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    ast_t* stmt = res.value.ast;
+    if (stmt->typ == PASCAL_T_NONE) {
+        stmt = stmt->child;
+    }
+
+    TEST_ASSERT(stmt->typ == PASCAL_T_FOR_STMT);
+
+    // Check that the direction is TO (not DOWNTO)
+    ast_t* initializer = stmt->child;
+    ast_t* direction = initializer->next;
+    TEST_ASSERT(direction != NULL);
+    TEST_ASSERT(direction->typ == PASCAL_T_TO);
+
+    free_ast(res.value.ast);    free(input->buffer);
+    free(input);
+}
+
 void test_pascal_while_statement(void) {
     combinator_t* p = new_combinator();
     init_pascal_program_parser(&p);  // Use program parser for terminated statements
@@ -4450,6 +4548,9 @@ TEST_LIST = {
     { "test_pascal_begin_end_block", test_pascal_begin_end_block },
     { "test_pascal_for_statement", test_pascal_for_statement },
     { "test_pascal_for_statement_without_assignment", test_pascal_for_statement_without_assignment },
+    { "test_pascal_for_downto_statement", test_pascal_for_downto_statement },
+    { "test_pascal_for_downto_without_assignment", test_pascal_for_downto_without_assignment },
+    { "test_pascal_for_to_direction", test_pascal_for_to_direction },
     { "test_pascal_while_statement", test_pascal_while_statement },
     { "test_pascal_simple_asm_block", test_pascal_simple_asm_block },
     { "test_pascal_multiline_asm_block", test_pascal_multiline_asm_block },

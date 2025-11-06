@@ -1800,7 +1800,7 @@ struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
 }
 
 struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struct Expression *to,
-                               struct Statement *do_for)
+                               struct Statement *do_for, int is_downto)
 {
    struct Statement *new_stmt;
    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
@@ -1814,12 +1814,13 @@ struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struc
    new_stmt->stmt_data.for_data.to = to;
    new_stmt->stmt_data.for_data.do_for = do_for;
    new_stmt->stmt_data.for_data.for_assign_data.var_assign = for_assign;
+   new_stmt->stmt_data.for_data.is_downto = is_downto;
 
    return new_stmt;
 }
 
 struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Expression *to,
-                              struct Statement *do_for)
+                              struct Statement *do_for, int is_downto)
 {
   struct Statement *new_stmt;
   new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
@@ -1833,6 +1834,7 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
   new_stmt->stmt_data.for_data.to = to;
   new_stmt->stmt_data.for_data.do_for = do_for;
   new_stmt->stmt_data.for_data.for_assign_data.var = for_var;
+  new_stmt->stmt_data.for_data.is_downto = is_downto;
 
   return new_stmt;
 }

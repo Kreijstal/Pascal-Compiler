@@ -392,8 +392,8 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // For statement: for [identifier := expression | identifier] (to|downto) expression do statement
     combinator_t* for_direction = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("to")),                 // to keyword (case-insensitive)
-        token(keyword_ci("downto")),             // downto keyword (case-insensitive)
+        token(create_keyword_parser("to", PASCAL_T_TO)),                 // to keyword (case-insensitive)
+        token(create_keyword_parser("downto", PASCAL_T_DOWNTO)),         // downto keyword (case-insensitive)
         NULL
     );
     combinator_t* for_initializer = multi(new_combinator(), PASCAL_T_NONE,

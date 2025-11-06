@@ -184,6 +184,7 @@ struct Statement
             enum StmtType for_assign_type;
             struct Expression *to;
             struct Statement *do_for;
+            int is_downto;  /* 0 for TO, 1 for DOWNTO */
 
             union for_assign
             {
