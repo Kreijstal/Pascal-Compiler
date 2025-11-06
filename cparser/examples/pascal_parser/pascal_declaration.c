@@ -321,6 +321,17 @@ combinator_t* create_pascal_param_parser(void) {
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
 }
 
+// Helper function to create generic type lookahead combinator
+// Checks for '< identifier' pattern to distinguish generic types from '<>' operator
+combinator_t* create_generic_type_lookahead(void) {
+    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    return seq(new_combinator(), PASCAL_T_NONE,
+        token(match("<")),
+        type_arg,
+        NULL
+    );
+}
+
 static ast_t* wrap_program_params(ast_t* params) {
     ast_t* params_node = new_ast();
     params_node->typ = PASCAL_T_PROGRAM_PARAMS;
@@ -467,14 +478,6 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Peek to ensure this looks like a generic type before committing
     // This prevents parsing '<>' (not-equal operator) as an empty generic type
     combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
-    
-    // Peek for '<' followed by an identifier to distinguish from '<>' operator
-    combinator_t* generic_lookahead = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("<")),
-        type_arg,
-        NULL
-    );
-    
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
         sep_by1(type_arg, token(match(","))),  // Require at least one type argument
@@ -483,8 +486,8 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(generic_lookahead),  // Lookahead to ensure '< identifier' pattern
-        type_arg_list,            // Now parse the full type argument list
+        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
+        type_arg_list,                          // Now parse the full type argument list
         NULL
     );
 
@@ -1185,14 +1188,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Peek to ensure this looks like a generic type before committing
     // This prevents parsing '<>' (not-equal operator) as an empty generic type
     combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
-    
-    // Peek for '<' followed by an identifier to distinguish from '<>' operator
-    combinator_t* generic_lookahead = seq(new_combinator(), PASCAL_T_NONE,
-        token(match("<")),
-        type_arg,
-        NULL
-    );
-    
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
         sep_by1(type_arg, token(match(","))),  // Require at least one type argument
@@ -1201,8 +1196,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(generic_lookahead),  // Lookahead to ensure '< identifier' pattern
-        type_arg_list,            // Now parse the full type argument list
+        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
+        type_arg_list,                          // Now parse the full type argument list
         NULL
     );
 
