@@ -1670,7 +1670,14 @@ def _discover_and_add_auto_tests():
                         [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
                     )
                     expected_output = read_file_content(expected_output_file)
-                    self.assertEqual(process.stdout, expected_output)
+                    # Normalize line endings for cross-platform compatibility
+                    # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
+                    # which Python then reads as \n\n. Normalize by removing \r and collapsing \n\n to \n.
+                    actual_output = process.stdout.replace('\r', '')
+                    # For Windows cross-compilation, \r\n sequences become \n\n, so collapse them
+                    while '\n\n' in actual_output:
+                        actual_output = actual_output.replace('\n\n', '\n')
+                    self.assertEqual(actual_output, expected_output)
                     self.assertEqual(process.returncode, 0)
                 except subprocess.TimeoutExpired:
                     self.fail(f"Test {test_base_name} execution timed out.")

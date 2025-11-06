@@ -2,10 +2,14 @@ unit SysUtils;
 
 interface
 
+uses
+    ctypes;
+
 type
     TDateTime = longint;
     AnsiString = string;
-    NativeUInt = longint;
+    NativeUInt = cuint64;
+    Uint64 = cuint64;
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
