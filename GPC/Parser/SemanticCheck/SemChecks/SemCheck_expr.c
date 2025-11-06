@@ -2023,6 +2023,56 @@ static int semcheck_recordaccess(int *type_return,
             }
         }
 
+    /* Similar AST transformation for NOT operator: parser produces (NOT record).field
+     * instead of NOT (record.field). Detect EXPR_RELOP with NOT and restructure so the
+     * NOT wraps the record access rather than the record expression itself. */
+    if (record_expr->type == EXPR_RELOP &&
+        record_expr->expr_data.relop_data.type == NOT &&
+        record_expr->expr_data.relop_data.left != NULL &&
+        record_expr->expr_data.relop_data.right == NULL)
+    {
+        struct Expression *inner_expr = record_expr->expr_data.relop_data.left;
+
+        /* Create new record access for inner_expr.field */
+        struct Expression *new_record_access = (struct Expression *)calloc(1, sizeof(struct Expression));
+        if (new_record_access == NULL)
+        {
+            fprintf(stderr, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
+                expr->line_num);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+
+        new_record_access->line_num = expr->line_num;
+        new_record_access->type = EXPR_RECORD_ACCESS;
+        new_record_access->expr_data.record_access_data.record_expr = inner_expr;
+        new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
+        if (new_record_access->expr_data.record_access_data.field_id == NULL)
+        {
+            fprintf(stderr, "Error on line %d: failed to duplicate field name in AST transformation.\n",
+                expr->line_num);
+            free(new_record_access);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        new_record_access->expr_data.record_access_data.field_offset = 0;
+
+        /* Insert new record access as operand of NOT */
+        record_expr->expr_data.relop_data.left = new_record_access;
+
+        /* Swap expression types/data so current node becomes the NOT expression */
+        enum ExprType temp_type = expr->type;
+        expr->type = record_expr->type;
+        record_expr->type = temp_type;
+
+        union expr_data temp_data = expr->expr_data;
+        expr->expr_data = record_expr->expr_data;
+        record_expr->expr_data = temp_data;
+
+        /* Now expr is the NOT expression wrapping record access; re-run semantic check as relop */
+        return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+    }
+
     int error_count = 0;
     int record_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&record_type, symtab, record_expr, max_scope_lev, mutating);
@@ -2450,6 +2500,63 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
              * 3. Look up the field in the RecordType
              * 4. Return the field's GpcType
              */
+            break;
+        }
+
+        case EXPR_ARRAY_ACCESS:
+        {
+            struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
+            const char *alias_id = NULL;
+
+            if (array_expr != NULL && array_expr->is_array_expr &&
+                array_expr->array_element_type_id != NULL)
+            {
+                alias_id = array_expr->array_element_type_id;
+            }
+            else if (expr->array_element_type_id != NULL)
+            {
+                alias_id = expr->array_element_type_id;
+            }
+
+            if (alias_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, (char *)alias_id) != -1 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return type_node->type;
+                }
+            }
+
+            if (expr->is_array_expr)
+            {
+                int start_index = expr->array_lower_bound;
+                int end_index = expr->array_upper_bound;
+                if (expr->array_is_dynamic)
+                {
+                    start_index = 0;
+                    end_index = -1;
+                }
+
+                GpcType *element_type = NULL;
+                if (expr->array_element_record_type != NULL)
+                {
+                    element_type = create_record_type(expr->array_element_record_type);
+                }
+                else if (expr->array_element_type != UNKNOWN_TYPE)
+                {
+                    element_type = create_primitive_type(expr->array_element_type);
+                }
+
+                if (element_type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
+                    return create_array_type(element_type, start_index, end_index);
+                }
+            }
             break;
         }
         
