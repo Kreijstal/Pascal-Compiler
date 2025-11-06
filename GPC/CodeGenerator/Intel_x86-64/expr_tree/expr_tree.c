@@ -116,6 +116,8 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
     char buffer[64];
     if (codegen_type_uses_qword(type_tag))
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", offset, reg_name);
+    else if (type_tag == CHAR_TYPE)
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t-%d(%%rbp), %s\n", offset, reg_name);
     else
         snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", offset, reg_name);
     return add_inst(inst_list, buffer);
@@ -944,6 +946,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (use_qword)
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+    else if (expr->resolved_type == CHAR_TYPE && buf_leaf[0] != '$')
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", buf_leaf, target_reg->bit_32);
     else
         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
 
