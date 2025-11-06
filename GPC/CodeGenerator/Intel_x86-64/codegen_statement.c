@@ -2174,6 +2174,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if(var != NULL)
         {
             int use_qword = codegen_type_uses_qword(var_type) || (var->size >= 8);
+            int use_byte = 0;
+            const char *value_reg8 = NULL;
+            if (!use_qword && var_type == CHAR_TYPE)
+            {
+                value_reg8 = register_name8(reg);
+                if (value_reg8 != NULL)
+                {
+                    use_byte = 1;
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+                }
+            }
             if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_gpctype(assign_expr);
@@ -2187,6 +2202,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 /* Variable is in current scope, assign normally */
                 if (use_qword)
                     snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                else if (use_byte)
+                    snprintf(buffer, 50, "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
                 else
                     snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
             }
@@ -2198,6 +2215,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 {
                     if (use_qword)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, frame_reg->bit_64);
+                    else if (use_byte)
+                        snprintf(buffer, 50, "\tmovb\t%s, -%d(%s)\n", value_reg8, var->offset, frame_reg->bit_64);
                     else
                         snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, frame_reg->bit_64);
                 }
@@ -2208,6 +2227,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         var_expr->expr_data.id);
                     if (use_qword)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                    else if (use_byte)
+                        snprintf(buffer, 50, "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
                     else
                         snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
                 }
@@ -2218,7 +2239,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
 
             inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
-            if (codegen_type_uses_qword(var_type))
+            int use_qword = codegen_type_uses_qword(var_type);
+            int use_byte = 0;
+            const char *value_reg8 = NULL;
+            if (!use_qword && var_type == CHAR_TYPE)
+            {
+                value_reg8 = register_name8(reg);
+                if (value_reg8 != NULL)
+                    use_byte = 1;
+                else
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for character assignment.");
+            }
+            if (use_qword)
             {
                 int value_is_qword = expr_uses_qword_gpctype(assign_expr);
                 if (coerced_to_real)
@@ -2226,6 +2259,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 if (!value_is_qword)
                     inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
                 snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
+            }
+            else if (use_byte)
+            {
+                snprintf(buffer, 50, "\tmovb\t%s, -%d(%s)\n", value_reg8, offset, current_non_local_reg64());
             }
             else
             {
