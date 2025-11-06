@@ -321,6 +321,17 @@ combinator_t* create_pascal_param_parser(void) {
         token(match("(")), token(match(")")), sep_by(param, token(match(";")))));
 }
 
+// Helper function to create generic type lookahead combinator
+// Checks for '< identifier' pattern to distinguish generic types from '<>' operator
+combinator_t* create_generic_type_lookahead(void) {
+    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    return seq(new_combinator(), PASCAL_T_NONE,
+        token(match("<")),
+        type_arg,
+        NULL
+    );
+}
+
 static ast_t* wrap_program_params(ast_t* params) {
     ast_t* params_node = new_ast();
     params_node->typ = PASCAL_T_PROGRAM_PARAMS;
@@ -464,16 +475,19 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Constructed type parser for generic types like TFoo<Integer>
+    // Peek to ensure this looks like a generic type before committing
+    // This prevents parsing '<>' (not-equal operator) as an empty generic type
     combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(type_arg, token(match(","))),
+        sep_by1(type_arg, token(match(","))),  // Require at least one type argument
         token(match(">")),
         NULL
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list,
+        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
+        type_arg_list,                          // Now parse the full type argument list
         NULL
     );
 
@@ -489,8 +503,8 @@ void init_pascal_unit_parser(combinator_t** p) {
         range_type(PASCAL_T_RANGE_TYPE),                // range types like 1..100
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^integer
         specialize_type,
-        constructed_type,                               // constructed types like TFoo<Integer>
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),             // simple aliases like Foo = integer
+        constructed_type,                               // constructed types like TFoo<Integer> (try last to avoid conflicts)
         NULL
     );
 
@@ -1171,16 +1185,19 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* var_identifier_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     
     // Constructed type parser for generic types like TFoo<Integer>
+    // Peek to ensure this looks like a generic type before committing
+    // This prevents parsing '<>' (not-equal operator) as an empty generic type
     combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(type_arg, token(match(","))),
+        sep_by1(type_arg, token(match(","))),  // Require at least one type argument
         token(match(">")),
         NULL
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list,
+        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
+        type_arg_list,                          // Now parse the full type argument list
         NULL
     );
 
@@ -1196,9 +1213,9 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
-        constructed_type,                               // constructed types like TFoo<Integer>
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
         token(cident(PASCAL_T_IDENTIFIER)),             // custom types
+        constructed_type,                               // constructed types like TFoo<Integer> (try last to avoid conflicts)
         NULL
     );
 

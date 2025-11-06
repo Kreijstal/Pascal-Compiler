@@ -1657,6 +1657,7 @@ def _discover_and_add_auto_tests():
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
+                input_data_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.input")
 
                 # Compile the pascal program to assembly
                 run_compiler(input_file, asm_file)
@@ -1664,11 +1665,29 @@ def _discover_and_add_auto_tests():
                 # Compile the assembly to an executable
                 self.compile_executable(asm_file, executable_file)
 
+                # Check if there's an input file for stdin
+                stdin_input = None
+                if os.path.exists(input_data_file):
+                    stdin_input = read_file_content(input_data_file)
+
                 # Run the executable and check the output
                 try:
-                    process = subprocess.run(
-                        [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
-                    )
+                    # Only pass input parameter if there's actual stdin data
+                    if stdin_input is not None:
+                        process = subprocess.run(
+                            [executable_file], 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=EXEC_TIMEOUT,
+                            input=stdin_input
+                        )
+                    else:
+                        process = subprocess.run(
+                            [executable_file], 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=EXEC_TIMEOUT
+                        )
                     expected_output = read_file_content(expected_output_file)
                     # Normalize line endings for cross-platform compatibility
                     # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
