@@ -1058,7 +1058,7 @@ static void post_process_set_operations(ast_t* ast) {
 }
 
 // --- Parser Definition ---
-void init_pascal_expression_parser(combinator_t** p) {
+void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
 
@@ -1132,8 +1132,8 @@ void init_pascal_expression_parser(combinator_t** p) {
     );
 
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
-        token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p)),  // Anonymous functions
-        token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p)), // Anonymous procedures
+        token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p, stmt_parser)),  // Anonymous functions
+        token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p, stmt_parser)), // Anonymous procedures
         token(real_number(PASCAL_T_REAL)),        // Real numbers (3.14) - try first
         token(hex_integer(PASCAL_T_INTEGER)),     // Hex integers ($FF) - try before decimal
         token(integer(PASCAL_T_INTEGER)),         // Integers (123)
@@ -1415,6 +1415,7 @@ static int skip_anonymous_body(input_t* in) {
 typedef struct {
     tag_t tag;
     combinator_t** expr_parser;
+    combinator_t** stmt_parser;
 } anon_func_args;
 
 static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_name) {
@@ -1474,30 +1475,47 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
     return_type_ast->typ = PASCAL_T_RETURN_TYPE;
     return_type_ast->child = type_res.value.ast;
 
-    // Parse body "begin ... end"
-    combinator_t* begin_keyword = token(keyword_ci("begin"));
-    ParseResult begin_res = parse(in, begin_keyword);
-    free_combinator(begin_keyword);
+    // Parse body: begin ... end  (parse as a compound statement using statement parser)
+    ast_t* body_ast = NULL;
     
-    if (!begin_res.is_success) {
-        if (params_ast != NULL) free_ast(params_ast);
-        free_ast(return_type_ast);
-        discard_failure(begin_res);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'begin' for function body"), NULL);
-    }
-    free_ast(begin_res.value.ast);
+    if (afargs->stmt_parser != NULL && *afargs->stmt_parser != NULL) {
+        // Use the statement parser to parse the body
+        combinator_t* stmt_lazy = lazy(afargs->stmt_parser);
+        ParseResult body_res = parse(in, stmt_lazy);
+        free_combinator(stmt_lazy);
+        
+        if (!body_res.is_success) {
+            if (params_ast != NULL) free_ast(params_ast);
+            free_ast(return_type_ast);
+            discard_failure(body_res);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Failed to parse anonymous function body"), NULL);
+        }
+        
+        body_ast = body_res.value.ast;
+    } else {
+        // Fallback: skip the body if no statement parser available (for backward compatibility)
+        combinator_t* begin_keyword = token(keyword_ci("begin"));
+        ParseResult begin_res = parse(in, begin_keyword);
+        free_combinator(begin_keyword);
+        
+        if (!begin_res.is_success) {
+            if (params_ast != NULL) free_ast(params_ast);
+            free_ast(return_type_ast);
+            discard_failure(begin_res);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected 'begin' for function body"), NULL);
+        }
+        free_ast(begin_res.value.ast);
 
-    // For now, skip the body parsing to avoid circular dependency issues
-    // Just consume everything until we hit "end"
-    if (skip_anonymous_body(in) != 0) {
-        if (params_ast != NULL) free_ast(params_ast);
-        free_ast(return_type_ast);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Unmatched 'begin' in anonymous function"), NULL);
+        // Skip the body parsing to avoid circular dependency issues
+        if (skip_anonymous_body(in) != 0) {
+            if (params_ast != NULL) free_ast(params_ast);
+            free_ast(return_type_ast);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Unmatched 'begin' in anonymous function"), NULL);
+        }
     }
-
-    ast_t* body_ast = NULL;  // Body parsing not implemented yet
 
     // Build AST: params -> return_type -> body
     ast_t* anon_func_ast = new_ast();
@@ -1515,11 +1533,12 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
     return make_success(anon_func_ast);
 }
 
-combinator_t* anonymous_function(tag_t tag, combinator_t** expr_parser) {
+combinator_t* anonymous_function(tag_t tag, combinator_t** expr_parser, combinator_t** stmt_parser) {
     combinator_t* comb = new_combinator();
     anon_func_args* args = safe_malloc(sizeof(anon_func_args));
     args->tag = tag;
     args->expr_parser = expr_parser;
+    args->stmt_parser = stmt_parser;
     comb->args = args;
     comb->fn = anonymous_function_fn;
     return comb;
@@ -1554,28 +1573,51 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
         discard_failure(params_res);
     }
 
-    // Parse body "begin ... end"
-    combinator_t* begin_keyword = token(keyword_ci("begin"));
-    ParseResult begin_res = parse(in, begin_keyword);
-    free_combinator(begin_keyword);
+    // Parse body: begin ... end (parse as a compound statement using statement parser)
+    ast_t* body_ast = NULL;
     
-    if (!begin_res.is_success) {
-        if (params_ast != NULL) free_ast(params_ast);
-        discard_failure(begin_res);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected 'begin' for procedure body"), NULL);
-    }
-    free_ast(begin_res.value.ast);
+    if (afargs->stmt_parser != NULL && *afargs->stmt_parser != NULL) {
+        // Use the statement parser to parse the body
+        fprintf(stderr, "DEBUG: Anonymous procedure - using statement parser\n");
+        combinator_t* stmt_lazy = lazy(afargs->stmt_parser);
+        ParseResult body_res = parse(in, stmt_lazy);
+        free_combinator(stmt_lazy);
+        
+        if (!body_res.is_success) {
+            if (params_ast != NULL) free_ast(params_ast);
+            discard_failure(body_res);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Failed to parse anonymous procedure body"), NULL);
+        }
+        
+        body_ast = body_res.value.ast;
+        if (body_ast != NULL) {
+            fprintf(stderr, "DEBUG: Anonymous procedure - body parsed successfully, typ=%d\n", body_ast->typ);
+        } else {
+            fprintf(stderr, "DEBUG: Anonymous procedure - body_ast is NULL\n");
+        }
+    } else {
+        fprintf(stderr, "DEBUG: Anonymous procedure - NO statement parser available, using fallback\n");
+        // Fallback: skip the body if no statement parser available (for backward compatibility)
+        combinator_t* begin_keyword = token(keyword_ci("begin"));
+        ParseResult begin_res = parse(in, begin_keyword);
+        free_combinator(begin_keyword);
+        
+        if (!begin_res.is_success) {
+            if (params_ast != NULL) free_ast(params_ast);
+            discard_failure(begin_res);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Expected 'begin' for procedure body"), NULL);
+        }
+        free_ast(begin_res.value.ast);
 
-    // For now, skip the body parsing to avoid circular dependency issues
-    // Just consume everything until we hit "end"
-    if (skip_anonymous_body(in) != 0) {
-        if (params_ast != NULL) free_ast(params_ast);
-        restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Unmatched 'begin' in anonymous procedure"), NULL);
+        // Skip the body parsing to avoid circular dependency issues
+        if (skip_anonymous_body(in) != 0) {
+            if (params_ast != NULL) free_ast(params_ast);
+            restore_input_state(in, &state);
+            return make_failure_v2(in, parser_name, strdup("Unmatched 'begin' in anonymous procedure"), NULL);
+        }
     }
-
-    ast_t* body_ast = NULL;  // Body parsing not implemented yet
 
     // Build AST: params -> body
     ast_t* anon_proc_ast = new_ast();
@@ -1592,11 +1634,12 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
     return make_success(anon_proc_ast);
 }
 
-combinator_t* anonymous_procedure(tag_t tag, combinator_t** expr_parser) {
+combinator_t* anonymous_procedure(tag_t tag, combinator_t** expr_parser, combinator_t** stmt_parser) {
     combinator_t* comb = new_combinator();
     anon_func_args* args = safe_malloc(sizeof(anon_func_args));
     args->tag = tag;
     args->expr_parser = expr_parser;
+    args->stmt_parser = stmt_parser;
     comb->args = args;
     comb->fn = anonymous_procedure_fn;
     return comb;
