@@ -166,6 +166,7 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     free_combinator(base_type_id);
     
     // Check for optional [size] after type name (e.g., String[7])
+    // For now, we parse and discard the size since full shortstring support isn't implemented
     InputState subscript_state;
     save_input_state(in, &subscript_state);
     combinator_t* subscript_open = token(match("["));
@@ -202,14 +203,10 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
         }
         free_ast(subscript_close_res.value.ast);
         
-        // Create an ARRAY_ACCESS node to represent the subscripted type (String[7])
-        // This will be interpreted as a shortstring type in semantic analysis
-        ast_t* subscripted_type = new_ast();
-        subscripted_type->typ = PASCAL_T_ARRAY_ACCESS;
-        subscripted_type->child = element_ast;
-        element_ast->next = size_res.value.ast;
-        element_ast = subscripted_type;
-        set_ast_position(element_ast, in);
+        // Discard the size - treat String[n] as String for now
+        // Full shortstring support would require changes throughout the type system
+        free_ast(size_res.value.ast);
+        // element_ast remains as just the identifier (String)
     } else {
         discard_failure(subscript_open_res);
         restore_input_state(in, &subscript_state);

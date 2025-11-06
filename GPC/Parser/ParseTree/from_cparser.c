@@ -82,6 +82,7 @@ static int extract_constant_int(struct Expression *expr, long long *out_value);
 static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
+static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
 
@@ -442,6 +443,66 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
     }
     
     return -1; /* Not found */
+}
+
+/* Helper function to resolve the range of an enumerated type by type name.
+ * For example, if color = (red, blue, yellow), then resolve_enum_type_range_from_ast("color", ...)
+ * will set out_start=0 and out_end=2 (for 3 values: red, blue, yellow).
+ * Returns 0 on success, -1 if the type is not found or is not an enum type.
+ */
+static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end) {
+    if (type_name == NULL || type_section == NULL || out_start == NULL || out_end == NULL)
+        return -1;
+    
+    /* Iterate through type declarations to find the matching type name */
+    ast_t *type_decl = type_section->child;
+    while (type_decl != NULL) {
+        if (type_decl->typ == PASCAL_T_TYPE_DECL) {
+            /* Get the type name (first child) */
+            ast_t *type_id = type_decl->child;
+            if (type_id != NULL && type_id->typ == PASCAL_T_IDENTIFIER && type_id->sym != NULL) {
+                if (strcmp(type_id->sym->name, type_name) == 0) {
+                    /* Found the type - now check if it's an enumerated type */
+                    ast_t *type_spec_node = type_id->next;
+                    
+                    while (type_spec_node != NULL && 
+                           type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
+                           type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                        type_spec_node = type_spec_node->next;
+                    }
+                    
+                    /* Unwrap TYPE_SPEC if needed */
+                    ast_t *spec = type_spec_node;
+                    if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+                        spec = spec->child;
+                    
+                    /* Check if it's an enumerated type */
+                    if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+                        /* Count the enum values */
+                        int count = 0;
+                        ast_t *literal = spec->child;
+                        while (literal != NULL) {
+                            if (literal->typ == PASCAL_T_IDENTIFIER)
+                                count++;
+                            literal = literal->next;
+                        }
+                        
+                        if (count > 0) {
+                            *out_start = 0;
+                            *out_end = count - 1;
+                            return 0; /* Success */
+                        }
+                    }
+                    
+                    /* Found the type but it's not an enum */
+                    return -1;
+                }
+            }
+        }
+        type_decl = type_decl->next;
+    }
+    
+    return -1; /* Type not found */
 }
 
 /* Helper function to resolve a const integer identifier from the same const section.
