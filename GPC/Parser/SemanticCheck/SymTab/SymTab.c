@@ -273,6 +273,7 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, char *id)
         }
     }
 
+
     return all_found_nodes;
 }
 
