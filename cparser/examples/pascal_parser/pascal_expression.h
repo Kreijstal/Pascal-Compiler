@@ -6,7 +6,7 @@
 
 typedef struct { tag_t tag; combinator_t** expr_parser; } set_args;
 
-void init_pascal_expression_parser(combinator_t** p);
+void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser);
 ParseResult parse_pascal_expression(input_t* input, combinator_t* parser);
 combinator_t* pascal_identifier(tag_t tag);
 combinator_t* pascal_expression_identifier(tag_t tag);
@@ -16,7 +16,7 @@ combinator_t* char_code_literal(tag_t tag);
 combinator_t* pascal_string(tag_t tag);
 combinator_t* implicit_string_concat(tag_t tag);
 combinator_t* set_constructor(tag_t tag, combinator_t** expr_parser);
-combinator_t* anonymous_function(tag_t tag, combinator_t** expr_parser);
-combinator_t* anonymous_procedure(tag_t tag, combinator_t** expr_parser);
+combinator_t* anonymous_function(tag_t tag, combinator_t** expr_parser, combinator_t** stmt_parser);
+combinator_t* anonymous_procedure(tag_t tag, combinator_t** expr_parser, combinator_t** stmt_parser);
 
 #endif // PASCAL_EXPRESSION_H

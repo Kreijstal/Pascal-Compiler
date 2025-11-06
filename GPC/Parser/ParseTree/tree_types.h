@@ -256,7 +256,9 @@ enum ExprType {
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
     EXPR_TYPECAST,
-    EXPR_ADDR_OF_PROC
+    EXPR_ADDR_OF_PROC,
+    EXPR_ANONYMOUS_FUNCTION,
+    EXPR_ANONYMOUS_PROCEDURE
 };
 
 /* An expression subtree */
@@ -372,6 +374,17 @@ struct Expression
         {
             struct HashNode *procedure_symbol;
         } addr_of_proc_data;
+
+        /* Anonymous function/procedure */
+        struct AnonymousMethod
+        {
+            char *generated_name;           /* Auto-generated unique name */
+            ListNode_t *parameters;         /* Parameter list */
+            int return_type;                /* Return type (for functions, -1 for procedures) */
+            char *return_type_id;           /* Return type identifier */
+            struct Statement *body;         /* Body statement */
+            int is_function;                /* 1 for function, 0 for procedure */
+        } anonymous_method_data;
     } expr_data;
     struct Expression *field_width;
     struct Expression *field_precision;

@@ -499,7 +499,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // constructs as regular expressions (arrays, arithmetic, sets, etc.).
     combinator_t** const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *const_expr_parser = new_combinator();
-    init_pascal_expression_parser(const_expr_parser);
+    init_pascal_expression_parser(const_expr_parser, NULL);
 
     combinator_t* const_value = lazy(const_expr_parser);
 
@@ -612,7 +612,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Variable declaration for function/procedure local variables
     combinator_t** var_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *var_expr_parser = new_combinator();
-    init_pascal_expression_parser(var_expr_parser);
+    init_pascal_expression_parser(var_expr_parser, NULL);
 
     combinator_t* typed_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
@@ -1204,7 +1204,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t** program_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *program_expr_parser = new_combinator();
-    init_pascal_expression_parser(program_expr_parser);
+    init_pascal_expression_parser(program_expr_parser, NULL);
 
     combinator_t* typed_program_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         var_identifier_list,                            // multiple variable names
@@ -1320,7 +1320,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // complete expression grammar instead of a limited subset.
     combinator_t** program_const_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *program_const_expr_parser = new_combinator();
-    init_pascal_expression_parser(program_const_expr_parser);
+    init_pascal_expression_parser(program_const_expr_parser, NULL);
 
     combinator_t* const_value = lazy(program_const_expr_parser);
 
