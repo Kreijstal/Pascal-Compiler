@@ -132,7 +132,7 @@ static int expression_is_string(struct Expression *expr)
     if (expr == NULL)
         return 0;
     
-    if (expr->type == EXPR_STRING)
+    if (expr->type == EXPR_STRING || expr->type == EXPR_CHAR_CODE)
         return 1;
     
     if (expr->type == EXPR_ADDOP && expr->expr_data.addop_data.addop_type == PLUS)
@@ -156,6 +156,17 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
         case EXPR_STRING:
             *out_value = strdup(expr->expr_data.string);
             return (*out_value == NULL) ? 1 : 0;
+        
+        case EXPR_CHAR_CODE:
+        {
+            /* Character code: convert to a single-character string */
+            *out_value = (char *)malloc(2);
+            if (*out_value == NULL)
+                return 1;
+            (*out_value)[0] = (char)(expr->expr_data.char_code & 0xFF);
+            (*out_value)[1] = '\0';
+            return 0;
+        }
         
         case EXPR_VAR_ID:
         {

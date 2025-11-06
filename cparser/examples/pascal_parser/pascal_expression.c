@@ -948,6 +948,95 @@ combinator_t* pascal_string(tag_t tag) {
     );
 }
 
+// Parser for implicit string concatenation: 'hello'#13'world'
+// In Pascal, adjacent string literals and character codes are implicitly concatenated
+// Also handles single char literals vs strings properly
+static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+    
+    // Parse first item: try char literal first, then string, then char code
+    combinator_t* first_item = token(multi(new_combinator(), PASCAL_T_NONE,
+        char_literal(PASCAL_T_CHAR),
+        pascal_string(PASCAL_T_STRING),
+        char_code_literal(PASCAL_T_CHAR_CODE),
+        NULL
+    ));
+    
+    ParseResult first = parse(in, first_item);
+    free_combinator(first_item);
+    
+    if (!first.is_success) {
+        discard_failure(first);
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected string or char"), NULL);
+    }
+    
+    ast_t* result = first.value.ast;
+    int item_count = 1;
+    
+    // Try to parse additional strings/char codes without operators (with whitespace skipping)
+    while (1) {
+        InputState lookahead_state;
+        save_input_state(in, &lookahead_state);
+        
+        combinator_t* next_item = token(multi(new_combinator(), PASCAL_T_NONE,
+            pascal_string(PASCAL_T_STRING),
+            char_code_literal(PASCAL_T_CHAR_CODE),
+            NULL
+        ));
+        
+        ParseResult next = parse(in, next_item);
+        free_combinator(next_item);
+        
+        if (!next.is_success) {
+            discard_failure(next);
+            restore_input_state(in, &lookahead_state);
+            break; // No more adjacent strings/char codes
+        }
+        
+        item_count++;
+        
+        // Concatenate using ADD node
+        ast_t* concat = new_ast();
+        concat->typ = PASCAL_T_ADD;
+        concat->child = result;
+        result->next = next.value.ast;
+        concat->next = NULL;
+        set_ast_position(concat, in);
+        result = concat;
+    }
+    
+    // If we only got one item and it was a CHAR, return it as-is
+    if (item_count == 1 && result->typ == PASCAL_T_CHAR) {
+        return make_success(result);
+    }
+    
+    // Wrap result in the requested tag
+    if (result->typ != pargs->tag && pargs->tag != PASCAL_T_NONE) {
+        ast_t* wrapper = new_ast();
+        wrapper->typ = pargs->tag;
+        wrapper->child = result;
+        wrapper->next = NULL;
+        set_ast_position(wrapper, in);
+        result = wrapper;
+    }
+    
+    return make_success(result);
+}
+
+combinator_t* implicit_string_concat(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY;
+    comb->fn = implicit_string_concat_fn;
+    comb->args = args;
+    return comb;
+}
+
+
 // Post-process AST to handle semantic operations like set union
 static void post_process_set_operations(ast_t* ast) {
     if (ast == NULL || ast == ast_nil) return;
@@ -1033,9 +1122,7 @@ void init_pascal_expression_parser(combinator_t** p) {
         token(real_number(PASCAL_T_REAL)),        // Real numbers (3.14) - try first
         token(hex_integer(PASCAL_T_INTEGER)),     // Hex integers ($FF) - try before decimal
         token(integer(PASCAL_T_INTEGER)),         // Integers (123)
-        token(char_literal(PASCAL_T_CHAR)),       // Characters ('A')
-        token(char_code_literal(PASCAL_T_CHAR_CODE)), // Character codes (#13, #$0D)
-        token(pascal_string(PASCAL_T_STRING)),    // Strings ("hello" or 'hello')
+        implicit_string_concat(PASCAL_T_NONE),    // Strings and char codes with implicit concatenation (handles char/string detection)
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]
         token(boolean_true),                      // Boolean true
         token(boolean_false),                     // Boolean false
