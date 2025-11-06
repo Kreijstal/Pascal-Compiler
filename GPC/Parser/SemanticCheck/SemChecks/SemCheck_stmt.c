@@ -899,6 +899,16 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 types_compatible = 1;
                 /* Keep CHAR_TYPE so code generator knows to promote */
             }
+            /* Allow char assignment to char arrays (FPC compatibility) */
+            else if (type_first == CHAR_TYPE && type_second == CHAR_TYPE &&
+                var != NULL && var->is_array_expr && var->array_element_type == CHAR_TYPE &&
+                (expr == NULL || !expr->is_array_expr))
+            {
+                types_compatible = 1;
+                fprintf(stderr,
+                    "Warning on line %d, assigning char to array of char copies only the first element (FPC compatibility).\n\n",
+                    stmt->line_num);
+            }
             /* Allow string literal assignment to char arrays */
             else if (type_first == CHAR_TYPE && type_second == STRING_TYPE &&
                 var != NULL && var->is_array_expr && var->array_element_type == CHAR_TYPE &&
