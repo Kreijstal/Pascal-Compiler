@@ -2483,6 +2483,15 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
             break;
     }
     
+    /* Check if the expression already has a resolved GpcType (e.g., from semcheck_expr_main) */
+    if (expr->resolved_gpc_type != NULL)
+    {
+        /* Use the existing GpcType - caller doesn't own it (it belongs to the expression) */
+        if (owns_type != NULL)
+            *owns_type = 0;
+        return expr->resolved_gpc_type;
+    }
+    
     /* For all other cases or if direct resolution failed, use semcheck_expr_main
      * to get the type tag, then convert to GpcType */
     int type_tag = UNKNOWN_TYPE;
@@ -2585,14 +2594,45 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
-            /* Anonymous methods are not yet fully implemented in semantic checking */
-            /* For now, treat them as unknown type to avoid crashes */
-            fprintf(stderr, "ERROR: Anonymous methods are not yet fully supported at line %d\n", 
-                    expr->line_num);
-            fprintf(stderr, "       This feature is under development.\n");
-            *type_return = UNKNOWN_TYPE;
-            return_val = 1;  /* Mark as error */
+        {
+            /* Anonymous methods are treated as procedure/function references.
+             * For now, we just set their type to PROCEDURE (function pointer type).
+             * Full implementation requires creating hidden subprogram declarations
+             * which is handled during code generation.
+             */
+            
+            /* Set the type to PROCEDURE to represent a function/procedure reference */
+            *type_return = PROCEDURE;
+            
+            /* Create a GpcType for better type checking if parameters are available */
+            ListNode_t *params = expr->expr_data.anonymous_method_data.parameters;
+            GpcType *return_type = NULL;
+            
+            fprintf(stderr, "DEBUG: Anonymous %s - params=%p, return_type_id='%s'\n",
+                    (expr->type == EXPR_ANONYMOUS_FUNCTION) ? "function" : "procedure",
+                    params,
+                    expr->expr_data.anonymous_method_data.return_type_id);
+            
+            if (expr->type == EXPR_ANONYMOUS_FUNCTION) {
+                /* For functions, we may have a return type specified */
+                /* For now, we leave it as NULL - full implementation would resolve it */
+            }
+            
+            /* Create the procedure type to store in the expression */
+            GpcType *proc_type = create_procedure_type(params, return_type);
+            if (proc_type != NULL) {
+                expr->resolved_gpc_type = proc_type;
+                fprintf(stderr, "DEBUG: Created GpcType for anonymous %s at line %d\n",
+                        (expr->type == EXPR_ANONYMOUS_FUNCTION) ? "function" : "procedure",
+                        expr->line_num);
+            } else {
+                fprintf(stderr, "WARNING: Failed to create GpcType for anonymous method at line %d\n",
+                        expr->line_num);
+            }
+            
+            return_val = 0;  /* No error for now - we'll improve this gradually */
             break;
+        }
 
         default:
             assert(0 && "Bad type in semcheck_expr_main!");

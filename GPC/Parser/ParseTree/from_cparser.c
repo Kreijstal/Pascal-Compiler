@@ -2831,45 +2831,72 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return mk_addressof(expr_node->line, convert_expression(expr_node->child));
     case PASCAL_T_ANONYMOUS_FUNCTION:
     {
-        /* Anonymous function: params -> return_type -> body */
+        /* Anonymous function: params -> return_type -> body 
+         * Structure from parser:
+         * - If params exist: child is first PARAM, params are linked via ->next
+         * - Return type is in a sibling after all params
+         * - Body is after return type
+         */
         char *generated_name = generate_anonymous_method_name(1);
         if (generated_name == NULL) {
             fprintf(stderr, "ERROR: Failed to generate name for anonymous function at line %d\n", expr_node->line);
             return NULL;
         }
         
-        ast_t *params_node = expr_node->child;
+        fprintf(stderr, "DEBUG: Converting anonymous function at line %d\n", expr_node->line);
+        
+        /* Navigate the AST structure */
+        ast_t *current = expr_node->child;
+        ast_t *params_start = NULL;
         ast_t *return_type_node = NULL;
         ast_t *body_node = NULL;
         
-        if (params_node != NULL && params_node->typ == PASCAL_T_PARAM_LIST) {
-            return_type_node = params_node->next;
-            if (return_type_node != NULL && return_type_node->typ == PASCAL_T_RETURN_TYPE) {
-                body_node = return_type_node->next;
+        /* Check if first child is a PARAM (parameters exist) or RETURN_TYPE (no params) */
+        if (current != NULL) {
+            fprintf(stderr, "DEBUG:   child=%p, child->typ=%d (%s)\n", current, current->typ, tag_name(current->typ));
+            
+            if (current->typ == PASCAL_T_PARAM) {
+                /* We have parameters - collect them all */
+                params_start = current;
+                /* Find the last PARAM in the chain */
+                while (current != NULL && current->typ == PASCAL_T_PARAM) {
+                    current = current->next;
+                }
+                /* Now current should be RETURN_TYPE */
+                if (current != NULL && current->typ == PASCAL_T_RETURN_TYPE) {
+                    return_type_node = current;
+                    body_node = current->next;
+                }
+            } else if (current->typ == PASCAL_T_RETURN_TYPE) {
+                /* No parameters, directly to return type */
+                return_type_node = current;
+                body_node = current->next;
             }
-        } else {
-            /* No parameters, check if first child is return type */
-            return_type_node = params_node;
-            if (return_type_node != NULL && return_type_node->typ == PASCAL_T_RETURN_TYPE) {
-                body_node = return_type_node->next;
-            }
-            params_node = NULL;
         }
         
+        /* Convert parameters */
         ListNode_t *parameters = NULL;
-        if (params_node != NULL) {
-            ast_t *param_cursor = params_node->child;
+        if (params_start != NULL) {
+            ast_t *param_cursor = params_start;
             parameters = convert_param_list(&param_cursor);
+            fprintf(stderr, "DEBUG:   Converted %d parameters\n", ListLength(parameters));
+        } else {
+            fprintf(stderr, "DEBUG:   No parameters to convert\n");
         }
         
+        /* Convert return type */
         int return_type = UNKNOWN_TYPE;
         char *return_type_id = NULL;
         if (return_type_node != NULL && return_type_node->child != NULL) {
             if (return_type_node->child->sym != NULL && return_type_node->child->sym->name != NULL) {
                 return_type_id = strdup(return_type_node->child->sym->name);
+                fprintf(stderr, "DEBUG:   Return type: %s\n", return_type_id);
             }
+        } else {
+            fprintf(stderr, "DEBUG:   No return type\n");
         }
         
+        /* Convert body */
         struct Statement *body = NULL;
         if (body_node != NULL) {
             body = convert_statement(body_node);
