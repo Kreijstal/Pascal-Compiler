@@ -254,34 +254,40 @@ static ast_t* build_class_ast(ast_t* ast) {
     return class_node;
 }
 
-combinator_t* class_type(tag_t tag) {
-    // Type reference for field declarations - can be simple identifier or constructed type
-    combinator_t* type_arg_field = token(cident(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list_field = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+// Helper function to create a type reference parser that supports both
+// simple identifiers and constructed types (like TFoo<Integer>)
+static combinator_t* create_type_ref_parser(void) {
+    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(type_arg_field, token(match(","))),
+        sep_by(type_arg, token(match(","))),
         token(match(">")),
         NULL
     );
-    combinator_t* constructed_type_field = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list_field,
+        type_arg_list,
         NULL
     );
-    combinator_t* simple_type_field = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* field_type_ref = multi(new_combinator(), PASCAL_T_NONE,
-        constructed_type_field,
-        simple_type_field,
+    combinator_t* simple_type = token(cident(PASCAL_T_IDENTIFIER));
+    
+    return multi(new_combinator(), PASCAL_T_NONE,
+        constructed_type,
+        simple_type,
         NULL
     );
+}
+
+combinator_t* class_type(tag_t tag) {
+    // Type reference for field declarations, method return types, etc.
+    combinator_t* type_ref = create_type_ref_parser();
 
     // Field declaration: field_name: Type;
     combinator_t* field_name = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* field_type = field_type_ref; // Support both simple and constructed types
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         field_name,
         token(match(":")),
-        field_type,
+        type_ref,
         token(match(";")),
         NULL
     );
@@ -336,7 +342,7 @@ combinator_t* class_type(tag_t tag) {
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
-        field_type_ref,  // Support both simple and constructed types
+        create_type_ref_parser(),  // Support both simple and constructed types
         token(match(";")),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             multi(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
@@ -357,7 +363,7 @@ combinator_t* class_type(tag_t tag) {
         token(operator_name(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
-        field_type_ref,  // Support both simple and constructed types
+        create_type_ref_parser(),  // Support both simple and constructed types
         token(match(";")),
         NULL
     );
@@ -367,7 +373,7 @@ combinator_t* class_type(tag_t tag) {
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
         token(match(":")),
-        field_type_ref,  // Support both simple and constructed types
+        create_type_ref_parser(),  // Support both simple and constructed types
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
             token(cident(PASCAL_T_IDENTIFIER)), // read field/method
@@ -416,34 +422,12 @@ combinator_t* class_type(tag_t tag) {
         NULL
     ));
 
-    // Parent class can be simple identifier or constructed type like TFoo<Integer>
-    // For now, we'll parse until we hit end of parentheses
-    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by(type_arg, token(match(","))),
-        token(match(">")),
-        NULL
-    );
-    combinator_t* constructed_parent_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list,
-        NULL
-    );
-    combinator_t* simple_parent_type = token(cident(PASCAL_T_IDENTIFIER));
-    
-    combinator_t* parent_type = multi(new_combinator(), PASCAL_T_NONE,
-        constructed_parent_type,
-        simple_parent_type,
-        NULL
-    );
-    
     // Optional parent class/interface specification: (Parent) or (Parent1, Parent2, ...)
     // Supports both single parent and multiple parents (class + interfaces)
     combinator_t* parent_class = optional(between(
         token(match("(")),
         token(match(")")),
-        sep_by(parent_type, token(match(",")))
+        sep_by(create_type_ref_parser(), token(match(",")))
     ));
 
     combinator_t* class_parser = seq(new_combinator(), tag,
@@ -458,26 +442,6 @@ combinator_t* class_type(tag_t tag) {
 }
 
 combinator_t* interface_type(tag_t tag) {
-    // Type reference for interface methods - can be simple identifier or constructed type
-    combinator_t* type_arg_meth = token(cident(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list_meth = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by(type_arg_meth, token(match(","))),
-        token(match(">")),
-        NULL
-    );
-    combinator_t* constructed_type_ref = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list_meth,
-        NULL
-    );
-    combinator_t* simple_type_ref = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* type_ref = multi(new_combinator(), PASCAL_T_NONE,
-        constructed_type_ref,
-        simple_type_ref,
-        NULL
-    );
-
     // Interface method declarations (similar to class but no implementation)
     combinator_t* procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         token(keyword_ci("procedure")),
@@ -492,7 +456,7 @@ combinator_t* interface_type(tag_t tag) {
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
-        type_ref,  // Support both simple and constructed types
+        create_type_ref_parser(),  // Support both simple and constructed types
         token(match(";")),
         NULL
     );
@@ -502,7 +466,7 @@ combinator_t* interface_type(tag_t tag) {
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
         token(match(":")),
-        type_ref,  // Support both simple and constructed types
+        create_type_ref_parser(),  // Support both simple and constructed types
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
             token(cident(PASCAL_T_IDENTIFIER)), // read field/method
@@ -527,33 +491,12 @@ combinator_t* interface_type(tag_t tag) {
     // Interface body: method declarations
     combinator_t* interface_body_parser = many(interface_member);
 
-    // Parent interface can be simple identifier or constructed type like IFoo<Integer>
-    combinator_t* type_arg_int = token(cident(PASCAL_T_TYPE_ARG));
-    combinator_t* type_arg_list_int = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
-        token(match("<")),
-        sep_by(type_arg_int, token(match(","))),
-        token(match(">")),
-        NULL
-    );
-    combinator_t* constructed_parent_int = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list_int,
-        NULL
-    );
-    combinator_t* simple_parent_int = token(cident(PASCAL_T_IDENTIFIER));
-
-    combinator_t* parent_int_type = multi(new_combinator(), PASCAL_T_NONE,
-        constructed_parent_int,
-        simple_parent_int,
-        NULL
-    );
-
     // Optional parent interface specification: (ParentInterface) or (ParentInterface<T>)
     // Can also support multiple parent interfaces if needed
     combinator_t* parent_interface = optional(between(
         token(match("(")),
         token(match(")")),
-        sep_by(parent_int_type, token(match(",")))
+        sep_by(create_type_ref_parser(), token(match(",")))
     ));
 
     combinator_t* interface_parser = seq(new_combinator(), tag,
