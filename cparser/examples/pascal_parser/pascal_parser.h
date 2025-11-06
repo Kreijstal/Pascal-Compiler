@@ -126,16 +126,19 @@ typedef enum {
     PASCAL_T_ANONYMOUS_PROCEDURE,    // Anonymous procedure literal
     PASCAL_T_ENUMERATED_TYPE,
     PASCAL_T_CLASS_TYPE,
+    PASCAL_T_INTERFACE_TYPE,         // Interface type like interface ... end
     // Generic type tags
     PASCAL_T_GENERIC_TYPE_DECL,      // Generic type declaration like TFoo<T> = class
     PASCAL_T_TYPE_PARAM_LIST,        // Type parameter list like <T, U>
     PASCAL_T_TYPE_PARAM,             // Single type parameter like T
+    PASCAL_T_TYPE_CONSTRAINT,        // Type constraint like T: class
     PASCAL_T_CONSTRUCTED_TYPE,       // Constructed type like TFoo<Integer>
     PASCAL_T_TYPE_ARG_LIST,          // Type argument list like <Integer, String>
     PASCAL_T_TYPE_ARG,               // Single type argument like Integer
     PASCAL_T_GENERIC_METHOD,         // Generic method declaration
     PASCAL_T_GENERIC_PROCEDURE_TYPE, // Generic procedure type
     PASCAL_T_GENERIC_FUNCTION_TYPE,  // Generic function type
+    PASCAL_T_NESTED_TYPE_SECTION,    // Nested type section in class body
     PASCAL_T_CLASS_MEMBER,
     PASCAL_T_ACCESS_MODIFIER,
     PASCAL_T_CLASS_BODY,
