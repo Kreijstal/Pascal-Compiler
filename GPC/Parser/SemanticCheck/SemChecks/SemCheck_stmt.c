@@ -1251,6 +1251,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         fprintf(stderr, "DEBUG: Type mismatch - expected %s, got %s\n",
                             gpc_type_to_string(expected_gpc_type),
                             gpc_type_to_string(arg_gpc_type));
+                        if (expected_gpc_type && expected_gpc_type->kind == TYPE_KIND_RECORD && 
+                            arg_gpc_type && arg_gpc_type->kind == TYPE_KIND_RECORD) {
+                            fprintf(stderr, "  Expected RecordType ptr: %p\n", (void*)expected_gpc_type->info.record_info);
+                            fprintf(stderr, "  Argument RecordType ptr: %p\n", (void*)arg_gpc_type->info.record_info);
+                        }
                     }
                     
                     /* Special AST transformation for procedure parameters */
