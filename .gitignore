@@ -26,8 +26,9 @@ tests/output/
 /mod_test
 /simple_test
 /test_harness
+/*.md
 /_codeql_detected_source_root
-/test_*
+!/README.md
 !/test-cross-compile*.sh
 
 # Python cache
