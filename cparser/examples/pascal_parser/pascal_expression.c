@@ -1578,7 +1578,6 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
     
     if (afargs->stmt_parser != NULL && *afargs->stmt_parser != NULL) {
         // Use the statement parser to parse the body
-        fprintf(stderr, "DEBUG: Anonymous procedure - using statement parser\n");
         combinator_t* stmt_lazy = lazy(afargs->stmt_parser);
         ParseResult body_res = parse(in, stmt_lazy);
         free_combinator(stmt_lazy);
@@ -1591,13 +1590,7 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
         }
         
         body_ast = body_res.value.ast;
-        if (body_ast != NULL) {
-            fprintf(stderr, "DEBUG: Anonymous procedure - body parsed successfully, typ=%d\n", body_ast->typ);
-        } else {
-            fprintf(stderr, "DEBUG: Anonymous procedure - body_ast is NULL\n");
-        }
     } else {
-        fprintf(stderr, "DEBUG: Anonymous procedure - NO statement parser available, using fallback\n");
         // Fallback: skip the body if no statement parser available (for backward compatibility)
         combinator_t* begin_keyword = token(keyword_ci("begin"));
         ParseResult begin_res = parse(in, begin_keyword);

@@ -2916,13 +2916,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
             return NULL;
         }
         
-        fprintf(stderr, "DEBUG: Converting anonymous procedure at line %d\n", expr_node->line);
-        fprintf(stderr, "DEBUG: expr_node->child = %p\n", (void*)expr_node->child);
         if (expr_node->child != NULL) {
-            fprintf(stderr, "DEBUG: expr_node->child->typ = %d\n", expr_node->child->typ);
-            fprintf(stderr, "DEBUG: expr_node->child->next = %p\n", (void*)expr_node->child->next);
             if (expr_node->child->next != NULL) {
-                fprintf(stderr, "DEBUG: expr_node->child->next->typ = %d\n", expr_node->child->next->typ);
             }
         }
         
@@ -2932,28 +2927,22 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         
         /* Determine if first node is parameters or if there are no parameters */
         if (first_node != NULL && first_node->typ == PASCAL_T_PARAM_LIST) {
-            fprintf(stderr, "DEBUG: First node is PARAM_LIST\n");
             params_node = first_node;
             body_node = first_node->next;
         } else if (first_node != NULL && first_node->typ == PASCAL_T_NONE) {
             /* Empty/None node - parameters were empty, body is at next */
-            fprintf(stderr, "DEBUG: First node is NONE, body should be at next\n");
             params_node = NULL;
             body_node = first_node->next;
         } else if (first_node != NULL) {
             /* First node is the body itself (no params)  */
-            fprintf(stderr, "DEBUG: First node is body (typ=%d)\n", first_node->typ);
             params_node = NULL;
             body_node = first_node;
         } else {
-            fprintf(stderr, "DEBUG: No child at all\n");
             params_node = NULL;
             body_node = NULL;
         }
         
-        fprintf(stderr, "DEBUG: body_node = %p\n", (void*)body_node);
         if (body_node != NULL) {
-            fprintf(stderr, "DEBUG: body_node->typ = %d\n", body_node->typ);
         }
         
         ListNode_t *parameters = NULL;
@@ -2964,9 +2953,6 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         
         struct Statement *body = NULL;
         if (body_node != NULL) {
-            /* Debug: print body_node info */
-            fprintf(stderr, "DEBUG: Anonymous procedure body_node typ=%d, line=%d\n", 
-                    body_node->typ, body_node->line);
             body = convert_statement(body_node);
             if (body == NULL) {
                 fprintf(stderr, "ERROR: Failed to convert anonymous procedure body at line %d\n", 
