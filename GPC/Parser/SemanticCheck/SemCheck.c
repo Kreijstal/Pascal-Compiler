@@ -1464,6 +1464,13 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, text_name, text_type);
         free(text_name);
     }
+    char *pointer_name = strdup("Pointer");
+    if (pointer_name != NULL) {
+        GpcType *pointer_type = create_pointer_type(NULL); // Untyped pointer
+        assert(pointer_type != NULL && "Failed to create Pointer type");
+        AddBuiltinType_Typed(symtab, pointer_name, pointer_type);
+        free(pointer_name);
+    }
 
     /* Builtin procedures - procedures have no return type */
     char *setlength_name = strdup("SetLength");
@@ -2191,6 +2198,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
 
+    /* Check if already declared (e.g., by predeclare_subprogram in two-pass approach) */
+    HashNode_t *existing_decl = NULL;
+    int already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
@@ -2231,9 +2241,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
         
         // Use the typed version to properly set the GpcType
-        func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
-                        subprogram->tree_data.subprogram_data.mangled_id,
-                        proc_type);
+        // Skip if already declared
+        if (!already_declared)
+        {
+            func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
+                            subprogram->tree_data.subprogram_data.mangled_id,
+                            proc_type);
+        }
+        else
+        {
+            func_return = 0;  /* No error since it's expected to be already declared */
+        }
 
         PushScope(symtab);
         
@@ -2302,9 +2320,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         );
         
         // Use the typed version to properly set the GpcType
-        func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
-                        subprogram->tree_data.subprogram_data.mangled_id,
-                        func_type);
+        // Skip if already declared
+        if (!already_declared)
+        {
+            func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
+                            subprogram->tree_data.subprogram_data.mangled_id,
+                            func_type);
+        }
+        else
+        {
+            func_return = 0;  /* No error since it's expected to be already declared */
+        }
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
@@ -2383,8 +2409,117 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 }
 
 
+/* Pre-declare a subprogram (add to symbol table without processing body)
+ * This is used for forward declarations so all procedures are visible
+ * before any bodies are processed.
+ */
+static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
+{
+    int return_val = 0;
+    int func_return;
+    enum TreeType sub_type;
+    
+    assert(symtab != NULL);
+    assert(subprogram != NULL);
+    assert(subprogram->type == TREE_SUBPROGRAM);
+    
+    char *id_to_use_for_lookup;
+    
+    sub_type = subprogram->tree_data.subprogram_data.sub_type;
+    assert(sub_type == TREE_SUBPROGRAM_PROC || sub_type == TREE_SUBPROGRAM_FUNC);
+    
+    return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
+    
+    // --- Name Mangling Logic ---
+    if (subprogram->tree_data.subprogram_data.cname_flag) {
+        subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
+    } else {
+        // Pass the symbol table to the mangler
+        subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
+            subprogram->tree_data.subprogram_data.id,
+            subprogram->tree_data.subprogram_data.args_var,
+            symtab);
+    }
+    id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
+    
+    /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
+    if(sub_type == TREE_SUBPROGRAM_PROC)
+    {
+        /* Create GpcType for the procedure */
+        GpcType *proc_type = create_procedure_type(
+            subprogram->tree_data.subprogram_data.args_var,
+            NULL  /* procedures have no return type */
+        );
+        
+        // Add to current scope
+        func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
+                        subprogram->tree_data.subprogram_data.mangled_id,
+                        proc_type);
+        
+        if(func_return > 0)
+        {
+            fprintf(stderr, "On line %d: redeclaration of name %s!\n",
+                subprogram->line_num, subprogram->tree_data.subprogram_data.id);
+            return_val += func_return;
+        }
+    }
+    else // Function
+    {
+        /* Need to additionally extract the return type */
+        HashNode_t *return_type_node = NULL;
+        GpcType *return_gpc_type = NULL;
+        
+        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+        {
+            HashNode_t *type_node;
+            if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)
+            {
+                fprintf(stderr, "Error on line %d, undefined type %s!\n",
+                    subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
+                return_val++;
+            }
+            else
+            {
+                return_type_node = type_node;
+                assert(type_node->type != NULL && "Type node must have GpcType");
+                return_gpc_type = type_node->type;
+            }
+        }
+        
+        /* Create a primitive GpcType for the return type if we don't have one */
+        if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)
+        {
+            return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
+        }
+        
+        /* Create function GpcType */
+        GpcType *func_type = create_procedure_type(
+            subprogram->tree_data.subprogram_data.args_var,
+            return_gpc_type  /* functions have a return type */
+        );
+        
+        // Add to current scope
+        func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
+                        subprogram->tree_data.subprogram_data.mangled_id,
+                        func_type);
+        
+        if(func_return > 0)
+        {
+            fprintf(stderr, "On line %d: redeclaration of name %s!\n",
+                subprogram->line_num, subprogram->tree_data.subprogram_data.id);
+            return_val += func_return;
+        }
+    }
+    
+    return return_val;
+}
+
+
 /* Semantic check on multiple subprograms */
 /* A return value greater than 0 indicates how many errors occurred */
+/* Forward declaration - we'll define this after semcheck_subprogram */
+static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
+
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev)
 {
     ListNode_t *cur;
@@ -2392,6 +2527,27 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     assert(symtab != NULL);
 
     return_val = 0;
+    
+    /* ARCHITECTURAL FIX: Two-pass approach to ensure all procedure declarations
+     * are visible before processing any bodies. This fixes the issue where unit
+     * procedures were not visible in nested user procedures because they came
+     * later in the subprograms list.
+     * 
+     * Pass 1: Declare all procedures (add to symbol table)
+     * Pass 2: Process bodies (which may reference procedures declared in pass 1)
+     */
+    
+    /* Pass 1: Pre-declare all procedures at this level */
+    cur = subprograms;
+    while(cur != NULL)
+    {
+        assert(cur->cur != NULL);
+        assert(cur->type == LIST_TREE);
+        return_val += predeclare_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev);
+        cur = cur->next;
+    }
+    
+    /* Pass 2: Process full semantic checking including bodies */
     cur = subprograms;
     while(cur != NULL)
     {
