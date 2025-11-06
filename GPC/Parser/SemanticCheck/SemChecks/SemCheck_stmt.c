@@ -809,6 +809,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         (lhs_gpctype->kind == TYPE_KIND_PROCEDURE || rhs_gpctype->kind == TYPE_KIND_PROCEDURE))
     {
         handled_by_gpctype = 1;
+        
         if (!are_types_compatible_for_assignment(lhs_gpctype, rhs_gpctype, symtab))
         {
             const char *lhs_name = "<expression>";
@@ -1124,7 +1125,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         char *double_underscore = strstr(proc_id, "__");
         if (double_underscore != NULL) {
             /* Extract class name and method name */
-            char *class_name = strndup(proc_id, double_underscore - proc_id);
+            size_t class_name_len = double_underscore - proc_id;
+            char *class_name = (char *)malloc(class_name_len + 1);
+            if (class_name != NULL) {
+                memcpy(class_name, proc_id, class_name_len);
+                class_name[class_name_len] = '\0';
+            }
             char *method_name = strdup(double_underscore + 2);
             
             if (class_name != NULL && method_name != NULL) {
