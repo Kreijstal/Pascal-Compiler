@@ -850,7 +850,7 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
     
-    if (record_info->parent_class_name != NULL) {
+if (record_info->parent_class_name != NULL) {
         /* Look up parent class */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, record_info->parent_class_name) != -1 && 
