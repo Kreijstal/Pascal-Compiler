@@ -3244,22 +3244,30 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_FOR_STMT: {
         ast_t *init_node = unwrap_pascal_node(stmt_node->child);
-        ast_t *limit_wrapper = init_node != NULL ? init_node->next : NULL;
-        ast_t *end_node = unwrap_pascal_node(limit_wrapper);
-        ast_t *body_node = unwrap_pascal_node(limit_wrapper != NULL ? limit_wrapper->next : NULL);
+        ast_t *direction_wrapper = init_node != NULL ? init_node->next : NULL;
+        ast_t *direction_node = unwrap_pascal_node(direction_wrapper);
+        ast_t *end_wrapper = direction_wrapper != NULL ? direction_wrapper->next : NULL;
+        ast_t *end_node = unwrap_pascal_node(end_wrapper);
+        ast_t *body_node = unwrap_pascal_node(end_wrapper != NULL ? end_wrapper->next : NULL);
+
+        // Determine if this is a downto loop based on the direction node
+        int is_downto = 0;
+        if (direction_node != NULL && direction_node->typ == PASCAL_T_DOWNTO) {
+            is_downto = 1;
+        }
 
         struct Expression *end_expr = convert_expression(end_node);
         struct Statement *body_stmt = convert_statement(body_node);
 
         if (init_node != NULL && init_node->typ == PASCAL_T_ASSIGNMENT) {
             struct Statement *assign_stmt = convert_assignment(init_node);
-            return mk_forassign(stmt_node->line, assign_stmt, end_expr, body_stmt);
+            return mk_forassign(stmt_node->line, assign_stmt, end_expr, body_stmt, is_downto);
         }
 
         struct Expression *var_expr = convert_expression(init_node);
         if (var_expr == NULL)
             return NULL;
-        return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt);
+        return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt, is_downto);
     }
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
