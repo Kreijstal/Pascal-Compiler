@@ -119,6 +119,41 @@ begin
 end.
 ```
 
+## Known Limitations
+
+### 1. Code Generation (Intentional)
+
+The compiler **does not generate code** for anonymous methods. See "Unsupported Features" section below.
+
+### 2. Return Type Resolution in Type Aliases (Current Bug)
+
+When using `reference to function` type declarations, the return type is not currently being properly propagated to the GpcType. This means:
+
+```pascal
+type
+  TIntFunc = reference to function(x: Integer): Integer;
+  
+var
+  f: TIntFunc;  // f's type shows as "procedure" instead of "function: integer"
+```
+
+**Workaround**: Direct anonymous function expressions have their return types correctly identified:
+
+```pascal
+var
+  result_val: Integer;
+
+begin
+  // This works - the anonymous function's return type is correctly identified
+  result_val := (function(x: Integer): Integer
+  begin
+    Result := x + 1
+  end)(5);  // Would work if code generation was implemented
+end.
+```
+
+This is a pre-existing limitation in the type alias system's handling of function reference types, not introduced by this PR. Future work should enhance the type declaration conversion to properly resolve and store return types for function reference type aliases.
+
 ## Unsupported Features ❌
 
 ### Code Generation

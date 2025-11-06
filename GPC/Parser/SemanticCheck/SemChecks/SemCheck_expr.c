@@ -15,6 +15,12 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
 #include "SemCheck_expr.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
@@ -2605,6 +2611,45 @@ int semcheck_expr_main(int *type_return,
             /* Create a GpcType with parameter and return type information */
             ListNode_t *params = expr->expr_data.anonymous_method_data.parameters;
             GpcType *return_type = NULL;
+            
+            /* For functions, resolve the return type */
+            if (expr->type == EXPR_ANONYMOUS_FUNCTION) {
+                char *return_type_id = expr->expr_data.anonymous_method_data.return_type_id;
+                if (return_type_id != NULL) {
+                    /* Try to look up the type in the symbol table */
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, return_type_id) >= 0 && type_node != NULL) {
+                        /* Use the GpcType from the symbol table if available */
+                        if (type_node->type != NULL) {
+                            return_type = type_node->type;
+                        }
+                    }
+                    
+                    /* If not found in symbol table, it might be a built-in type */
+                    if (return_type == NULL) {
+                        /* Try to map the type name to a primitive type */
+                        int type_tag = UNKNOWN_TYPE;
+                        if (strcasecmp(return_type_id, "integer") == 0)
+                            type_tag = INT_TYPE;
+                        else if (strcasecmp(return_type_id, "longint") == 0)
+                            type_tag = LONGINT_TYPE;
+                        else if (strcasecmp(return_type_id, "real") == 0 || strcasecmp(return_type_id, "double") == 0)
+                            type_tag = REAL_TYPE;
+                        else if (strcasecmp(return_type_id, "string") == 0)
+                            type_tag = STRING_TYPE;
+                        else if (strcasecmp(return_type_id, "char") == 0)
+                            type_tag = CHAR_TYPE;
+                        else if (strcasecmp(return_type_id, "boolean") == 0)
+                            type_tag = BOOL;
+                        
+                        if (type_tag != UNKNOWN_TYPE) {
+                            return_type = create_primitive_type(type_tag);
+                            /* Note: This creates a new GpcType that will be owned by proc_type */
+                        }
+                    }
+                }
+            }
+            /* For procedures, return_type remains NULL */
             
             /* Create the procedure type to store in the expression */
             GpcType *proc_type = create_procedure_type(params, return_type);
