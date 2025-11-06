@@ -1116,6 +1116,21 @@ void init_pascal_expression_parser(combinator_t** p) {
     // Use standard factor parser - defer complex pointer dereference for now
     combinator_t* nil_literal = map(token(keyword_ci("nil")), wrap_nil_literal);
 
+    // Constructed type parser for expressions (e.g., TFoo<Integer>.Create)
+    // Use cident for type arguments to allow type names like Integer, String, etc.
+    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by(type_arg, token(match(","))),
+        token(match(">")),
+        NULL
+    );
+    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),
+        type_arg_list,
+        NULL
+    );
+
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p)),  // Anonymous functions
         token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p)), // Anonymous procedures
@@ -1133,6 +1148,7 @@ void init_pascal_expression_parser(combinator_t** p) {
         between(token(match("(")), token(match(")")), lazy(p)), // Parenthesized expressions - try before tuple
         tuple,                                    // Tuple constants (a,b,c) - try after parenthesized expressions
         token(record_constructor(PASCAL_T_RECORD_CONSTRUCTOR, p)), // Record constructors (field: value; field: value)
+        constructed_type,                         // Constructed types like TFoo<Integer> - try before identifier
         identifier,                               // Identifiers (variables, built-ins)
         NULL
     );

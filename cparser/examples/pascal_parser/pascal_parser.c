@@ -260,6 +260,16 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_ANONYMOUS_PROCEDURE: return "ANONYMOUS_PROCEDURE";
         case PASCAL_T_ENUMERATED_TYPE: return "ENUMERATED_TYPE";
         case PASCAL_T_CLASS_TYPE: return "CLASS_TYPE";
+        // Generic type tags
+        case PASCAL_T_GENERIC_TYPE_DECL: return "GENERIC_TYPE_DECL";
+        case PASCAL_T_TYPE_PARAM_LIST: return "TYPE_PARAM_LIST";
+        case PASCAL_T_TYPE_PARAM: return "TYPE_PARAM";
+        case PASCAL_T_CONSTRUCTED_TYPE: return "CONSTRUCTED_TYPE";
+        case PASCAL_T_TYPE_ARG_LIST: return "TYPE_ARG_LIST";
+        case PASCAL_T_TYPE_ARG: return "TYPE_ARG";
+        case PASCAL_T_GENERIC_METHOD: return "GENERIC_METHOD";
+        case PASCAL_T_GENERIC_PROCEDURE_TYPE: return "GENERIC_PROCEDURE_TYPE";
+        case PASCAL_T_GENERIC_FUNCTION_TYPE: return "GENERIC_FUNCTION_TYPE";
         case PASCAL_T_CLASS_MEMBER: return "CLASS_MEMBER";
         case PASCAL_T_ACCESS_MODIFIER: return "ACCESS_MODIFIER";
         case PASCAL_T_CLASS_BODY: return "CLASS_BODY";
