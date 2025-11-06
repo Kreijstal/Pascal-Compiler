@@ -15,6 +15,12 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
 #include "SemCheck_expr.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
@@ -2483,6 +2489,15 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
             break;
     }
     
+    /* Check if the expression already has a resolved GpcType (e.g., from semcheck_expr_main) */
+    if (expr->resolved_gpc_type != NULL)
+    {
+        /* Use the existing GpcType - caller doesn't own it (it belongs to the expression) */
+        if (owns_type != NULL)
+            *owns_type = 0;
+        return expr->resolved_gpc_type;
+    }
+    
     /* For all other cases or if direct resolution failed, use semcheck_expr_main
      * to get the type tag, then convert to GpcType */
     int type_tag = UNKNOWN_TYPE;
@@ -2585,14 +2600,66 @@ int semcheck_expr_main(int *type_return,
 
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
-            /* Anonymous methods are not yet fully implemented in semantic checking */
-            /* For now, treat them as unknown type to avoid crashes */
-            fprintf(stderr, "ERROR: Anonymous methods are not yet fully supported at line %d\n", 
-                    expr->line_num);
-            fprintf(stderr, "       This feature is under development.\n");
-            *type_return = UNKNOWN_TYPE;
-            return_val = 1;  /* Mark as error */
+        {
+            /* Anonymous methods are treated as procedure/function references.
+             * Create a GpcType for better type checking.
+             */
+            
+            /* Set the type to PROCEDURE to represent a function/procedure reference */
+            *type_return = PROCEDURE;
+            
+            /* Create a GpcType with parameter and return type information */
+            ListNode_t *params = expr->expr_data.anonymous_method_data.parameters;
+            GpcType *return_type = NULL;
+            
+            /* For functions, resolve the return type */
+            if (expr->type == EXPR_ANONYMOUS_FUNCTION) {
+                char *return_type_id = expr->expr_data.anonymous_method_data.return_type_id;
+                if (return_type_id != NULL) {
+                    /* Try to look up the type in the symbol table */
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, return_type_id) >= 0 && type_node != NULL) {
+                        /* Use the GpcType from the symbol table if available */
+                        if (type_node->type != NULL) {
+                            return_type = type_node->type;
+                        }
+                    }
+                    
+                    /* If not found in symbol table, it might be a built-in type */
+                    if (return_type == NULL) {
+                        /* Try to map the type name to a primitive type */
+                        int type_tag = UNKNOWN_TYPE;
+                        if (strcasecmp(return_type_id, "integer") == 0)
+                            type_tag = INT_TYPE;
+                        else if (strcasecmp(return_type_id, "longint") == 0)
+                            type_tag = LONGINT_TYPE;
+                        else if (strcasecmp(return_type_id, "real") == 0 || strcasecmp(return_type_id, "double") == 0)
+                            type_tag = REAL_TYPE;
+                        else if (strcasecmp(return_type_id, "string") == 0)
+                            type_tag = STRING_TYPE;
+                        else if (strcasecmp(return_type_id, "char") == 0)
+                            type_tag = CHAR_TYPE;
+                        else if (strcasecmp(return_type_id, "boolean") == 0)
+                            type_tag = BOOL;
+                        
+                        if (type_tag != UNKNOWN_TYPE) {
+                            return_type = create_primitive_type(type_tag);
+                            /* Note: This creates a new GpcType that will be owned by proc_type */
+                        }
+                    }
+                }
+            }
+            /* For procedures, return_type remains NULL */
+            
+            /* Create the procedure type to store in the expression */
+            GpcType *proc_type = create_procedure_type(params, return_type);
+            if (proc_type != NULL) {
+                expr->resolved_gpc_type = proc_type;
+            }
+            
+            return_val = 0;
             break;
+        }
 
         default:
             assert(0 && "Bad type in semcheck_expr_main!");

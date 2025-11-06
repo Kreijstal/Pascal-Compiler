@@ -386,6 +386,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_POINTER_DEREF:
         case EXPR_ADDR:
         case EXPR_ADDR_OF_PROC:
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -847,6 +849,19 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_symbol->mangled_id, target_reg->bit_64);
         return add_inst(inst_list, buffer);
+    }
+    else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
+    {
+        /* Anonymous methods require complex code generation:
+         * 1. Generate the function/procedure code as a nested definition
+         * 2. Handle closure variable capture if needed
+         * 3. Return a pointer to the generated function
+         * 
+         * For now, this is not fully implemented.
+         */
+        codegen_report_error(ctx, "ERROR: Code generation for anonymous methods is not yet implemented.");
+        codegen_report_error(ctx, "       This feature requires additional architectural work.");
+        return inst_list;
     }
     else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {

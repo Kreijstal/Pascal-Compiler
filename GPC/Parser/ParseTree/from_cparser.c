@@ -2829,37 +2829,53 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         return mk_addressof(expr_node->line, convert_expression(expr_node->child));
     case PASCAL_T_ANONYMOUS_FUNCTION:
     {
-        /* Anonymous function: params -> return_type -> body */
+        /* Anonymous function: params -> return_type -> body 
+         * Structure from parser:
+         * - If params exist: child is first PARAM, params are linked via ->next
+         * - Return type is in a sibling after all params
+         * - Body is after return type
+         */
         char *generated_name = generate_anonymous_method_name(1);
         if (generated_name == NULL) {
             fprintf(stderr, "ERROR: Failed to generate name for anonymous function at line %d\n", expr_node->line);
             return NULL;
         }
         
-        ast_t *params_node = expr_node->child;
+        /* Navigate the AST structure */
+        ast_t *current = expr_node->child;
+        ast_t *params_start = NULL;
         ast_t *return_type_node = NULL;
         ast_t *body_node = NULL;
         
-        if (params_node != NULL && params_node->typ == PASCAL_T_PARAM_LIST) {
-            return_type_node = params_node->next;
-            if (return_type_node != NULL && return_type_node->typ == PASCAL_T_RETURN_TYPE) {
-                body_node = return_type_node->next;
+        /* Check if first child is a PARAM (parameters exist) or RETURN_TYPE (no params) */
+        if (current != NULL) {
+            if (current->typ == PASCAL_T_PARAM) {
+                /* We have parameters - collect them all */
+                params_start = current;
+                /* Find the last PARAM in the chain */
+                while (current != NULL && current->typ == PASCAL_T_PARAM) {
+                    current = current->next;
+                }
+                /* Now current should be RETURN_TYPE */
+                if (current != NULL && current->typ == PASCAL_T_RETURN_TYPE) {
+                    return_type_node = current;
+                    body_node = current->next;
+                }
+            } else if (current->typ == PASCAL_T_RETURN_TYPE) {
+                /* No parameters, directly to return type */
+                return_type_node = current;
+                body_node = current->next;
             }
-        } else {
-            /* No parameters, check if first child is return type */
-            return_type_node = params_node;
-            if (return_type_node != NULL && return_type_node->typ == PASCAL_T_RETURN_TYPE) {
-                body_node = return_type_node->next;
-            }
-            params_node = NULL;
         }
         
+        /* Convert parameters */
         ListNode_t *parameters = NULL;
-        if (params_node != NULL) {
-            ast_t *param_cursor = params_node->child;
+        if (params_start != NULL) {
+            ast_t *param_cursor = params_start;
             parameters = convert_param_list(&param_cursor);
         }
         
+        /* Convert return type */
         int return_type = UNKNOWN_TYPE;
         char *return_type_id = NULL;
         if (return_type_node != NULL && return_type_node->child != NULL) {
@@ -2868,6 +2884,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
             }
         }
         
+        /* Convert body */
         struct Statement *body = NULL;
         if (body_node != NULL) {
             body = convert_statement(body_node);
@@ -2878,49 +2895,52 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     }
     case PASCAL_T_ANONYMOUS_PROCEDURE:
     {
-        /* Anonymous procedure: params -> body */
-        /* Structure: child can be params (PARAM_LIST) or NULL/NONE, body is typically at child->next */
+        /* Anonymous procedure: params -> body
+         * Structure from parser (same as anonymous function but without return type):
+         * - If params exist: child is first PARAM, params are linked via ->next
+         * - Body is after all params (or first child if no params)
+         */
         char *generated_name = generate_anonymous_method_name(0);
         if (generated_name == NULL) {
             fprintf(stderr, "ERROR: Failed to generate name for anonymous procedure at line %d\n", expr_node->line);
             return NULL;
         }
         
-        if (expr_node->child != NULL) {
-            if (expr_node->child->next != NULL) {
+        /* Navigate the AST structure */
+        ast_t *current = expr_node->child;
+        ast_t *params_start = NULL;
+        ast_t *body_node = NULL;
+        
+        /* Check if first child is a PARAM (parameters exist) or a statement (no params) */
+        if (current != NULL) {
+            /* Skip NONE nodes */
+            while (current != NULL && current->typ == PASCAL_T_NONE) {
+                current = current->child;
+            }
+            
+            if (current != NULL && current->typ == PASCAL_T_PARAM) {
+                /* We have parameters - collect them all */
+                params_start = current;
+                /* Find the last PARAM in the chain */
+                while (current != NULL && current->typ == PASCAL_T_PARAM) {
+                    current = current->next;
+                }
+                /* Now current should be the body */
+                body_node = current;
+            } else {
+                /* No parameters, directly to body */
+                body_node = current;
             }
         }
         
-        ast_t *first_node = expr_node->child;
-        ast_t *params_node = NULL;
-        ast_t *body_node = NULL;
-        
-        /* Determine if first node is parameters or if there are no parameters */
-        if (first_node != NULL && first_node->typ == PASCAL_T_PARAM_LIST) {
-            params_node = first_node;
-            body_node = first_node->next;
-        } else if (first_node != NULL && first_node->typ == PASCAL_T_NONE) {
-            /* Empty/None node - parameters were empty, body is at next */
-            params_node = NULL;
-            body_node = first_node->next;
-        } else if (first_node != NULL) {
-            /* First node is the body itself (no params)  */
-            params_node = NULL;
-            body_node = first_node;
-        } else {
-            params_node = NULL;
-            body_node = NULL;
-        }
-        
-        if (body_node != NULL) {
-        }
-        
+        /* Convert parameters */
         ListNode_t *parameters = NULL;
-        if (params_node != NULL) {
-            ast_t *param_cursor = params_node->child;
+        if (params_start != NULL) {
+            ast_t *param_cursor = params_start;
             parameters = convert_param_list(&param_cursor);
         }
         
+        /* Convert body */
         struct Statement *body = NULL;
         if (body_node != NULL) {
             body = convert_statement(body_node);
