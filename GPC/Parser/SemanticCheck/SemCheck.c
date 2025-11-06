@@ -1586,7 +1586,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
     char *chr_name = strdup("Chr");
     if (chr_name != NULL) {
-        GpcType *return_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_CHAR);
         assert(return_type != NULL && "Failed to create return type for Chr");
         GpcType *chr_type = create_procedure_type(NULL, return_type);
         assert(chr_type != NULL && "Failed to create Chr function type");
