@@ -1672,13 +1672,22 @@ def _discover_and_add_auto_tests():
 
                 # Run the executable and check the output
                 try:
-                    process = subprocess.run(
-                        [executable_file], 
-                        capture_output=True, 
-                        text=True, 
-                        timeout=EXEC_TIMEOUT,
-                        input=stdin_input  # Provide stdin if available
-                    )
+                    # Only pass input parameter if there's actual stdin data
+                    if stdin_input is not None:
+                        process = subprocess.run(
+                            [executable_file], 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=EXEC_TIMEOUT,
+                            input=stdin_input
+                        )
+                    else:
+                        process = subprocess.run(
+                            [executable_file], 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=EXEC_TIMEOUT
+                        )
                     expected_output = read_file_content(expected_output_file)
                     # Normalize line endings for cross-platform compatibility
                     # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
