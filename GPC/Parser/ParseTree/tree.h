@@ -218,10 +218,10 @@ struct Statement *mk_repeat(int line_num, ListNode_t *body_list,
                             struct Expression *until_expr);
 
 struct Statement *mk_forassign(int line_num, struct Statement *for_assign, struct Expression *to,
-                               struct Statement *do_for);
+                               struct Statement *do_for, int is_downto);
 
 struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Expression *to,
-                              struct Statement *do_for);
+                              struct Statement *do_for, int is_downto);
 
 struct Statement *mk_asmblock(int line_num, char *code);
 

@@ -2940,8 +2940,16 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     if (for_var == NULL)
         return inst_list;
 
+    // Determine the direction of the loop
+    const int is_downto = stmt->stmt_data.for_data.is_downto;
+    
+    // Create the update expression based on loop direction
     one_expr = mk_inum(-1, 1);
-    update_expr = mk_addop(-1, PLUS, for_var, one_expr);
+    if (is_downto) {
+        update_expr = mk_addop(-1, MINUS, for_var, one_expr);
+    } else {
+        update_expr = mk_addop(-1, PLUS, for_var, one_expr);
+    }
     update_stmt = mk_varassign(-1, for_var, update_expr);
 
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &limit_reg);
@@ -3019,7 +3027,13 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", cmp_instr, limit_cmp_reg, loop_cmp_reg);
     inst_list = add_inst(inst_list, buffer);
 
-    const char *branch_instr = use_unsigned_compare ? "jbe" : "jle";
+    // Choose the correct branch instruction based on loop direction
+    const char *branch_instr;
+    if (is_downto) {
+        branch_instr = use_unsigned_compare ? "jae" : "jge";  // jump if above or equal / greater or equal
+    } else {
+        branch_instr = use_unsigned_compare ? "jbe" : "jle";  // jump if below or equal / less or equal
+    }
     snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", branch_instr, body_label);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", exit_label);
