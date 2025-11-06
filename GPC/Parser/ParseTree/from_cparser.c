@@ -88,6 +88,17 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
 
 static ListNode_t *class_method_bindings = NULL;
 
+/* Counter for generating unique anonymous method names */
+static int anonymous_method_counter = 0;
+
+/* Helper function to generate unique names for anonymous methods */
+static char *generate_anonymous_method_name(int is_function) {
+    char *name = (char *)malloc(64);
+    if (name == NULL) return NULL;
+    snprintf(name, 64, "$anon_%s_%d", is_function ? "func" : "proc", ++anonymous_method_counter);
+    return name;
+}
+
 static void register_class_method_ex(const char *class_name, const char *method_name, 
                                       int is_virtual, int is_override) {
     if (class_name == NULL || method_name == NULL)
@@ -2847,12 +2858,115 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_ADDR:
         return mk_addressof(expr_node->line, convert_expression(expr_node->child));
     case PASCAL_T_ANONYMOUS_FUNCTION:
+    {
+        /* Anonymous function: params -> return_type -> body */
+        char *generated_name = generate_anonymous_method_name(1);
+        if (generated_name == NULL) {
+            fprintf(stderr, "ERROR: Failed to generate name for anonymous function at line %d\n", expr_node->line);
+            return NULL;
+        }
+        
+        ast_t *params_node = expr_node->child;
+        ast_t *return_type_node = NULL;
+        ast_t *body_node = NULL;
+        
+        if (params_node != NULL && params_node->typ == PASCAL_T_PARAM_LIST) {
+            return_type_node = params_node->next;
+            if (return_type_node != NULL && return_type_node->typ == PASCAL_T_RETURN_TYPE) {
+                body_node = return_type_node->next;
+            }
+        } else {
+            /* No parameters, check if first child is return type */
+            return_type_node = params_node;
+            if (return_type_node != NULL && return_type_node->typ == PASCAL_T_RETURN_TYPE) {
+                body_node = return_type_node->next;
+            }
+            params_node = NULL;
+        }
+        
+        ListNode_t *parameters = NULL;
+        if (params_node != NULL) {
+            ast_t *param_cursor = params_node->child;
+            parameters = convert_param_list(&param_cursor);
+        }
+        
+        int return_type = UNKNOWN_TYPE;
+        char *return_type_id = NULL;
+        if (return_type_node != NULL && return_type_node->child != NULL) {
+            if (return_type_node->child->sym != NULL && return_type_node->child->sym->name != NULL) {
+                return_type_id = strdup(return_type_node->child->sym->name);
+            }
+        }
+        
+        struct Statement *body = NULL;
+        if (body_node != NULL) {
+            body = convert_statement(body_node);
+        }
+        
+        return mk_anonymous_function(expr_node->line, generated_name, parameters, 
+                                      return_type, return_type_id, body);
+    }
     case PASCAL_T_ANONYMOUS_PROCEDURE:
-        // Anonymous functions/procedures are not yet fully supported in code generation
-        // For now, return NULL to avoid crashes, but this should be implemented
-        fprintf(stderr, "WARNING: Anonymous functions are not yet supported in code generation at line %d\n", 
-                expr_node->line);
-        return NULL;
+    {
+        /* Anonymous procedure: params -> body */
+        /* Structure: child can be params (PARAM_LIST) or NULL/NONE, body is typically at child->next */
+        char *generated_name = generate_anonymous_method_name(0);
+        if (generated_name == NULL) {
+            fprintf(stderr, "ERROR: Failed to generate name for anonymous procedure at line %d\n", expr_node->line);
+            return NULL;
+        }
+        
+        if (expr_node->child != NULL) {
+            if (expr_node->child->next != NULL) {
+            }
+        }
+        
+        ast_t *first_node = expr_node->child;
+        ast_t *params_node = NULL;
+        ast_t *body_node = NULL;
+        
+        /* Determine if first node is parameters or if there are no parameters */
+        if (first_node != NULL && first_node->typ == PASCAL_T_PARAM_LIST) {
+            params_node = first_node;
+            body_node = first_node->next;
+        } else if (first_node != NULL && first_node->typ == PASCAL_T_NONE) {
+            /* Empty/None node - parameters were empty, body is at next */
+            params_node = NULL;
+            body_node = first_node->next;
+        } else if (first_node != NULL) {
+            /* First node is the body itself (no params)  */
+            params_node = NULL;
+            body_node = first_node;
+        } else {
+            params_node = NULL;
+            body_node = NULL;
+        }
+        
+        if (body_node != NULL) {
+        }
+        
+        ListNode_t *parameters = NULL;
+        if (params_node != NULL) {
+            ast_t *param_cursor = params_node->child;
+            parameters = convert_param_list(&param_cursor);
+        }
+        
+        struct Statement *body = NULL;
+        if (body_node != NULL) {
+            body = convert_statement(body_node);
+            if (body == NULL) {
+                fprintf(stderr, "ERROR: Failed to convert anonymous procedure body at line %d\n", 
+                        expr_node->line);
+                if (generated_name) free(generated_name);
+                if (parameters) destroy_list(parameters);
+                return NULL;
+            }
+        } else {
+            fprintf(stderr, "WARNING: Anonymous procedure has no body at line %d\n", expr_node->line);
+        }
+        
+        return mk_anonymous_procedure(expr_node->line, generated_name, parameters, body);
+    }
     default: {
         const char *name = tag_name(expr_node->typ);
         fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",

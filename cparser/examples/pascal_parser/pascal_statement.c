@@ -266,13 +266,14 @@ static ast_t* transform_plus_assignment(ast_t* assignment_ast) {
 
 // --- Pascal Statement Parser Implementation ---
 void init_pascal_statement_parser(combinator_t** p) {
-    // First create the expression parser to use within statements
+    // Create the main statement parser pointer for recursive references FIRST
+    // This allows the expression parser to reference it via lazy()
+    combinator_t** stmt_parser = p;
+    
+    // Create the expression parser and pass the statement parser to it
     combinator_t** expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
     *expr_parser = new_combinator();
-    init_pascal_expression_parser(expr_parser);
-
-    // Create the main statement parser pointer for recursive references
-    combinator_t** stmt_parser = p;
+    init_pascal_expression_parser(expr_parser, stmt_parser);
 
     // Left-value parser: base identifier with optional pointer, array, or member suffixes.
     combinator_t* simple_identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));

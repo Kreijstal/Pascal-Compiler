@@ -21,7 +21,7 @@ int main() {
     double start = get_wall_time();
     for (int i = 0; i < 100; i++) {
         combinator_t* p = new_combinator();
-        init_pascal_expression_parser(&p);
+        init_pascal_expression_parser(&p, NULL);
         free_combinator(p);
     }
     double end = get_wall_time();

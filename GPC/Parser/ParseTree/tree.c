@@ -1221,6 +1221,30 @@ void destroy_expr(struct Expression *expr)
           /* Nothing to free - procedure_symbol is a reference, not owned */
           break;
 
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+          if (expr->expr_data.anonymous_method_data.generated_name != NULL)
+          {
+              free(expr->expr_data.anonymous_method_data.generated_name);
+              expr->expr_data.anonymous_method_data.generated_name = NULL;
+          }
+          if (expr->expr_data.anonymous_method_data.parameters != NULL)
+          {
+              destroy_list(expr->expr_data.anonymous_method_data.parameters);
+              expr->expr_data.anonymous_method_data.parameters = NULL;
+          }
+          if (expr->expr_data.anonymous_method_data.return_type_id != NULL)
+          {
+              free(expr->expr_data.anonymous_method_data.return_type_id);
+              expr->expr_data.anonymous_method_data.return_type_id = NULL;
+          }
+          if (expr->expr_data.anonymous_method_data.body != NULL)
+          {
+              destroy_stmt(expr->expr_data.anonymous_method_data.body);
+              expr->expr_data.anonymous_method_data.body = NULL;
+          }
+          break;
+
         default:
           fprintf(stderr, "BAD TYPE IN destroy_expr!\n");
           exit(1);
@@ -2207,6 +2231,40 @@ struct Expression *mk_typecast(int line_num, int target_type, char *target_type_
     new_expr->expr_data.typecast_data.target_type = target_type;
     new_expr->expr_data.typecast_data.target_type_id = target_type_id;
     new_expr->expr_data.typecast_data.expr = expr;
+
+    return new_expr;
+}
+
+struct Expression *mk_anonymous_function(int line_num, char *generated_name, 
+    ListNode_t *parameters, int return_type, char *return_type_id, struct Statement *body)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_ANONYMOUS_FUNCTION);
+    new_expr->expr_data.anonymous_method_data.generated_name = generated_name;
+    new_expr->expr_data.anonymous_method_data.parameters = parameters;
+    new_expr->expr_data.anonymous_method_data.return_type = return_type;
+    new_expr->expr_data.anonymous_method_data.return_type_id = return_type_id;
+    new_expr->expr_data.anonymous_method_data.body = body;
+    new_expr->expr_data.anonymous_method_data.is_function = 1;
+
+    return new_expr;
+}
+
+struct Expression *mk_anonymous_procedure(int line_num, char *generated_name,
+    ListNode_t *parameters, struct Statement *body)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_ANONYMOUS_PROCEDURE);
+    new_expr->expr_data.anonymous_method_data.generated_name = generated_name;
+    new_expr->expr_data.anonymous_method_data.parameters = parameters;
+    new_expr->expr_data.anonymous_method_data.return_type = -1;  // No return type for procedures
+    new_expr->expr_data.anonymous_method_data.return_type_id = NULL;
+    new_expr->expr_data.anonymous_method_data.body = body;
+    new_expr->expr_data.anonymous_method_data.is_function = 0;
 
     return new_expr;
 }

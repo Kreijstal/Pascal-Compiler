@@ -2583,6 +2583,17 @@ int semcheck_expr_main(int *type_return,
             *type_return = SET_TYPE;
             break;
 
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            /* Anonymous methods are not yet fully implemented in semantic checking */
+            /* For now, treat them as unknown type to avoid crashes */
+            fprintf(stderr, "ERROR: Anonymous methods are not yet fully supported at line %d\n", 
+                    expr->line_num);
+            fprintf(stderr, "       This feature is under development.\n");
+            *type_return = UNKNOWN_TYPE;
+            return_val = 1;  /* Mark as error */
+            break;
+
         default:
             assert(0 && "Bad type in semcheck_expr_main!");
             break;

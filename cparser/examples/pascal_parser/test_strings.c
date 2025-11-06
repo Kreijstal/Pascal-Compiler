@@ -5,7 +5,7 @@
 
 void test_pascal_string_escapes(void) {
     combinator_t* p = new_combinator();
-    init_pascal_expression_parser(&p);
+    init_pascal_expression_parser(&p, NULL);
 
     // Test Pascal-style escaped single quotes
     input_t* input1 = new_input();

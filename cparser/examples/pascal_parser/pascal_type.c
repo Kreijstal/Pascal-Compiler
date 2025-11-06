@@ -37,7 +37,7 @@ static ParseResult range_type_fn(input_t* in, void* args, char* parser_name) {
     save_input_state(in, &state);
 
     combinator_t* expr_parser = new_combinator();
-    init_pascal_expression_parser(&expr_parser);
+    init_pascal_expression_parser(&expr_parser, NULL);
 
     ParseResult expr_result = parse(in, expr_parser);
     free_combinator(expr_parser);
@@ -178,7 +178,7 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
         
         // Parse the size expression
         combinator_t* size_expr = new_combinator();
-        init_pascal_expression_parser(&size_expr);
+        init_pascal_expression_parser(&size_expr, NULL);
         ParseResult size_res = parse(in, size_expr);
         free_combinator(size_expr);
         
