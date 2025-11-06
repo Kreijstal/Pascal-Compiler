@@ -463,9 +463,24 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    // Constructed type parser for generic types like TFoo<Integer>
+    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by(type_arg, token(match(","))),
+        token(match(">")),
+        NULL
+    );
+    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        type_arg_list,
+        NULL
+    );
+
     combinator_t* type_definition = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         type_helper_type,
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
+        interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end (try first)
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
@@ -474,6 +489,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         range_type(PASCAL_T_RANGE_TYPE),                // range types like 1..100
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^integer
         specialize_type,
+        constructed_type,                               // constructed types like TFoo<Integer>
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),             // simple aliases like Foo = integer
         NULL
     );
@@ -527,20 +543,61 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
     
-    combinator_t* type_param_list = optional(seq(new_combinator(), PASCAL_T_NONE,
-        token(match("<")),
-        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
-        token(match(">")),
+    // Type constraint parser: T: class, T: record, T: constructor, T: interface
+    combinator_t* constraint_keyword = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        token(keyword_ci("class")),
+        token(keyword_ci("record")),
+        token(keyword_ci("constructor")),
+        token(keyword_ci("interface")),
+        NULL
+    );
+    
+    combinator_t* type_constraint = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        constraint_keyword,
         NULL
     ));
+    
+    // Type parameter with optional constraint: T or T: class
+    combinator_t* type_param_with_constraint = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        type_constraint,
+        NULL
+    );
+    
+    // Type parameter list parser: <T, U, V> or <T: class, U: record>
+    combinator_t* type_param_list_required = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(type_param_with_constraint, token(match(","))),
+        token(match(">")),
+        NULL
+    );
 
-    combinator_t* type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+    // Generic type declaration: TFoo<T> = class ...
+    // This requires the angle brackets with type parameters
+    combinator_t* generic_type_decl = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
         optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        type_param_list,                              // optional type parameters
+        type_param_list_required,                     // type parameters (REQUIRED - has angle brackets)
         token(match("=")),                           // equals sign
         type_definition,                              // type definition
         optional(token(match(";"))),                 // semicolon (optional for last decl)
+        NULL
+    );
+
+    // Regular type declaration: TFoo = Integer
+    combinator_t* regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+        optional(token(keyword_ci("generic"))),      // optional generic keyword
+        token(cident(PASCAL_T_IDENTIFIER)),           // type name
+        token(match("=")),                           // equals sign
+        type_definition,                              // type definition
+        optional(token(match(";"))),                 // semicolon (optional for last decl)
+        NULL
+    );
+
+    combinator_t* type_decl = multi(new_combinator(), PASCAL_T_NONE,
+        generic_type_decl,      // Try generic first (requires <...>)
+        regular_type_decl,      // Fall back to regular (no <...>)
         NULL
     );
 
@@ -760,11 +817,40 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(destructor_impl, "destructor_impl");
 
+    // Helper for optional method type parameter list: <T, U>
+    combinator_t* constraint_kw_impl = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        token(keyword_ci("class")),
+        token(keyword_ci("record")),
+        token(keyword_ci("constructor")),
+        token(keyword_ci("interface")),
+        NULL
+    );
+    
+    combinator_t* type_constraint_impl = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        constraint_kw_impl,
+        NULL
+    ));
+    
+    combinator_t* type_param_impl = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        type_constraint_impl,
+        NULL
+    );
+    
+    combinator_t* method_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(type_param_impl, token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+
     // Method procedure implementation (with required body)
     combinator_t* method_procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
         optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("procedure")),              // procedure keyword
         method_name_with_class,                      // ClassName.MethodName
+        method_type_params,                          // optional type parameters <T, U>
         optional(param_list),                        // optional parameter list
         token(match(";")),                           // semicolon
         routine_directives,
@@ -779,6 +865,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(keyword_ci("class"))),        // optional class modifier
         token(keyword_ci("function")),               // function keyword
         method_name_with_class,                      // ClassName.MethodName
+        method_type_params,                          // optional type parameters <T, U>
         optional(param_list),                        // optional parameter list
         return_type,                                 // return type
         token(match(";")),                           // semicolon
@@ -1082,8 +1169,24 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Enhanced Variable declaration: var1, var2, var3 : type;
     combinator_t* var_identifier_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+    
+    // Constructed type parser for generic types like TFoo<Integer>
+    combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
+        token(match("<")),
+        sep_by(type_arg, token(match(","))),
+        token(match(">")),
+        NULL
+    );
+    combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        type_arg_list,
+        NULL
+    );
+
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
+        interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
@@ -1093,6 +1196,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
+        constructed_type,                               // constructed types like TFoo<Integer>
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
         token(cident(PASCAL_T_IDENTIFIER)),             // custom types
         NULL
@@ -1137,12 +1241,61 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
     var_section->extra_to_free = program_expr_parser;
 
-    // Type declaration: TypeName = TypeSpec;
-    combinator_t* type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
-        token(cident(PASCAL_T_IDENTIFIER)),          // type name
+    // Type constraint parser: T: class, T: record, T: constructor, T: interface
+    combinator_t* constraint_keyword_prog = multi(new_combinator(), PASCAL_T_TYPE_CONSTRAINT,
+        token(keyword_ci("class")),
+        token(keyword_ci("record")),
+        token(keyword_ci("constructor")),
+        token(keyword_ci("interface")),
+        NULL
+    );
+    
+    combinator_t* type_constraint_prog = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        constraint_keyword_prog,
+        NULL
+    ));
+    
+    // Type parameter with optional constraint: T or T: class
+    combinator_t* type_param_with_constraint_prog = seq(new_combinator(), PASCAL_T_TYPE_PARAM,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        type_constraint_prog,
+        NULL
+    );
+    
+    // Type parameter list parser: <T, U, V> or <T: class, U: record>
+    combinator_t* type_param_list_required_prog = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(type_param_with_constraint_prog, token(match(","))),
+        token(match(">")),
+        NULL
+    );
+
+    // Generic type declaration: TFoo<T> = class ...
+    // This requires the angle brackets with type parameters
+    combinator_t* generic_type_decl_prog = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
+        optional(token(keyword_ci("generic"))),      // optional generic keyword
+        token(cident(PASCAL_T_IDENTIFIER)),           // type name
+        type_param_list_required_prog,                // type parameters (REQUIRED - has angle brackets)
         token(match("=")),                           // equals sign
-        type_spec,                                   // type specification
+        type_spec,                                    // type specification
         token(match(";")),                           // semicolon
+        NULL
+    );
+
+    // Regular type declaration: TFoo = Integer
+    combinator_t* regular_type_decl_prog = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+        optional(token(keyword_ci("generic"))),      // optional generic keyword
+        token(cident(PASCAL_T_IDENTIFIER)),           // type name
+        token(match("=")),                           // equals sign
+        type_spec,                                    // type specification
+        token(match(";")),                           // semicolon
+        NULL
+    );
+
+    combinator_t* type_decl = multi(new_combinator(), PASCAL_T_NONE,
+        generic_type_decl_prog,     // Try generic first (requires <...>)
+        regular_type_decl_prog,     // Fall back to regular (no <...>)
         NULL
     );
 
