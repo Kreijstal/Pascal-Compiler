@@ -1021,6 +1021,77 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (handled_builtin)
         return return_val;
 
+    /* Check if this is a method call that needs type-based resolution.
+     * Method calls have the pattern: ClassName__MethodName(object, ...)
+     * We need to verify the ClassName matches the object's actual type.
+     * If not, we need to correct it based on the object's type.
+     */
+    if (proc_id != NULL && strstr(proc_id, "__") != NULL && args_given != NULL) {
+        char *double_underscore = strstr(proc_id, "__");
+        if (double_underscore != NULL) {
+            /* Extract the method name (part after __) */
+            char *method_name_part = double_underscore + 2;
+            
+            /* Get the first argument (should be the object/Self parameter) */
+            struct Expression *first_arg = (struct Expression *)args_given->cur;
+            if (first_arg != NULL && first_arg->type == EXPR_VAR_ID) {
+                /* Look up the object's type in the symbol table */
+                HashNode_t *obj_node = NULL;
+                if (FindIdent(&obj_node, symtab, first_arg->expr_data.id) != -1 &&
+                    obj_node != NULL && obj_node->type != NULL &&
+                    obj_node->type->kind == TYPE_KIND_RECORD) {
+                    /* Found the object with a record type. Now find the class name for this type. */
+                    struct RecordType *obj_record_type = obj_node->type->info.record_info;
+                    
+                    /* Search for a type declaration with this RecordType */
+                    /* We need to iterate through all identifiers in the symbol table */
+                    char *correct_class_name = NULL;
+                    
+                    /* Walk through symbol table scopes to find matching type */
+                    ListNode_t *scope_list = symtab->stack_head;
+                    while (scope_list != NULL && correct_class_name == NULL) {
+                        HashTable_t *hash_table = (HashTable_t *)scope_list->cur;
+                        if (hash_table != NULL && hash_table->table != NULL) {
+                            for (int i = 0; i < TABLE_SIZE && correct_class_name == NULL; i++) {
+                                ListNode_t *bucket = hash_table->table[i];
+                                while (bucket != NULL && correct_class_name == NULL) {
+                                    HashNode_t *node = (HashNode_t *)bucket->cur;
+                                    if (node != NULL &&
+                                        node->hash_type == HASHTYPE_TYPE &&
+                                        node->type != NULL &&
+                                        node->type->kind == TYPE_KIND_RECORD &&
+                                        node->type->info.record_info == obj_record_type) {
+                                        /* Found it! */
+                                        correct_class_name = node->id;
+                                        break;
+                                    }
+                                    bucket = bucket->next;
+                                }
+                            }
+                        }
+                        scope_list = scope_list->next;
+                    }
+                    
+                    if (correct_class_name != NULL) {
+                        /* Build the correct mangled name */
+                        size_t class_len = strlen(correct_class_name);
+                        size_t method_len = strlen(method_name_part);
+                        char *correct_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                        if (correct_proc_id != NULL) {
+                            snprintf(correct_proc_id, class_len + 2 + method_len + 1,
+                                    "%s__%s", correct_class_name, method_name_part);
+                            
+                            /* Update proc_id to use the correct class */
+                            free(stmt->stmt_data.procedure_call_data.id);
+                            stmt->stmt_data.procedure_call_data.id = correct_proc_id;
+                            proc_id = correct_proc_id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
     assert(mangled_name != NULL);
 
@@ -1245,13 +1316,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 else
                 {
                     types_match = are_types_compatible_for_assignment(expected_gpc_type, arg_gpc_type, symtab);
-                    
-                    if (!types_match)
-                    {
-                        fprintf(stderr, "DEBUG: Type mismatch - expected %s, got %s\n",
-                            gpc_type_to_string(expected_gpc_type),
-                            gpc_type_to_string(arg_gpc_type));
-                    }
                     
                     /* Special AST transformation for procedure parameters */
                     if (types_match && 
