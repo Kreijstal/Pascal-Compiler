@@ -82,6 +82,7 @@ static int extract_constant_int(struct Expression *expr, long long *out_value);
 static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
+static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
 
@@ -444,6 +445,66 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
     return -1; /* Not found */
 }
 
+/* Helper function to resolve the range of an enumerated type by type name.
+ * For example, if color = (red, blue, yellow), then resolve_enum_type_range_from_ast("color", ...)
+ * will set out_start=0 and out_end=2 (for 3 values: red, blue, yellow).
+ * Returns 0 on success, -1 if the type is not found or is not an enum type.
+ */
+static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end) {
+    if (type_name == NULL || type_section == NULL || out_start == NULL || out_end == NULL)
+        return -1;
+    
+    /* Iterate through type declarations to find the matching type name */
+    ast_t *type_decl = type_section->child;
+    while (type_decl != NULL) {
+        if (type_decl->typ == PASCAL_T_TYPE_DECL) {
+            /* Get the type name (first child) */
+            ast_t *type_id = type_decl->child;
+            if (type_id != NULL && type_id->typ == PASCAL_T_IDENTIFIER && type_id->sym != NULL) {
+                if (strcmp(type_id->sym->name, type_name) == 0) {
+                    /* Found the type - now check if it's an enumerated type */
+                    ast_t *type_spec_node = type_id->next;
+                    
+                    while (type_spec_node != NULL && 
+                           type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
+                           type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                        type_spec_node = type_spec_node->next;
+                    }
+                    
+                    /* Unwrap TYPE_SPEC if needed */
+                    ast_t *spec = type_spec_node;
+                    if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+                        spec = spec->child;
+                    
+                    /* Check if it's an enumerated type */
+                    if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+                        /* Count the enum values */
+                        int count = 0;
+                        ast_t *literal = spec->child;
+                        while (literal != NULL) {
+                            if (literal->typ == PASCAL_T_IDENTIFIER)
+                                count++;
+                            literal = literal->next;
+                        }
+                        
+                        if (count > 0) {
+                            *out_start = 0;
+                            *out_end = count - 1;
+                            return 0; /* Success */
+                        }
+                    }
+                    
+                    /* Found the type but it's not an enum */
+                    return -1;
+                }
+            }
+        }
+        type_decl = type_decl->next;
+    }
+    
+    return -1; /* Type not found */
+}
+
 /* Helper function to resolve a const integer identifier from the same const section.
  * This is needed for array ranges like [C_Low .. C_High].
  * Returns the integer value if found, otherwise returns fallback_value.
@@ -571,8 +632,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->is_open_array = 1;
                     }
                 } else if (dim->typ == PASCAL_T_IDENTIFIER) {
-                    type_info->is_open_array = 1;
+                    // Single identifier as array dimension (e.g., array[color])
+                    // This is NOT an open array - it's an array indexed by an enum or subrange type
+                    // Store the identifier for semantic resolution
                     list_builder_append(&dims_builder, dup_symbol(dim), LIST_STRING);
+                    // Note: is_open_array is NOT set to 1 here
                 } else {
                     type_info->is_open_array = 1;
                 }
@@ -1726,7 +1790,9 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     int end = type_info->end;
     
     /* If both start and end are 0, check if we need to resolve identifiers.
-     * The array_dimensions list contains the range as a string like "January..December" or "C_Low..C_High".
+     * The array_dimensions list contains:
+     * - A range string like "January..December" or "C_Low..C_High", OR
+     * - A single type identifier like "color" (for array[color] where color is an enum)
      */
     if (start == 0 && end == 0 && type_info->array_dimensions != NULL && 
         type_info->array_dimensions->cur != NULL) {
@@ -1781,6 +1847,16 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
                             end = (int)num;
                     }
+                }
+            } else {
+                /* Single identifier - resolve as an enum type to get its range */
+                int enum_start, enum_end;
+                if (resolve_enum_type_range_from_ast(range_str, type_section, &enum_start, &enum_end) == 0) {
+                    start = enum_start;
+                    end = enum_end;
+                } else {
+                    fprintf(stderr, "ERROR: Could not resolve array index type '%s' for const %s.\n",
+                            range_str, *id_ptr);
                 }
             }
             free(range_copy);
