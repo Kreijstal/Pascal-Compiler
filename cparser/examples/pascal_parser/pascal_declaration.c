@@ -544,18 +544,19 @@ void init_pascal_unit_parser(combinator_t** p) {
     
     // Type parameter list parser: <T, U, V>
     combinator_t* type_param = token(cident(PASCAL_T_TYPE_PARAM));
-    combinator_t* type_param_list = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+    combinator_t* type_param_list_required = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
         token(match("<")),
         sep_by(type_param, token(match(","))),
         token(match(">")),
         NULL
-    ));
+    );
 
     // Generic type declaration: TFoo<T> = class ...
+    // This requires the angle brackets with type parameters
     combinator_t* generic_type_decl = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
         optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        type_param_list,                              // type parameters (required for generic)
+        type_param_list_required,                     // type parameters (REQUIRED - has angle brackets)
         token(match("=")),                           // equals sign
         type_definition,                              // type definition
         optional(token(match(";"))),                 // semicolon (optional for last decl)
@@ -573,8 +574,8 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     combinator_t* type_decl = multi(new_combinator(), PASCAL_T_NONE,
-        generic_type_decl,
-        regular_type_decl,
+        generic_type_decl,      // Try generic first (requires <...>)
+        regular_type_decl,      // Fall back to regular (no <...>)
         NULL
     );
 
@@ -1188,19 +1189,20 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     var_section->extra_to_free = program_expr_parser;
 
     // Type parameter list parser: <T, U, V>
-    combinator_t* type_param = token(cident(PASCAL_T_TYPE_PARAM));
-    combinator_t* type_param_list = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+    combinator_t* type_param_prog = token(cident(PASCAL_T_TYPE_PARAM));
+    combinator_t* type_param_list_required_prog = seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
         token(match("<")),
-        sep_by(type_param, token(match(","))),
+        sep_by(type_param_prog, token(match(","))),
         token(match(">")),
         NULL
-    ));
+    );
 
     // Generic type declaration: TFoo<T> = class ...
-    combinator_t* generic_type_decl = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
+    // This requires the angle brackets with type parameters
+    combinator_t* generic_type_decl_prog = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
         optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(cident(PASCAL_T_IDENTIFIER)),           // type name
-        type_param_list,                              // type parameters (required for generic)
+        type_param_list_required_prog,                // type parameters (REQUIRED - has angle brackets)
         token(match("=")),                           // equals sign
         type_spec,                                    // type specification
         token(match(";")),                           // semicolon
@@ -1208,7 +1210,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Regular type declaration: TFoo = Integer
-    combinator_t* regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
+    combinator_t* regular_type_decl_prog = seq(new_combinator(), PASCAL_T_TYPE_DECL,
         optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(cident(PASCAL_T_IDENTIFIER)),           // type name
         token(match("=")),                           // equals sign
@@ -1218,8 +1220,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     combinator_t* type_decl = multi(new_combinator(), PASCAL_T_NONE,
-        generic_type_decl,
-        regular_type_decl,
+        generic_type_decl_prog,     // Try generic first (requires <...>)
+        regular_type_decl_prog,     // Fall back to regular (no <...>)
         NULL
     );
 
