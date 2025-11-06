@@ -810,17 +810,6 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     {
         handled_by_gpctype = 1;
         
-        /* DEBUG: Print detailed type information */
-        fprintf(stderr, "DEBUG: Assignment type check\n");
-        fprintf(stderr, "  LHS kind=%d, return_type=%p, params=%p\n",
-                lhs_gpctype->kind,
-                (lhs_gpctype->kind == TYPE_KIND_PROCEDURE) ? lhs_gpctype->info.proc_info.return_type : NULL,
-                (lhs_gpctype->kind == TYPE_KIND_PROCEDURE) ? lhs_gpctype->info.proc_info.params : NULL);
-        fprintf(stderr, "  RHS kind=%d, return_type=%p, params=%p\n",
-                rhs_gpctype->kind,
-                (rhs_gpctype->kind == TYPE_KIND_PROCEDURE) ? rhs_gpctype->info.proc_info.return_type : NULL,
-                (rhs_gpctype->kind == TYPE_KIND_PROCEDURE) ? rhs_gpctype->info.proc_info.params : NULL);
-        
         if (!are_types_compatible_for_assignment(lhs_gpctype, rhs_gpctype, symtab))
         {
             const char *lhs_name = "<expression>";

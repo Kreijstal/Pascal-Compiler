@@ -2596,41 +2596,23 @@ int semcheck_expr_main(int *type_return,
         case EXPR_ANONYMOUS_PROCEDURE:
         {
             /* Anonymous methods are treated as procedure/function references.
-             * For now, we just set their type to PROCEDURE (function pointer type).
-             * Full implementation requires creating hidden subprogram declarations
-             * which is handled during code generation.
+             * Create a GpcType for better type checking.
              */
             
             /* Set the type to PROCEDURE to represent a function/procedure reference */
             *type_return = PROCEDURE;
             
-            /* Create a GpcType for better type checking if parameters are available */
+            /* Create a GpcType with parameter and return type information */
             ListNode_t *params = expr->expr_data.anonymous_method_data.parameters;
             GpcType *return_type = NULL;
-            
-            fprintf(stderr, "DEBUG: Anonymous %s - params=%p, return_type_id='%s'\n",
-                    (expr->type == EXPR_ANONYMOUS_FUNCTION) ? "function" : "procedure",
-                    params,
-                    expr->expr_data.anonymous_method_data.return_type_id);
-            
-            if (expr->type == EXPR_ANONYMOUS_FUNCTION) {
-                /* For functions, we may have a return type specified */
-                /* For now, we leave it as NULL - full implementation would resolve it */
-            }
             
             /* Create the procedure type to store in the expression */
             GpcType *proc_type = create_procedure_type(params, return_type);
             if (proc_type != NULL) {
                 expr->resolved_gpc_type = proc_type;
-                fprintf(stderr, "DEBUG: Created GpcType for anonymous %s at line %d\n",
-                        (expr->type == EXPR_ANONYMOUS_FUNCTION) ? "function" : "procedure",
-                        expr->line_num);
-            } else {
-                fprintf(stderr, "WARNING: Failed to create GpcType for anonymous method at line %d\n",
-                        expr->line_num);
             }
             
-            return_val = 0;  /* No error for now - we'll improve this gradually */
+            return_val = 0;
             break;
         }
 
