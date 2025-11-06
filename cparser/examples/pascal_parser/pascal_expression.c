@@ -1117,17 +1117,27 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     combinator_t* nil_literal = map(token(keyword_ci("nil")), wrap_nil_literal);
 
     // Constructed type parser for expressions (e.g., TFoo<Integer>.Create)
-    // Use cident for type arguments to allow type names like Integer, String, etc.
+    // Peek to ensure this looks like a generic type before committing
+    // This prevents parsing '<>' (not-equal operator) as an empty generic type
     combinator_t* type_arg = token(cident(PASCAL_T_TYPE_ARG));
+    
+    // Peek for '<' followed by an identifier to distinguish from '<>' operator
+    combinator_t* generic_lookahead = seq(new_combinator(), PASCAL_T_NONE,
+        token(match("<")),
+        type_arg,
+        NULL
+    );
+    
     combinator_t* type_arg_list = seq(new_combinator(), PASCAL_T_TYPE_ARG_LIST,
         token(match("<")),
-        sep_by(type_arg, token(match(","))),
+        sep_by1(type_arg, token(match(","))),  // Require at least one type argument
         token(match(">")),
         NULL
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
         token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list,
+        peek(generic_lookahead),  // Lookahead to ensure '< identifier' pattern
+        type_arg_list,            // Now parse the full type argument list
         NULL
     );
 
