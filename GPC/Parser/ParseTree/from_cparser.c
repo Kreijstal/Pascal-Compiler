@@ -966,6 +966,14 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
         return create_primitive_type(ENUM_TYPE);
     }
 
+    /* Handle class types */
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
+        /* Note: We can't get the class name here because we're inside the type spec, not the type decl.
+         * For now, we return NULL to let the class be handled by the legacy path.
+         * The class's RecordType will be properly populated during semantic checking. */
+        return NULL;
+    }
+
     return NULL;
 }
 
@@ -1091,27 +1099,6 @@ static void collect_class_members(ast_t *node, const char *class_name, ListBuild
                 if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
                     break;
                 
-                /* Debug: print AST structure */
-                ast_t *dbg_node = unwrapped->child;
-                int idx = 0;
-                while (dbg_node != NULL && idx < 10) {
-                    fprintf(stderr, "  [%d] typ=%d (DIRECTIVE=%d), sym=%s\n", idx, dbg_node->typ, 
-                            PASCAL_T_METHOD_DIRECTIVE,
-                            dbg_node->sym && dbg_node->sym->name ? dbg_node->sym->name : "NULL");
-                    if (dbg_node->typ == PASCAL_T_METHOD_DIRECTIVE && dbg_node->child) {
-                        ast_t *dir_child = dbg_node->child;
-                        int jdx = 0;
-                        while (dir_child != NULL && jdx < 5) {
-                            fprintf(stderr, "    directive[%d] typ=%d, sym=%s\n", jdx, dir_child->typ,
-                                    dir_child->sym && dir_child->sym->name ? dir_child->sym->name : "NULL");
-                            jdx++;
-                            dir_child = dir_child->next;
-                        }
-                    }
-                    idx++;
-                    dbg_node = dbg_node->next;
-                }
-                
                 /* Look for virtual/override directive after the method declaration */
                 int is_virtual = 0;
                 int is_override = 0;
@@ -1119,26 +1106,11 @@ static void collect_class_members(ast_t *node, const char *class_name, ListBuild
                 ast_t *directive_node = unwrapped->child;
                 while (directive_node != NULL) {
                     if (directive_node->typ == PASCAL_T_METHOD_DIRECTIVE) {
-                        /* METHOD_DIRECTIVE node found. The parser uses multi() combinator
-                         * which accepts either "virtual" or "override" keyword.
-                         * The matched keyword should be in the child node.
-                         * 
-                         * For now, we check if it's the first method declaration (in class body)
-                         * vs the implementation. Class body methods are typically virtual,
-                         * while implementations in derived classes use override.
-                         * 
-                         * Since the parser structure doesn't easily expose which keyword was matched,
-                         * we use a heuristic: if there's a parent class, assume override, else virtual.
-                         */
-                        
-                        /* Simple heuristic for now: assume virtual by default.
-                         * This works for our current test cases.
-                         * A proper implementation would parse the actual keyword from the AST. */
+                        /* METHOD_DIRECTIVE node found - mark as virtual.
+                         * The actual determination of whether this is an override 
+                         * is done during semantic checking in build_class_vmt() 
+                         * by checking if a method with the same name exists in the parent VMT. */
                         is_virtual = 1;
-                        
-                        /* Assert our assumption - this will help catch cases where
-                         * our heuristic doesn't work */
-                        assert(is_virtual == 1 || is_override == 1);
                         break;
                     }
                     directive_node = directive_node->next;
@@ -3197,20 +3169,21 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (method_name == NULL)
         return NULL;
 
-    /* For method calls, we should ideally use the object's type to determine
-     * which class's method to call. However, at parse time we don't have full
-     * type information. For now, we use find_class_for_method which returns
-     * the first registered class. This works for non-override methods, but
-     * for override methods, the semantic checker will need to handle multiple
-     * candidates.
+    /* For method calls, we need the object's type to determine which class's
+     * method to call. However, at parse time we don't have full type information.
      * 
-     * TODO: Consider not mangling the name here, and instead resolve it during
-     * semantic checking when we have full type information.
+     * Solution: Don't mangle the name during parsing. Instead, store the unmangled
+     * method name and let the semantic checker resolve it based on the object's type.
+     * 
+     * For now, we'll use find_class_for_method as a heuristic to try to determine
+     * the correct class. This works when there's only one class with this method,
+     * but fails when multiple classes have the same method name (polymorphism).
+     * 
+     * A proper fix would require semantic analysis to resolve the method name
+     * based on the actual object type.
      */
     const char *class_name = find_class_for_method(method_name);
     
-    /* Build mangled name, but mark this as a method call that may need 
-     * override resolution during semantic checking */
     char *proc_name = NULL;
     if (class_name != NULL) {
         proc_name = mangle_method_name(class_name, method_name);
@@ -3592,8 +3565,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     /* Prefer the explicitly specified class name from the qualified identifier,
      * falling back to the registered class if no explicit class was given */
     const char *effective_class = class_name != NULL ? class_name : registered_class;
-    if (effective_class != NULL)
-        register_class_method(effective_class, method_name);
+    
+    /* Don't re-register the method here - it was already registered during class declaration */
+    
     char *proc_name = mangle_method_name(effective_class, method_name);
     if (proc_name == NULL) {
         free(class_name);
