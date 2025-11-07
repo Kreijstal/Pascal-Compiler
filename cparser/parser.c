@@ -411,6 +411,11 @@ void set_ast_position(ast_t* ast, input_t* in) {
 ast_t* ast1(tag_t typ, ast_t* a1) {
     ast_t* ast = new_ast();
     ast->typ = typ; ast->child = a1; ast->next = NULL;
+    /* Copy position from first child if available */
+    if (a1 != NULL) {
+        ast->line = a1->line;
+        ast->col = a1->col;
+    }
     return ast;
 }
 
@@ -430,6 +435,11 @@ ast_t* copy_ast(ast_t* orig) {
 ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2) {
     ast_t* ast = new_ast();
     ast->typ = typ; ast->child = a1; a1->next = a2; ast->next = NULL;
+    /* Copy position from first child if available */
+    if (a1 != NULL) {
+        ast->line = a1->line;
+        ast->col = a1->col;
+    }
     return ast;
 }
 

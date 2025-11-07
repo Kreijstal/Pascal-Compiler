@@ -2993,7 +2993,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     } else {
         update_expr = mk_addop(-1, PLUS, for_var, one_expr);
     }
-    update_stmt = mk_varassign(-1, for_var, update_expr);
+    update_stmt = mk_varassign(-1, 0, for_var, update_expr);
 
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &limit_reg);
     if (codegen_had_error(ctx) || limit_reg == NULL)
