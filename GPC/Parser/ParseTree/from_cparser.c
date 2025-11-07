@@ -91,11 +91,13 @@ static ListNode_t *class_method_bindings = NULL;
 /* Counter for generating unique anonymous method names */
 static int anonymous_method_counter = 0;
 
+#define ANON_METHOD_NAME_SIZE 64
+
 /* Helper function to generate unique names for anonymous methods */
 static char *generate_anonymous_method_name(int is_function) {
-    char *name = (char *)malloc(64);
+    char *name = (char *)malloc(ANON_METHOD_NAME_SIZE);
     if (name == NULL) return NULL;
-    snprintf(name, 64, "_anon_%s_%d", is_function ? "func" : "proc", ++anonymous_method_counter);
+    snprintf(name, ANON_METHOD_NAME_SIZE, "_anon_%s_%d", is_function ? "func" : "proc", ++anonymous_method_counter);
     return name;
 }
 

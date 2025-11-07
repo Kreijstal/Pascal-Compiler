@@ -1614,6 +1614,43 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     #endif
 }
 
+/* Helper function to determine the size in bytes for a return type */
+static int get_return_type_size(int return_type)
+{
+    if (return_type == LONGINT_TYPE || return_type == STRING_TYPE || 
+        return_type == POINTER_TYPE || return_type == REAL_TYPE)
+        return 8;
+    return 4; /* Default for INT_TYPE, BOOL, CHAR_TYPE, etc. */
+}
+
+/* Helper function to add a Result alias for anonymous function return variable */
+static void add_result_alias_for_return_var(StackNode_t *return_var)
+{
+    if (return_var == NULL)
+        return;
+    
+    /* Create a stack node for "Result" pointing to the same offset */
+    StackNode_t *result_alias = init_stack_node(return_var->offset, "Result", return_var->size);
+    if (result_alias == NULL)
+        return;
+    
+    result_alias->element_size = return_var->element_size;
+    
+    /* Add it to the x list in the current stack scope using the list API */
+    StackScope_t *cur_scope = get_cur_scope();
+    if (cur_scope != NULL)
+    {
+        ListNode_t *new_list_node = CreateListNode(result_alias, LIST_UNSPECIFIED);
+        if (new_list_node != NULL)
+        {
+            if (cur_scope->x == NULL)
+                cur_scope->x = new_list_node;
+            else
+                cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+        }
+    }
+}
+
 /* Code generation for an anonymous function/procedure
  * This generates the function body and returns the function's label name.
  * The caller is responsible for generating code to load the address of this function.
@@ -1690,34 +1727,11 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     StackNode_t *return_var = NULL;
     if (anon->is_function && anon->return_type != -1)
     {
-        /* Allocate space for return value based on type */
-        int return_size = 4; /* Default to 4 bytes for INT_TYPE */
-        if (anon->return_type == LONGINT_TYPE || anon->return_type == STRING_TYPE || 
-            anon->return_type == POINTER_TYPE)
-            return_size = 8;
-        else if (anon->return_type == REAL_TYPE)
-            return_size = 8; /* 8 bytes for double */
-        
+        int return_size = get_return_type_size(anon->return_type);
         return_var = add_l_x(anon->generated_name, return_size);
         
         /* Also add "Result" as an alias at the same stack offset */
-        if (return_var != NULL)
-        {
-            /* Create a stack node for "Result" pointing to the same offset */
-            StackNode_t *result_alias = init_stack_node(return_var->offset, "Result", return_var->size);
-            result_alias->element_size = return_var->element_size;
-            
-            /* Add it to the x list in the current stack scope using the list API */
-            StackScope_t *cur_scope = get_cur_scope();
-            if (cur_scope != NULL)
-            {
-                ListNode_t *new_list_node = CreateListNode(result_alias, LIST_UNSPECIFIED);
-                if (cur_scope->x == NULL)
-                    cur_scope->x = new_list_node;
-                else
-                    cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
-            }
-        }
+        add_result_alias_for_return_var(return_var);
     }
     
     /* No local variable declarations in anonymous methods (they're inline) */
@@ -1733,8 +1747,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     if (anon->is_function && return_var != NULL)
     {
         char buffer[64];
-        if (anon->return_type == LONGINT_TYPE || anon->return_type == STRING_TYPE || 
-            anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE)
+        int uses_qword = (anon->return_type == LONGINT_TYPE || anon->return_type == STRING_TYPE || 
+                         anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE);
+        if (uses_qword)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
         }
