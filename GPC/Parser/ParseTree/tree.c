@@ -1993,6 +1993,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
 {
     assert(expr != NULL);
     expr->line_num = line_num;
+    expr->col_num = 0;  /* Initialize to 0 - not tracked for expressions yet */
     expr->type = type;
     expr->field_width = NULL;
     expr->field_precision = NULL;
