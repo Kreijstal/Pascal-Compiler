@@ -394,6 +394,18 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         case EXPR_BOOL:
             *out_value = expr->expr_data.bool_value ? 1 : 0;
             return 0;
+        case EXPR_STRING:
+            /* Handle character literals in const expressions */
+            if (expr->expr_data.string != NULL && 
+                expr->expr_data.string[0] != '\0' && 
+                expr->expr_data.string[1] == '\0')
+            {
+                /* Single character literal - return its ASCII value */
+                *out_value = (unsigned char)expr->expr_data.string[0];
+                return 0;
+            }
+            fprintf(stderr, "Error: string literal in const expression must be a single character.\n");
+            return 1;
         case EXPR_VAR_ID:
         {
             HashNode_t *node = NULL;
@@ -557,6 +569,12 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         return 1;
                     }
                     *out_value = (unsigned char)literal[0];
+                    return 0;
+                }
+                /* Handle character code literal */
+                else if (arg->type == EXPR_CHAR_CODE)
+                {
+                    *out_value = (unsigned char)arg->expr_data.char_code;
                     return 0;
                 }
                 /* Handle boolean literal */
@@ -1655,6 +1673,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinFunction_Typed(symtab, ord_name, ord_type);
         free(ord_name);
     }
+    
+    char *high_name = strdup("High");
+    if (high_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for High");
+        GpcType *high_type = create_procedure_type(NULL, return_type);
+        assert(high_type != NULL && "Failed to create High function type");
+        AddBuiltinFunction_Typed(symtab, high_name, high_type);
+        free(high_name);
+    }
 
     /* Builtins are now in stdlib.p */
 }
@@ -2422,14 +2450,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         // Always use _Typed variant, even if GpcType is NULL
         PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
         
-        /* Also add "Result" as an alias for the return variable for Pascal compatibility */
-        /* Check if "Result" is already used as a parameter or local variable */
+/* Also add "Result" as an alias for the return variable for Pascal compatibility */
+        /* Check if "Result" (or "result") is already used as a parameter or local variable */
         HashNode_t *result_check = NULL;
         if (FindIdent(&result_check, symtab, "Result") == -1)
         {
             /* "Result" is not already declared, so we can add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_gpc_type);
         }
+        /* Note: We don't check for "result" anymore since it conflicts with built-in Result alias */
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
 

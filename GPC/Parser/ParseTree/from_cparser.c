@@ -20,6 +20,7 @@
 #include "type_tags.h"
 #include "pascal_parser.h"
 #include "GpcType.h"
+#include "../SemanticCheck/SymTab/SymTab.h"
 
 typedef struct {
     int is_array;
@@ -627,6 +628,18 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             while (element_node != NULL && element_node->next != NULL)
                 element_node = element_node->next;
 
+            // Check if there are any dimensions specified
+            int has_dimensions = 0;
+            for (ast_t *dim = child; dim != NULL && dim != element_node; dim = dim->next) {
+                has_dimensions = 1;
+                break;
+            }
+            
+            // If no dimensions specified, it's an open array (e.g., "array of string")
+            if (!has_dimensions) {
+                type_info->is_open_array = 1;
+            }
+
             for (ast_t *dim = child; dim != NULL && dim != element_node; dim = dim->next) {
                 if (dim->typ == PASCAL_T_RANGE_TYPE) {
                     ast_t *lower = dim->child;
@@ -958,6 +971,7 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
             }
                 
             if (cursor != NULL) {
+                fprintf(stderr, "DEBUG: Found return type node, typ=%d\n", cursor->typ);
                 #ifdef DEBUG_GPC_TYPE_CREATION
                 fprintf(stderr, "DEBUG: Found return type node, typ=%d\n", cursor->typ);
                 #endif
@@ -966,11 +980,19 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
                 } else if (cursor->typ == PASCAL_T_IDENTIFIER) {
                     char *ret_type_name = dup_symbol(cursor);
                     if (ret_type_name != NULL) {
+                        // First check if it's a primitive type
                         int ret_tag = map_type_name(ret_type_name, NULL);
-                        free(ret_type_name);
                         if (ret_tag != UNKNOWN_TYPE) {
                             return_type = create_primitive_type(ret_tag);
+                        } else {
+                            // Check if it's a user-defined type in the symbol table
+                            HashNode_t *type_node = NULL;
+                            if (symtab != NULL && FindIdent(&type_node, symtab, ret_type_name) != -1 && 
+                                type_node != NULL && type_node->type != NULL) {
+                                return_type = type_node->type;
+                            }
                         }
+                        free(ret_type_name);
                     }
                 }
             }
@@ -2639,8 +2661,21 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_REAL:
         return mk_rnum(expr_node->line, strtof(expr_node->sym->name, NULL));
     case PASCAL_T_STRING:
-    case PASCAL_T_CHAR:
         return mk_string(expr_node->line, dup_symbol(expr_node));
+    case PASCAL_T_CHAR:
+    {
+        /* Convert character literal to character code */
+        const char *char_str = (expr_node->sym != NULL) ? expr_node->sym->name : NULL;
+        if (char_str != NULL && strlen(char_str) >= 1)
+        {
+            return mk_charcode(expr_node->line, (unsigned int)char_str[0]);
+        }
+        else
+        {
+            /* Fallback: create empty character */
+            return mk_charcode(expr_node->line, 0);
+        }
+    }
     case PASCAL_T_CHAR_CODE:
     {
         unsigned int char_value = 0;

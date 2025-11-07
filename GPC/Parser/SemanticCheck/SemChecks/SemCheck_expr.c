@@ -2286,6 +2286,34 @@ static int semcheck_addressof(int *type_return,
     semcheck_set_pointer_info(expr, inner_type, type_id);
     expr->record_type = record_info;
     *type_return = POINTER_TYPE;
+    
+    /* Create a proper GpcType for the address-of expression */
+    GpcType *pointed_to_type = NULL;
+    
+    /* Convert inner_type to GpcType */
+    if (inner_type == INT_TYPE) {
+        pointed_to_type = create_primitive_type(INT_TYPE);
+    } else if (inner_type == LONGINT_TYPE) {
+        pointed_to_type = create_primitive_type(LONGINT_TYPE);
+    } else if (inner_type == REAL_TYPE) {
+        pointed_to_type = create_primitive_type(REAL_TYPE);
+    } else if (inner_type == CHAR_TYPE) {
+        pointed_to_type = create_primitive_type(CHAR_TYPE);
+    } else if (inner_type == STRING_TYPE) {
+        pointed_to_type = create_primitive_type(STRING_TYPE);
+    } else if (inner_type == RECORD_TYPE && record_info != NULL) {
+        pointed_to_type = create_record_type(record_info);
+    }
+    /* For other types, we could add more conversions here */
+    
+    /* Create the pointer type */
+    if (pointed_to_type != NULL) {
+        if (expr->resolved_gpc_type != NULL) {
+            destroy_gpc_type(expr->resolved_gpc_type);
+        }
+        expr->resolved_gpc_type = create_pointer_type(pointed_to_type);
+    }
+    
     return error_count;
 }
 /* Sets a type based on a hash_type - uses GpcType when available */
@@ -2494,14 +2522,106 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
         {
             /* For record field access, we need to resolve the type of the record,
              * then look up the field's type within that record.
-             * This is complex and requires the record type information.
-             * For now, we'll fall back to semcheck_expr_main for this case.
-             * In a full implementation, we would:
-             * 1. Resolve the record expression's type
-             * 2. Get the RecordType from that GpcType
-             * 3. Look up the field in the RecordType
-             * 4. Return the field's GpcType
              */
+            struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+            const char *field_name = expr->expr_data.record_access_data.field_id;
+            
+            if (record_expr != NULL && field_name != NULL)
+            {
+                /* Resolve the record expression's type */
+                int record_type_owned = 0;
+                GpcType *record_type = semcheck_resolve_expression_gpc_type(symtab, record_expr, 
+                                                                          max_scope_lev, mutating, &record_type_owned);
+                
+                if (record_type != NULL && record_type->kind == TYPE_KIND_RECORD)
+                {
+                    /* Look up the field in the record type */
+                    struct RecordType *record_info = record_type->info.record_info;
+                    if (record_info != NULL)
+                    {
+                    ListNode_t *field_cursor = record_info->fields;
+                    while (field_cursor != NULL)
+                    {
+                        if (field_cursor->type == LIST_RECORD_FIELD)
+                        {
+                            struct RecordField *field = (struct RecordField *)field_cursor->cur;
+                            if (field != NULL)
+                            {
+                                if (field->name != NULL && strcmp(field->name, field_name) == 0)
+                                {
+                                    /* Found the field, resolve its type */
+                                    GpcType *field_type = NULL;
+                                    
+                                    if (field->type_id != NULL)
+                                    {
+                                        /* User-defined type - look up in symbol table */
+                                        HashNode_t *type_node = NULL;
+                                        if (FindIdent(&type_node, symtab, field->type_id) != -1 && type_node != NULL)
+                                        {
+                                            if (owns_type != NULL)
+                                                *owns_type = 0;
+                                            field_type = type_node->type;
+                                        }
+                                    }
+                                    else if (field->nested_record != NULL)
+                                    {
+                                        /* Nested record type */
+                                        if (owns_type != NULL)
+                                            *owns_type = 1;
+                                        field_type = create_record_type(field->nested_record);
+                                    }
+                                    else if (field->is_array)
+                                    {
+                                        /* Array field */
+                                        GpcType *element_type = NULL;
+                                        if (field->array_element_type_id != NULL)
+                                        {
+                                            HashNode_t *elem_type_node = NULL;
+                                            if (FindIdent(&elem_type_node, symtab, field->array_element_type_id) != -1 && elem_type_node != NULL)
+                                            {
+                                                element_type = elem_type_node->type;
+                                            }
+                                        }
+                                        else if (field->array_element_type != UNKNOWN_TYPE)
+                                        {
+                                            if (owns_type != NULL)
+                                                *owns_type = 1;
+                                            element_type = create_primitive_type(field->array_element_type);
+                                        }
+                                        
+                                        if (element_type != NULL)
+                                        {
+                                            if (owns_type != NULL)
+                                                *owns_type = 1;
+                                            field_type = create_array_type(element_type, field->array_start, field->array_end);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        /* Primitive type */
+                                        if (owns_type != NULL)
+                                            *owns_type = 1;
+                                        field_type = create_primitive_type(field->type);
+                                    }
+                                    
+                                    /* Clean up record type if we owned it */
+                                    if (record_type_owned)
+                                        destroy_gpc_type(record_type);
+                                    
+                                    /* Return the field type */
+                                    return field_type;
+                                }
+                            }
+                        }
+                        field_cursor = field_cursor->next;
+                    }
+                    }
+                }
+                
+                /* Clean up record type if we owned it */
+                if (record_type_owned)
+                    destroy_gpc_type(record_type);
+            }
             break;
         }
 
@@ -2702,6 +2822,11 @@ int semcheck_expr_main(int *type_return,
         case EXPR_NIL:
             *type_return = POINTER_TYPE;
             semcheck_clear_pointer_info(expr);
+            /* Create a proper GpcType for nil with points_to = NULL */
+            if (expr->resolved_gpc_type != NULL) {
+                destroy_gpc_type(expr->resolved_gpc_type);
+            }
+            expr->resolved_gpc_type = create_pointer_type(NULL);
             break;
         case EXPR_SET:
             *type_return = SET_TYPE;
