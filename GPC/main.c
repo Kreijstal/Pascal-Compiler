@@ -315,6 +315,10 @@ int main(int argc, char **argv)
         }
         else
         {
+            /* Mark prelude (stdlib.p) subprograms as library procedures so they don't
+             * incorrectly get static links when merged into user programs */
+            mark_unit_subprograms(prelude_subs);
+            
             ListNode_t *last_node = prelude_subs;
             while(last_node->next != NULL)
             {
