@@ -2709,10 +2709,15 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
         if (should_pass_static_link)
         {
+            const char *link_dest_reg = current_arg_reg64(0);
+            assert(link_dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
+            
             if (callee_depth > current_depth)
             {
                 /* Callee is nested inside the current procedure: pass our frame pointer. */
-                inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+                char link_buffer[64];
+                snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rbp, %s\n", link_dest_reg);
+                inst_list = add_inst(inst_list, link_buffer);
             }
             else if (callee_depth == current_depth)
             {
@@ -2721,8 +2726,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 if (static_link_node != NULL)
                 {
                     char link_buffer[64];
-                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %%rdi\n",
-                        static_link_node->offset);
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        static_link_node->offset, link_dest_reg);
                     inst_list = add_inst(inst_list, link_buffer);
                 }
                 else
@@ -2741,7 +2746,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 if (link_reg != NULL)
                 {
                     char link_buffer[64];
-                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %%rdi\n", link_reg->bit_64);
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %s\n", link_reg->bit_64, link_dest_reg);
                     inst_list = add_inst(inst_list, link_buffer);
                 }
                 else
