@@ -812,8 +812,53 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             func_type = expr->expr_data.function_call_data.resolved_func->type;
         }
         
+        /* Check if the function being called requires a static link */
+        const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        int callee_needs_static_link = codegen_proc_requires_static_link(ctx, func_mangled_name);
+        int callee_depth = 0;
+        int have_depth = codegen_proc_static_link_depth(ctx, func_mangled_name, &callee_depth);
+        int current_depth = codegen_get_lexical_depth(ctx);
+        int should_pass_static_link = (callee_needs_static_link && have_depth);
+        
+        if (should_pass_static_link)
+        {
+            if (callee_depth > current_depth)
+            {
+                /* Callee is nested inside current: pass our frame pointer */
+                inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+            }
+            else if (callee_depth == current_depth)
+            {
+                /* Sibling call: forward our static link */
+                StackNode_t *static_link_node = find_label("__static_link__");
+                if (static_link_node != NULL)
+                {
+                    char link_buffer[64];
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %%rdi\n",
+                        static_link_node->offset);
+                    inst_list = add_inst(inst_list, link_buffer);
+                }
+            }
+            else if (current_depth > callee_depth)
+            {
+                /* Callee is in outer scope: traverse static link chain */
+                int levels_to_traverse = current_depth - callee_depth;
+                codegen_begin_expression(ctx);
+                Register_t *link_reg = codegen_acquire_static_link(ctx, &inst_list, levels_to_traverse);
+                if (link_reg != NULL)
+                {
+                    char link_buffer[64];
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %%rdi\n", link_reg->bit_64);
+                    inst_list = add_inst(inst_list, link_buffer);
+                }
+                codegen_end_expression(ctx);
+            }
+        }
+        
+        /* Pass arguments, shifted by 1 if static link is passed */
+        int arg_start_index = should_pass_static_link ? 1 : 0;
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
-            inst_list, ctx, func_type, expr->expr_data.function_call_data.id, 0);
+            inst_list, ctx, func_type, expr->expr_data.function_call_data.id, arg_start_index);
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         if (expr->resolved_type == STRING_TYPE || expr->resolved_type == LONGINT_TYPE ||

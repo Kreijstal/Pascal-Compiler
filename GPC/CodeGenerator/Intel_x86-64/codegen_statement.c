@@ -2700,12 +2700,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         /* DIRECT CALL LOGIC */
 
-        int num_args = (args_expr == NULL) ? 0 : ListLength(args_expr);
         int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, proc_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
-        int should_pass_static_link = (callee_needs_static_link && num_args == 0 && have_depth);
+        /* Static links are now supported even when there are arguments */
+        int should_pass_static_link = (callee_needs_static_link && have_depth);
 
         if (should_pass_static_link)
         {
@@ -2754,8 +2754,10 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
         
+        /* When passing static link, shift arguments by 1 register position */
+        int arg_start_index = should_pass_static_link ? 1 : 0;
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_gpc_type, 
-            unmangled_name, 0);
+            unmangled_name, arg_start_index);
         inst_list = codegen_vect_reg(inst_list, 0);
         snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
