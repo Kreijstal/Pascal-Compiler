@@ -22,6 +22,7 @@
 #define strncasecmp _strnicmp
 #endif
 #include "SemCheck_expr.h"
+#include "SemCheck_stmt.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"

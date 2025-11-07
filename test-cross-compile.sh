@@ -19,6 +19,12 @@ if [ ! -d "quasi-msys2" ]; then
     git clone https://github.com/HolyBlackCat/quasi-msys2.git
 fi
 
+# Apply patch to fix meson cross file
+if [ ! -f "quasi-msys2/env/generate_meson_config.mk.bak" ]; then
+    echo "Applying patch to quasi-msys2..."
+    ./fix-quasi-msys2-meson-cross.sh
+fi
+
 cd quasi-msys2
 
 # Set MSYS2 environment (UCRT64 is recommended)
