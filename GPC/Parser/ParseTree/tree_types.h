@@ -109,6 +109,7 @@ struct CaseBranch
 struct Statement
 {
     int line_num;
+    int col_num;
     enum StmtType type;
     union stmt_data
     {
@@ -265,6 +266,7 @@ enum ExprType {
 struct Expression
 {
     int line_num;
+    int col_num;
     enum ExprType type;
     union expr_data
     {

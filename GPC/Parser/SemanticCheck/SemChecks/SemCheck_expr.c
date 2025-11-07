@@ -3050,12 +3050,12 @@ int semcheck_addop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        semantic_error(expr->line_num, "type mismatch on addop");
+        semantic_error(expr->line_num, expr->col_num, "type mismatch on addop");
         ++return_val;
     }
     if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
     {
-        semantic_error(expr->line_num, "expected int/real on both sides of addop");
+        semantic_error(expr->line_num, expr->col_num, "expected int/real on both sides of addop");
         ++return_val;
     }
 
@@ -3171,13 +3171,13 @@ int semcheck_varid(int *type_return,
 
         if (with_status == -1)
         {
-            semantic_error(expr->line_num,
+            semantic_error(expr->line_num, expr->col_num,
                 "unable to resolve WITH context for field \"%s\"", id);
             ++return_val;
         }
         else
         {
-            semantic_error(expr->line_num, "undeclared identifier \"%s\"", id);
+            semantic_error(expr->line_num, expr->col_num, "undeclared identifier \"%s\"", id);
             ++return_val;
         }
 

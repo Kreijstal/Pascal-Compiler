@@ -210,7 +210,7 @@ void parser_error_report(const char *message, const char *yytext, int yyleng)
 }
 
 /* Print source code context around an error line */
-void print_source_context(const char *file_path, int error_line, int num_context_lines)
+void print_source_context(const char *file_path, int error_line, int error_col, int num_context_lines)
 {
     if (file_path == NULL || error_line <= 0)
         return;
@@ -221,6 +221,9 @@ void print_source_context(const char *file_path, int error_line, int num_context
 
     if (num_context_lines < 0)
         num_context_lines = 2; /* Default to 2 lines of context */
+    
+    if (error_col < 0)
+        error_col = 0;
 
     char buffer[512];
     int current_line = 1;
@@ -244,7 +247,11 @@ void print_source_context(const char *file_path, int error_line, int num_context
             /* Highlight the error line */
             fprintf(stderr, "  > %4d | %s\n", current_line, buffer);
             fprintf(stderr, "         | ");
-            /* Print caret at beginning of line */
+            
+            /* Print caret at the error column */
+            int col_to_print = error_col > 0 ? error_col : 1;
+            for (int i = 1; i < col_to_print; ++i)
+                fputc(' ', stderr);
             fprintf(stderr, "^\n");
         }
         else

@@ -19,9 +19,10 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
 
 /* Helper to print semantic error with source code context
  * line_num: line number where error occurred
+ * col_num: column number where error occurred (0 if unknown)
  * format: printf-style format string for error message
  * ...: arguments for format string
  */
-void semantic_error(int line_num, const char *format, ...);
+void semantic_error(int line_num, int col_num, const char *format, ...);
 
 #endif

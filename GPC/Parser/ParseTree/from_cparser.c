@@ -1663,7 +1663,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                             struct Expression *index_expr = mk_inum(decl_node->line, index);
                             struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
                             struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
-                            struct Statement *assign_stmt = mk_varassign(decl_node->line, array_access, elem_expr);
+                            struct Statement *assign_stmt = mk_varassign(decl_node->line, decl_node->col, array_access, elem_expr);
                             list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
                         }
                         index++;
@@ -1679,7 +1679,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     struct Expression *init_expr = convert_expression(init_node);
                     if (init_expr != NULL) {
                         struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
-                        initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
+                        initializer_stmt = mk_varassign(decl_node->line, decl_node->col, lhs, init_expr);
                     }
                 }
             }
@@ -1730,7 +1730,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
                     char *var_name = (char *)ids->cur;
                     struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
-                    initializer_stmt = mk_varassign(decl_node->line, lhs, init_expr);
+                    initializer_stmt = mk_varassign(decl_node->line, decl_node->col, lhs, init_expr);
                 } else {
                     destroy_expr(init_expr);
                 }
@@ -1950,7 +1950,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             struct Expression *lhs = mk_recordaccess(element->line, array_elem, strdup(field_name));
                             
                             /* Generate assignment statement */
-                            struct Statement *field_assign = mk_varassign(element->line, lhs, field_value);
+                            struct Statement *field_assign = mk_varassign(element->line, element->col, lhs, field_value);
                             list_builder_append(&stmt_builder, field_assign, LIST_STMT);
                         } else {
                             fprintf(stderr, "ERROR: Unsupported field value in record constructor for %s[%d].%s.\n",
@@ -1974,7 +1974,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             struct Expression *index_expr = mk_inum(element->line, index);
             struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
             struct Expression *lhs = mk_arrayaccess(element->line, base_expr, index_expr);
-            struct Statement *assign = mk_varassign(element->line, lhs, rhs);
+            struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
             list_builder_append(&stmt_builder, assign, LIST_STMT);
         }
 
@@ -2076,7 +2076,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                         struct Expression *lhs = mk_recordaccess(const_decl_node->line, base_expr, strdup(field_name));
                         
                         /* Generate assignment statement */
-                        struct Statement *field_assign = mk_varassign(const_decl_node->line, lhs, field_value);
+                        struct Statement *field_assign = mk_varassign(const_decl_node->line, const_decl_node->col, lhs, field_value);
                         list_builder_append(&field_stmts, field_assign, LIST_STMT);
                     } else {
                         fprintf(stderr, "ERROR: Unsupported field value in record constructor for %s.%s.\n",
@@ -3181,7 +3181,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 
     struct Expression *left = convert_expression(lhs);
     struct Expression *right = convert_expression(rhs);
-    return mk_varassign(assign_node->line, left, right);
+    return mk_varassign(assign_node->line, assign_node->col, left, right);
 }
 
 static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
