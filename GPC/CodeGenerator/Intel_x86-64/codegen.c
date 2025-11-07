@@ -1699,6 +1699,25 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
             return_size = 8; /* 8 bytes for double */
         
         return_var = add_l_x(anon->generated_name, return_size);
+        
+        /* Also add "Result" as an alias at the same stack offset */
+        if (return_var != NULL)
+        {
+            /* Create a stack node for "Result" pointing to the same offset */
+            StackNode_t *result_alias = init_stack_node(return_var->offset, "Result", return_var->size);
+            result_alias->element_size = return_var->element_size;
+            
+            /* Add it to the x list in the current stack scope using the list API */
+            StackScope_t *cur_scope = get_cur_scope();
+            if (cur_scope != NULL)
+            {
+                ListNode_t *new_list_node = CreateListNode(result_alias, LIST_UNSPECIFIED);
+                if (cur_scope->x == NULL)
+                    cur_scope->x = new_list_node;
+                else
+                    cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+            }
+        }
     }
     
     /* No local variable declarations in anonymous methods (they're inline) */
