@@ -204,7 +204,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
 Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value);
 
 /* Statement routines */
-struct Statement *mk_varassign(int line_num, struct Expression *var, struct Expression *expr);
+struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var, struct Expression *expr);
 struct Statement *mk_label(int line_num, char *label, struct Statement *stmt);
 struct Statement *mk_goto(int line_num, char *label);
 

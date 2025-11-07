@@ -670,6 +670,7 @@ int main(int argc, char **argv)
     }
 
     const char *input_file = argv[1];
+    file_to_parse = (char *)input_file;  /* Set global for error reporting */
     unit_search_paths_init(&g_unit_paths);
     unit_search_paths_set_user(&g_unit_paths, input_file);
     const char *output_file = argv[2];

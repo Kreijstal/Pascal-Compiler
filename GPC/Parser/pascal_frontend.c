@@ -373,7 +373,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     free(buffer);
     free(input);
-    file_to_parse = NULL;
+    /* Don't reset file_to_parse to NULL - it's needed for semantic error reporting */
+    /* file_to_parse = NULL; */
     // Don't free parser - it's cached for reuse
 
     if (!success && tree != NULL)

@@ -29,14 +29,43 @@
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/GpcType.h"
 #include "../ParseTree/from_cparser.h"
+#include "../parser_error.h"
+#include "../ErrVars.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
 #include "NameMangling.h"
+#include <stdarg.h>
 
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);
+
+/* Helper function to print semantic error with source code context */
+void semantic_error(int line_num, int col_num, const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
+    
+    /* Print the error message */
+    fprintf(stderr, "Error on line %d", line_num);
+    if (col_num > 0)
+        fprintf(stderr, ", column %d", col_num);
+    fprintf(stderr, ": ");
+    
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    
+    /* Print source code context if we have a file */
+    if (file_path != NULL && line_num > 0)
+    {
+        print_source_context(file_path, line_num, col_num, 2);
+    }
+    
+    fprintf(stderr, "\n");
+}
 
 /* Main is a special keyword at the moment for code generation */
 int semcheck_id_not_main(char *id)
@@ -1301,8 +1330,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
         if(func_return > 0)
         {
-            fprintf(stderr, "Error on line %d, redeclaration of name %s!\n",
-                tree->line_num, tree->tree_data.type_decl_data.id);
+            semantic_error(tree->line_num, 0, "redeclaration of name %s",
+                tree->tree_data.type_decl_data.id);
             return_val += func_return;
         }
 
@@ -1767,8 +1796,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     HashNode_t *type_node = resolved_type;
                     if (type_node == NULL)
                     {
-                        fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                            tree->line_num, tree->tree_data.var_decl_data.type_id);
+                        semantic_error(tree->line_num, 0, "undefined type %s",
+                            tree->tree_data.var_decl_data.type_id);
                         return_val++;
                         var_type = HASHVAR_UNTYPED;
                     }
@@ -2070,8 +2099,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Greater than 0 signifies an error */
             if(func_return > 0)
             {
-                fprintf(stderr, "Error on line %d, redeclaration of name %s!\n",
-                    tree->line_num, (char *)ids->cur);
+                semantic_error(tree->line_num, 0, "redeclaration of name %s",
+                    (char *)ids->cur);
                 return_val += func_return;
             }
 
