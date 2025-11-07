@@ -3854,14 +3854,20 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
+        case PASCAL_T_EXTERNAL_DECL: {
+            is_external = 1;
+            break;
+        }
             /* Check if this is a directive keyword (external/forward/assembler) */
             /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL && strcasecmp(directive, "external") == 0) {
                     is_external = 1;
+                    free(directive);
                 }
-                free(directive);
+            } else if (cur->sym != NULL && strcasecmp(cur->sym->name, "external") == 0) {
+                is_external = 1;
             }
             break;
         }
@@ -3971,17 +3977,35 @@ static Tree_t *convert_function(ast_t *func_node) {
             if (stmt != NULL)
                 list_builder_append(&stmts_builder, stmt, LIST_STMT);
             body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
+        case PASCAL_T_EXTERNAL_DECL: {
+            is_external = 1;
             break;
         }
-        case PASCAL_T_IDENTIFIER: {
+            break;
+        }
+case PASCAL_T_IDENTIFIER: {
             /* Check if this is a directive keyword (external/forward/assembler) */
-            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
-            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
+            /* The directive IDENTIFIER has a child with the directive */
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_EXTERNAL_DECL) {
+                is_external = 1;
+                /* Check if there's an external name specified */
+                ast_t *external_decl = cur->child;
+                if (external_decl->child != NULL && external_decl->child->typ == PASCAL_T_EXTERNAL_NAME) {
+                    ast_t *external_name_node = external_decl->child;
+                    if (external_name_node->child != NULL && external_name_node->child->typ == PASCAL_T_STRING) {
+                        /* Use the external name instead of the function ID */
+                        free(id);
+                        id = dup_symbol(external_name_node->child);
+                    }
+                }
+            } else if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL && strcasecmp(directive, "external") == 0) {
                     is_external = 1;
+                    free(directive);
                 }
-                free(directive);
+            } else if (cur->sym != NULL && strcasecmp(cur->sym->name, "external") == 0) {
+                is_external = 1;
             }
             break;
         }

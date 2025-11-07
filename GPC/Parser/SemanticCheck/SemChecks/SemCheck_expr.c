@@ -1064,6 +1064,8 @@ static long long sizeof_from_var_type(enum VarType var_type)
             return POINTER_SIZE_BYTES;
         case HASHVAR_BOOLEAN:
             return 4;
+        case HASHVAR_GENERIC_PARAM:
+            return -1;
         case HASHVAR_PROCEDURE:
             return POINTER_SIZE_BYTES;
         case HASHVAR_CHAR:

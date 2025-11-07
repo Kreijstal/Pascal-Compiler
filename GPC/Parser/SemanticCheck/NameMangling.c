@@ -159,8 +159,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
             case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
-            case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
-            case HASHVAR_CHAR:    type_suffix = "_c"; break;
+case HASHVAR_BOOLEAN: type_suffix = "_b"; break;
+        case HASHVAR_GENERIC_PARAM: type_suffix = "_g"; break;
+        case HASHVAR_CHAR:    type_suffix = "_c"; break;
             case HASHVAR_POINTER: type_suffix = "_p"; break;
             case HASHVAR_SET:     type_suffix = "_set"; break;
             case HASHVAR_ENUM:    type_suffix = "_e"; break;

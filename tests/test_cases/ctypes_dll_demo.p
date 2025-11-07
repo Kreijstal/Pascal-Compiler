@@ -2,7 +2,7 @@ program ctypes_dll_demo;
 
 uses ctypes;
 
-function ctypes_helper_add(a, b: integer): cint; external;
+function ctypes_helper_add(a, b: integer): cint; external name 'ctypes_helper_add';
 
 var
   left: cint;

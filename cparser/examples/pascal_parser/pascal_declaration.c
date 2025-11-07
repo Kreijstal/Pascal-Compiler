@@ -199,7 +199,14 @@ static combinator_t* enhanced_external_directive(void) {
         NULL
     );
     
-    // Variant 3: external 'library_name' name 'external_name';
+    // Variant 3: external name 'external_name' (no library)
+    combinator_t* simple_named_external = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_name_clause(),
+        NULL
+    );
+    
+// Variant 4: external 'library_name' name 'external_name';
     combinator_t* named_external = seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("external")),
         external_library_name(),
@@ -207,7 +214,7 @@ static combinator_t* enhanced_external_directive(void) {
         NULL
     );
     
-    // Variant 4: external 'library_name' index integer;
+    // Variant 5: external 'library_name' index integer;
     combinator_t* indexed_external = seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("external")),
         external_library_name(),
@@ -218,6 +225,7 @@ static combinator_t* enhanced_external_directive(void) {
     return map(multi(new_combinator(), PASCAL_T_NONE,
         indexed_external,
         named_external,
+        simple_named_external,
         library_external,
         simple_external,
         NULL
