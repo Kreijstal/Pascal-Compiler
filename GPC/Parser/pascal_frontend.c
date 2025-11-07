@@ -12,6 +12,8 @@
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "pascal_preprocessor.h"
+#include "../benchmark.h"
+#include "../flags.h"
 
 extern ast_t *ast_nil;
 
@@ -258,6 +260,9 @@ void pascal_frontend_cleanup(void)
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
 {
+    double start_time = benchmark_get_time();
+    double phase_start = 0.0;
+    
     if (error_out != NULL)
         *error_out = NULL;
 
@@ -266,6 +271,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (buffer == NULL)
         return false;
 
+    if (benchmark_flag()) {
+        phase_start = benchmark_get_time();
+    }
+    
     PascalPreprocessor *preprocessor = pascal_preprocessor_create();
     if (preprocessor == NULL)
     {
@@ -311,6 +320,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     buffer = preprocessed_buffer;
     length = preprocessed_length;
 
+    if (benchmark_flag()) {
+        double preprocess_time = benchmark_get_time() - phase_start;
+        benchmark_count_call("preprocessing");
+        fprintf(stderr, "[benchmark] Preprocessing: %.6f s\n", preprocess_time);
+    }
+
     bool is_unit = buffer_starts_with_unit(buffer, length);
     combinator_t *parser = is_unit ? get_or_create_unit_parser() : get_or_create_program_parser();
 
@@ -326,7 +341,21 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     file_to_parse = (char *)path;
 
+    if (benchmark_flag()) {
+        phase_start = benchmark_get_time();
+        benchmark_start_phase(BENCH_PHASE_PARSE_PROGRAM);
+    }
+    
     ParseResult result = parse(input, parser);
+    
+    if (benchmark_flag()) {
+        benchmark_end_phase(BENCH_PHASE_PARSE_PROGRAM);
+        double parse_time = benchmark_get_time() - phase_start;
+        benchmark_count_call("parse()");
+        fprintf(stderr, "[benchmark] Core parsing: %.6f s\n", parse_time);
+        phase_start = benchmark_get_time();
+    }
+    
     Tree_t *tree = NULL;
     bool success = false;
     if (!result.is_success)
@@ -362,6 +391,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             {
                 success = true;
             }
+            
+            if (benchmark_flag()) {
+                double ast_convert_time = benchmark_get_time() - phase_start;
+                benchmark_count_call("tree_from_pascal_ast");
+                fprintf(stderr, "[benchmark] AST conversion: %.6f s\n", ast_convert_time);
+            }
         }
         else
         {
@@ -376,6 +411,11 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     /* Don't reset file_to_parse to NULL - it's needed for semantic error reporting */
     /* file_to_parse = NULL; */
     // Don't free parser - it's cached for reuse
+
+    if (benchmark_flag()) {
+        double total_time = benchmark_get_time() - start_time;
+        fprintf(stderr, "[benchmark] Total pascal_parse_source: %.6f s\n", total_time);
+    }
 
     if (!success && tree != NULL)
     {
