@@ -58,6 +58,172 @@ static ast_t* map_assembler_directive(ast_t* ast) {
     return make_modifier_node(ast, "assembler");
 }
 
+// Helper function to structure external declaration nodes
+static ast_t* structure_external_decl(ast_t* ast) {
+    if (ast == NULL || ast == ast_nil)
+        return ast_nil;
+
+    ast_t* external_decl = new_ast();
+    external_decl->typ = PASCAL_T_EXTERNAL_DECL;
+    external_decl->child = ast;
+    external_decl->next = NULL;
+    
+    if (ast != NULL) {
+        external_decl->line = ast->line;
+        external_decl->col = ast->col;
+    }
+    
+    return external_decl;
+}
+
+// Parser for external library name: 'library_name'
+static combinator_t* external_library_name(void) {
+    return seq(new_combinator(), PASCAL_T_EXTERNAL_LIBRARY,
+        token(pascal_string(PASCAL_T_STRING)),
+        NULL
+    );
+}
+
+// Parser for external name clause: name 'external_name'
+static combinator_t* external_name_clause(void) {
+    return seq(new_combinator(), PASCAL_T_EXTERNAL_NAME,
+        token(keyword_ci("name")),
+        token(pascal_string(PASCAL_T_STRING)),
+        NULL
+    );
+}
+
+// Parser for external index clause: index integer
+static combinator_t* external_index_clause(void) {
+    return seq(new_combinator(), PASCAL_T_EXTERNAL_INDEX,
+        token(keyword_ci("index")),
+        token(integer(PASCAL_T_INTEGER)),
+        NULL
+    );
+}
+
+// Parser for cvar modifier
+static ast_t* map_cvar_modifier(ast_t* ast) {
+    return make_modifier_node(ast, "cvar");
+}
+
+// Parser for external variable declarations
+static combinator_t* external_var_decl(void) {
+    // Var name : type; external [name 'varname'];
+    combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        array_type(PASCAL_T_ARRAY_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    
+    // Variant 1: external name 'varname'
+    combinator_t* simple_external_var = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_name_clause(),
+        token(match(";")),
+        NULL
+    );
+    
+    // Variant 2: external 'library' name 'varname'
+    combinator_t* library_external_var = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_library_name(),
+        external_name_clause(),
+        token(match(";")),
+        NULL
+    );
+    
+    // Variant 3: external 'library'
+    combinator_t* library_only_external_var = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_library_name(),
+        token(match(";")),
+        NULL
+    );
+    
+    combinator_t* external_clause = multi(new_combinator(), PASCAL_T_NONE,
+        library_external_var,
+        simple_external_var,
+        library_only_external_var,
+        NULL
+    );
+    
+    return seq(new_combinator(), PASCAL_T_EXTERNAL_VAR,
+        token(cident(PASCAL_T_IDENTIFIER)),          // variable name
+        token(match(":")),                           // colon
+        type_spec,                                   // type specification
+        token(match(";")),                           // semicolon after type
+        external_clause,                             // external clause
+        NULL
+    );
+}
+
+// Parser for cvar external variable declarations
+static combinator_t* cvar_external_var_decl(void) {
+    // varname : type; cvar; external;
+    combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        array_type(PASCAL_T_ARRAY_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    
+    return seq(new_combinator(), PASCAL_T_EXTERNAL_VAR,
+        token(cident(PASCAL_T_IDENTIFIER)),          // variable name
+        token(match(":")),                           // colon
+        type_spec,                                   // type specification
+        token(match(";")),                           // semicolon after type
+        map(token(keyword_ci("cvar")), map_cvar_modifier),  // cvar modifier
+        token(match(";")),                           // semicolon after cvar
+        token(keyword_ci("external")),               // external keyword
+        token(match(";")),                           // semicolon after external
+        NULL
+    );
+}
+
+// Enhanced external directive parser that supports all variants
+static combinator_t* enhanced_external_directive(void) {
+    // Variant 1: simple external; 
+    combinator_t* simple_external = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        NULL
+    );
+    
+    // Variant 2: external 'library_name';
+    combinator_t* library_external = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_library_name(),
+        NULL
+    );
+    
+    // Variant 3: external 'library_name' name 'external_name';
+    combinator_t* named_external = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_library_name(),
+        external_name_clause(),
+        NULL
+    );
+    
+    // Variant 4: external 'library_name' index integer;
+    combinator_t* indexed_external = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("external")),
+        external_library_name(),
+        external_index_clause(),
+        NULL
+    );
+    
+    return map(multi(new_combinator(), PASCAL_T_NONE,
+        indexed_external,
+        named_external,
+        library_external,
+        simple_external,
+        NULL
+    ), structure_external_decl);
+}
+
 static ast_t* discard_ast(ast_t* ast) {
     if (ast != NULL && ast != ast_nil) {
         free_ast(ast);
@@ -659,6 +825,8 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
+        external_var_decl(),
+        cvar_external_var_decl(),
         inferred_var_decl,
         typed_var_decl,
         NULL
@@ -728,7 +896,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     // Directives that indicate no body should follow - preserve the directive keyword in AST
     combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
         map(token(keyword_ci("forward")), map_forward_directive),
-        map(token(keyword_ci("external")), map_external_directive),
+        enhanced_external_directive(),
         map(token(keyword_ci("assembler")), map_assembler_directive),
         NULL
     );
@@ -1249,6 +1417,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
+        external_var_decl(),
+        cvar_external_var_decl(),
         inferred_program_var_decl,
         typed_program_var_decl,
         NULL
@@ -1470,7 +1640,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Directives that indicate no body should follow - preserve the directive keyword in AST
     combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
         map(token(keyword_ci("forward")), map_forward_directive),
-        map(token(keyword_ci("external")), map_external_directive),
+        enhanced_external_directive(),
         map(token(keyword_ci("assembler")), map_assembler_directive),
         NULL
     );

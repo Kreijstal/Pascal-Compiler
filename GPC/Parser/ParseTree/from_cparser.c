@@ -3872,6 +3872,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     }
 
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
+    fprintf(stderr, "DEBUG: convert_procedure calling mk_procedure with is_external=%d for '%s'\n", is_external, id);
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, list_builder_finish(&var_decls_builder), nested_subs, body, is_external, 0);
     return tree;
@@ -3991,6 +3992,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
 
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
+    fprintf(stderr, "DEBUG: convert_function calling mk_function with is_external=%d for '%s'\n", is_external, id);
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                label_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                return_type, return_type_id, is_external, 0);

@@ -2407,6 +2407,9 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         case HASHVAR_BOOLEAN:
             *type = BOOL;
             break;
+        case HASHVAR_GENERIC_PARAM:
+            *type = UNKNOWN_TYPE;
+            break;
         case HASHVAR_CHAR:
             *type = CHAR_TYPE;
             break;
@@ -3558,6 +3561,57 @@ static int resolve_param_type(Tree_t *var_decl, SymTab_t *symtab)
             /* Get the type tag from the type node */
             int resolved_type = UNKNOWN_TYPE;
             set_type_from_hashtype(&resolved_type, type_node);
+            
+            /* If this is a type alias (like AnsiString = string), 
+             * try to resolve it to the underlying primitive type */
+            if (resolved_type == UNKNOWN_TYPE && type_node->type != NULL)
+            {
+                /* For type aliases, the GpcType should contain the actual type */
+                if (type_node->type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    resolved_type = type_node->type->info.primitive_type_tag;
+                }
+                /* Handle type aliases through the type_alias metadata */
+                else if (type_node->type->type_alias != NULL)
+                {
+                    /* This type was created from a type alias, try to get the underlying type */
+                    struct TypeAlias *alias = type_node->type->type_alias;
+                    if (alias != NULL)
+                    {
+                        /* For simple type aliases like "AnsiString = string", 
+                         * check the target_type_id */
+                        if (alias->target_type_id != NULL)
+                        {
+                            /* Handle common type aliases directly */
+                            if (strcmp(alias->target_type_id, "string") == 0)
+                            {
+                                resolved_type = STRING_TYPE;
+                            }
+                            else if (strcmp(alias->target_type_id, "integer") == 0)
+                            {
+                                resolved_type = INT_TYPE;
+                            }
+                            else if (strcmp(alias->target_type_id, "longint") == 0)
+                            {
+                                resolved_type = LONGINT_TYPE;
+                            }
+                            else if (strcmp(alias->target_type_id, "real") == 0)
+                            {
+                                resolved_type = REAL_TYPE;
+                            }
+                            else if (strcmp(alias->target_type_id, "char") == 0)
+                            {
+                                resolved_type = CHAR_TYPE;
+                            }
+                            else if (strcmp(alias->target_type_id, "boolean") == 0)
+                            {
+                                resolved_type = BOOL;
+                            }
+                        }
+                    }
+                }
+            }
+            
             return resolved_type;
         }
     }
@@ -3608,6 +3662,9 @@ int semcheck_funccall(int *type_return,
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
 
     int match_count = 0;
+    int has_external_candidate = 0;
+
+    fprintf(stderr, "DEBUG: Looking for function '%s', mangled to '%s'\n", id, mangled_name);
 
     if (overload_candidates != NULL)
     {
@@ -3615,10 +3672,23 @@ int semcheck_funccall(int *type_return,
         while(cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
+            fprintf(stderr, "DEBUG: Candidate '%s' with mangled_id '%s'\n", candidate->id, candidate->mangled_id ? candidate->mangled_id : "NULL");
             if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
                 match_count++;
+            // Check if this is an external function (mangled_id equals original id)
+            if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, id) == 0)
+                has_external_candidate = 1;
             cur = cur->next;
         }
+    }
+
+    fprintf(stderr, "DEBUG: match_count=%d, has_external_candidate=%d\n", match_count, has_external_candidate);
+
+    // If we have an external candidate but no mangled matches, use the original name
+    if (match_count == 0 && has_external_candidate) {
+        free(mangled_name);
+        mangled_name = strdup(id);
+        fprintf(stderr, "DEBUG: Using original name '%s' for external function\n", id);
     }
 
     HashNode_t *best_match = NULL;
@@ -3654,6 +3724,12 @@ int semcheck_funccall(int *type_return,
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
                         current_score += 1;
+                    else if (formal_type == STRING_TYPE && call_type == STRING_TYPE)
+                        current_score += 0;  /* Exact string match */
+                    else if (formal_type == STRING_TYPE && call_type == CHAR_TYPE)
+                        current_score += 1;  /* Char to string conversion */
+                    else if (formal_type == CHAR_TYPE && call_type == STRING_TYPE)
+                        current_score += 2;  /* String to char conversion (less preferred) */
                     else
                         current_score += 1000; // Mismatch
 

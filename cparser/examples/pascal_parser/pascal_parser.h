@@ -169,6 +169,13 @@ typedef enum {
     PASCAL_T_IMPLEMENTATION_SECTION,
     PASCAL_T_INITIALIZATION_SECTION,
     PASCAL_T_FINALIZATION_SECTION,
+    // External declaration types
+    PASCAL_T_EXTERNAL_DECL,
+    PASCAL_T_EXTERNAL_LIBRARY,
+    PASCAL_T_EXTERNAL_NAME,
+    PASCAL_T_EXTERNAL_INDEX,
+    PASCAL_T_EXTERNAL_VAR,
+    PASCAL_T_CVAR,
     // Field width specifier for formatted output
     PASCAL_T_FIELD_WIDTH
 } pascal_tag_t;

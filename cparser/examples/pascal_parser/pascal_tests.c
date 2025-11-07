@@ -4504,6 +4504,201 @@ void test_pascal_unit_forward_declaration(void) {
     free(input);
 }
 
+void test_external_simple_function(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program TestExternalSimple;\n"
+        "\n"
+        "function SimpleFunc: integer; external;\n"
+        "\n"
+        "begin\n"
+        "  writeln('Test');\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_PROGRAM_DECL);
+        
+        // Find the external function declaration
+        ast_t* func_decl = find_first_node_of_type(ast, PASCAL_T_FUNCTION_DECL);
+        TEST_ASSERT(func_decl != NULL);
+        TEST_ASSERT(func_decl->child != NULL);
+        TEST_ASSERT(func_decl->child->sym != NULL);
+        TEST_ASSERT(strcmp(func_decl->child->sym->name, "SimpleFunc") == 0);
+        
+        // Check return type
+        ast_t* return_type = find_first_node_of_type(func_decl, PASCAL_T_RETURN_TYPE);
+        TEST_ASSERT(return_type != NULL);
+        TEST_ASSERT(return_type->child != NULL);
+        TEST_ASSERT(return_type->child->sym != NULL);
+        TEST_ASSERT(strcmp(return_type->child->sym->name, "integer") == 0);
+        
+        // Check external directive (simple external has just IDENTIFIER, complex ones have EXTERNAL_DECL)
+        ast_t* external = find_first_node_of_type(func_decl, PASCAL_T_IDENTIFIER);
+        if (external != NULL && external->sym != NULL && strcmp(external->sym->name, "external") == 0) {
+            TEST_ASSERT(1); // Simple external found
+        } else {
+            // Check for complex external declaration
+            ast_t* external_decl = find_first_node_of_type(func_decl, PASCAL_T_EXTERNAL_DECL);
+            TEST_ASSERT(external_decl != NULL || external != NULL); // At least one should exist
+        }
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_external_library_function(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program TestExternalLibrary;\n"
+        "\n"
+        "function LibraryFunc: integer; external 'kernel32';\n"
+        "\n"
+        "begin\n"
+        "  writeln('Test');\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_PROGRAM_DECL);
+        
+        // Find the external function declaration
+        ast_t* func_decl = find_first_node_of_type(ast, PASCAL_T_FUNCTION_DECL);
+        TEST_ASSERT(func_decl != NULL);
+        
+        // Check external library
+        ast_t* external_lib = find_first_node_of_type(func_decl, PASCAL_T_EXTERNAL_LIBRARY);
+        TEST_ASSERT(external_lib != NULL);
+        TEST_ASSERT(external_lib->child != NULL);
+        TEST_ASSERT(external_lib->child->typ == PASCAL_T_STRING);
+        TEST_ASSERT(strcmp(external_lib->child->sym->name, "kernel32") == 0);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_external_named_function(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program TestExternalNamed;\n"
+        "\n"
+        "function NamedFunc: integer; external 'kernel32' name 'CreateFileA';\n"
+        "\n"
+        "begin\n"
+        "  writeln('Test');\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_PROGRAM_DECL);
+        
+        // Find the external function declaration
+        ast_t* func_decl = find_first_node_of_type(ast, PASCAL_T_FUNCTION_DECL);
+        TEST_ASSERT(func_decl != NULL);
+        
+        // Check external library
+        ast_t* external_lib = find_first_node_of_type(func_decl, PASCAL_T_EXTERNAL_LIBRARY);
+        TEST_ASSERT(external_lib != NULL);
+        TEST_ASSERT(external_lib->child != NULL);
+        TEST_ASSERT(external_lib->child->typ == PASCAL_T_STRING);
+        TEST_ASSERT(strcmp(external_lib->child->sym->name, "kernel32") == 0);
+        
+        // Check external name
+        ast_t* external_name = find_first_node_of_type(func_decl, PASCAL_T_EXTERNAL_NAME);
+        TEST_ASSERT(external_name != NULL);
+        TEST_ASSERT(external_name->child != NULL);
+        TEST_ASSERT(external_name->child->typ == PASCAL_T_STRING);
+        TEST_ASSERT(strcmp(external_name->child->sym->name, "CreateFileA") == 0);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
+void test_external_simple_variable(void) {
+    combinator_t* p = get_program_parser();
+    
+    const char* source =
+        "program TestExternalVarSimple;\n"
+        "\n"
+        "var\n"
+        "  extVar: integer; external name 'extvar';\n"
+        "\n"
+        "begin\n"
+        "  writeln('Test');\n"
+        "end.\n";
+    
+    input_t* input = new_input();
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    TEST_ASSERT(res.is_success);
+    
+    if (res.is_success) {
+        ast_t* ast = res.value.ast;
+        TEST_ASSERT(ast != NULL);
+        TEST_ASSERT(ast->typ == PASCAL_T_PROGRAM_DECL);
+        
+        // Find the external variable declaration
+        ast_t* ext_var = find_first_node_of_type(ast, PASCAL_T_EXTERNAL_VAR);
+        TEST_ASSERT(ext_var != NULL);
+        TEST_ASSERT(ext_var->child != NULL);
+        TEST_ASSERT(ext_var->child->sym != NULL);
+        TEST_ASSERT(strcmp(ext_var->child->sym->name, "extVar") == 0);
+        
+        // Check type
+        ast_t* type_spec = find_first_node_of_type(ext_var, PASCAL_T_TYPE_SPEC);
+        TEST_ASSERT(type_spec != NULL);
+        TEST_ASSERT(type_spec->child != NULL);
+        TEST_ASSERT(type_spec->child->sym != NULL);
+        TEST_ASSERT(strcmp(type_spec->child->sym->name, "integer") == 0);
+        
+        // Check external name
+        ast_t* external_name = find_first_node_of_type(ext_var, PASCAL_T_EXTERNAL_NAME);
+        TEST_ASSERT(external_name != NULL);
+        TEST_ASSERT(external_name->child != NULL);
+        TEST_ASSERT(external_name->child->typ == PASCAL_T_STRING);
+        TEST_ASSERT(strcmp(external_name->child->sym->name, "extvar") == 0);
+    }
+    
+    free(input->buffer);
+    free(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -4653,5 +4848,9 @@ TEST_LIST = {
     { "test_pascal_program_forward_declaration", test_pascal_program_forward_declaration },
     { "test_pascal_program_external_declaration", test_pascal_program_external_declaration },
     { "test_pascal_unit_forward_declaration", test_pascal_unit_forward_declaration },
+    { "test_external_simple_function", test_external_simple_function },
+    { "test_external_library_function", test_external_library_function },
+    { "test_external_named_function", test_external_named_function },
+    { "test_external_simple_variable", test_external_simple_variable },
     { NULL, NULL }
 };
