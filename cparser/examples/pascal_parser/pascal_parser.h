@@ -167,6 +167,8 @@ typedef enum {
     PASCAL_T_UNIT_DECL,
     PASCAL_T_INTERFACE_SECTION,
     PASCAL_T_IMPLEMENTATION_SECTION,
+    PASCAL_T_INITIALIZATION_SECTION,
+    PASCAL_T_FINALIZATION_SECTION,
     // Field width specifier for formatted output
     PASCAL_T_FIELD_WIDTH
 } pascal_tag_t;

@@ -1004,28 +1004,29 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
-    combinator_t* initialization_end_marker = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("finalization")),
-        unit_end_marker,
-        NULL
-    );
-
-    combinator_t* initialization_section = optional(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* make_stmt_list_parser() {
+        return seq(new_combinator(), PASCAL_T_NONE,
+            sep_by(lazy(stmt_parser), token(match(";"))),
+            optional(token(match(";"))),
+            NULL
+        );
+    }
+    
+    combinator_t* initialization_section = optional(seq(new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
         token(keyword_ci("initialization")),
-        map(until(initialization_end_marker, PASCAL_T_NONE), discard_ast),
+        make_stmt_list_parser(),
         NULL
     ));
 
-    combinator_t* finalization_section = optional(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* finalization_section = optional(seq(new_combinator(), PASCAL_T_FINALIZATION_SECTION,
         token(keyword_ci("finalization")),
-        map(until(unit_end_marker, PASCAL_T_NONE), discard_ast),
+        make_stmt_list_parser(),
         NULL
     ));
 
-    combinator_t* stmt_list_for_init = sep_end_by(lazy(stmt_parser), token(match(";")));
     combinator_t* legacy_initialization_block = optional(map(seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("begin")),
-        stmt_list_for_init,
+        make_stmt_list_parser(),
         NULL
     ), discard_ast));
 

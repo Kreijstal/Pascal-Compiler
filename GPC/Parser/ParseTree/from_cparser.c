@@ -4097,10 +4097,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t *subprograms = NULL;
         ListNode_t **subprograms_tail = &subprograms;
         struct Statement *initialization = NULL;
+        struct Statement *finalization = NULL;
 
         ast_t *interface_node = unit_name_node != NULL ? unit_name_node->next : NULL;
         ast_t *implementation_node = interface_node != NULL ? interface_node->next : NULL;
         ast_t *initialization_node = implementation_node != NULL ? implementation_node->next : NULL;
+        ast_t *finalization_node = initialization_node != NULL ? initialization_node->next : NULL;
 
         if (interface_node != NULL && interface_node->typ == PASCAL_T_INTERFACE_SECTION) {
             ast_t *section = interface_node->child;
@@ -4185,10 +4187,22 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
         }
 
-        if (initialization_node != NULL) {
-            ast_t *init_block = unwrap_pascal_node(initialization_node);
-            if (init_block != NULL)
-                initialization = convert_block(init_block);
+        if (initialization_node != NULL && initialization_node->typ == PASCAL_T_INITIALIZATION_SECTION) {
+            // initialization_node->child is a PASCAL_T_NONE seq with stmt_list as first child
+            ast_t *stmt_list_seq = initialization_node->child;
+            if (stmt_list_seq != NULL && stmt_list_seq->child != NULL) {
+                ListNode_t *stmts = convert_statement_list(stmt_list_seq->child);
+                initialization = mk_compoundstatement(initialization_node->line, stmts);
+            }
+        }
+
+        if (finalization_node != NULL && finalization_node->typ == PASCAL_T_FINALIZATION_SECTION) {
+            // finalization_node->child is a PASCAL_T_NONE seq with stmt_list as first child
+            ast_t *stmt_list_seq = finalization_node->child;
+            if (stmt_list_seq != NULL && stmt_list_seq->child != NULL) {
+                ListNode_t *stmts = convert_statement_list(stmt_list_seq->child);
+                finalization = mk_compoundstatement(finalization_node->line, stmts);
+            }
         }
 
         Tree_t *tree = mk_unit(cur->line, unit_id, interface_uses,
@@ -4196,7 +4210,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                list_builder_finish(&interface_var_builder), implementation_uses,
                                implementation_const_decls,
                                implementation_type_decls, list_builder_finish(&implementation_var_builder),
-                               subprograms, initialization);
+                               subprograms, initialization, finalization);
         return tree;
     }
 
