@@ -15,6 +15,7 @@
 #include <string.h>
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
+#include "../SemCheck.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
@@ -942,9 +943,8 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
-            fprintf(stderr,
-                "Error on line %d, type mismatch in assignment statement for %s (lhs: %s, rhs: %s)!\n\n",
-                stmt->line_num,
+            semantic_error(stmt->line_num,
+                "type mismatch in assignment statement for %s (lhs: %s, rhs: %s)",
                 lhs_name,
                 type_tag_to_name(type_first),
                 type_tag_to_name(type_second));

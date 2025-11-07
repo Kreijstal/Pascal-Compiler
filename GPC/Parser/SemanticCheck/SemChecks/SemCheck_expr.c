@@ -23,6 +23,7 @@
 #endif
 #include "SemCheck_expr.h"
 #include "SemCheck_stmt.h"
+#include "../SemCheck.h"
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
@@ -3049,14 +3050,12 @@ int semcheck_addop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        fprintf(stderr, "Error on line %d, type mismatch on addop!\n\n",
-            expr->line_num);
+        semantic_error(expr->line_num, "type mismatch on addop");
         ++return_val;
     }
     if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
     {
-        fprintf(stderr, "Error on line %d, expected int/real on both sides of addop!\n\n",
-            expr->line_num);
+        semantic_error(expr->line_num, "expected int/real on both sides of addop");
         ++return_val;
     }
 
@@ -3172,14 +3171,13 @@ int semcheck_varid(int *type_return,
 
         if (with_status == -1)
         {
-            fprintf(stderr,
-                "Error on line %d, unable to resolve WITH context for field \"%s\".\n\n",
-                expr->line_num, id);
+            semantic_error(expr->line_num,
+                "unable to resolve WITH context for field \"%s\"", id);
             ++return_val;
         }
         else
         {
-            fprintf(stderr, "Error on line %d, undeclared identifier \"%s\"!\n\n", expr->line_num, id);
+            semantic_error(expr->line_num, "undeclared identifier \"%s\"", id);
             ++return_val;
         }
 

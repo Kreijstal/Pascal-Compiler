@@ -29,14 +29,39 @@
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/GpcType.h"
 #include "../ParseTree/from_cparser.h"
+#include "../parser_error.h"
+#include "../ErrVars.h"
 #include "./SymTab/SymTab.h"
 #include "./HashTable/HashTable.h"
 #include "SemChecks/SemCheck_stmt.h"
 #include "SemChecks/SemCheck_expr.h"
 #include "NameMangling.h"
+#include <stdarg.h>
 
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);
+
+/* Helper function to print semantic error with source code context */
+void semantic_error(int line_num, const char *format, ...)
+{
+    const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0') ? file_to_parse : NULL;
+    
+    /* Print the error message */
+    fprintf(stderr, "Error on line %d: ", line_num);
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    
+    /* Print source code context if we have a file */
+    if (file_path != NULL && line_num > 0)
+    {
+        print_source_context(file_path, line_num, 2);
+    }
+    
+    fprintf(stderr, "\n");
+}
 
 /* Main is a special keyword at the moment for code generation */
 int semcheck_id_not_main(char *id)

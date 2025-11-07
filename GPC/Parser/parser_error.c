@@ -208,3 +208,52 @@ void parser_error_report(const char *message, const char *yytext, int yyleng)
 
     fputc('\n', stderr);
 }
+
+/* Print source code context around an error line */
+void print_source_context(const char *file_path, int error_line, int num_context_lines)
+{
+    if (file_path == NULL || error_line <= 0)
+        return;
+
+    FILE *fp = fopen(file_path, "r");
+    if (fp == NULL)
+        return;
+
+    if (num_context_lines < 0)
+        num_context_lines = 2; /* Default to 2 lines of context */
+
+    char buffer[512];
+    int current_line = 1;
+    int start_line = error_line - num_context_lines;
+    int end_line = error_line + num_context_lines;
+    
+    if (start_line < 1)
+        start_line = 1;
+
+    /* Skip to start_line */
+    while (current_line < start_line && fgets(buffer, sizeof(buffer), fp) != NULL)
+        ++current_line;
+
+    /* Print context lines */
+    while (current_line <= end_line && fgets(buffer, sizeof(buffer), fp) != NULL)
+    {
+        buffer[strcspn(buffer, "\r\n")] = '\0';
+        
+        if (current_line == error_line)
+        {
+            /* Highlight the error line */
+            fprintf(stderr, "  > %4d | %s\n", current_line, buffer);
+            fprintf(stderr, "         | ");
+            /* Print caret at beginning of line */
+            fprintf(stderr, "^\n");
+        }
+        else
+        {
+            fprintf(stderr, "    %4d | %s\n", current_line, buffer);
+        }
+        
+        ++current_line;
+    }
+
+    fclose(fp);
+}
