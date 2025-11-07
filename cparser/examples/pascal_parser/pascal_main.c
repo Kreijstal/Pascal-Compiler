@@ -5,13 +5,44 @@
 #include <string.h>
 #ifndef _WIN32
 #include <strings.h>
+#include <time.h>
 #else
 #ifndef strncasecmp
 #define strncasecmp _strnicmp
 #endif
+#include <windows.h>
 #endif
 #include "pascal_parser.h"
 #include "pascal_preprocessor.h"
+
+#ifdef _WIN32
+typedef struct {
+    LARGE_INTEGER value;
+} monotonic_time_t;
+
+static void monotonic_now(monotonic_time_t* t) {
+    QueryPerformanceCounter(&t->value);
+}
+
+static double seconds_between(monotonic_time_t start, monotonic_time_t end) {
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    double elapsed = (double)(end.value.QuadPart - start.value.QuadPart);
+    return elapsed / (double)frequency.QuadPart;
+}
+#else
+typedef struct timespec monotonic_time_t;
+
+static void monotonic_now(monotonic_time_t* t) {
+    clock_gettime(CLOCK_MONOTONIC, t);
+}
+
+static double seconds_between(monotonic_time_t start, monotonic_time_t end) {
+    double seconds = (double)(end.tv_sec - start.tv_sec);
+    double nanoseconds = (double)(end.tv_nsec - start.tv_nsec) / 1e9;
+    return seconds + nanoseconds;
+}
+#endif
 
 // Forward declaration
 static void print_ast_indented(ast_t* ast, int depth);
@@ -90,6 +121,38 @@ static bool buffer_starts_with_keyword(const char* buffer, size_t length, const 
         return false;
 
     return true;
+}
+
+static void print_profile_report(
+    const char* filename,
+    double file_read_seconds,
+    double preprocess_seconds,
+    double parser_init_seconds,
+    double parse_seconds,
+    parser_stats_t stats) {
+    double total = file_read_seconds + preprocess_seconds + parser_init_seconds + parse_seconds;
+    double hit_pct = stats.parse_calls ? (100.0 * (double)stats.memo_hits / (double)stats.parse_calls) : 0.0;
+    double miss_pct = stats.parse_calls ? (100.0 * (double)stats.memo_misses / (double)stats.parse_calls) : 0.0;
+    double copy_pct = stats.ast_nodes_created ? (100.0 * (double)stats.ast_nodes_copied / (double)stats.ast_nodes_created) : 0.0;
+    double success_pct = stats.parse_calls ? (100.0 * (double)stats.parse_successes / (double)stats.parse_calls) : 0.0;
+
+    printf("\n== Profiling Report (%s) ==\n", filename ? filename : "<buffer>");
+    printf("  File read            : %.3f s\n", file_read_seconds);
+    printf("  Preprocess           : %.3f s\n", preprocess_seconds);
+    printf("  Parser init          : %.3f s\n", parser_init_seconds);
+    printf("  Core parse           : %.3f s\n", parse_seconds);
+    printf("  Accounted total      : %.3f s\n", total);
+    printf("  parse() calls        : %zu\n", stats.parse_calls);
+    printf("    successes          : %zu (%.1f%%)\n", stats.parse_successes, success_pct);
+    printf("    failures           : %zu\n", stats.parse_failures);
+    printf("    memo hits          : %zu (%.1f%%)\n", stats.memo_hits, hit_pct);
+    printf("    memo misses        : %zu (%.1f%%)\n", stats.memo_misses, miss_pct);
+    printf("    left recursion     : %zu\n", stats.memo_recursions);
+    printf("    memo replays       : %zu\n", stats.memo_replays);
+    printf("    memo entries       : %zu\n", stats.memo_entries_created);
+    printf("  AST nodes allocated  : %zu\n", stats.ast_nodes_created);
+    printf("    copies via memo    : %zu (%.1f%% of total)\n", stats.ast_nodes_copied, copy_pct);
+    printf("  Memo result clones   : %zu\n", stats.memo_result_clones);
 }
 
 // Helper function to print ParseError with partial AST
@@ -183,23 +246,39 @@ int main(int argc, char *argv[]) {
     bool print_ast = false;
     bool parse_procedure = false;
     char *filename = NULL;
+    bool profile = false;
+    double file_read_seconds = 0.0;
+    double preprocess_seconds = 0.0;
+    double parser_init_seconds = 0.0;
+    double parse_seconds = 0.0;
+    parser_stats_t stats = {0};
+    bool stats_ready = false;
+    monotonic_time_t read_start, read_end;
+    monotonic_time_t preprocess_start, preprocess_end;
+    monotonic_time_t parser_init_start, parser_init_end;
+    monotonic_time_t parse_start, parse_end;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--print-ast") == 0) {
             print_ast = true;
         } else if (strcmp(argv[i], "--parse-procedure") == 0) {
             parse_procedure = true;
+        } else if (strcmp(argv[i], "--profile") == 0 || strcmp(argv[i], "--benchmark") == 0) {
+            profile = true;
         } else {
             filename = argv[i];
         }
     }
 
     if (filename == NULL) {
-        fprintf(stderr, "Usage: %s [--print-ast] [--parse-procedure] <filename>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--print-ast] [--parse-procedure] [--profile] <filename>\n", argv[0]);
         return 1;
     }
 
     // Read file content
+    if (profile) {
+        monotonic_now(&read_start);
+    }
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         fprintf(stderr, "Error: Cannot open file '%s'\n", filename);
@@ -233,6 +312,10 @@ int main(int argc, char *argv[]) {
     }
     file_content[bytes_read] = '\0';
     fclose(file);
+    if (profile) {
+        monotonic_now(&read_end);
+        file_read_seconds = seconds_between(read_start, read_end);
+    }
 
     printf("Parsing file: %s\n", filename);
     printf("File size: %zu bytes\n", bytes_read);
@@ -254,6 +337,9 @@ int main(int argc, char *argv[]) {
 
     char *preprocess_error = NULL;
     size_t preprocessed_length = 0;
+    if (profile) {
+        monotonic_now(&preprocess_start);
+    }
     char *preprocessed_content = pascal_preprocess_buffer(
         preprocessor,
         filename,
@@ -262,6 +348,10 @@ int main(int argc, char *argv[]) {
         &preprocessed_length,
         &preprocess_error);
     pascal_preprocessor_free(preprocessor);
+    if (profile) {
+        monotonic_now(&preprocess_end);
+        preprocess_seconds = seconds_between(preprocess_start, preprocess_end);
+    }
 
     if (preprocessed_content == NULL) {
         fprintf(stderr, "Preprocessing failed: %s\n", preprocess_error ? preprocess_error : "unknown error");
@@ -281,6 +371,9 @@ int main(int argc, char *argv[]) {
         printf("Detected top-level form: %s\n", parse_as_unit ? "unit" : "program");
     }
 
+    if (profile) {
+        monotonic_now(&parser_init_start);
+    }
     combinator_t *parser = new_combinator();
     if (parse_procedure) {
         init_pascal_procedure_parser(&parser);
@@ -289,6 +382,10 @@ int main(int argc, char *argv[]) {
     } else {
         init_pascal_complete_program_parser(&parser);
     }
+    if (profile) {
+        monotonic_now(&parser_init_end);
+        parser_init_seconds = seconds_between(parser_init_start, parser_init_end);
+    }
 
     input_t *in = new_input();
     in->buffer = preprocessed_content;
@@ -296,7 +393,17 @@ int main(int argc, char *argv[]) {
     ast_nil = new_ast();
     ast_nil->typ = PASCAL_T_NONE;
 
+    if (profile) {
+        parser_stats_reset();
+        monotonic_now(&parse_start);
+    }
     ParseResult result = parse(in, parser);
+    if (profile) {
+        monotonic_now(&parse_end);
+        parse_seconds = seconds_between(parse_start, parse_end);
+        stats = parser_stats_snapshot();
+        stats_ready = true;
+    }
     
     printf("Parse completed. Success: %s\n", result.is_success ? "YES" : "NO");
     if (!result.is_success && result.value.error) {
@@ -333,6 +440,9 @@ int main(int argc, char *argv[]) {
             free_combinator(parser);
             free(in);
             free(ast_nil);
+            if (profile && stats_ready) {
+                print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
+            }
             return 1;
         }
         if (print_ast) {
@@ -347,6 +457,9 @@ int main(int argc, char *argv[]) {
         free_combinator(parser);
         free(in);
         free(ast_nil);
+        if (profile && stats_ready) {
+            print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
+        }
         return 1;
     }
 
@@ -355,6 +468,9 @@ int main(int argc, char *argv[]) {
     free(ast_nil);
     free(preprocessed_content);
     free(file_content);
+    if (profile && stats_ready) {
+        print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
+    }
 
     return 0;
 }

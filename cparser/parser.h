@@ -119,6 +119,23 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
 
 extern ast_t * ast_nil;
 
+// --- Profiling & Diagnostics ---
+typedef struct parser_stats {
+    size_t parse_calls;
+    size_t parse_successes;
+    size_t parse_failures;
+    size_t memo_hits;
+    size_t memo_misses;
+    size_t memo_recursions;
+    size_t memo_entries_created;
+    size_t memo_replays;
+    size_t memo_result_clones;
+    size_t ast_nodes_created;
+    size_t ast_nodes_copied;
+} parser_stats_t;
+
+void parser_stats_reset(void);
+parser_stats_t parser_stats_snapshot(void);
 
 //=============================================================================
 // Public Function Prototypes

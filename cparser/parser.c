@@ -56,6 +56,15 @@ static ast_t* ensure_ast_nil_initialized();
 
 ast_t * ast_nil = NULL;
 static size_t next_combinator_id = 1;
+static parser_stats_t g_parser_stats = {0};
+
+void parser_stats_reset(void) {
+    memset(&g_parser_stats, 0, sizeof(g_parser_stats));
+}
+
+parser_stats_t parser_stats_snapshot(void) {
+    return g_parser_stats;
+}
 
 //=============================================================================
 // PACKRAT MEMOIZATION SUPPORT
@@ -397,6 +406,7 @@ ast_t * new_ast() {
     ast->sym = NULL;
     ast->line = 0;
     ast->col = 0;
+    g_parser_stats.ast_nodes_created++;
     return ast;
 }
 
@@ -423,6 +433,7 @@ ast_t* copy_ast(ast_t* orig) {
     if (orig == NULL) return NULL;
     if (orig == ensure_ast_nil_initialized()) return ensure_ast_nil_initialized();
     ast_t* new = new_ast();
+    g_parser_stats.ast_nodes_copied++;
     new->typ = orig->typ;
     new->line = orig->line;
     new->col = orig->col;
@@ -474,6 +485,7 @@ static ParseResult clone_parse_result(const ParseResult* original) {
         return (ParseResult){ .is_success = false, .value.error = NULL };
     }
 
+    g_parser_stats.memo_result_clones++;
     ParseResult copy;
     copy.is_success = original->is_success;
     if (original->is_success) {
@@ -604,6 +616,7 @@ static memo_entry_t* memo_table_insert(memo_table_t* table, size_t combinator_id
     entry->next = table->buckets[index];
     table->buckets[index] = entry;
     table->size++;
+    g_parser_stats.memo_entries_created++;
     return entry;
 }
 
@@ -626,6 +639,7 @@ static ParseResult memo_entry_replay(memo_entry_t* entry, input_t* in) {
         return (ParseResult){ .is_success = false, .value.error = NULL };
     }
 
+    g_parser_stats.memo_replays++;
     if (in != NULL) {
         in->start = entry->final_state.start;
         in->line = entry->final_state.line;
@@ -1096,6 +1110,7 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (!comb || !comb->fn) exception("Attempted to parse with a NULL or uninitialized combinator.");
     if (in == NULL) exception("Attempted to parse with NULL input.");
 
+    g_parser_stats.parse_calls++;
     if (in->memo == NULL) {
         in->memo = memo_table_create();
     }
@@ -1104,11 +1119,20 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     size_t combinator_id = comb->memo_id;
     memo_entry_t* entry = memo_table_lookup(in->memo, combinator_id, position);
     if (entry && entry->has_result) {
-        return memo_entry_replay(entry, in);
+        g_parser_stats.memo_hits++;
+        ParseResult replay = memo_entry_replay(entry, in);
+        if (replay.is_success) {
+            g_parser_stats.parse_successes++;
+        } else {
+            g_parser_stats.parse_failures++;
+        }
+        return replay;
     }
 
     if (entry && entry->in_progress) {
+        g_parser_stats.memo_recursions++;
         char* message = strdup("Left recursion detected.");
+        g_parser_stats.parse_failures++;
         return make_failure_v2(in, comb->name, message, NULL);
     }
 
@@ -1116,12 +1140,18 @@ ParseResult parse(input_t * in, combinator_t * comb) {
         entry = memo_table_insert(in->memo, combinator_id, position);
     }
 
+    g_parser_stats.memo_misses++;
     entry->in_progress = true;
     ParseResult result = comb->fn(in, (void *)comb->args, comb->name);
     InputState final_state;
     save_input_state(in, &final_state);
     entry->in_progress = false;
     memo_table_store_result(entry, &result, &final_state);
+    if (result.is_success) {
+        g_parser_stats.parse_successes++;
+    } else {
+        g_parser_stats.parse_failures++;
+    }
     return result;
 }
 
