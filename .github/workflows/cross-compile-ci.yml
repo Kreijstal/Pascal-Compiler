@@ -36,11 +36,6 @@ jobs:
         cd quasi-msys2
         echo "${{ matrix.msystem }}" > msystem.txt
 
-    - name: Apply quasi-msys2 patch
-      run: |
-        # Apply patch to fix meson cross file generation
-        ./fix-quasi-msys2-meson-cross.sh
-
     - name: Install MSYS2 packages via quasi-msys2
       run: |
         cd quasi-msys2
