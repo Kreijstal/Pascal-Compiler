@@ -1614,6 +1614,138 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     #endif
 }
 
+/* Code generation for an anonymous function/procedure
+ * This generates the function body and returns the function's label name.
+ * The caller is responsible for generating code to load the address of this function.
+ */
+void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    
+    assert(expr != NULL);
+    assert(expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+    
+    struct AnonymousMethod *anon = &expr->expr_data.anonymous_method_data;
+    
+    if (anon->generated_name == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Anonymous method missing generated name at line %d", expr->line_num);
+        return;
+    }
+    
+    if (anon->body == NULL)
+    {
+        /* Empty body - generate a no-op function */
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Anonymous method %s has no body, generating no-op\n", anon->generated_name);
+        #endif
+    }
+    
+    const char *prev_sub_id = ctx->current_subprogram_id;
+    const char *prev_sub_mangled = ctx->current_subprogram_mangled;
+    
+    /* Enter a new lexical scope for the anonymous function */
+    codegen_enter_lexical_scope(ctx);
+    push_stackscope();
+    
+    ListNode_t *inst_list = NULL;
+    int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
+    int lexical_depth = codegen_get_lexical_depth(ctx);
+    int is_nested = (lexical_depth >= 1);
+    
+    ctx->current_subprogram_id = anon->generated_name;
+    ctx->current_subprogram_mangled = anon->generated_name;
+    
+    /* Anonymous methods are always nested (they're defined inside some other context).
+     * They always need a static link to access variables from their parent scope (closure).
+     * The static link is passed in %rdi (first register) and parameters are shifted by 1.
+     */
+    StackNode_t *static_link = NULL;
+    int will_need_static_link = is_nested;
+    int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
+    
+    /* Process parameters (convert from TREE_VAR_DECL to stack allocations) */
+    inst_list = codegen_subprogram_arguments(anon->parameters, inst_list, ctx, symtab, arg_start_index);
+    
+    /* Add static link after parameters */
+    if (will_need_static_link)
+    {
+        static_link = add_l_x("__static_link__", 8);
+        codegen_register_static_link_proc(ctx, anon->generated_name, lexical_depth);
+        
+        if (static_link != NULL)
+        {
+            char buffer[64];
+            /* Static link always comes in %rdi (first register) */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    
+    /* For functions (not procedures), allocate space for the return value */
+    StackNode_t *return_var = NULL;
+    if (anon->is_function && anon->return_type != -1)
+    {
+        /* Allocate space for return value based on type */
+        int return_size = 4; /* Default to 4 bytes for INT_TYPE */
+        if (anon->return_type == LONGINT_TYPE || anon->return_type == STRING_TYPE || 
+            anon->return_type == POINTER_TYPE)
+            return_size = 8;
+        else if (anon->return_type == REAL_TYPE)
+            return_size = 8; /* 8 bytes for double */
+        
+        return_var = add_l_x(anon->generated_name, return_size);
+    }
+    
+    /* No local variable declarations in anonymous methods (they're inline) */
+    /* No nested subprograms in anonymous methods */
+    
+    /* Generate the body */
+    if (anon->body != NULL)
+    {
+        inst_list = codegen_stmt(anon->body, inst_list, ctx, symtab);
+    }
+    
+    /* For functions, move return value to %rax */
+    if (anon->is_function && return_var != NULL)
+    {
+        char buffer[64];
+        if (anon->return_type == LONGINT_TYPE || anon->return_type == STRING_TYPE || 
+            anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%eax\n", return_var->offset);
+        }
+        inst_list = add_inst(inst_list, buffer);
+    }
+    
+    /* Generate the function header, stack allocation, body, and footer */
+    codegen_function_header(anon->generated_name, ctx);
+    codegen_stack_space(ctx);
+    codegen_inst_list(inst_list, ctx);
+    codegen_function_footer(anon->generated_name, ctx);
+    
+    free_inst_list(inst_list);
+    pop_stackscope();
+    
+    ctx->current_subprogram_id = prev_sub_id;
+    ctx->current_subprogram_mangled = prev_sub_mangled;
+    
+    /* Leave the lexical scope */
+    codegen_leave_lexical_scope(ctx);
+    
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+}
+
 /* Code generation for subprogram arguments */
 ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab, int arg_start_index)

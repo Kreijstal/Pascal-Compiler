@@ -899,16 +899,34 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     }
     else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
     {
-        /* Anonymous methods require complex code generation:
+        /* Anonymous methods:
          * 1. Generate the function/procedure code as a nested definition
-         * 2. Handle closure variable capture if needed
-         * 3. Return a pointer to the generated function
+         * 2. Return a pointer to the generated function
          * 
-         * For now, this is not fully implemented.
+         * The function is generated immediately and we return its address.
          */
-        codegen_report_error(ctx, "ERROR: Code generation for anonymous methods is not yet implemented.");
-        codegen_report_error(ctx, "       This feature requires additional architectural work.");
-        return inst_list;
+        
+        /* First, generate the anonymous function body */
+        codegen_anonymous_method(expr, ctx, ctx->symtab);
+        
+        /* Check if generation succeeded */
+        if (codegen_had_error(ctx))
+        {
+            return inst_list;
+        }
+        
+        /* Now load the address of the generated function into the target register */
+        struct AnonymousMethod *anon = &expr->expr_data.anonymous_method_data;
+        if (anon->generated_name == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Anonymous method missing generated name");
+            return inst_list;
+        }
+        
+        /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address */
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", 
+                 anon->generated_name, target_reg->bit_64);
+        return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
