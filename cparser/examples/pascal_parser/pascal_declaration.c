@@ -408,6 +408,15 @@ void init_pascal_program_parser(combinator_t** p) {
     (*p)->extra_to_free = base_stmt;
 }
 
+// Helper function to create statement list parser
+static combinator_t* make_stmt_list_parser(combinator_t** stmt_parser) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        sep_by(lazy(stmt_parser), token(match(";"))),
+        optional(token(match(";"))),
+        NULL
+    );
+}
+
 // Pascal Unit Parser
 void init_pascal_unit_parser(combinator_t** p) {
     combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
@@ -1004,29 +1013,23 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
-    combinator_t* make_stmt_list_parser() {
-        return seq(new_combinator(), PASCAL_T_NONE,
-            sep_by(lazy(stmt_parser), token(match(";"))),
-            optional(token(match(";"))),
-            NULL
-        );
-    }
+    
     
     combinator_t* initialization_section = optional(seq(new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
         token(keyword_ci("initialization")),
-        make_stmt_list_parser(),
+        make_stmt_list_parser(stmt_parser),
         NULL
     ));
 
     combinator_t* finalization_section = optional(seq(new_combinator(), PASCAL_T_FINALIZATION_SECTION,
         token(keyword_ci("finalization")),
-        make_stmt_list_parser(),
+        make_stmt_list_parser(stmt_parser),
         NULL
     ));
 
     combinator_t* legacy_initialization_block = optional(map(seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("begin")),
-        make_stmt_list_parser(),
+        make_stmt_list_parser(stmt_parser),
         NULL
     ), discard_ast));
 
