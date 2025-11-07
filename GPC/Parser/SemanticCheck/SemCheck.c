@@ -2382,8 +2382,86 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* Need to additionally extract the return type */
         HashNode_t *return_type_node = NULL;
         GpcType *return_gpc_type = NULL;
+        struct TypeAlias *return_type_alias = NULL;
         
-        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+        /* Check for inline return type (e.g., array of string) */
+        if (subprogram->tree_data.subprogram_data.inline_return_type != NULL)
+        {
+            return_type_alias = subprogram->tree_data.subprogram_data.inline_return_type;
+            
+            /* Create GpcType from TypeAlias */
+            if (return_type_alias->is_array)
+            {
+                int start = return_type_alias->array_start;
+                int end = return_type_alias->array_end;
+                if (return_type_alias->is_open_array)
+                {
+                    start = 0;
+                    end = -1;
+                }
+
+                /* Get element type - it might be a primitive type or a type reference */
+                GpcType *element_type = NULL;
+                int element_type_tag = return_type_alias->array_element_type;
+                
+                /* If element type is a type reference, resolve it */
+                if (element_type_tag == UNKNOWN_TYPE && return_type_alias->array_element_type_id != NULL)
+                {
+                    HashNode_t *element_type_node = NULL;
+                    if (FindIdent(&element_type_node, symtab, return_type_alias->array_element_type_id) >= 0 &&
+                        element_type_node != NULL && element_type_node->type != NULL)
+                    {
+                        element_type = element_type_node->type;
+                    }
+                }
+                else if (element_type_tag != UNKNOWN_TYPE)
+                {
+                    /* Direct primitive type tag - use create_primitive_type */
+                    element_type = create_primitive_type(element_type_tag);
+                }
+                
+                if (element_type != NULL)
+                {
+                    /* Create array GpcType */
+                    return_gpc_type = create_array_type(element_type, start, end);
+                    assert(return_gpc_type != NULL && "Failed to create array return type");
+                    
+                    /* Set type_alias on GpcType so it's properly propagated */
+                    gpc_type_set_type_alias(return_gpc_type, return_type_alias);
+                }
+            }
+            else if (return_type_alias->is_pointer)
+            {
+                /* Handle pointer return types */
+                GpcType *points_to = NULL;
+                
+                /* Try to resolve the target type */
+                if (return_type_alias->pointer_type_id != NULL)
+                {
+                    HashNode_t *target_node = NULL;
+                    if (FindIdent(&target_node, symtab, return_type_alias->pointer_type_id) >= 0 &&
+                        target_node != NULL && target_node->type != NULL)
+                    {
+                        points_to = target_node->type;
+                    }
+                }
+                
+                /* If we couldn't resolve it, create a placeholder based on pointer_type */
+                if (points_to == NULL && return_type_alias->pointer_type != UNKNOWN_TYPE)
+                {
+                    points_to = create_primitive_type(return_type_alias->pointer_type);
+                }
+                
+                if (points_to != NULL)
+                {
+                    return_gpc_type = create_pointer_type(points_to);
+                    gpc_type_set_type_alias(return_gpc_type, return_type_alias);
+                }
+            }
+            /* Add more complex type handling as needed (set, record, etc.) */
+        }
+        
+        if (subprogram->tree_data.subprogram_data.return_type_id != NULL && return_gpc_type == NULL)
         {
             HashNode_t *type_node;
             if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)

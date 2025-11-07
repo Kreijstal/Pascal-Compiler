@@ -810,7 +810,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     {
         handled_by_gpctype = 1;
         
-        if (!are_types_compatible_for_assignment(lhs_gpctype, rhs_gpctype, symtab))
+        int compat = are_types_compatible_for_assignment(lhs_gpctype, rhs_gpctype, symtab);
+        fprintf(stderr, "DEBUG SemCheck line %d: are_types_compatible_for_assignment returned %d (lhs: %s, rhs: %s)\n", 
+                stmt->line_num, compat,
+                gpc_type_to_string(lhs_gpctype),
+                gpc_type_to_string(rhs_gpctype));
+        if (!compat)
         {
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)

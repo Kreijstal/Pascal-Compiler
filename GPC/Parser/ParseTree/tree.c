@@ -1555,7 +1555,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
     ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
-    int return_type, char *return_type_id, int cname_flag, int overload_flag)
+    int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1571,6 +1571,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.label_declarations = label_decl;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
+    new_tree->tree_data.subprogram_data.inline_return_type = inline_return_type;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.declarations = var_decl;

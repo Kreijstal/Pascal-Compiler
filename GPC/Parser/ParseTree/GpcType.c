@@ -361,7 +361,12 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
 int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab) {
     /* NULL types are incompatible */
     if (lhs_type == NULL || rhs_type == NULL)
+    {
+        fprintf(stderr, "DEBUG: NULL types - lhs=%p, rhs=%p\n", (void*)lhs_type, (void*)rhs_type);
         return 0;
+    }
+
+    fprintf(stderr, "DEBUG: Checking types - lhs kind=%d, rhs kind=%d\n", lhs_type->kind, rhs_type->kind);
 
     /* Special case: Allow string (primitive) to be assigned to char array */
     /* This is a common Pascal idiom: var s: array[1..20] of char; begin s := 'hello'; end; */
@@ -410,9 +415,13 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
     switch (lhs_type->kind) {
         case TYPE_KIND_PRIMITIVE:
             /* Use numeric compatibility for primitives */
-            return types_numeric_compatible(
+            fprintf(stderr, "DEBUG: Comparing primitives: lhs=%d, rhs=%d\n",
+                    lhs_type->info.primitive_type_tag, rhs_type->info.primitive_type_tag);
+            int result = types_numeric_compatible(
                 lhs_type->info.primitive_type_tag,
                 rhs_type->info.primitive_type_tag);
+            fprintf(stderr, "DEBUG: Primitive compatibility result: %d\n", result);
+            return result;
 
         case TYPE_KIND_POINTER:
             /* Pointers are compatible if they point to compatible types */
@@ -428,18 +437,33 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
 
         case TYPE_KIND_ARRAY:
             /* Arrays are compatible if element types match and dimensions match */
+            fprintf(stderr, "DEBUG: Comparing arrays: lhs[%d..%d], rhs[%d..%d]\n",
+                    lhs_type->info.array_info.start_index, lhs_type->info.array_info.end_index,
+                    rhs_type->info.array_info.start_index, rhs_type->info.array_info.end_index);
+            fprintf(stderr, "DEBUG: Element types: lhs=%p, rhs=%p\n",
+                    (void*)lhs_type->info.array_info.element_type,
+                    (void*)rhs_type->info.array_info.element_type);
             if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
             {
+                fprintf(stderr, "DEBUG: Start indices don't match\n");
                 return 0;
             }
             if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
             {
+                fprintf(stderr, "DEBUG: End indices don't match\n");
                 return 0;
             }
-            return are_types_compatible_for_assignment(
+            if (lhs_type->info.array_info.element_type == NULL || rhs_type->info.array_info.element_type == NULL)
+            {
+                fprintf(stderr, "DEBUG: One or both element types are NULL\n");
+                return 0;
+            }
+            int array_result = are_types_compatible_for_assignment(
                 lhs_type->info.array_info.element_type,
                 rhs_type->info.array_info.element_type,
                 symtab);
+            fprintf(stderr, "DEBUG: Array compatibility result: %d\n", array_result);
+            return array_result;
 
         case TYPE_KIND_RECORD:
             /* Records are compatible if they are the same record type 
