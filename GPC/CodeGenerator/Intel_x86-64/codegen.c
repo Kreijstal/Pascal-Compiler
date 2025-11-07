@@ -1296,8 +1296,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (static_link != NULL)
     {
         char buffer[64];
-        /* Static link always comes in %rdi (first register) */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdi, -%d(%%rbp)\n", static_link->offset);
+        /* Static link always comes in the first argument register (platform-dependent) */
+        const char *link_reg = current_arg_reg64(0);
+        if (link_reg == NULL)
+            link_reg = "%rdi";  /* Fallback for safety */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", link_reg, static_link->offset);
         inst_list = add_inst(inst_list, buffer);
     }
     

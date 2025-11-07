@@ -834,8 +834,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (static_link_node != NULL)
                 {
                     char link_buffer[64];
-                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %%rdi\n",
-                        static_link_node->offset);
+                    const char *link_reg = current_arg_reg64(0);
+                    if (link_reg == NULL)
+                        link_reg = "%rdi";  /* Fallback for safety */
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        static_link_node->offset, link_reg);
                     inst_list = add_inst(inst_list, link_buffer);
                 }
             }
@@ -848,7 +851,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (link_reg != NULL)
                 {
                     char link_buffer[64];
-                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %%rdi\n", link_reg->bit_64);
+                    const char *dest_reg = current_arg_reg64(0);
+                    if (dest_reg == NULL)
+                        dest_reg = "%rdi";  /* Fallback for safety */
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %s\n", link_reg->bit_64, dest_reg);
                     inst_list = add_inst(inst_list, link_buffer);
                 }
                 codegen_end_expression(ctx);
