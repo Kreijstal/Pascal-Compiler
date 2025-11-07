@@ -825,7 +825,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             if (callee_depth > current_depth)
             {
                 /* Callee is nested inside current: pass our frame pointer */
-                inst_list = add_inst(inst_list, "\tmovq\t%rbp, %rdi\n");
+                const char *link_reg = current_arg_reg64(0);
+                assert(link_reg != NULL && "current_arg_reg64(0) should never return NULL");
+                char link_buffer[64];
+                snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rbp, %s\n", link_reg);
+                inst_list = add_inst(inst_list, link_buffer);
             }
             else if (callee_depth == current_depth)
             {
