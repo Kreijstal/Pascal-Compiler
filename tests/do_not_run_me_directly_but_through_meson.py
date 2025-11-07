@@ -118,6 +118,7 @@ class TAPTestResult(unittest.TestResult):
         super().__init__()
         self.stream = stream
         self._test_index = 0
+        self._test_states = {}
 
     def _emit(self, line):
         self.stream.write(f"{line}\n")
@@ -133,41 +134,107 @@ class TAPTestResult(unittest.TestResult):
         except AttributeError:
             return str(test)
 
+    def _subtest_name(self, subtest):
+        if subtest is None:
+            return ""
+        params = getattr(subtest, "params", None) or {}
+        msg = getattr(subtest, "message", None)
+        parts = []
+        if params:
+            formatted = ", ".join(
+                f"{key}={value!r}" for key, value in sorted(params.items())
+            )
+            parts.append(formatted)
+        if msg:
+            parts.append(str(msg))
+        if parts:
+            return " | ".join(parts)
+        return str(subtest)
+
+    def _get_state(self, test):
+        return self._test_states.setdefault(
+            test, {"reported": False, "had_failure": False}
+        )
+
+    def _emit_failure_header(self, test):
+        state = self._get_state(test)
+        if not state["reported"]:
+            self._emit(f"not ok {self._test_index} - {self._test_name(test)}")
+            state["reported"] = True
+        return state
+
+    def _mark_failure(self, test):
+        state = self._get_state(test)
+        state["had_failure"] = True
+        return state
+
     def startTest(self, test):
         super().startTest(test)
         self._test_index += 1
+        self._test_states[test] = {"reported": False, "had_failure": False}
+
+    def stopTest(self, test):
+        super().stopTest(test)
+        self._test_states.pop(test, None)
 
     def addSuccess(self, test):
         super().addSuccess(test)
+        state = self._test_states.get(test)
+        if state and state.get("had_failure"):
+            return
         self._emit(f"ok {self._test_index} - {self._test_name(test)}")
+        if state:
+            state["reported"] = True
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
         self._emit(f"ok {self._test_index} - {self._test_name(test)} # SKIP {reason}")
+        state = self._test_states.get(test)
+        if state:
+            state["reported"] = True
 
     def addExpectedFailure(self, test, err):
         super().addExpectedFailure(test, err)
         self._emit(
             f"ok {self._test_index} - {self._test_name(test)} # TODO expected failure"
         )
+        state = self._test_states.get(test)
+        if state:
+            state["reported"] = True
 
     def addUnexpectedSuccess(self, test):
         super().addUnexpectedSuccess(test)
         self._emit(
             f"not ok {self._test_index} - {self._test_name(test)} # Unexpected success"
         )
+        self._mark_failure(test)
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        self._emit(f"not ok {self._test_index} - {self._test_name(test)}")
+        self._emit_failure_header(test)
         self._emit_diagnostic("Failure:")
         self._emit_diagnostic("".join(traceback.format_exception(*err)))
+        self._mark_failure(test)
 
     def addError(self, test, err):
         super().addError(test, err)
-        self._emit(f"not ok {self._test_index} - {self._test_name(test)}")
+        self._emit_failure_header(test)
         self._emit_diagnostic("Error:")
         self._emit_diagnostic("".join(traceback.format_exception(*err)))
+        self._mark_failure(test)
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        if err is None:
+            return
+        self._emit_failure_header(test)
+        description = self._subtest_name(subtest)
+        if description:
+            self._emit_diagnostic(f"Subtest failed: {description}")
+        else:
+            self._emit_diagnostic("Subtest failed")
+        self._emit_diagnostic("".join(traceback.format_exception(*err)))
+        self._mark_failure(test)
 
 
 class TAPTestRunner:
