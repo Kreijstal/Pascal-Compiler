@@ -835,8 +835,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 {
                     char link_buffer[64];
                     const char *link_reg = current_arg_reg64(0);
-                    if (link_reg == NULL)
-                        link_reg = "%rdi";  /* Fallback for safety */
+                    assert(link_reg != NULL && "current_arg_reg64(0) should never return NULL");
                     snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         static_link_node->offset, link_reg);
                     inst_list = add_inst(inst_list, link_buffer);
@@ -852,8 +851,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 {
                     char link_buffer[64];
                     const char *dest_reg = current_arg_reg64(0);
-                    if (dest_reg == NULL)
-                        dest_reg = "%rdi";  /* Fallback for safety */
+                    assert(dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
                     snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %s\n", link_reg->bit_64, dest_reg);
                     inst_list = add_inst(inst_list, link_buffer);
                 }

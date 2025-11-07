@@ -2710,8 +2710,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         if (should_pass_static_link)
         {
             const char *link_dest_reg = current_arg_reg64(0);
-            if (link_dest_reg == NULL)
-                link_dest_reg = "%rdi";  /* Fallback for safety */
+            assert(link_dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
             
             if (callee_depth > current_depth)
             {
