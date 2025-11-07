@@ -50,6 +50,11 @@ struct input_t {
    int line;
    int col;
    memo_table_t* memo;
+   int parse_depth;         // Track recursion depth for backtracking limit
+   int max_parse_depth;     // Maximum allowed parse depth
+   unsigned long parse_ops;  // Count of parse operations for timeout check
+   double start_time;        // Start time for timeout detection
+   double timeout_seconds;   // Maximum parse time allowed
 };
 
 // --- Parse Result & Error Structs ---

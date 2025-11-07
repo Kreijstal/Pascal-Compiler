@@ -344,11 +344,15 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (benchmark_flag()) {
         phase_start = benchmark_get_time();
         benchmark_start_phase(BENCH_PHASE_PARSE_PROGRAM);
+        fprintf(stderr, "[DEBUG] Starting parse() call...\n");
+        fflush(stderr);
     }
     
     ParseResult result = parse(input, parser);
     
     if (benchmark_flag()) {
+        fprintf(stderr, "[DEBUG] parse() returned, is_success=%d\n", result.is_success);
+        fflush(stderr);
         benchmark_end_phase(BENCH_PHASE_PARSE_PROGRAM);
         double parse_time = benchmark_get_time() - phase_start;
         benchmark_count_call("parse()");
@@ -382,7 +386,18 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
         if (convert_to_tree)
         {
+            if (benchmark_flag()) {
+                fprintf(stderr, "[DEBUG] Starting tree_from_pascal_ast()...\n");
+                fflush(stderr);
+            }
+            
             tree = tree_from_pascal_ast(result.value.ast);
+            
+            if (benchmark_flag()) {
+                fprintf(stderr, "[DEBUG] tree_from_pascal_ast() returned, tree=%p\n", (void*)tree);
+                fflush(stderr);
+            }
+            
             if (tree == NULL)
             {
                 fprintf(stderr, "Error: Failed to convert AST for '%s' to legacy parse tree.\n", path);
@@ -403,7 +418,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             success = true;
         }
 
+        if (benchmark_flag()) {
+            fprintf(stderr, "[DEBUG] About to free_ast()...\n");
+            fflush(stderr);
+        }
+        
         free_ast(result.value.ast);
+        
+        if (benchmark_flag()) {
+            fprintf(stderr, "[DEBUG] free_ast() completed\n");
+            fflush(stderr);
+        }
     }
 
     free(buffer);

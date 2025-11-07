@@ -6,8 +6,10 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 #ifndef _WIN32
 #include <unistd.h>
+#include <sys/time.h>
 #endif
 #include "parser.h"
 #include "combinator_internals.h"
@@ -57,6 +59,17 @@ static ast_t* ensure_ast_nil_initialized();
 ast_t * ast_nil = NULL;
 static size_t next_combinator_id = 1;
 
+// Timer function for timeout detection
+static double get_current_time_seconds(void) {
+#ifdef _WIN32
+    return (double)clock() / CLOCKS_PER_SEC;
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec + tv.tv_usec / 1000000.0;
+#endif
+}
+
 //=============================================================================
 // PACKRAT MEMOIZATION SUPPORT
 //=============================================================================
@@ -75,6 +88,7 @@ struct memo_table {
     memo_entry_t** buckets;
     size_t bucket_count;
     size_t size;
+    size_t max_size;  // Maximum allowed entries to prevent unbounded growth
 };
 
 static ParseError* clone_parse_error(const ParseError* original);
@@ -518,6 +532,7 @@ static memo_table_t* memo_table_create(void) {
     memo_table_t* table = (memo_table_t*)safe_malloc(sizeof(memo_table_t));
     table->bucket_count = 1024;
     table->size = 0;
+    table->max_size = 500000;  // Increased limit - 500k entries should be enough for large files
     table->buckets = (memo_entry_t**)safe_malloc(sizeof(memo_entry_t*) * table->bucket_count);
     memset(table->buckets, 0, sizeof(memo_entry_t*) * table->bucket_count);
     return table;
@@ -586,6 +601,13 @@ static memo_entry_t* memo_table_insert(memo_table_t* table, size_t combinator_id
         return NULL;
     }
 
+    // Check if we've exceeded the maximum memo table size
+    if (table->size >= table->max_size) {
+        // Return NULL to signal that memoization is disabled due to size limit
+        // This will cause parse() to fail with a depth limit error
+        return NULL;
+    }
+
     if ((table->size + 1) * 4 >= table->bucket_count * 3) {
         memo_table_resize(table);
     }
@@ -638,6 +660,11 @@ static ParseResult memo_entry_replay(memo_entry_t* entry, input_t* in) {
 input_t * new_input() {
     input_t * in = (input_t *) safe_malloc(sizeof(input_t));
     in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1; in->memo = NULL;
+    in->parse_depth = 0;
+    in->max_parse_depth = 10000;  // Reasonable depth limit
+    in->parse_ops = 0;
+    in->start_time = get_current_time_seconds();
+    in->timeout_seconds = 2.0;  // 2 second timeout - if parsing one file takes > 2s, something is wrong
     return in;
 }
 
@@ -653,6 +680,9 @@ void init_input_buffer(input_t *in, char *buffer, int length) {
     // Reset to beginning for parsing
     in->line = 1;
     in->col = 1;
+    in->parse_depth = 0;
+    in->parse_ops = 0;
+    in->start_time = get_current_time_seconds();
 }
 
 char read1(input_t * in) {
@@ -1096,14 +1126,52 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (!comb || !comb->fn) exception("Attempted to parse with a NULL or uninitialized combinator.");
     if (in == NULL) exception("Attempted to parse with NULL input.");
 
+    // Check timeout every 100 operations for faster detection
+    in->parse_ops++;
+    if ((in->parse_ops % 100) == 0) {
+        double elapsed = get_current_time_seconds() - in->start_time;
+        if (elapsed > in->timeout_seconds) {
+            fprintf(stderr, "TIMEOUT: %.1fs elapsed, %lu ops\n", elapsed, in->parse_ops);
+            fflush(stderr);
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg), 
+                     "Parser timeout after %.1f seconds (%lu operations) - likely exponential backtracking on malformed input at line %d, column %d", 
+                     elapsed, in->parse_ops, in->line, in->col);
+            return make_failure_v2(in, comb->name, strdup(error_msg), NULL);
+        }
+        if ((in->parse_ops % 10000) == 0) {
+            fprintf(stderr, "Progress: %lu ops, %.3fs elapsed\n", in->parse_ops, elapsed);
+            fflush(stderr);
+        }
+    }
+
+    // Check parse depth limit to prevent exponential backtracking
+    if (in->parse_depth >= in->max_parse_depth) {
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), 
+                 "Parse depth limit exceeded (%d) - likely exponential backtracking on malformed input at line %d, column %d", 
+                 in->max_parse_depth, in->line, in->col);
+        return make_failure_v2(in, comb->name, strdup(error_msg), NULL);
+    }
+
     if (in->memo == NULL) {
         in->memo = memo_table_create();
+    }
+
+    // Check if memo table has grown too large
+    if (in->memo && in->memo->size >= in->memo->max_size) {
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), 
+                 "Memoization table size limit exceeded (%zu entries) - likely pathological backtracking at line %d, column %d", 
+                 in->memo->max_size, in->line, in->col);
+        return make_failure_v2(in, comb->name, strdup(error_msg), NULL);
     }
 
     int position = in->start;
     size_t combinator_id = comb->memo_id;
     memo_entry_t* entry = memo_table_lookup(in->memo, combinator_id, position);
     if (entry && entry->has_result) {
+        // Memo hit - replay without incrementing depth
         return memo_entry_replay(entry, in);
     }
 
@@ -1112,8 +1180,20 @@ ParseResult parse(input_t * in, combinator_t * comb) {
         return make_failure_v2(in, comb->name, message, NULL);
     }
 
+    // Only increment depth for actual parsing, not memo replays
+    in->parse_depth++;
+
     if (!entry) {
         entry = memo_table_insert(in->memo, combinator_id, position);
+        if (!entry) {
+            // Memo table size limit reached
+            in->parse_depth--;
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg), 
+                     "Memoization table insertion failed - size limit reached at line %d, column %d", 
+                     in->line, in->col);
+            return make_failure_v2(in, comb->name, strdup(error_msg), NULL);
+        }
     }
 
     entry->in_progress = true;
@@ -1122,6 +1202,8 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     save_input_state(in, &final_state);
     entry->in_progress = false;
     memo_table_store_result(entry, &result, &final_state);
+    
+    in->parse_depth--;
     return result;
 }
 
