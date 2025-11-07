@@ -1372,9 +1372,24 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     init_pascal_statement_parser(stmt_parser);
 
     // Return type: : type (for functions)
+    // Support complex types like arrays, sets, pointers, etc., not just simple identifiers
+    combinator_t* return_type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        array_type(PASCAL_T_ARRAY_TYPE),
+        set_type(PASCAL_T_SET),
+        range_type(PASCAL_T_RANGE_TYPE),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
+        procedure_type(PASCAL_T_PROCEDURE_TYPE),
+        function_type(PASCAL_T_FUNCTION_TYPE),
+        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
+        token(cident(PASCAL_T_IDENTIFIER)),          // simple type identifier (fallback)
+        NULL
+    );
+    
     combinator_t* return_type = seq(new_combinator(), PASCAL_T_RETURN_TYPE,
         token(match(":")),                           // colon
-        token(cident(PASCAL_T_IDENTIFIER)),          // return type (simplified)
+        return_type_spec,                            // comprehensive type specification
         NULL
     );
 

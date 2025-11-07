@@ -408,8 +408,21 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
     int is_new_proc_func = is_procedure_or_function(new_hash_type);
     int is_existing_proc_func = is_procedure_or_function(existing_node->hash_type);
 
-    /* Allow collision only if both are procedures/functions */
-    return (is_new_proc_func && is_existing_proc_func);
+    /* Allow collision if both are procedures/functions (overloading) */
+    if (is_new_proc_func && is_existing_proc_func) {
+        return 1;
+    }
+    
+    /* Allow user-declared variables/arrays to shadow the automatic FUNCTION_RETURN "Result" variable
+     * This enables the common Pascal pattern of declaring a local "result" variable in functions.
+     * The function name itself can still be used for the return value if the user doesn't shadow it. */
+    if (existing_node->hash_type == HASHTYPE_FUNCTION_RETURN && 
+        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
+    
+    /* No other collisions allowed */
+    return 0;
 }
 
 /* Get VarType equivalent from node (for legacy code compatibility) */
