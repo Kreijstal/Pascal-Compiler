@@ -91,11 +91,13 @@ static ListNode_t *class_method_bindings = NULL;
 /* Counter for generating unique anonymous method names */
 static int anonymous_method_counter = 0;
 
+#define ANON_METHOD_NAME_SIZE 64
+
 /* Helper function to generate unique names for anonymous methods */
 static char *generate_anonymous_method_name(int is_function) {
-    char *name = (char *)malloc(64);
+    char *name = (char *)malloc(ANON_METHOD_NAME_SIZE);
     if (name == NULL) return NULL;
-    snprintf(name, 64, "$anon_%s_%d", is_function ? "func" : "proc", ++anonymous_method_counter);
+    snprintf(name, ANON_METHOD_NAME_SIZE, "_anon_%s_%d", is_function ? "func" : "proc", ++anonymous_method_counter);
     return name;
 }
 
@@ -887,15 +889,29 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
     if (spec_node->typ == PASCAL_T_PROCEDURE_TYPE || spec_node->typ == PASCAL_T_FUNCTION_TYPE) {
         int is_function = (spec_node->typ == PASCAL_T_FUNCTION_TYPE);
         
+        #ifdef DEBUG_GPC_TYPE_CREATION
+        fprintf(stderr, "DEBUG: convert_type_spec_to_gpctype: handling %s\n",
+                is_function ? "FUNCTION_TYPE" : "PROCEDURE_TYPE");
+        #endif
+        
         /* Parse parameters */
         ast_t *cursor = spec_node->child;
         ListNode_t *params = NULL;
         
         /* Check if first child is a PARAM_LIST */
         if (cursor != NULL && cursor->typ == PASCAL_T_PARAM_LIST) {
+            #ifdef DEBUG_GPC_TYPE_CREATION
+            fprintf(stderr, "DEBUG: Found PARAM_LIST node\n");
+            #endif
             /* The PARAM_LIST node should contain PARAM children */
             ast_t *param_cursor = cursor->child;
             params = convert_param_list(&param_cursor);
+            /* Move cursor to the next sibling after PARAM_LIST */
+            cursor = cursor->next;
+            #ifdef DEBUG_GPC_TYPE_CREATION
+            fprintf(stderr, "DEBUG: After PARAM_LIST, cursor=%p, cursor->typ=%d\n",
+                    (void*)cursor, cursor ? cursor->typ : -1);
+            #endif
         } else {
             /* Skip to parameter list if present */
             while (cursor != NULL && cursor->typ != PASCAL_T_PARAM && cursor->typ != PASCAL_T_TYPE_SPEC)
@@ -909,11 +925,42 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
         /* For functions, get return type */
         GpcType *return_type = NULL;
         if (is_function) {
+            #ifdef DEBUG_GPC_TYPE_CREATION
+            fprintf(stderr, "DEBUG: Looking for return type, cursor=%p, cursor->typ=%d, cursor->sym=%s, cursor->child=%p\n",
+                    (void*)cursor, cursor ? cursor->typ : -1,
+                    (cursor && cursor->sym && cursor->sym->name) ? cursor->sym->name : "NULL",
+                    cursor ? (void*)cursor->child : NULL);
+            if (cursor && cursor->child) {
+                fprintf(stderr, "DEBUG: cursor->child->typ=%d, cursor->child->sym=%s\n",
+                        cursor->child->typ,
+                        (cursor->child->sym && cursor->child->sym->name) ? cursor->child->sym->name : "NULL");
+            }
+            #endif
             /* Look for return type specification */
+            /* The return type might be:
+             * 1. A direct sibling (PASCAL_T_TYPE_SPEC or PASCAL_T_IDENTIFIER)
+             * 2. A child of an intermediate wrapper node (check child->typ)
+             */
             while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC && cursor->typ != PASCAL_T_IDENTIFIER)
+            {
+                /* Check if the child is a TYPE_SPEC or IDENTIFIER */
+                if (cursor->child != NULL && 
+                    (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))
+                {
+                    cursor = cursor->child;
+                    break;
+                }
+                #ifdef DEBUG_GPC_TYPE_CREATION
+                fprintf(stderr, "DEBUG: Skipping node type %d (PASCAL_T_TYPE_SPEC=%d, PASCAL_T_IDENTIFIER=%d)\n", 
+                        cursor->typ, PASCAL_T_TYPE_SPEC, PASCAL_T_IDENTIFIER);
+                #endif
                 cursor = cursor->next;
+            }
                 
             if (cursor != NULL) {
+                #ifdef DEBUG_GPC_TYPE_CREATION
+                fprintf(stderr, "DEBUG: Found return type node, typ=%d\n", cursor->typ);
+                #endif
                 if (cursor->typ == PASCAL_T_TYPE_SPEC) {
                     return_type = convert_type_spec_to_gpctype(cursor, symtab);
                 } else if (cursor->typ == PASCAL_T_IDENTIFIER) {
@@ -927,6 +974,11 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
                     }
                 }
             }
+            #ifdef DEBUG_GPC_TYPE_CREATION
+            else {
+                fprintf(stderr, "DEBUG: No return type node found!\n");
+            }
+            #endif
         }
         
         return create_procedure_type(params, return_type);
