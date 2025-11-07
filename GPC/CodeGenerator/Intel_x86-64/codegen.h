@@ -162,6 +162,7 @@ typedef struct {
      * 2 = nested in nested procedure, etc.
      */
     int lexical_depth;
+    int current_subprogram_lexical_depth;
     const char *current_subprogram_id;
     const char *current_subprogram_mangled;
     ListNode_t *static_link_procs;
