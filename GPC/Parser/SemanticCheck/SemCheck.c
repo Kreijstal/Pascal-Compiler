@@ -2512,7 +2512,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     else // Function
     {
         /* Need to additionally extract the return type */
-        HashNode_t *return_type_node = NULL;
         GpcType *return_gpc_type = NULL;
         
         if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
@@ -2526,7 +2525,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             }
             else
             {
-                return_type_node = type_node;
                 assert(type_node->type != NULL && "Type node must have GpcType");
                 return_gpc_type = type_node->type;
             }
