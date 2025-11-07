@@ -1704,7 +1704,6 @@ struct Statement *mk_varassign(int line_num, int col_num, struct Expression *var
     assert(new_stmt != NULL);
 
     new_stmt->line_num = line_num;
-    new_stmt->col_num = 0;
     new_stmt->col_num = col_num;
     new_stmt->type = STMT_VAR_ASSIGN;
     new_stmt->stmt_data.var_assign_data.var = var;
