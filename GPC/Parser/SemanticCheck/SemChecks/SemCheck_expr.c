@@ -2764,7 +2764,76 @@ int semcheck_expr_main(int *type_return,
                 expr->resolved_gpc_type = proc_type;
             }
             
-            return_val = 0;
+            /* Semantic check the anonymous function body */
+            /* We need to create a new scope with parameters and return variable */
+            if (expr->expr_data.anonymous_method_data.body != NULL)
+            {
+                PushScope(symtab);
+                
+                /* Add parameters to the scope */
+                if (params != NULL)
+                {
+                    ListNode_t *param = params;
+                    while (param != NULL)
+                    {
+                        if (param->type == LIST_TREE && param->cur != NULL)
+                        {
+                            Tree_t *param_tree = (Tree_t *)param->cur;
+                            if (param_tree->type == TREE_VAR_DECL)
+                            {
+                                /* Add parameter as a variable */
+                                ListNode_t *ids = param_tree->tree_data.var_decl_data.ids;
+                                while (ids != NULL)
+                                {
+                                    char *param_id = (char *)ids->cur;
+                                    int param_type = param_tree->tree_data.var_decl_data.type;
+                                    GpcType *param_gpc_type = NULL;
+                                    
+                                    /* Try to resolve parameter type */
+                                    if (param_tree->tree_data.var_decl_data.type_id != NULL)
+                                    {
+                                        HashNode_t *type_node = NULL;
+                                        if (FindIdent(&type_node, symtab, param_tree->tree_data.var_decl_data.type_id) >= 0 &&
+                                            type_node != NULL && type_node->type != NULL)
+                                        {
+                                            param_gpc_type = type_node->type;
+                                        }
+                                    }
+                                    
+                                    if (param_gpc_type == NULL && param_type != UNKNOWN_TYPE)
+                                    {
+                                        param_gpc_type = create_primitive_type(param_type);
+                                    }
+                                    
+                                    PushVarOntoScope_Typed(symtab, param_id, param_gpc_type);
+                                    ids = ids->next;
+                                }
+                            }
+                        }
+                        param = param->next;
+                    }
+                }
+                
+                /* For functions, add the return variable */
+                if (expr->type == EXPR_ANONYMOUS_FUNCTION && expr->expr_data.anonymous_method_data.generated_name != NULL)
+                {
+                    /* Add the function name as the return variable */
+                    PushFuncRetOntoScope_Typed(symtab, expr->expr_data.anonymous_method_data.generated_name, return_type);
+                    
+                    /* Also add "Result" as an alias */
+                    HashNode_t *result_check = NULL;
+                    if (FindIdent(&result_check, symtab, "Result") == -1)
+                    {
+                        PushFuncRetOntoScope_Typed(symtab, "Result", return_type);
+                    }
+                }
+                
+                /* Semantic check the body statement */
+                return_val += semcheck_stmt(symtab, expr->expr_data.anonymous_method_data.body, max_scope_lev);
+                
+                PopScope(symtab);
+            }
+            
             break;
         }
 

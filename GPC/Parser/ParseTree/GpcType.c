@@ -40,6 +40,12 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type) {
     type->kind = TYPE_KIND_PROCEDURE;
     type->info.proc_info.params = params; // Takes ownership
     type->info.proc_info.return_type = return_type; // Takes ownership
+    
+    #ifdef DEBUG_GPC_TYPE_CREATION
+    fprintf(stderr, "DEBUG: create_procedure_type: params=%p, return_type=%p (is_function=%d)\n",
+            (void*)params, (void*)return_type, return_type != NULL);
+    #endif
+    
     return type;
 }
 

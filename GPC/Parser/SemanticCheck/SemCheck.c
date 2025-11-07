@@ -2351,6 +2351,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         // Use the ORIGINAL name for the internal return variable with GpcType
         // Always use _Typed variant, even if GpcType is NULL
         PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_gpc_type);
+        
+        /* Also add "Result" as an alias for the return variable for Pascal compatibility */
+        /* Check if "Result" is already used as a parameter or local variable */
+        HashNode_t *result_check = NULL;
+        if (FindIdent(&result_check, symtab, "Result") == -1)
+        {
+            /* "Result" is not already declared, so we can add it as an alias */
+            PushFuncRetOntoScope_Typed(symtab, "Result", return_gpc_type);
+        }
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
@@ -2402,7 +2411,20 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 body, new_max_scope);
         /* Allow functions with asm blocks to skip explicit return assignment */
         int has_asm = statement_contains_asm_block(body);
-        if(hash_return->mutated == NO_MUTATE && !has_asm)
+        
+        /* Check if either the function name or "Result" was assigned to */
+        int return_was_assigned = (hash_return->mutated != NO_MUTATE);
+        if (!return_was_assigned)
+        {
+            /* Also check if "Result" was mutated */
+            HashNode_t *result_node = NULL;
+            if (FindIdent(&result_node, symtab, "Result") == 0 && result_node != NULL)
+            {
+                return_was_assigned = (result_node->mutated != NO_MUTATE);
+            }
+        }
+        
+        if(!return_was_assigned && !has_asm)
         {
             fprintf(stderr,
                 "Error in function %s: no return statement declared in function body!\n\n",
