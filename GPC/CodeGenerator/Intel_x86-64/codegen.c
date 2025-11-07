@@ -191,7 +191,7 @@ void codegen_leave_lexical_scope(CodeGenContext *ctx)
 /* Helper: Get current lexical nesting depth */
 int codegen_get_lexical_depth(const CodeGenContext *ctx)
 {
-    return (ctx != NULL) ? ctx->lexical_depth : 0;
+    return (ctx != NULL) ? ctx->current_subprogram_lexical_depth : 0;
 }
 
 /* Helper: Check if we're currently in a nested context (depth > 0) */
@@ -894,8 +894,10 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 
     const char *prev_id = ctx->current_subprogram_id;
     const char *prev_mangled = ctx->current_subprogram_mangled;
+    int prev_depth = ctx->current_subprogram_lexical_depth;
     ctx->current_subprogram_id = prgm_name;
     ctx->current_subprogram_mangled = prgm_name;
+    ctx->current_subprogram_lexical_depth = 0;
 
     push_stackscope();
 
@@ -928,6 +930,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 
     ctx->current_subprogram_id = prev_id;
     ctx->current_subprogram_mangled = prev_mangled;
+    ctx->current_subprogram_lexical_depth = prev_depth;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1257,8 +1260,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
 
-    /* Enter a new lexical scope */
-    codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
 
@@ -1272,31 +1273,25 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int num_args = (proc->args_var == NULL) ? 0 : ListLength(proc->args_var);
     ctx->current_subprogram_id = proc->id;
     ctx->current_subprogram_mangled = sub_id;
-    int lexical_depth = codegen_get_lexical_depth(ctx);
-    int is_nested = (lexical_depth >= 1);
+    int lexical_depth = proc->nesting_level;
+    if (lexical_depth < 0)
+        lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    int prev_depth = ctx->current_subprogram_lexical_depth;
+    ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
     StackNode_t *static_link = NULL;
 
     /* Process arguments first to allocate their stack space */
-    /* Check if this procedure will need a static link:
-     * - Depth >= 2: always need static link (truly nested)
-     * - Depth == 1 with nested subprograms: need static link to pass to children
-     * - Depth == 1 with no params: need static link to access parent (main) variables
-     * - Depth == 1 with params but no nested subprograms: DON'T need static link
-     */
-    int has_nested_subprograms = (proc->subprograms != NULL && ListLength(proc->subprograms) > 0);
-    int will_need_static_link = (is_nested && !is_class_method && 
-                                (lexical_depth >= 2 || has_nested_subprograms || num_args == 0));
+    /* Only procedures that actually capture outer scope require a static link.
+     * Class methods are the only exception because they pass `self` instead. */
+    int will_need_static_link = (!is_class_method &&
+        proc->requires_static_link);
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
     inst_list = codegen_subprogram_arguments(proc->args_var, inst_list, ctx, symtab, arg_start_index);
     
     /* Now add static link after arguments to avoid overlap */
-    /* Static links are needed for:
-     * 1. Depth >= 2 (truly nested procedures), OR
-     * 2. Depth == 1 procedures that have nested subprograms (they need to pass their frame to children)
-     */
     if (will_need_static_link)
     {
         /* Reserve space for static link (parent's frame pointer) after arguments
@@ -1331,10 +1326,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
+    ctx->current_subprogram_lexical_depth = prev_depth;
 
-    /* Leave the lexical scope */
-    codegen_leave_lexical_scope(ctx);
-    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -1367,8 +1360,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
 
-    /* Enter a new lexical scope */
-    codegen_enter_lexical_scope(ctx);
     push_stackscope();
     inst_list = NULL;
 
@@ -1382,8 +1373,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int num_args = (func->args_var == NULL) ? 0 : ListLength(func->args_var);
     ctx->current_subprogram_id = func->id;
     ctx->current_subprogram_mangled = sub_id;
-    int lexical_depth = codegen_get_lexical_depth(ctx);
-    int is_nested = (lexical_depth >= 1);
+    int lexical_depth = func->nesting_level;
+    if (lexical_depth < 0)
+        lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    int prev_depth = ctx->current_subprogram_lexical_depth;
+    ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_class_method = (sub_id != NULL && strstr(sub_id, "__") != NULL);
     StackNode_t *static_link = NULL;
 
@@ -1435,15 +1429,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
-    /* Check if this function will need a static link:
-     * - Depth >= 2: always need static link (truly nested)
-     * - Depth == 1 with nested subprograms: need static link to pass to children
-     * - Depth == 1 with no params: need static link to access parent (main) variables
-     * - Depth == 1 with params but no nested subprograms: DON'T need static link
-     */
-    int has_nested_subprograms = (func->subprograms != NULL && ListLength(func->subprograms) > 0);
-    int will_need_static_link = (is_nested && !is_class_method && 
-                                (lexical_depth >= 2 || has_nested_subprograms || num_args == 0));
+    /* Only functions that close over variables need static links (excluding class methods). */
+    int will_need_static_link = (!is_class_method &&
+        func->requires_static_link);
     
     /* Calculate argument start index:
      * - If function returns record: use index 1 (record pointer in first arg)
@@ -1618,10 +1606,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
+    ctx->current_subprogram_lexical_depth = prev_depth;
 
-    /* Leave the lexical scope */
-    codegen_leave_lexical_scope(ctx);
-    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -1698,13 +1684,13 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     
-    /* Enter a new lexical scope for the anonymous function */
-    codegen_enter_lexical_scope(ctx);
     push_stackscope();
     
     ListNode_t *inst_list = NULL;
     int num_args = (anon->parameters == NULL) ? 0 : ListLength(anon->parameters);
-    int lexical_depth = codegen_get_lexical_depth(ctx);
+    int lexical_depth = codegen_get_lexical_depth(ctx) + 1;
+    int prev_depth = ctx->current_subprogram_lexical_depth;
+    ctx->current_subprogram_lexical_depth = lexical_depth;
     int is_nested = (lexical_depth >= 1);
     
     ctx->current_subprogram_id = anon->generated_name;
@@ -1784,9 +1770,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
-    
-    /* Leave the lexical scope */
-    codegen_leave_lexical_scope(ctx);
+    ctx->current_subprogram_lexical_depth = prev_depth;
     
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

@@ -3219,6 +3219,7 @@ int semcheck_varid(int *type_return,
         }
         
         set_hash_meta(hash_return, mutating);
+        semcheck_mark_static_link_needed(scope_return, hash_return);
         if(scope_return > max_scope_lev)
         {
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
