@@ -2296,14 +2296,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
     // --- Name Mangling Logic ---
+    fprintf(stderr, "DEBUG: Processing subprogram '%s', cname_flag=%d\n", 
+            subprogram->tree_data.subprogram_data.id, 
+            subprogram->tree_data.subprogram_data.cname_flag);
     if (subprogram->tree_data.subprogram_data.cname_flag) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
+        fprintf(stderr, "DEBUG: Using original name '%s' for cname_flag function\n", subprogram->tree_data.subprogram_data.mangled_id);
     } else {
         // Pass the symbol table to the mangler
         subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
             subprogram->tree_data.subprogram_data.id,
             subprogram->tree_data.subprogram_data.args_var,
             symtab); // <-- PASS symtab HERE
+        fprintf(stderr, "DEBUG: Mangled name to '%s'\n", subprogram->tree_data.subprogram_data.mangled_id);
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
 

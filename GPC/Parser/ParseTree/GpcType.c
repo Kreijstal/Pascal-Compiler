@@ -779,6 +779,8 @@ static int var_type_to_primitive_tag(enum VarType var_type)
             return REAL_TYPE;
         case HASHVAR_BOOLEAN:
             return BOOL;
+        case HASHVAR_GENERIC_PARAM:
+            return UNKNOWN_TYPE;
         case HASHVAR_CHAR:
             return CHAR_TYPE;
         case HASHVAR_PCHAR:
@@ -808,6 +810,7 @@ GpcType* gpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_LONGINT:
         case HASHVAR_REAL:
         case HASHVAR_BOOLEAN:
+        case HASHVAR_GENERIC_PARAM:
         case HASHVAR_CHAR:
         case HASHVAR_PCHAR:
         case HASHVAR_SET:

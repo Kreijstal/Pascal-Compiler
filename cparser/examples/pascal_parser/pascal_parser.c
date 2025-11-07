@@ -302,6 +302,13 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_IMPLEMENTATION_SECTION: return "IMPLEMENTATION_SECTION";
         case PASCAL_T_INITIALIZATION_SECTION: return "INITIALIZATION_SECTION";
         case PASCAL_T_FINALIZATION_SECTION: return "FINALIZATION_SECTION";
+        // External declaration types
+        case PASCAL_T_EXTERNAL_DECL: return "EXTERNAL_DECL";
+        case PASCAL_T_EXTERNAL_LIBRARY: return "EXTERNAL_LIBRARY";
+        case PASCAL_T_EXTERNAL_NAME: return "EXTERNAL_NAME";
+        case PASCAL_T_EXTERNAL_INDEX: return "EXTERNAL_INDEX";
+        case PASCAL_T_EXTERNAL_VAR: return "EXTERNAL_VAR";
+        case PASCAL_T_CVAR: return "CVAR";
         // Field width specifier
         case PASCAL_T_FIELD_WIDTH: return "FIELD_WIDTH";
         default:
