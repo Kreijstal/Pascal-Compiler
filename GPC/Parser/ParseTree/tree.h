@@ -95,6 +95,8 @@ typedef struct Tree
             int cname_flag;
             int overload_flag;
             int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
+            int requires_static_link;
+            int defined_in_unit;
 
             ListNode_t *declarations;
             ListNode_t *subprograms;
