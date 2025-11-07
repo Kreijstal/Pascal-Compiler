@@ -4099,10 +4099,25 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         struct Statement *initialization = NULL;
         struct Statement *finalization = NULL;
 
-        ast_t *interface_node = unit_name_node != NULL ? unit_name_node->next : NULL;
-        ast_t *implementation_node = interface_node != NULL ? interface_node->next : NULL;
-        ast_t *initialization_node = implementation_node != NULL ? implementation_node->next : NULL;
-        ast_t *finalization_node = initialization_node != NULL ? initialization_node->next : NULL;
+        // Navigate through unit children to find sections by type
+        ast_t *section = unit_name_node != NULL ? unit_name_node->next : NULL;
+        ast_t *interface_node = NULL;
+        ast_t *implementation_node = NULL;
+        ast_t *initialization_node = NULL;
+        ast_t *finalization_node = NULL;
+
+        while (section != NULL) {
+            if (section->typ == PASCAL_T_INTERFACE_SECTION) {
+                interface_node = section;
+            } else if (section->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
+                implementation_node = section;
+            } else if (section->typ == PASCAL_T_INITIALIZATION_SECTION) {
+                initialization_node = section;
+            } else if (section->typ == PASCAL_T_FINALIZATION_SECTION) {
+                finalization_node = section;
+            }
+            section = section->next;
+        }
 
         if (interface_node != NULL && interface_node->typ == PASCAL_T_INTERFACE_SECTION) {
             ast_t *section = interface_node->child;

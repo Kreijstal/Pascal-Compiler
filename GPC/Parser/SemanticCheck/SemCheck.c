@@ -1636,6 +1636,18 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, 0);
 
+    // Semantic check finalization statements from units
+    if (tree->tree_data.program_data.finalization_statements != NULL) {
+        ListNode_t *final_node = tree->tree_data.program_data.finalization_statements;
+        while (final_node != NULL) {
+            if (final_node->type == LIST_STMT && final_node->cur != NULL) {
+                struct Statement *final_stmt = (struct Statement *)final_node->cur;
+                return_val += semcheck_stmt(symtab, final_stmt, 0);
+            }
+            final_node = final_node->next;
+        }
+    }
+
     if(optimize_flag() > 0 && return_val == 0)
     {
         optimize(symtab, tree);
