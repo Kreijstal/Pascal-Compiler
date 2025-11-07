@@ -806,8 +806,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     GpcType *rhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
     int handled_by_gpctype = 0;
 
-    if (lhs_gpctype != NULL && rhs_gpctype != NULL &&
-        (lhs_gpctype->kind == TYPE_KIND_PROCEDURE || rhs_gpctype->kind == TYPE_KIND_PROCEDURE))
+    if (lhs_gpctype != NULL && rhs_gpctype != NULL)
     {
         handled_by_gpctype = 1;
         
