@@ -251,6 +251,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[BODY]:\n");
           stmt_print(tree->tree_data.program_data.body_statement, f, num_indent+1);
+
+          print_indent(f, num_indent);
+          fprintf(f, "[FINALIZATION_STATEMENTS]:\n");
+          list_print(tree->tree_data.program_data.finalization_statements, f, num_indent+1);
           break;
 
         case TREE_UNIT:
@@ -297,6 +301,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[INITIALIZATION]:\n");
           stmt_print(tree->tree_data.unit_data.initialization, f, num_indent+1);
+
+          print_indent(f, num_indent);
+          fprintf(f, "[FINALIZATION]:\n");
+          stmt_print(tree->tree_data.unit_data.finalization, f, num_indent+1);
           break;
 
         case TREE_SUBPROGRAM:
@@ -870,6 +878,8 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.program_data.subprograms);
 
           destroy_stmt(tree->tree_data.program_data.body_statement);
+          
+          destroy_list(tree->tree_data.program_data.finalization_statements);
           break;
 
         case TREE_UNIT:
@@ -885,6 +895,8 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.unit_data.subprograms);
           if (tree->tree_data.unit_data.initialization != NULL)
               destroy_stmt(tree->tree_data.unit_data.initialization);
+          if (tree->tree_data.unit_data.finalization != NULL)
+              destroy_stmt(tree->tree_data.unit_data.finalization);
           break;
 
         case TREE_SUBPROGRAM:
@@ -1445,6 +1457,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     new_tree->tree_data.program_data.type_declaration = type_decl;
     new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.body_statement = compound_statement;
+    new_tree->tree_data.program_data.finalization_statements = NULL;
 
     return new_tree;
 }
@@ -1455,7 +1468,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     ListNode_t *implementation_const_decls,
     ListNode_t *implementation_type_decls,
     ListNode_t *implementation_var_decls, ListNode_t *subprograms,
-    struct Statement *initialization)
+    struct Statement *initialization, struct Statement *finalization)
 {
     Tree_t *new_tree = (Tree_t *)malloc(sizeof(Tree_t));
     assert(new_tree != NULL);
@@ -1473,6 +1486,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     new_tree->tree_data.unit_data.implementation_var_decls = implementation_var_decls;
     new_tree->tree_data.unit_data.subprograms = subprograms;
     new_tree->tree_data.unit_data.initialization = initialization;
+    new_tree->tree_data.unit_data.finalization = finalization;
 
     return new_tree;
 }

@@ -24,6 +24,8 @@ const char* pascal_reserved_keywords[] = {
     // Additional Pascal keywords
     "function", "procedure", "program", "unit", "uses", "interface", "implementation",
     "label", "goto",
+    // Unit initialization/finalization keywords
+    "initialization", "finalization",
     // Anonymous function support
     "reference",
     NULL

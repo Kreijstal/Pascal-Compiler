@@ -906,6 +906,18 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
+    // Generate finalization code from units (in LIFO order - already reversed in list)
+    if (data->finalization_statements != NULL) {
+        ListNode_t *final_node = data->finalization_statements;
+        while (final_node != NULL) {
+            if (final_node->type == LIST_STMT && final_node->cur != NULL) {
+                struct Statement *final_stmt = (struct Statement *)final_node->cur;
+                inst_list = codegen_stmt(final_stmt, inst_list, ctx, symtab);
+            }
+            final_node = final_node->next;
+        }
+    }
+
     codegen_function_header(prgm_name, ctx);
     codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);

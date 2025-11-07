@@ -2114,7 +2114,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (assign_type == CHAR_TYPE)
             {
                 /* Call gpc_char_to_string to convert char to string */
-                const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
                 const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
                 char buffer[128];
                 
