@@ -300,6 +300,8 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_UNIT_DECL: return "UNIT_DECL";
         case PASCAL_T_INTERFACE_SECTION: return "INTERFACE_SECTION";
         case PASCAL_T_IMPLEMENTATION_SECTION: return "IMPLEMENTATION_SECTION";
+        case PASCAL_T_INITIALIZATION_SECTION: return "INITIALIZATION_SECTION";
+        case PASCAL_T_FINALIZATION_SECTION: return "FINALIZATION_SECTION";
         // Field width specifier
         case PASCAL_T_FIELD_WIDTH: return "FIELD_WIDTH";
         default:

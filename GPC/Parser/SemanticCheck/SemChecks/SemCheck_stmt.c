@@ -968,7 +968,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 /** PROCEDURE_CALL **/
 int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    int return_val, scope_return, cur_arg, arg_type;
+    int return_val, scope_return, cur_arg;
     HashNode_t *sym_return;
     ListNode_t *true_args, *true_arg_ids, *args_given;
     Tree_t *arg_decl;
@@ -1062,7 +1062,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     ListNode_t *scope_list = symtab->stack_head;
                     while (scope_list != NULL && correct_class_name == NULL) {
                         HashTable_t *hash_table = (HashTable_t *)scope_list->cur;
-                        if (hash_table != NULL && hash_table->table != NULL) {
+                        if (hash_table != NULL) {
                             for (int i = 0; i < TABLE_SIZE && correct_class_name == NULL; i++) {
                                 ListNode_t *bucket = hash_table->table[i];
                                 while (bucket != NULL && correct_class_name == NULL) {

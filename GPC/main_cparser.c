@@ -511,10 +511,11 @@ static void append_initialization_statement(Tree_t *program, struct Statement *i
         return;
     }
 
+    // Prepend initialization to the body (so it runs BEFORE the main program body)
     if (body->stmt_data.compound_statement == NULL)
         body->stmt_data.compound_statement = init_list;
     else
-        ConcatList(body->stmt_data.compound_statement, init_list);
+        body->stmt_data.compound_statement = ConcatList(init_list, body->stmt_data.compound_statement);
 
     init_stmt->stmt_data.compound_statement = NULL;
     destroy_stmt(init_stmt);
@@ -562,6 +563,16 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 
     append_initialization_statement(program, unit_tree->tree_data.unit_data.initialization);
     unit_tree->tree_data.unit_data.initialization = NULL;
+
+    // Prepend finalization to the list (for LIFO execution order)
+    if (unit_tree->tree_data.unit_data.finalization != NULL) {
+        ListNode_t *final_node = CreateListNode(unit_tree->tree_data.unit_data.finalization, LIST_STMT);
+        if (final_node != NULL) {
+            final_node->next = program->tree_data.program_data.finalization_statements;
+            program->tree_data.program_data.finalization_statements = final_node;
+        }
+        unit_tree->tree_data.unit_data.finalization = NULL;
+    }
 }
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);

@@ -42,6 +42,7 @@ typedef struct Tree
             ListNode_t *type_declaration;
             ListNode_t *subprograms;
             struct Statement *body_statement;
+            ListNode_t *finalization_statements; /* List of Statement* from units, stored in reverse order */
         } program_data;
 
         /* Pascal unit */
@@ -58,6 +59,7 @@ typedef struct Tree
             ListNode_t *implementation_var_decls;
             ListNode_t *subprograms;
             struct Statement *initialization;
+            struct Statement *finalization;
         } unit_data;
 
         /* A type declaration */
@@ -178,7 +180,7 @@ Tree_t *mk_unit(int line_num, char *id, ListNode_t *interface_uses,
     ListNode_t *implementation_const_decls,
     ListNode_t *implementation_type_decls,
     ListNode_t *implementation_var_decls, ListNode_t *subprograms,
-    struct Statement *initialization);
+    struct Statement *initialization, struct Statement *finalization);
 
 Tree_t *mk_typedecl(int line_num, char *id, int start, int end);
 Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, char *type_id, int start, int end);

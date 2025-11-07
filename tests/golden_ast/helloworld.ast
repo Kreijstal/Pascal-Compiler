@@ -11,3 +11,4 @@
       [PROCEDURE_CALL:writeln]:
         [ARGS]:
           [STRING:Hello, World!]
+  [FINALIZATION_STATEMENTS]:
