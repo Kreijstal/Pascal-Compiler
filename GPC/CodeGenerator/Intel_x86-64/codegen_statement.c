@@ -42,6 +42,10 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+#if GPC_ENABLE_REG_DEBUG
+extern const char *g_reg_debug_context;
+#endif
+
 ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type);
 static int record_type_is_mp_integer(const struct RecordType *record_type);
@@ -325,7 +329,14 @@ static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     Register_t *dest_reg = NULL;
+#if GPC_ENABLE_REG_DEBUG
+    const char *prev_ctx = g_reg_debug_context;
+    g_reg_debug_context = "dyn_array_dest";
+#endif
     inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+#if GPC_ENABLE_REG_DEBUG
+    g_reg_debug_context = prev_ctx;
+#endif
     if (codegen_had_error(ctx) || dest_reg == NULL)
         return inst_list;
 
@@ -349,7 +360,14 @@ static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     if (expr_is_dynamic_array(src_expr) && codegen_expr_is_addressable(src_expr))
     {
         Register_t *src_reg = NULL;
+#if GPC_ENABLE_REG_DEBUG
+        prev_ctx = g_reg_debug_context;
+        g_reg_debug_context = "dyn_array_src";
+#endif
         inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+#if GPC_ENABLE_REG_DEBUG
+        g_reg_debug_context = prev_ctx;
+#endif
         if (codegen_had_error(ctx) || src_reg == NULL)
         {
             if (src_reg != NULL)
@@ -376,7 +394,14 @@ static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     else
     {
         Register_t *value_reg = NULL;
+#if GPC_ENABLE_REG_DEBUG
+        prev_ctx = g_reg_debug_context;
+        g_reg_debug_context = "dyn_array_value";
+#endif
         inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &value_reg);
+#if GPC_ENABLE_REG_DEBUG
+        g_reg_debug_context = prev_ctx;
+#endif
         if (codegen_had_error(ctx) || value_reg == NULL)
         {
             if (value_reg != NULL)

@@ -1549,6 +1549,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
     if (returns_dynamic_array)
     {
+#if GPC_ENABLE_REG_DEBUG
+        const char *prev_reg_ctx = g_reg_debug_context;
+        g_reg_debug_context = "dyn_array_return";
+#endif
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
         {
@@ -1581,6 +1585,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             free_arg_regs();
             free_reg(get_reg_stack(), addr_reg);
         }
+#if GPC_ENABLE_REG_DEBUG
+        g_reg_debug_context = prev_reg_ctx;
+#endif
     }
     else if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
     {
@@ -2200,3 +2207,6 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
     }
     return inst_list;
 }
+#if GPC_ENABLE_REG_DEBUG
+extern const char *g_reg_debug_context;
+#endif
