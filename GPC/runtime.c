@@ -546,6 +546,58 @@ void gpc_string_assign(char **target, const char *value)
     *target = copy;
 }
 
+void *gpc_dynarray_clone_descriptor(const void *descriptor, size_t descriptor_size)
+{
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(gpc_dynarray_descriptor_t);
+
+    void *temp = malloc(descriptor_size);
+    if (temp == NULL)
+        return NULL;
+
+    if (descriptor != NULL)
+        memcpy(temp, descriptor, descriptor_size);
+    else
+        memset(temp, 0, descriptor_size);
+
+    return temp;
+}
+
+void gpc_dynarray_assign_descriptor(void *dest_descriptor, const void *src_descriptor,
+    size_t descriptor_size)
+{
+    if (dest_descriptor == NULL || src_descriptor == NULL)
+        return;
+    
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(gpc_dynarray_descriptor_t);
+
+    memcpy(dest_descriptor, src_descriptor, descriptor_size);
+}
+
+void gpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor,
+    size_t descriptor_size)
+{
+    if (dest_descriptor == NULL)
+    {
+        if (temp_descriptor != NULL)
+            free(temp_descriptor);
+        return;
+    }
+
+    if (descriptor_size == 0)
+        descriptor_size = sizeof(gpc_dynarray_descriptor_t);
+
+    if (temp_descriptor == NULL)
+    {
+        memset(dest_descriptor, 0, descriptor_size);
+        return;
+    }
+
+    memcpy(dest_descriptor, temp_descriptor, descriptor_size);
+    free(temp_descriptor);
+}
+
 /* Copy a string literal to a char array (fixed-size buffer)
  * Fills the entire array. If the string is shorter, pads with nulls.
  * If the string is longer, truncates to fit.

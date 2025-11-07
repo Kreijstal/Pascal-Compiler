@@ -918,6 +918,7 @@ int gpc_type_uses_qword(GpcType *type)
             return 1;  /* Procedure pointers are 64-bit */
         
         case TYPE_KIND_ARRAY:
+            return gpc_type_is_dynamic_array(type);
         case TYPE_KIND_RECORD:
         default:
             return 0;
@@ -951,4 +952,26 @@ int gpc_type_equals_tag(GpcType *type, int type_tag)
     /* For primitives, pointers, records, and procedures, use legacy tag comparison */
     int legacy_tag = gpc_type_get_legacy_tag(type);
     return (legacy_tag == type_tag);
+}
+
+GpcType* gpc_type_build_function_return(struct TypeAlias *inline_alias,
+                                        HashNode_t *resolved_type_node,
+                                        int primitive_tag,
+                                        SymTab_t *symtab)
+{
+    if (inline_alias != NULL)
+    {
+        GpcType *inline_type = create_gpc_type_from_type_alias(inline_alias, symtab);
+        if (inline_type != NULL && inline_type->type_alias == NULL)
+            gpc_type_set_type_alias(inline_type, inline_alias);
+        return inline_type;
+    }
+
+    if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+        return resolved_type_node->type;
+
+    if (primitive_tag != -1)
+        return create_primitive_type(primitive_tag);
+
+    return NULL;
 }

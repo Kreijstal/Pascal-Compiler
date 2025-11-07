@@ -18,6 +18,7 @@ typedef struct GpcType GpcType;
 
 // Forward declaration for symbol table (avoid circular dependency)
 struct SymTab;
+struct HashNode;
 
 // Forward declaration for VarType enum (defined in HashTable.h)
 enum VarType;
@@ -195,5 +196,13 @@ int gpc_type_is_signed(GpcType *type);
  * This is a helper for transitioning code that compares types.
  * Returns 1 if the type matches the tag, 0 otherwise. */
 int gpc_type_equals_tag(GpcType *type, int type_tag);
+
+/* Build the function return type from inline alias/type-id/primitive specification.
+ * This consolidates the logic used by semantic checking for both forward declarations
+ * and full definitions. */
+GpcType* gpc_type_build_function_return(struct TypeAlias *inline_alias,
+                                        struct HashNode *resolved_type_node,
+                                        int primitive_tag,
+                                        struct SymTab *symtab);
 
 #endif // GPC_TYPE_H

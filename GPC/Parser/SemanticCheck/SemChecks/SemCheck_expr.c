@@ -170,6 +170,38 @@ static void semcheck_clear_array_info(struct Expression *expr)
     expr->array_element_record_type = NULL;
 }
 
+static void semcheck_set_array_info_from_gpctype(struct Expression *expr, SymTab_t *symtab,
+    GpcType *array_type, int line_num)
+{
+    if (expr == NULL || array_type == NULL || array_type->kind != TYPE_KIND_ARRAY)
+        return;
+
+    semcheck_clear_array_info(expr);
+    expr->is_array_expr = 1;
+    expr->array_lower_bound = array_type->info.array_info.start_index;
+    expr->array_upper_bound = array_type->info.array_info.end_index;
+    expr->array_is_dynamic = gpc_type_is_dynamic_array(array_type);
+    expr->array_element_size = (int)gpc_type_get_array_element_size(array_type);
+
+    GpcType *element_type = gpc_type_get_array_element_type(array_type);
+    if (element_type != NULL)
+    {
+        expr->array_element_type = gpc_type_get_legacy_tag(element_type);
+        if (element_type->kind == TYPE_KIND_RECORD)
+            expr->array_element_record_type = gpc_type_get_record(element_type);
+        else
+            expr->array_element_record_type = NULL;
+    }
+    else
+    {
+        expr->array_element_type = UNKNOWN_TYPE;
+        expr->array_element_record_type = NULL;
+    }
+
+    (void)symtab;
+    (void)line_num;
+}
+
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -3671,6 +3703,8 @@ int semcheck_funccall(int *type_return,
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
                         current_score += 1;
+                    else if (formal_type == STRING_TYPE && call_type == CHAR_TYPE)
+                        current_score += 1; /* Allow implicit char-to-string promotion */
                     else
                         current_score += 1000; // Mismatch
 
@@ -3755,11 +3789,16 @@ int semcheck_funccall(int *type_return,
                 expr->resolved_gpc_type = return_type;
                 fprintf(stderr, "DEBUG: Set function call resolved_gpc_type: %s\n", 
                         gpc_type_to_string(return_type));
+                if (return_type->kind == TYPE_KIND_ARRAY)
+                    semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
+                else
+                    semcheck_clear_array_info(expr);
             }
             else
             {
                 expr->resolved_gpc_type = NULL;
                 fprintf(stderr, "DEBUG: No return type for function\n");
+                semcheck_clear_array_info(expr);
             }
         }
         else
@@ -3767,6 +3806,7 @@ int semcheck_funccall(int *type_return,
             expr->resolved_gpc_type = hash_return->type;
             fprintf(stderr, "DEBUG: Set resolved_gpc_type from hash_return: %p\n",
                     (void*)hash_return->type);
+            semcheck_clear_array_info(expr);
         }
 
         if (*type_return == RECORD_TYPE)
@@ -3808,6 +3848,10 @@ int semcheck_funccall(int *type_return,
                     int type_compatible = 0;
                     if ((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
                         (arg_type == LONGINT_TYPE && expected_type == INT_TYPE))
+                    {
+                        type_compatible = 1;
+                    }
+                    else if (expected_type == STRING_TYPE && arg_type == CHAR_TYPE)
                     {
                         type_compatible = 1;
                     }

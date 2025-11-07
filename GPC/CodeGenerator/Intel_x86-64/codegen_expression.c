@@ -40,6 +40,24 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+/* Helper to check if a formal parameter declaration expects a string type. */
+static int formal_decl_expects_string(Tree_t *decl)
+{
+    if (decl == NULL)
+        return 0;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        if (decl->tree_data.var_decl_data.type == STRING_TYPE)
+            return 1;
+        if (decl->tree_data.var_decl_data.type_id != NULL &&
+            pascal_identifier_equals(decl->tree_data.var_decl_data.type_id, "string"))
+            return 1;
+    }
+
+    return 0;
+}
+
 /* Helper function to get TypeAlias from HashNode */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
@@ -2525,6 +2543,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
+
+            /* Promote char arguments to strings when the formal parameter expects string. */
+            if (formal_decl_expects_string(formal_arg_decl) && expr_has_type_tag(arg_expr, CHAR_TYPE))
+            {
+                const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tcall\tgpc_char_to_string\n");
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
 
             if (arg_infos != NULL)
             {

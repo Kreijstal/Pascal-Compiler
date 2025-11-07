@@ -136,6 +136,35 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram);
 
+/* Resolve the return type for a function declaration once so callers share the same GpcType. */
+static GpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
+    int *error_count)
+{
+    if (subprogram == NULL || symtab == NULL)
+        return NULL;
+
+    /* TODO: Once the symbol table tracks placeholder types, this helper should
+     * validate that any returned GpcType has been fully resolved. */
+    HashNode_t *type_node = NULL;
+    if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+    {
+        if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1 ||
+            type_node == NULL)
+        {
+            semantic_error(subprogram->line_num, 0, "undefined type %s",
+                subprogram->tree_data.subprogram_data.return_type_id);
+            if (error_count != NULL)
+                ++(*error_count);
+        }
+    }
+
+    return gpc_type_build_function_return(
+        subprogram->tree_data.subprogram_data.inline_return_type,
+        type_node,
+        subprogram->tree_data.subprogram_data.return_type,
+        symtab);
+}
+
 /* Helper to check if an expression contains a real number literal or real constant */
 static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr)
 {
@@ -2379,172 +2408,51 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     else // Function
     {
-        /* Need to additionally extract the return type */
-        HashNode_t *return_type_node = NULL;
         GpcType *return_gpc_type = NULL;
-        struct TypeAlias *return_type_alias = NULL;
-        
-        fprintf(stderr, "DEBUG SemCheck function: inline_return_type=%p\n",
-                (void*)subprogram->tree_data.subprogram_data.inline_return_type);
-        
-        /* Check for inline return type (e.g., array of string) */
-        if (subprogram->tree_data.subprogram_data.inline_return_type != NULL)
-        {
-            return_type_alias = subprogram->tree_data.subprogram_data.inline_return_type;
-            
-            fprintf(stderr, "DEBUG: Found inline_return_type, is_array=%d\n", return_type_alias->is_array);
-            
-            /* Create GpcType from TypeAlias */
-            if (return_type_alias->is_array)
-            {
-                int start = return_type_alias->array_start;
-                int end = return_type_alias->array_end;
-                if (return_type_alias->is_open_array)
-                {
-                    start = 0;
-                    end = -1;
-                }
-                
-                fprintf(stderr, "DEBUG: Array bounds [%d..%d], element_type=%d, element_type_id=%s\n",
-                        start, end, return_type_alias->array_element_type,
-                        return_type_alias->array_element_type_id ? return_type_alias->array_element_type_id : "(null)");
 
-                /* Get element type - it might be a primitive type or a type reference */
-                GpcType *element_type = NULL;
-                int element_type_tag = return_type_alias->array_element_type;
-                
-                /* If element type is a type reference, resolve it */
-                if (element_type_tag == UNKNOWN_TYPE && return_type_alias->array_element_type_id != NULL)
-                {
-                    HashNode_t *element_type_node = NULL;
-                    if (FindIdent(&element_type_node, symtab, return_type_alias->array_element_type_id) >= 0 &&
-                        element_type_node != NULL && element_type_node->type != NULL)
-                    {
-                        element_type = element_type_node->type;
-                        fprintf(stderr, "DEBUG: Resolved element type from ID\n");
-                    }
-                }
-                else if (element_type_tag != UNKNOWN_TYPE)
-                {
-                    /* Direct primitive type tag - use create_primitive_type */
-                    element_type = create_primitive_type(element_type_tag);
-                    fprintf(stderr, "DEBUG: Created primitive element type, tag=%d\n", element_type_tag);
-                }
-                
-                if (element_type != NULL)
-                {
-                    /* Create array GpcType */
-                    return_gpc_type = create_array_type(element_type, start, end);
-                    assert(return_gpc_type != NULL && "Failed to create array return type");
-                    fprintf(stderr, "DEBUG: Created array GpcType: %s\n", gpc_type_to_string(return_gpc_type));
-                    
-                    /* Set type_alias on GpcType so it's properly propagated */
-                    gpc_type_set_type_alias(return_gpc_type, return_type_alias);
-                }
-                else
-                {
-                    fprintf(stderr, "DEBUG: Failed to create element type!\n");
-                }
-            }
-            else if (return_type_alias->is_pointer)
-            {
-                /* Handle pointer return types */
-                GpcType *points_to = NULL;
-                
-                /* Try to resolve the target type */
-                if (return_type_alias->pointer_type_id != NULL)
-                {
-                    HashNode_t *target_node = NULL;
-                    if (FindIdent(&target_node, symtab, return_type_alias->pointer_type_id) >= 0 &&
-                        target_node != NULL && target_node->type != NULL)
-                    {
-                        points_to = target_node->type;
-                    }
-                }
-                
-                /* If we couldn't resolve it, create a placeholder based on pointer_type */
-                if (points_to == NULL && return_type_alias->pointer_type != UNKNOWN_TYPE)
-                {
-                    points_to = create_primitive_type(return_type_alias->pointer_type);
-                }
-                
-                if (points_to != NULL)
-                {
-                    return_gpc_type = create_pointer_type(points_to);
-                    gpc_type_set_type_alias(return_gpc_type, return_type_alias);
-                }
-            }
-            /* Add more complex type handling as needed (set, record, etc.) */
-        }
-        
-        if (subprogram->tree_data.subprogram_data.return_type_id != NULL && return_gpc_type == NULL)
+        /* Reuse the type created during predeclaration when possible. */
+        if (already_declared && existing_decl != NULL &&
+            existing_decl->type != NULL &&
+            existing_decl->type->kind == TYPE_KIND_PROCEDURE)
         {
-            HashNode_t *type_node;
-            if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)
-            {
-                fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                    subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
-                return_val++;
-            }
-            else
-            {
-                return_type_node = type_node;
-                /* Get GpcType for the return type */
-                assert(type_node->type != NULL && "Type node must have GpcType");
-                return_gpc_type = type_node->type;
-            }
+            return_gpc_type = gpc_type_get_return_type(existing_decl->type);
         }
 
-        /* Create a primitive GpcType for the return type if we don't have one */
-        if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)
-        {
-            return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
-        }
-        
-        /* Add type metadata from return_type_node to return_gpc_type */
-        if (return_gpc_type != NULL && return_type_node != NULL)
-        {
-            struct TypeAlias *type_alias = get_type_alias_from_node(return_type_node);
-            if (type_alias != NULL)
-            {
-                gpc_type_set_type_alias(return_gpc_type, type_alias);
-            }
-            struct RecordType *record_type = get_record_type_from_node(return_type_node);
-            if (record_type != NULL && return_gpc_type->kind == TYPE_KIND_RECORD)
-            {
-                /* Use the canonical RecordType, not a clone */
-                return_gpc_type->info.record_info = record_type;
-            }
-        }
-        
-        fprintf(stderr, "DEBUG: About to create procedure type, return_gpc_type=%s\n",
-                return_gpc_type ? gpc_type_to_string(return_gpc_type) : "(null)");
-        
-        /* Create GpcType for the function (which is also a procedure type with a return value) */
-        GpcType *func_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            return_gpc_type  /* functions have a return type */
-        );
-        
-        fprintf(stderr, "DEBUG: Created func_type, checking return type from it\n");
-        GpcType *check_return = gpc_type_get_return_type(func_type);
-        fprintf(stderr, "DEBUG: func_type return type: %s\n",
-                check_return ? gpc_type_to_string(check_return) : "(null)");
-        
-        // Use the typed version to properly set the GpcType
-        // Skip if already declared
+        /* If the predeclare step could not resolve the type (e.g., inline array),
+         * build it now and update the existing declaration. */
+        if (return_gpc_type == NULL)
+            return_gpc_type = build_function_return_type(subprogram, symtab, &return_val);
+
+        GpcType *func_type = NULL;
         if (!already_declared)
         {
+            func_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                return_gpc_type
+            );
             func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             func_type);
         }
         else
         {
-            func_return = 0;  /* No error since it's expected to be already declared */
+            func_return = 0;
+            if (existing_decl != NULL)
+            {
+                if (existing_decl->type == NULL)
+                {
+                    func_type = create_procedure_type(
+                        subprogram->tree_data.subprogram_data.args_var,
+                        return_gpc_type
+                    );
+                    existing_decl->type = func_type;
+                }
+                else if (return_gpc_type != NULL)
+                {
+                    existing_decl->type->info.proc_info.return_type = return_gpc_type;
+                }
+            }
         }
-
-        /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
         PushScope(symtab);
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
@@ -2705,30 +2613,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
     else // Function
     {
-        /* Need to additionally extract the return type */
-        GpcType *return_gpc_type = NULL;
-        
-        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
-        {
-            HashNode_t *type_node;
-            if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)
-            {
-                fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                    subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
-                return_val++;
-            }
-            else
-            {
-                assert(type_node->type != NULL && "Type node must have GpcType");
-                return_gpc_type = type_node->type;
-            }
-        }
-        
-        /* Create a primitive GpcType for the return type if we don't have one */
-        if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)
-        {
-            return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
-        }
+        GpcType *return_gpc_type = build_function_return_type(subprogram, symtab, &return_val);
         
         /* Create function GpcType */
         GpcType *func_type = create_procedure_type(

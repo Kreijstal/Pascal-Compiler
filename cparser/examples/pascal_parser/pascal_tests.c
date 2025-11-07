@@ -3528,6 +3528,31 @@ void test_aligned_records(void) {
     free(input);
 }
 
+void test_pascal_array_function_return(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("arrayfunctionreturn.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free(input);
+        return;
+    }
+
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free(input);
+}
+
 void test_const_set(void) {
     combinator_t* p = get_unit_parser();
     input_t* input = new_input();
@@ -4618,6 +4643,7 @@ TEST_LIST = {
     { "test_complex_fpc_rax64int_unit", test_complex_fpc_rax64int_unit },
     // Pascal directory snippet tests
     { "test_aligned_records", test_aligned_records },
+    { "test_pascal_array_function_return", test_pascal_array_function_return },
     { "test_const_set", test_const_set },
     { "test_deprecated_type", test_deprecated_type },
     { "test_dotted_types", test_dotted_types },

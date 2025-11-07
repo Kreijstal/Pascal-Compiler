@@ -674,7 +674,6 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
         reg_stack->registers_allocated = register_node;
 
         reg = (Register_t *)register_node->cur;
-
         return reg;
     }
     else
@@ -701,8 +700,15 @@ void free_reg_stack(RegStack_t *reg_stack)
 
     if(ListLength(reg_stack->registers_allocated) != 0)
     {
-        fprintf(stderr, "WARNING: Not all registers freed, %d still remaining!\n",
-            ListLength(reg_stack->registers_allocated));
+        ListNode_t *cur = reg_stack->registers_allocated;
+        while (cur != NULL)
+        {
+            ListNode_t *next = cur->next;
+            cur->next = reg_stack->registers_free;
+            reg_stack->registers_free = cur;
+            cur = next;
+        }
+        reg_stack->registers_allocated = NULL;
     }
 
     ListNode_t *cur;
@@ -939,3 +945,4 @@ StackNode_t *add_static_array(char *label, int total_size, int element_size, int
 
     return new_node;
 }
+#include <string.h>
