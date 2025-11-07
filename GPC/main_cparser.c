@@ -521,6 +521,21 @@ static void append_initialization_statement(Tree_t *program, struct Statement *i
     destroy_stmt(init_stmt);
 }
 
+static void mark_unit_subprograms(ListNode_t *sub_list)
+{
+    ListNode_t *node = sub_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)node->cur;
+            if (sub->type == TREE_SUBPROGRAM)
+                sub->tree_data.subprogram_data.defined_in_unit = 1;
+        }
+        node = node->next;
+    }
+}
+
 static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 {
     if (program == NULL || unit_tree == NULL)
@@ -556,6 +571,7 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
                    unit_tree->tree_data.unit_data.implementation_var_decls);
     unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
+    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
     program->tree_data.program_data.subprograms =
         ConcatList(program->tree_data.program_data.subprograms,
                    unit_tree->tree_data.unit_data.subprograms);
@@ -794,6 +810,10 @@ int main(int argc, char **argv)
         mark_stdlib_var_params(prelude_subs);
     if (prelude_subs != NULL)
     {
+        /* Mark prelude (stdlib.p) subprograms as library procedures so they don't
+         * incorrectly get static links when merged into user programs */
+        mark_unit_subprograms(prelude_subs);
+        
         ListNode_t *last = prelude_subs;
         while (last->next != NULL)
             last = last->next;
