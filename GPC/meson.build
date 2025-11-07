@@ -36,6 +36,7 @@ endif
 gpc_cparser_sources = [
   'main_cparser.c',
   'flags.c',
+  'benchmark.c',
   'Parser/ParseTree/from_cparser.c',
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',

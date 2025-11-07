@@ -22,6 +22,7 @@
 #endif
 #include "SemCheck.h"
 #include "../../flags.h"
+#include "../../benchmark.h"
 #include "../../identifier_utils.h"
 #include "../../Optimizer/optimizer.h"
 #include "../ParseTree/tree.h"
@@ -641,11 +642,24 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
 
+    if (benchmark_flag())
+        benchmark_start_phase(BENCH_PHASE_SEMANTIC_SYMTAB_BUILD);
+    
     symtab = InitSymTab();
     semcheck_add_builtins(symtab);
+    
+    if (benchmark_flag())
+        benchmark_end_phase(BENCH_PHASE_SEMANTIC_SYMTAB_BUILD);
+    
     /*PrintSymTab(symtab, stderr, 0);*/
 
+    if (benchmark_flag())
+        benchmark_start_phase(BENCH_PHASE_SEMANTIC_TYPE_CHECK);
+    
     return_val = semcheck_program(symtab, parse_tree);
+
+    if (benchmark_flag())
+        benchmark_end_phase(BENCH_PHASE_SEMANTIC_TYPE_CHECK);
 
     if(return_val > 0)
         fprintf(stderr, "\nCheck failed with %d error(s)!\n\n", return_val);
