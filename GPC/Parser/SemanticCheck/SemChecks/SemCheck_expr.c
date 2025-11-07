@@ -2497,7 +2497,21 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
         
         case EXPR_FUNCTION_CALL:
         {
-            /* For function calls, try to get the return type from the resolved function */
+            /* First, try the cached resolved_gpc_type if available */
+            if (expr->resolved_gpc_type != NULL)
+            {
+                fprintf(stderr, "DEBUG resolve_gpc: Using cached resolved_gpc_type: %s\n",
+                        gpc_type_to_string(expr->resolved_gpc_type));
+                if (owns_type != NULL)
+                    *owns_type = 0;  /* Shared reference */
+                return expr->resolved_gpc_type;
+            }
+            else
+            {
+                fprintf(stderr, "DEBUG resolve_gpc: No cached resolved_gpc_type, looking up function\n");
+            }
+            
+            /* Fallback: For function calls, try to get the return type from the resolved function */
             HashNode_t *func_node = expr->expr_data.function_call_data.resolved_func;
             if (func_node == NULL && expr->expr_data.function_call_data.id != NULL)
             {
@@ -2509,12 +2523,15 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
                 if (func_node->type->kind == TYPE_KIND_PROCEDURE && 
                     func_node->type->info.proc_info.return_type != NULL)
                 {
+                    fprintf(stderr, "DEBUG resolve_gpc: Returning proc return type: %s\n",
+                            gpc_type_to_string(func_node->type->info.proc_info.return_type));
                     /* Return the function's return type - caller doesn't own it */
                     if (owns_type != NULL)
                         *owns_type = 0;
                     return func_node->type->info.proc_info.return_type;
                 }
             }
+            fprintf(stderr, "DEBUG resolve_gpc: Failed to find return type\n");
             break;
         }
         
@@ -3723,6 +3740,34 @@ int semcheck_funccall(int *type_return,
         }
 
         set_type_from_hashtype(type_return, hash_return);
+        
+        /* NEW: Also set the resolved GpcType for this expression */
+        fprintf(stderr, "DEBUG funccall %s: hash_return->type=%p, kind=%d\n",
+                id, (void*)hash_return->type, hash_return->type ? hash_return->type->kind : -1);
+        if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            GpcType *return_type = gpc_type_get_return_type(hash_return->type);
+            fprintf(stderr, "DEBUG funccall %s: return_type=%p\n", id, (void*)return_type);
+            if (return_type != NULL)
+            {
+                fprintf(stderr, "DEBUG funccall %s: return_type kind=%d, %s\n", 
+                        id, return_type->kind, gpc_type_to_string(return_type));
+                expr->resolved_gpc_type = return_type;
+                fprintf(stderr, "DEBUG: Set function call resolved_gpc_type: %s\n", 
+                        gpc_type_to_string(return_type));
+            }
+            else
+            {
+                expr->resolved_gpc_type = NULL;
+                fprintf(stderr, "DEBUG: No return type for function\n");
+            }
+        }
+        else
+        {
+            expr->resolved_gpc_type = hash_return->type;
+            fprintf(stderr, "DEBUG: Set resolved_gpc_type from hash_return: %p\n",
+                    (void*)hash_return->type);
+        }
 
         if (*type_return == RECORD_TYPE)
         {

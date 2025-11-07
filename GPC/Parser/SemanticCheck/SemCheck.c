@@ -2384,10 +2384,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         GpcType *return_gpc_type = NULL;
         struct TypeAlias *return_type_alias = NULL;
         
+        fprintf(stderr, "DEBUG SemCheck function: inline_return_type=%p\n",
+                (void*)subprogram->tree_data.subprogram_data.inline_return_type);
+        
         /* Check for inline return type (e.g., array of string) */
         if (subprogram->tree_data.subprogram_data.inline_return_type != NULL)
         {
             return_type_alias = subprogram->tree_data.subprogram_data.inline_return_type;
+            
+            fprintf(stderr, "DEBUG: Found inline_return_type, is_array=%d\n", return_type_alias->is_array);
             
             /* Create GpcType from TypeAlias */
             if (return_type_alias->is_array)
@@ -2399,6 +2404,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     start = 0;
                     end = -1;
                 }
+                
+                fprintf(stderr, "DEBUG: Array bounds [%d..%d], element_type=%d, element_type_id=%s\n",
+                        start, end, return_type_alias->array_element_type,
+                        return_type_alias->array_element_type_id ? return_type_alias->array_element_type_id : "(null)");
 
                 /* Get element type - it might be a primitive type or a type reference */
                 GpcType *element_type = NULL;
@@ -2412,12 +2421,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                         element_type_node != NULL && element_type_node->type != NULL)
                     {
                         element_type = element_type_node->type;
+                        fprintf(stderr, "DEBUG: Resolved element type from ID\n");
                     }
                 }
                 else if (element_type_tag != UNKNOWN_TYPE)
                 {
                     /* Direct primitive type tag - use create_primitive_type */
                     element_type = create_primitive_type(element_type_tag);
+                    fprintf(stderr, "DEBUG: Created primitive element type, tag=%d\n", element_type_tag);
                 }
                 
                 if (element_type != NULL)
@@ -2425,9 +2436,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     /* Create array GpcType */
                     return_gpc_type = create_array_type(element_type, start, end);
                     assert(return_gpc_type != NULL && "Failed to create array return type");
+                    fprintf(stderr, "DEBUG: Created array GpcType: %s\n", gpc_type_to_string(return_gpc_type));
                     
                     /* Set type_alias on GpcType so it's properly propagated */
                     gpc_type_set_type_alias(return_gpc_type, return_type_alias);
+                }
+                else
+                {
+                    fprintf(stderr, "DEBUG: Failed to create element type!\n");
                 }
             }
             else if (return_type_alias->is_pointer)
@@ -2501,11 +2517,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
         
+        fprintf(stderr, "DEBUG: About to create procedure type, return_gpc_type=%s\n",
+                return_gpc_type ? gpc_type_to_string(return_gpc_type) : "(null)");
+        
         /* Create GpcType for the function (which is also a procedure type with a return value) */
         GpcType *func_type = create_procedure_type(
             subprogram->tree_data.subprogram_data.args_var,
             return_gpc_type  /* functions have a return type */
         );
+        
+        fprintf(stderr, "DEBUG: Created func_type, checking return type from it\n");
+        GpcType *check_return = gpc_type_get_return_type(func_type);
+        fprintf(stderr, "DEBUG: func_type return type: %s\n",
+                check_return ? gpc_type_to_string(check_return) : "(null)");
         
         // Use the typed version to properly set the GpcType
         // Skip if already declared
