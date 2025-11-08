@@ -20,7 +20,7 @@ void test_calc_valid_expression(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_calc_invalid_expression(void) {
@@ -40,7 +40,7 @@ void test_calc_invalid_expression(void) {
     free_error(res.value.error);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 TEST_LIST = {

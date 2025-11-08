@@ -42,6 +42,10 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+#if GPC_ENABLE_REG_DEBUG
+extern const char *g_reg_debug_context;
+#endif
+
 ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type);
 static int record_type_is_mp_integer(const struct RecordType *record_type);
@@ -55,6 +59,16 @@ static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
 static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
     struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list,
     int *coerced_to_real);
+static int expr_is_dynamic_array(const struct Expression *expr);
+static int codegen_dynamic_array_descriptor_size(const struct Expression *expr);
+static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg, int descriptor_size);
+static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *dest_reg, Register_t *temp_reg, int descriptor_size);
+static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
+    Register_t **out_reg, const char *message);
 
 static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
 {
@@ -214,6 +228,205 @@ static int codegen_align_to(int value, int alignment)
     if (remainder == 0)
         return value;
     return value + (alignment - remainder);
+}
+
+static int expr_is_dynamic_array(const struct Expression *expr)
+{
+    return (expr != NULL && expr->is_array_expr && expr->array_is_dynamic);
+}
+
+static int codegen_dynamic_array_descriptor_size(const struct Expression *expr)
+{
+    const int base_size = 4 * DOUBLEWORD;
+    if (expr == NULL)
+        return base_size;
+
+    if (expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        if (node != NULL && node->is_dynamic && node->size > 0)
+            return node->size;
+    }
+
+    if (expr->array_element_size > 0)
+    {
+        int descriptor_size = base_size;
+        int needed = expr->array_element_size * 2;
+        if (descriptor_size < needed)
+            descriptor_size = needed;
+        return descriptor_size;
+    }
+
+    return base_size;
+}
+
+static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, Register_t *src_reg, int descriptor_size)
+{
+    if (inst_list == NULL || ctx == NULL || dest_reg == NULL || src_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_dynarray_assign_descriptor\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *dest_reg, Register_t *temp_reg, int descriptor_size)
+{
+    if (inst_list == NULL || ctx == NULL || dest_reg == NULL || temp_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", temp_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", descriptor_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", temp_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", descriptor_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_dynarray_assign_from_temp\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    Register_t *dest_reg = NULL;
+#if GPC_ENABLE_REG_DEBUG
+    const char *prev_ctx = g_reg_debug_context;
+    g_reg_debug_context = "dyn_array_dest";
+#endif
+    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+#if GPC_ENABLE_REG_DEBUG
+    g_reg_debug_context = prev_ctx;
+#endif
+    if (codegen_had_error(ctx) || dest_reg == NULL)
+        return inst_list;
+
+    StackNode_t *dest_temp = add_l_t("dynarray_dest");
+    if (dest_temp == NULL)
+    {
+        free_reg(get_reg_stack(), dest_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for dynamic array assignment.");
+    }
+
+    char buffer[96];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        dest_reg->bit_64, dest_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), dest_reg);
+    dest_reg = NULL;
+
+    int descriptor_size = codegen_dynamic_array_descriptor_size(dest_expr);
+
+    if (expr_is_dynamic_array(src_expr) && codegen_expr_is_addressable(src_expr))
+    {
+        Register_t *src_reg = NULL;
+#if GPC_ENABLE_REG_DEBUG
+        prev_ctx = g_reg_debug_context;
+        g_reg_debug_context = "dyn_array_src";
+#endif
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+#if GPC_ENABLE_REG_DEBUG
+        g_reg_debug_context = prev_ctx;
+#endif
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
+        Register_t *dest_reload = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_reload == NULL)
+        {
+            free_reg(get_reg_stack(), src_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for dynamic array destination.");
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            dest_temp->offset, dest_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_call_dynarray_copy(inst_list, ctx, dest_reload, src_reg, descriptor_size);
+        free_reg(get_reg_stack(), src_reg);
+        free_reg(get_reg_stack(), dest_reload);
+    }
+    else
+    {
+        Register_t *value_reg = NULL;
+#if GPC_ENABLE_REG_DEBUG
+        prev_ctx = g_reg_debug_context;
+        g_reg_debug_context = "dyn_array_value";
+#endif
+        inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &value_reg);
+#if GPC_ENABLE_REG_DEBUG
+        g_reg_debug_context = prev_ctx;
+#endif
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
+            return inst_list;
+        }
+
+        Register_t *dest_reload = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_reload == NULL)
+        {
+            free_reg(get_reg_stack(), value_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for dynamic array destination.");
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            dest_temp->offset, dest_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_call_dynarray_assign_from_temp(inst_list, ctx, dest_reload, value_reg, descriptor_size);
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), dest_reload);
+    }
+
+    return inst_list;
 }
 
 static ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, CodeGenContext *ctx, const char *target)
@@ -713,21 +926,32 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, ret_ptr_reg);
             inst_list = add_inst(inst_list, buffer);
 
-            HashNode_t *func_node = src_expr->expr_data.function_call_data.resolved_func;
-            if (func_node == NULL && ctx != NULL && ctx->symtab != NULL &&
+            struct GpcType *func_type = NULL;
+            if (src_expr->expr_data.function_call_data.is_call_info_valid)
+            {
+                func_type = src_expr->expr_data.function_call_data.call_gpc_type;
+            }
+            
+            if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
                 src_expr->expr_data.function_call_data.id != NULL)
             {
-                FindIdent(&func_node, ctx->symtab, src_expr->expr_data.function_call_data.id);
+                HashNode_t *func_node = NULL;
+                if (FindIdent(&func_node, ctx->symtab,
+                        src_expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
+                {
+                    func_type = func_node->type;
+                }
             }
 
             inst_list = codegen_pass_arguments(
                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_node ? func_node->type : NULL, 
+                func_type, 
                 src_expr->expr_data.function_call_data.id, 1);
 
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                 src_expr->expr_data.function_call_data.mangled_id);
             inst_list = add_inst(inst_list, buffer);
+            codegen_release_function_call_mangled_id(src_expr);
 
             free_reg(get_reg_stack(), dest_reg);
             free_arg_regs();
@@ -2089,6 +2313,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (var_expr->type == EXPR_VAR_ID)
     {
+        if (expr_is_dynamic_array(var_expr))
+        {
+            inst_list = codegen_assign_dynamic_array(var_expr, assign_expr, inst_list, ctx);
+            return inst_list;
+        }
+
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
 

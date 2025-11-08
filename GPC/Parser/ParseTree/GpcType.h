@@ -18,6 +18,7 @@ typedef struct GpcType GpcType;
 
 // Forward declaration for symbol table (avoid circular dependency)
 struct SymTab;
+struct HashNode;
 
 // Forward declaration for VarType enum (defined in HashTable.h)
 enum VarType;
@@ -57,6 +58,7 @@ struct GpcType {
     GpcTypeKind kind;
     int size_in_bytes;      // To be calculated and filled in by the semantic checker.
     int alignment_in_bytes; // For future architecture support.
+    int ref_count;
     
     // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
     // This is owned by the AST, not by GpcType, so should not be freed.
@@ -90,6 +92,7 @@ GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab 
 
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_gpc_type(GpcType *type);
+void gpc_type_retain(GpcType *type);
 
 // Utility functions
 int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab);
@@ -195,5 +198,13 @@ int gpc_type_is_signed(GpcType *type);
  * This is a helper for transitioning code that compares types.
  * Returns 1 if the type matches the tag, 0 otherwise. */
 int gpc_type_equals_tag(GpcType *type, int type_tag);
+
+/* Build the function return type from inline alias/type-id/primitive specification.
+ * This consolidates the logic used by semantic checking for both forward declarations
+ * and full definitions. */
+GpcType* gpc_type_build_function_return(struct TypeAlias *inline_alias,
+                                        struct HashNode *resolved_type_node,
+                                        int primitive_tag,
+                                        struct SymTab *symtab);
 
 #endif // GPC_TYPE_H

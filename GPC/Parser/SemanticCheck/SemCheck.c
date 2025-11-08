@@ -124,6 +124,17 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
     }
 }
 
+void semcheck_mark_call_requires_static_link(HashNode_t *callee)
+{
+    if (callee == NULL)
+        return;
+    if (g_semcheck_current_subprogram == NULL)
+        return;
+    if (!hashnode_requires_static_link(callee))
+        return;
+    g_semcheck_current_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
@@ -135,6 +146,35 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram);
+
+/* Resolve the return type for a function declaration once so callers share the same GpcType. */
+static GpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
+    int *error_count)
+{
+    if (subprogram == NULL || symtab == NULL)
+        return NULL;
+
+    /* TODO: Once the symbol table tracks placeholder types, this helper should
+     * validate that any returned GpcType has been fully resolved. */
+    HashNode_t *type_node = NULL;
+    if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+    {
+        if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1 ||
+            type_node == NULL)
+        {
+            semantic_error(subprogram->line_num, 0, "undefined type %s",
+                subprogram->tree_data.subprogram_data.return_type_id);
+            if (error_count != NULL)
+                ++(*error_count);
+        }
+    }
+
+    return gpc_type_build_function_return(
+        subprogram->tree_data.subprogram_data.inline_return_type,
+        type_node,
+        subprogram->tree_data.subprogram_data.return_type,
+        symtab);
+}
 
 /* Helper to check if an expression contains a real number literal or real constant */
 static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr)
@@ -1470,6 +1510,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *pchar_type = gpc_type_from_var_type(HASHVAR_PCHAR);
         assert(pchar_type != NULL && "Failed to create PChar type");
         AddBuiltinType_Typed(symtab, pchar_name, pchar_type);
+        destroy_gpc_type(pchar_type);
         free(pchar_name);
     }
     char *integer_name = strdup("integer");
@@ -1477,6 +1518,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *integer_type = gpc_type_from_var_type(HASHVAR_INTEGER);
         assert(integer_type != NULL && "Failed to create integer type");
         AddBuiltinType_Typed(symtab, integer_name, integer_type);
+        destroy_gpc_type(integer_type);
         free(integer_name);
     }
     char *longint_name = strdup("longint");
@@ -1484,6 +1526,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *longint_type = gpc_type_from_var_type(HASHVAR_LONGINT);
         assert(longint_type != NULL && "Failed to create longint type");
         AddBuiltinType_Typed(symtab, longint_name, longint_type);
+        destroy_gpc_type(longint_type);
         free(longint_name);
     }
     char *real_name = strdup("real");
@@ -1491,6 +1534,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *real_type = gpc_type_from_var_type(HASHVAR_REAL);
         assert(real_type != NULL && "Failed to create real type");
         AddBuiltinType_Typed(symtab, real_name, real_type);
+        destroy_gpc_type(real_type);
         free(real_name);
     }
     char *single_name = strdup("single");
@@ -1498,6 +1542,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *single_type = gpc_type_from_var_type(HASHVAR_REAL);
         assert(single_type != NULL && "Failed to create single type");
         AddBuiltinType_Typed(symtab, single_name, single_type);
+        destroy_gpc_type(single_type);
         free(single_name);
     }
     char *double_name = strdup("double");
@@ -1505,6 +1550,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *double_type = gpc_type_from_var_type(HASHVAR_REAL);
         assert(double_type != NULL && "Failed to create double type");
         AddBuiltinType_Typed(symtab, double_name, double_type);
+        destroy_gpc_type(double_type);
         free(double_name);
     }
     char *string_name = strdup("string");
@@ -1512,6 +1558,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *string_type = gpc_type_from_var_type(HASHVAR_PCHAR);
         assert(string_type != NULL && "Failed to create string type");
         AddBuiltinType_Typed(symtab, string_name, string_type);
+        destroy_gpc_type(string_type);
         free(string_name);
     }
     char *boolean_name = strdup("boolean");
@@ -1519,6 +1566,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *boolean_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
         assert(boolean_type != NULL && "Failed to create boolean type");
         AddBuiltinType_Typed(symtab, boolean_name, boolean_type);
+        destroy_gpc_type(boolean_type);
         free(boolean_name);
     }
     char *char_name = strdup("char");
@@ -1526,6 +1574,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *char_type = gpc_type_from_var_type(HASHVAR_CHAR);
         assert(char_type != NULL && "Failed to create char type");
         AddBuiltinType_Typed(symtab, char_name, char_type);
+        destroy_gpc_type(char_type);
         free(char_name);
     }
     char *file_name = strdup("file");
@@ -1533,6 +1582,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *file_type = gpc_type_from_var_type(HASHVAR_FILE);
         assert(file_type != NULL && "Failed to create file type");
         AddBuiltinType_Typed(symtab, file_name, file_type);
+        destroy_gpc_type(file_type);
         free(file_name);
     }
     char *text_name = strdup("text");
@@ -1540,6 +1590,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *text_type = gpc_type_from_var_type(HASHVAR_FILE);
         assert(text_type != NULL && "Failed to create text type");
         AddBuiltinType_Typed(symtab, text_name, text_type);
+        destroy_gpc_type(text_type);
         free(text_name);
     }
     char *pointer_name = strdup("Pointer");
@@ -1547,6 +1598,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *pointer_type = create_pointer_type(NULL); // Untyped pointer
         assert(pointer_type != NULL && "Failed to create Pointer type");
         AddBuiltinType_Typed(symtab, pointer_name, pointer_type);
+        destroy_gpc_type(pointer_type);
         free(pointer_name);
     }
 
@@ -1556,6 +1608,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *setlength_type = create_procedure_type(NULL, NULL);
         assert(setlength_type != NULL && "Failed to create SetLength procedure type");
         AddBuiltinProc_Typed(symtab, setlength_name, setlength_type);
+        destroy_gpc_type(setlength_type);
         free(setlength_name);
     }
 
@@ -1564,6 +1617,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *write_type = create_procedure_type(NULL, NULL);
         assert(write_type != NULL && "Failed to create write procedure type");
         AddBuiltinProc_Typed(symtab, write_name, write_type);
+        destroy_gpc_type(write_type);
         free(write_name);
     }
 
@@ -1572,6 +1626,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *writeln_type = create_procedure_type(NULL, NULL);
         assert(writeln_type != NULL && "Failed to create writeln procedure type");
         AddBuiltinProc_Typed(symtab, writeln_name, writeln_type);
+        destroy_gpc_type(writeln_type);
         free(writeln_name);
     }
 
@@ -1580,6 +1635,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *move_type = create_procedure_type(NULL, NULL);
         assert(move_type != NULL && "Failed to create Move procedure type");
         AddBuiltinProc_Typed(symtab, move_name, move_type);
+        destroy_gpc_type(move_type);
         free(move_name);
     }
     char *val_name = strdup("Val");
@@ -1587,6 +1643,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *val_type = create_procedure_type(NULL, NULL);
         assert(val_type != NULL && "Failed to create Val procedure type");
         AddBuiltinProc_Typed(symtab, val_name, val_type);
+        destroy_gpc_type(val_type);
         free(val_name);
     }
 
@@ -1595,6 +1652,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *inc_type = create_procedure_type(NULL, NULL);
         assert(inc_type != NULL && "Failed to create Inc procedure type");
         AddBuiltinProc_Typed(symtab, inc_name, inc_type);
+        destroy_gpc_type(inc_type);
         free(inc_name);
     }
 
@@ -1603,6 +1661,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *new_type = create_procedure_type(NULL, NULL);
         assert(new_type != NULL && "Failed to create New procedure type");
         AddBuiltinProc_Typed(symtab, new_name, new_type);
+        destroy_gpc_type(new_type);
         free(new_name);
     }
 
@@ -1611,6 +1670,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *dispose_type = create_procedure_type(NULL, NULL);
         assert(dispose_type != NULL && "Failed to create Dispose procedure type");
         AddBuiltinProc_Typed(symtab, dispose_name, dispose_type);
+        destroy_gpc_type(dispose_type);
         free(dispose_name);
     }
 
@@ -1622,6 +1682,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *length_type = create_procedure_type(NULL, return_type);
         assert(length_type != NULL && "Failed to create Length function type");
         AddBuiltinFunction_Typed(symtab, length_name, length_type);
+        destroy_gpc_type(length_type);
         free(length_name);
     }
 
@@ -1632,6 +1693,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *copy_type = create_procedure_type(NULL, return_type);
         assert(copy_type != NULL && "Failed to create Copy function type");
         AddBuiltinFunction_Typed(symtab, copy_name, copy_type);
+        destroy_gpc_type(copy_type);
         free(copy_name);
     }
     char *eof_name = strdup("EOF");
@@ -1641,6 +1703,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *eof_type = create_procedure_type(NULL, return_type);
         assert(eof_type != NULL && "Failed to create EOF function type");
         AddBuiltinFunction_Typed(symtab, eof_name, eof_type);
+        destroy_gpc_type(eof_type);
         free(eof_name);
     }
 
@@ -1651,6 +1714,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *sizeof_type = create_procedure_type(NULL, return_type);
         assert(sizeof_type != NULL && "Failed to create SizeOf function type");
         AddBuiltinFunction_Typed(symtab, sizeof_name, sizeof_type);
+        destroy_gpc_type(sizeof_type);
         free(sizeof_name);
     }
 
@@ -1661,6 +1725,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *chr_type = create_procedure_type(NULL, return_type);
         assert(chr_type != NULL && "Failed to create Chr function type");
         AddBuiltinFunction_Typed(symtab, chr_name, chr_type);
+        destroy_gpc_type(chr_type);
         free(chr_name);
     }
 
@@ -1671,6 +1736,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *ord_type = create_procedure_type(NULL, return_type);
         assert(ord_type != NULL && "Failed to create Ord function type");
         AddBuiltinFunction_Typed(symtab, ord_name, ord_type);
+        destroy_gpc_type(ord_type);
         free(ord_name);
     }
     
@@ -1681,6 +1747,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *high_type = create_procedure_type(NULL, return_type);
         assert(high_type != NULL && "Failed to create High function type");
         AddBuiltinFunction_Typed(symtab, high_name, high_type);
+        destroy_gpc_type(high_type);
         free(high_name);
     }
 
@@ -2281,9 +2348,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
 
-    /* Record lexical nesting depth so codegen can reason about static links accurately. */
+    /* Record lexical nesting depth so codegen can reason about static links accurately.
+     * Store depth as parent depth + 1 so the top-level program has depth 1 and
+     * nested subprograms continue to increase. */
     subprogram->tree_data.subprogram_data.nesting_level = max_scope_lev + 1;
-    int default_requires = (subprogram->tree_data.subprogram_data.nesting_level > 0 &&
+    int default_requires = (subprogram->tree_data.subprogram_data.nesting_level > 1 &&
         !subprogram->tree_data.subprogram_data.defined_in_unit);
     subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;
 
@@ -2379,70 +2448,51 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     else // Function
     {
-        /* Need to additionally extract the return type */
-        HashNode_t *return_type_node = NULL;
         GpcType *return_gpc_type = NULL;
-        
-        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+
+        /* Reuse the type created during predeclaration when possible. */
+        if (already_declared && existing_decl != NULL &&
+            existing_decl->type != NULL &&
+            existing_decl->type->kind == TYPE_KIND_PROCEDURE)
         {
-            HashNode_t *type_node;
-            if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)
-            {
-                fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                    subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
-                return_val++;
-            }
-            else
-            {
-                return_type_node = type_node;
-                /* Get GpcType for the return type */
-                assert(type_node->type != NULL && "Type node must have GpcType");
-                return_gpc_type = type_node->type;
-            }
+            return_gpc_type = gpc_type_get_return_type(existing_decl->type);
         }
 
-        /* Create a primitive GpcType for the return type if we don't have one */
-        if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)
-        {
-            return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
-        }
-        
-        /* Add type metadata from return_type_node to return_gpc_type */
-        if (return_gpc_type != NULL && return_type_node != NULL)
-        {
-            struct TypeAlias *type_alias = get_type_alias_from_node(return_type_node);
-            if (type_alias != NULL)
-            {
-                gpc_type_set_type_alias(return_gpc_type, type_alias);
-            }
-            struct RecordType *record_type = get_record_type_from_node(return_type_node);
-            if (record_type != NULL && return_gpc_type->kind == TYPE_KIND_RECORD)
-            {
-                /* Use the canonical RecordType, not a clone */
-                return_gpc_type->info.record_info = record_type;
-            }
-        }
-        
-        /* Create GpcType for the function (which is also a procedure type with a return value) */
-        GpcType *func_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            return_gpc_type  /* functions have a return type */
-        );
-        
-        // Use the typed version to properly set the GpcType
-        // Skip if already declared
+        /* If the predeclare step could not resolve the type (e.g., inline array),
+         * build it now and update the existing declaration. */
+        if (return_gpc_type == NULL)
+            return_gpc_type = build_function_return_type(subprogram, symtab, &return_val);
+
+        GpcType *func_type = NULL;
         if (!already_declared)
         {
+            func_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                return_gpc_type
+            );
             func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             func_type);
         }
         else
         {
-            func_return = 0;  /* No error since it's expected to be already declared */
+            func_return = 0;
+            if (existing_decl != NULL)
+            {
+                if (existing_decl->type == NULL)
+                {
+                    func_type = create_procedure_type(
+                        subprogram->tree_data.subprogram_data.args_var,
+                        return_gpc_type
+                    );
+                    existing_decl->type = func_type;
+                }
+                else if (return_gpc_type != NULL)
+                {
+                    existing_decl->type->info.proc_info.return_type = return_gpc_type;
+                }
+            }
         }
-
-        /* Note: Type metadata now in GpcType, no post-creation writes needed */
 
         PushScope(symtab);
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
@@ -2541,6 +2591,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         optimize(symtab, subprogram);
     }
 
+    if (subprogram->tree_data.subprogram_data.id != NULL)
+    {
+        ListNode_t *defs = FindAllIdents(symtab, subprogram->tree_data.subprogram_data.id);
+        ListNode_t *iter = defs;
+        while (iter != NULL)
+        {
+            if (iter->cur != NULL)
+            {
+                HashNode_t *node = (HashNode_t *)iter->cur;
+                if (node != NULL &&
+                    node->mangled_id != NULL &&
+                    subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+                    strcmp(node->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
+                {
+                    node->requires_static_link =
+                        subprogram->tree_data.subprogram_data.requires_static_link ? 1 : 0;
+                }
+            }
+            iter = iter->next;
+        }
+        DestroyList(defs);
+    }
+
     g_semcheck_current_subprogram = prev_current_subprogram;
     PopScope(symtab);
     return return_val;
@@ -2603,30 +2676,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
     else // Function
     {
-        /* Need to additionally extract the return type */
-        GpcType *return_gpc_type = NULL;
-        
-        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
-        {
-            HashNode_t *type_node;
-            if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1)
-            {
-                fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                    subprogram->line_num, subprogram->tree_data.subprogram_data.return_type_id);
-                return_val++;
-            }
-            else
-            {
-                assert(type_node->type != NULL && "Type node must have GpcType");
-                return_gpc_type = type_node->type;
-            }
-        }
-        
-        /* Create a primitive GpcType for the return type if we don't have one */
-        if (return_gpc_type == NULL && subprogram->tree_data.subprogram_data.return_type != -1)
-        {
-            return_gpc_type = create_primitive_type(subprogram->tree_data.subprogram_data.return_type);
-        }
+        GpcType *return_gpc_type = build_function_return_type(subprogram, symtab, &return_val);
         
         /* Create function GpcType */
         GpcType *func_type = create_procedure_type(

@@ -1,11 +1,13 @@
 #include "pascal_type.h"
 #include "pascal_parser.h"
 #include "pascal_keywords.h"
+#include "pascal_peek.h"
 #include "pascal_expression.h"
 #include "pascal_declaration.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 #include <stdbool.h>
 
@@ -19,6 +21,45 @@ static void set_combinator_name(combinator_t* comb, const char* name) {
     comb->name = strdup(name);
 }
 
+static combinator_t* make_generic_type_prefix(void) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        optional(token(keyword_ci("generic"))),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("<")),
+        NULL
+    );
+}
+
+static bool read_identifier_slice(const char* buffer, int length, int pos, int* out_start, size_t* out_len) {
+    if (pos >= length) {
+        return false;
+    }
+    unsigned char ch = (unsigned char)buffer[pos];
+    if (!(isalpha(ch) || ch == '_')) {
+        return false;
+    }
+    int start = pos;
+    pos++;
+    while (pos < length) {
+        unsigned char next = (unsigned char)buffer[pos];
+        if (!(isalnum(next) || next == '_')) {
+            break;
+        }
+        pos++;
+    }
+    *out_start = start;
+    *out_len = (size_t)(pos - start);
+    return true;
+}
+
+static bool slice_equals_keyword_ci(const char* start, size_t len, const char* keyword) {
+    size_t keyword_len = strlen(keyword);
+    if (len != keyword_len) {
+        return false;
+    }
+    return strncasecmp(start, keyword, len) == 0;
+}
+
 static inline void discard_failure(ParseResult result) {
     if (!result.is_success) {
         free_error(result.value.error);
@@ -28,6 +69,71 @@ static inline void discard_failure(ParseResult result) {
 static ParseResult fail_with_message(const char* message, input_t* in, InputState* state, char* parser_name) {
     restore_input_state(in, state);
     return make_failure_v2(in, parser_name, strdup(message), NULL);
+}
+
+static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parser_name) {
+    class_member_dispatch_args_t* dispatch = (class_member_dispatch_args_t*)args;
+    if (dispatch == NULL) {
+        return make_failure(in, strdup("class member dispatcher misconfigured"));
+    }
+    if (in == NULL || in->buffer == NULL) {
+        return make_failure(in, strdup("class member dispatcher missing input"));
+    }
+    const char* buffer = in->buffer;
+    int length = in->length > 0 ? in->length : (int)strlen(buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return make_failure_v2(in, parser_name, strdup("Unexpected end of input inside class member"), NULL);
+    }
+
+    int word_start = 0;
+    size_t word_len = 0;
+    if (!read_identifier_slice(buffer, length, pos, &word_start, &word_len)) {
+        if (dispatch->field_parser != NULL) {
+            return parse(in, dispatch->field_parser);
+        }
+        return make_failure_v2(in, parser_name, strdup("Unable to determine class member kind"), NULL);
+    }
+
+    pos = skip_pascal_layout_preview(in, word_start + (int)word_len);
+    const char* keyword_start = buffer + word_start;
+    size_t keyword_len = word_len;
+
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "class")) {
+        if (!read_identifier_slice(buffer, length, pos, &word_start, &word_len)) {
+            if (dispatch->field_parser != NULL) {
+                return parse(in, dispatch->field_parser);
+            }
+            return make_failure_v2(in, parser_name, strdup("Expected keyword after 'class'"), NULL);
+        }
+        keyword_start = buffer + word_start;
+        keyword_len = word_len;
+    }
+
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "constructor") && dispatch->constructor_parser != NULL) {
+        return parse(in, dispatch->constructor_parser);
+    }
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "destructor") && dispatch->destructor_parser != NULL) {
+        return parse(in, dispatch->destructor_parser);
+    }
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "procedure") && dispatch->procedure_parser != NULL) {
+        return parse(in, dispatch->procedure_parser);
+    }
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "function") && dispatch->function_parser != NULL) {
+        return parse(in, dispatch->function_parser);
+    }
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "operator") && dispatch->operator_parser != NULL) {
+        return parse(in, dispatch->operator_parser);
+    }
+    if (slice_equals_keyword_ci(keyword_start, keyword_len, "property") && dispatch->property_parser != NULL) {
+        return parse(in, dispatch->property_parser);
+    }
+
+    if (dispatch->field_parser != NULL) {
+        return parse(in, dispatch->field_parser);
+    }
+
+    return make_failure_v2(in, parser_name, strdup("No matching class member parser"), NULL);
 }
 
 // Range type parser: reuse expression parser and re-tag range AST nodes
@@ -421,16 +527,19 @@ combinator_t* class_type(tag_t tag) {
         NULL
     );
 
-    combinator_t* class_member = multi(new_combinator(), PASCAL_T_CLASS_MEMBER,
-        constructor_decl,
-        destructor_decl,
-        procedure_decl,
-        function_decl,
-        class_operator_decl,
-        property_decl,
-        field_decl,
-        NULL
-    );
+    class_member_dispatch_args_t* class_dispatch = (class_member_dispatch_args_t*)safe_malloc(sizeof(class_member_dispatch_args_t));
+    class_dispatch->constructor_parser = constructor_decl;
+    class_dispatch->destructor_parser = destructor_decl;
+    class_dispatch->procedure_parser = procedure_decl;
+    class_dispatch->function_parser = function_decl;
+    class_dispatch->operator_parser = class_operator_decl;
+    class_dispatch->property_parser = property_decl;
+    class_dispatch->field_parser = field_decl;
+
+    combinator_t* class_member = new_combinator();
+    class_member->type = COMB_CLASS_MEMBER_DISPATCH;
+    class_member->fn = class_member_dispatch_fn;
+    class_member->args = class_dispatch;
     set_combinator_name(class_member, "class_member");
 
     // Access sections: private, public, protected, published
@@ -503,6 +612,7 @@ combinator_t* class_type(tag_t tag) {
         optional(token(match(";"))),
         NULL
     );
+    nested_generic_type_decl = right(peek(make_generic_type_prefix()), nested_generic_type_decl);
     
     combinator_t* nested_regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
         optional(token(keyword_ci("generic"))),

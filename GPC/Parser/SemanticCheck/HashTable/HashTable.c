@@ -110,6 +110,8 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
             return 1;
         }
         
+        if (params->type != NULL)
+            gpc_type_retain(params->type);
         hash_node->canonical_id = canonical_id;
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -143,6 +145,8 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
             return 1;
         }
         
+        if (params->type != NULL)
+            gpc_type_retain(params->type);
         hash_node->canonical_id = canonical_id;
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;
@@ -157,7 +161,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
         .mangled_id = mangled_id,
         .hash_type = hash_type,
         .type = type,
-        .var_type = HASHVAR_UNTYPED,  // Will be set from GpcType
+        .var_type = HASHVAR_UNTYPED,
         .record_type = NULL,
         .type_alias = NULL
     };
@@ -273,6 +277,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->canonical_id);
             if (hash_node->const_string_value != NULL)
                 free(hash_node->const_string_value);
+            if (hash_node->type != NULL)
+                destroy_gpc_type(hash_node->type);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
@@ -374,6 +380,7 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->const_int_value = 0;
     hash_node->const_string_value = NULL;
     hash_node->is_var_parameter = 0;
+    hash_node->requires_static_link = 0;
     
     /* Set identifier */
     hash_node->id = strdup(id);
@@ -408,8 +415,21 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
     int is_new_proc_func = is_procedure_or_function(new_hash_type);
     int is_existing_proc_func = is_procedure_or_function(existing_node->hash_type);
 
-    /* Allow collision only if both are procedures/functions */
-    return (is_new_proc_func && is_existing_proc_func);
+    /* Allow collision if both are procedures/functions (overloading) */
+    if (is_new_proc_func && is_existing_proc_func) {
+        return 1;
+    }
+    
+    /* Allow user-declared variables/arrays to shadow the automatic FUNCTION_RETURN "Result" variable
+     * This enables the common Pascal pattern of declaring a local "result" variable in functions.
+     * The function name itself can still be used for the return value if the user doesn't shadow it. */
+    if (existing_node->hash_type == HASHTYPE_FUNCTION_RETURN && 
+        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
+    
+    /* No other collisions allowed */
+    return 0;
 }
 
 /* Get VarType equivalent from node (for legacy code compatibility) */
