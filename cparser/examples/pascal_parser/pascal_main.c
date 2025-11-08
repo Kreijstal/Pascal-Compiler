@@ -420,6 +420,23 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Unknown memo mode '%s'. Expected full|failures|off\n", mode);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--memo-mode") == 0 && i + 1 < argc) {
+            const char* mode = argv[++i];
+            if (strcasecmp(mode, "full") == 0) {
+                parser_set_memo_mode(PARSER_MEMO_FULL);
+            } else if (strcasecmp(mode, "failures") == 0 || strcasecmp(mode, "failure") == 0 ||
+                       strcasecmp(mode, "fail") == 0) {
+                parser_set_memo_mode(PARSER_MEMO_FAILURES_ONLY);
+            } else if (strcasecmp(mode, "off") == 0 || strcasecmp(mode, "none") == 0 ||
+                       strcasecmp(mode, "disable") == 0 || strcasecmp(mode, "disabled") == 0) {
+                parser_set_memo_mode(PARSER_MEMO_DISABLED);
+            } else {
+                fprintf(stderr, "Unknown memo mode '%s'. Expected full|failures|off\n", mode);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--memo-mode") == 0) {
+            parser_set_memo_mode(PARSER_MEMO_DISABLED);
+            continue;
         } else {
             filename = argv[i];
         }
@@ -429,6 +446,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s [--print-ast] [--parse-procedure] [--profile] [--profile-combinators[=N]] [--memo-mode=<full|failures|off>] <filename>\n", argv[0]);
         return 1;
     }
+
+    parser_set_memo_mode(PARSER_MEMO_DISABLED);
 
     if (profile_combinators) {
         parser_comb_stats_set_enabled(true);
