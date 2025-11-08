@@ -246,8 +246,8 @@ typedef struct pascal_keyword_entry {
 } pascal_keyword_entry_t;
 
 typedef struct statement_dispatch_args {
-    pascal_keyword_entry_t* entries;
-    size_t entry_count;
+    combinator_t** keyword_parsers;
+    size_t keyword_count;
     combinator_t* label_parser;
     combinator_t* assignment_parser;
     combinator_t* expr_parser;
