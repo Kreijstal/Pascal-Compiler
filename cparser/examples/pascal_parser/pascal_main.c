@@ -198,6 +198,8 @@ static const char* parser_type_to_string(parser_type_t type) {
         case COMB_FOR_INIT_DISPATCH: return "for_init_dispatch";
         case COMB_ASSIGNMENT_GUARD: return "assignment_guard";
         case COMB_LABEL_GUARD: return "label_guard";
+        case COMB_STATEMENT_DISPATCH: return "statement_dispatch";
+        case COMB_CLASS_MEMBER_DISPATCH: return "class_member_dispatch";
         case P_EOI: return "eoi";
         default: return "unknown";
     }

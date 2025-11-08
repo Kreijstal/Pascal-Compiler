@@ -86,6 +86,7 @@ typedef enum {
     COMB_ASSIGNMENT_GUARD,
     COMB_LABEL_GUARD,
     COMB_STATEMENT_DISPATCH,
+    COMB_CLASS_MEMBER_DISPATCH,
     COMB_LAZY,
     COMB_VARIANT_TAG,
     COMB_VARIANT_PART,
@@ -248,6 +249,16 @@ typedef struct statement_dispatch_args {
     combinator_t* assignment_parser;
     combinator_t* expr_parser;
 } statement_dispatch_args_t;
+
+typedef struct class_member_dispatch_args {
+    combinator_t* constructor_parser;
+    combinator_t* destructor_parser;
+    combinator_t* procedure_parser;
+    combinator_t* function_parser;
+    combinator_t* operator_parser;
+    combinator_t* property_parser;
+    combinator_t* field_parser;
+} class_member_dispatch_args_t;
 
 // --- Helper Function Prototypes ---
 void* safe_malloc(size_t size);

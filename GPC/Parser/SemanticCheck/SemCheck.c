@@ -1499,6 +1499,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *pchar_type = gpc_type_from_var_type(HASHVAR_PCHAR);
         assert(pchar_type != NULL && "Failed to create PChar type");
         AddBuiltinType_Typed(symtab, pchar_name, pchar_type);
+        destroy_gpc_type(pchar_type);
         free(pchar_name);
     }
     char *integer_name = strdup("integer");
@@ -1506,6 +1507,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *integer_type = gpc_type_from_var_type(HASHVAR_INTEGER);
         assert(integer_type != NULL && "Failed to create integer type");
         AddBuiltinType_Typed(symtab, integer_name, integer_type);
+        destroy_gpc_type(integer_type);
         free(integer_name);
     }
     char *longint_name = strdup("longint");
@@ -1513,6 +1515,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *longint_type = gpc_type_from_var_type(HASHVAR_LONGINT);
         assert(longint_type != NULL && "Failed to create longint type");
         AddBuiltinType_Typed(symtab, longint_name, longint_type);
+        destroy_gpc_type(longint_type);
         free(longint_name);
     }
     char *real_name = strdup("real");
@@ -1520,6 +1523,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *real_type = gpc_type_from_var_type(HASHVAR_REAL);
         assert(real_type != NULL && "Failed to create real type");
         AddBuiltinType_Typed(symtab, real_name, real_type);
+        destroy_gpc_type(real_type);
         free(real_name);
     }
     char *single_name = strdup("single");
@@ -1527,6 +1531,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *single_type = gpc_type_from_var_type(HASHVAR_REAL);
         assert(single_type != NULL && "Failed to create single type");
         AddBuiltinType_Typed(symtab, single_name, single_type);
+        destroy_gpc_type(single_type);
         free(single_name);
     }
     char *double_name = strdup("double");
@@ -1534,6 +1539,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *double_type = gpc_type_from_var_type(HASHVAR_REAL);
         assert(double_type != NULL && "Failed to create double type");
         AddBuiltinType_Typed(symtab, double_name, double_type);
+        destroy_gpc_type(double_type);
         free(double_name);
     }
     char *string_name = strdup("string");
@@ -1541,6 +1547,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *string_type = gpc_type_from_var_type(HASHVAR_PCHAR);
         assert(string_type != NULL && "Failed to create string type");
         AddBuiltinType_Typed(symtab, string_name, string_type);
+        destroy_gpc_type(string_type);
         free(string_name);
     }
     char *boolean_name = strdup("boolean");
@@ -1548,6 +1555,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *boolean_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
         assert(boolean_type != NULL && "Failed to create boolean type");
         AddBuiltinType_Typed(symtab, boolean_name, boolean_type);
+        destroy_gpc_type(boolean_type);
         free(boolean_name);
     }
     char *char_name = strdup("char");
@@ -1555,6 +1563,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *char_type = gpc_type_from_var_type(HASHVAR_CHAR);
         assert(char_type != NULL && "Failed to create char type");
         AddBuiltinType_Typed(symtab, char_name, char_type);
+        destroy_gpc_type(char_type);
         free(char_name);
     }
     char *file_name = strdup("file");
@@ -1562,6 +1571,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *file_type = gpc_type_from_var_type(HASHVAR_FILE);
         assert(file_type != NULL && "Failed to create file type");
         AddBuiltinType_Typed(symtab, file_name, file_type);
+        destroy_gpc_type(file_type);
         free(file_name);
     }
     char *text_name = strdup("text");
@@ -1569,6 +1579,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *text_type = gpc_type_from_var_type(HASHVAR_FILE);
         assert(text_type != NULL && "Failed to create text type");
         AddBuiltinType_Typed(symtab, text_name, text_type);
+        destroy_gpc_type(text_type);
         free(text_name);
     }
     char *pointer_name = strdup("Pointer");
@@ -1576,6 +1587,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *pointer_type = create_pointer_type(NULL); // Untyped pointer
         assert(pointer_type != NULL && "Failed to create Pointer type");
         AddBuiltinType_Typed(symtab, pointer_name, pointer_type);
+        destroy_gpc_type(pointer_type);
         free(pointer_name);
     }
 
@@ -1585,6 +1597,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *setlength_type = create_procedure_type(NULL, NULL);
         assert(setlength_type != NULL && "Failed to create SetLength procedure type");
         AddBuiltinProc_Typed(symtab, setlength_name, setlength_type);
+        destroy_gpc_type(setlength_type);
         free(setlength_name);
     }
 
@@ -1593,6 +1606,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *write_type = create_procedure_type(NULL, NULL);
         assert(write_type != NULL && "Failed to create write procedure type");
         AddBuiltinProc_Typed(symtab, write_name, write_type);
+        destroy_gpc_type(write_type);
         free(write_name);
     }
 
@@ -1601,6 +1615,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *writeln_type = create_procedure_type(NULL, NULL);
         assert(writeln_type != NULL && "Failed to create writeln procedure type");
         AddBuiltinProc_Typed(symtab, writeln_name, writeln_type);
+        destroy_gpc_type(writeln_type);
         free(writeln_name);
     }
 
@@ -1609,6 +1624,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *move_type = create_procedure_type(NULL, NULL);
         assert(move_type != NULL && "Failed to create Move procedure type");
         AddBuiltinProc_Typed(symtab, move_name, move_type);
+        destroy_gpc_type(move_type);
         free(move_name);
     }
     char *val_name = strdup("Val");
@@ -1616,6 +1632,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *val_type = create_procedure_type(NULL, NULL);
         assert(val_type != NULL && "Failed to create Val procedure type");
         AddBuiltinProc_Typed(symtab, val_name, val_type);
+        destroy_gpc_type(val_type);
         free(val_name);
     }
 
@@ -1624,6 +1641,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *inc_type = create_procedure_type(NULL, NULL);
         assert(inc_type != NULL && "Failed to create Inc procedure type");
         AddBuiltinProc_Typed(symtab, inc_name, inc_type);
+        destroy_gpc_type(inc_type);
         free(inc_name);
     }
 
@@ -1632,6 +1650,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *new_type = create_procedure_type(NULL, NULL);
         assert(new_type != NULL && "Failed to create New procedure type");
         AddBuiltinProc_Typed(symtab, new_name, new_type);
+        destroy_gpc_type(new_type);
         free(new_name);
     }
 
@@ -1640,6 +1659,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *dispose_type = create_procedure_type(NULL, NULL);
         assert(dispose_type != NULL && "Failed to create Dispose procedure type");
         AddBuiltinProc_Typed(symtab, dispose_name, dispose_type);
+        destroy_gpc_type(dispose_type);
         free(dispose_name);
     }
 
@@ -1651,6 +1671,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *length_type = create_procedure_type(NULL, return_type);
         assert(length_type != NULL && "Failed to create Length function type");
         AddBuiltinFunction_Typed(symtab, length_name, length_type);
+        destroy_gpc_type(length_type);
         free(length_name);
     }
 
@@ -1661,6 +1682,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *copy_type = create_procedure_type(NULL, return_type);
         assert(copy_type != NULL && "Failed to create Copy function type");
         AddBuiltinFunction_Typed(symtab, copy_name, copy_type);
+        destroy_gpc_type(copy_type);
         free(copy_name);
     }
     char *eof_name = strdup("EOF");
@@ -1670,6 +1692,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *eof_type = create_procedure_type(NULL, return_type);
         assert(eof_type != NULL && "Failed to create EOF function type");
         AddBuiltinFunction_Typed(symtab, eof_name, eof_type);
+        destroy_gpc_type(eof_type);
         free(eof_name);
     }
 
@@ -1680,6 +1703,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *sizeof_type = create_procedure_type(NULL, return_type);
         assert(sizeof_type != NULL && "Failed to create SizeOf function type");
         AddBuiltinFunction_Typed(symtab, sizeof_name, sizeof_type);
+        destroy_gpc_type(sizeof_type);
         free(sizeof_name);
     }
 
@@ -1690,6 +1714,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *chr_type = create_procedure_type(NULL, return_type);
         assert(chr_type != NULL && "Failed to create Chr function type");
         AddBuiltinFunction_Typed(symtab, chr_name, chr_type);
+        destroy_gpc_type(chr_type);
         free(chr_name);
     }
 
@@ -1700,6 +1725,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *ord_type = create_procedure_type(NULL, return_type);
         assert(ord_type != NULL && "Failed to create Ord function type");
         AddBuiltinFunction_Typed(symtab, ord_name, ord_type);
+        destroy_gpc_type(ord_type);
         free(ord_name);
     }
     
@@ -1710,6 +1736,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         GpcType *high_type = create_procedure_type(NULL, return_type);
         assert(high_type != NULL && "Failed to create High function type");
         AddBuiltinFunction_Typed(symtab, high_name, high_type);
+        destroy_gpc_type(high_type);
         free(high_name);
     }
 
@@ -2310,9 +2337,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
 
-    /* Record lexical nesting depth so codegen can reason about static links accurately. */
+    /* Record lexical nesting depth so codegen can reason about static links accurately.
+     * Store depth as parent depth + 1 so the top-level program has depth 1 and
+     * nested subprograms continue to increase. */
     subprogram->tree_data.subprogram_data.nesting_level = max_scope_lev + 1;
-    int default_requires = (subprogram->tree_data.subprogram_data.nesting_level > 0 &&
+    int default_requires = (subprogram->tree_data.subprogram_data.nesting_level > 1 &&
         !subprogram->tree_data.subprogram_data.defined_in_unit);
     subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;
 

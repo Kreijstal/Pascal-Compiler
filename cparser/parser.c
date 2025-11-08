@@ -66,7 +66,7 @@ static size_t g_comb_stats_capacity = 0;
 static size_t g_comb_stats_used = 0;
 static void comb_stats_free_names(void);
 static void comb_stats_set_name(parser_comb_stat_t* entry, const char* name);
-#define AST_POOLING 0
+#define AST_POOLING 1
 
 #if AST_POOLING
 static ast_t* ast_free_list = NULL;
@@ -1810,6 +1810,34 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     }
                     if (args->expr_parser != NULL) {
                         free_combinator_recursive(args->expr_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_CLASS_MEMBER_DISPATCH: {
+                class_member_dispatch_args_t* args = (class_member_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->constructor_parser) {
+                        free_combinator_recursive(args->constructor_parser, visited, extras);
+                    }
+                    if (args->destructor_parser) {
+                        free_combinator_recursive(args->destructor_parser, visited, extras);
+                    }
+                    if (args->procedure_parser) {
+                        free_combinator_recursive(args->procedure_parser, visited, extras);
+                    }
+                    if (args->function_parser) {
+                        free_combinator_recursive(args->function_parser, visited, extras);
+                    }
+                    if (args->operator_parser) {
+                        free_combinator_recursive(args->operator_parser, visited, extras);
+                    }
+                    if (args->property_parser) {
+                        free_combinator_recursive(args->property_parser, visited, extras);
+                    }
+                    if (args->field_parser) {
+                        free_combinator_recursive(args->field_parser, visited, extras);
                     }
                     free(args);
                 }

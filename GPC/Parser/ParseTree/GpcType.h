@@ -58,6 +58,7 @@ struct GpcType {
     GpcTypeKind kind;
     int size_in_bytes;      // To be calculated and filled in by the semantic checker.
     int alignment_in_bytes; // For future architecture support.
+    int ref_count;
     
     // Optional type alias metadata - points to TypeAlias if this type was declared via a type alias.
     // This is owned by the AST, not by GpcType, so should not be freed.
@@ -91,6 +92,7 @@ GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab 
 
 // Destructor function (CRITICAL for preventing memory leaks)
 void destroy_gpc_type(GpcType *type);
+void gpc_type_retain(GpcType *type);
 
 // Utility functions
 int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, struct SymTab *symtab);
