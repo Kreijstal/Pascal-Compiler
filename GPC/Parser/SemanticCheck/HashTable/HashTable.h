@@ -73,6 +73,7 @@ typedef struct HashNode
     char *const_string_value;  /* Owned by HashNode, must be freed */
 
     int is_var_parameter;
+    int requires_static_link;
 
 } HashNode_t;
 
@@ -177,6 +178,11 @@ static inline int hashnode_get_element_size(const HashNode_t *node)
     /* No fallback - element_size field has been removed */
     /* Element size must come from GpcType */
     return 0;
+}
+
+static inline int hashnode_requires_static_link(const HashNode_t *node)
+{
+    return (node != NULL) ? node->requires_static_link : 0;
 }
 
 /* Get record type from node */

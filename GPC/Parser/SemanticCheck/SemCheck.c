@@ -124,6 +124,17 @@ void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
     }
 }
 
+void semcheck_mark_call_requires_static_link(HashNode_t *callee)
+{
+    if (callee == NULL)
+        return;
+    if (g_semcheck_current_subprogram == NULL)
+        return;
+    if (!hashnode_requires_static_link(callee))
+        return;
+    g_semcheck_current_subprogram->tree_data.subprogram_data.requires_static_link = 1;
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
@@ -2578,6 +2589,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if(optimize_flag() > 0 && return_val == 0)
     {
         optimize(symtab, subprogram);
+    }
+
+    if (subprogram->tree_data.subprogram_data.id != NULL)
+    {
+        ListNode_t *defs = FindAllIdents(symtab, subprogram->tree_data.subprogram_data.id);
+        ListNode_t *iter = defs;
+        while (iter != NULL)
+        {
+            if (iter->cur != NULL)
+            {
+                HashNode_t *node = (HashNode_t *)iter->cur;
+                if (node != NULL &&
+                    node->mangled_id != NULL &&
+                    subprogram->tree_data.subprogram_data.mangled_id != NULL &&
+                    strcmp(node->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
+                {
+                    node->requires_static_link =
+                        subprogram->tree_data.subprogram_data.requires_static_link ? 1 : 0;
+                }
+            }
+            iter = iter->next;
+        }
+        DestroyList(defs);
     }
 
     g_semcheck_current_subprogram = prev_current_subprogram;

@@ -1300,6 +1300,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
         stmt->stmt_data.procedure_call_data.call_gpc_type = resolved_proc->type;
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        semcheck_mark_call_requires_static_link(resolved_proc);
         
         sym_return = resolved_proc;
         scope_return = 0; // FIXME: This needs to be properly calculated

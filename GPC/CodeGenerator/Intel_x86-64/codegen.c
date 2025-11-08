@@ -1283,8 +1283,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     StackNode_t *static_link = NULL;
 
     /* Process arguments first to allocate their stack space */
-    /* Only procedures that actually capture outer scope require a static link.
-     * Class methods are the only exception because they pass `self` instead. */
+    /* Nested procedures always receive a static link so they can forward it to callees,
+     * even if they don't themselves capture any outer scope state. Class methods still
+     * use the implicit `self` parameter instead. */
     int will_need_static_link = (!is_class_method &&
         proc->requires_static_link);
     

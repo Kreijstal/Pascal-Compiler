@@ -3791,6 +3791,7 @@ int semcheck_funccall(int *type_return,
             free(expr->expr_data.function_call_data.mangled_id);
         expr->expr_data.function_call_data.mangled_id = resolved_name;
         semcheck_set_function_call_target(expr, best_match);
+        semcheck_mark_call_requires_static_link(best_match);
         hash_return = best_match;
         scope_return = 0; // FIXME
     }
