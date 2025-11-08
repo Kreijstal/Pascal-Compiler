@@ -1782,15 +1782,6 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     }
                     free(args);
                 }
-                if (args != NULL) {
-                    if (args->assignment_parser) {
-                        free_combinator_recursive(args->assignment_parser, visited, extras);
-                    }
-                    if (args->identifier_parser) {
-                        free_combinator_recursive(args->identifier_parser, visited, extras);
-                    }
-                    free(args);
-                }
                 break;
             }
             case COMB_ASSIGNMENT_GUARD:
