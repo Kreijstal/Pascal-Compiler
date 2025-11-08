@@ -3,12 +3,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #ifndef _WIN32
 #include <strings.h>
 #include <time.h>
 #else
 #ifndef strncasecmp
 #define strncasecmp _strnicmp
+#endif
+#ifndef strcasecmp
+#define strcasecmp _stricmp
 #endif
 #include <windows.h>
 #endif
@@ -155,6 +159,118 @@ static void print_profile_report(
     printf("  Memo result clones   : %zu\n", stats.memo_result_clones);
 }
 
+static const char* parser_type_to_string(parser_type_t type) {
+    switch (type) {
+        case P_MATCH: return "match";
+        case P_MATCH_RAW: return "match_raw";
+        case P_INTEGER: return "integer";
+        case P_CIDENT: return "cident";
+        case P_STRING: return "string";
+        case P_UNTIL: return "until";
+        case P_SUCCEED: return "succeed";
+        case P_ANY_CHAR: return "any_char";
+        case P_SATISFY: return "satisfy";
+        case P_CI_KEYWORD: return "ci_keyword";
+        case P_LAYOUT: return "layout";
+        case COMB_EXPECT: return "expect";
+        case COMB_SEQ: return "seq";
+        case COMB_MULTI: return "multi";
+        case COMB_FLATMAP: return "flatMap";
+        case COMB_MANY: return "many";
+        case COMB_EXPR: return "expr";
+        case COMB_OPTIONAL: return "optional";
+        case COMB_SEP_BY: return "sep_by";
+        case COMB_SEP_BY1: return "sep_by1";
+        case COMB_LEFT: return "left";
+        case COMB_RIGHT: return "right";
+        case COMB_NOT: return "not";
+        case COMB_PEEK: return "peek";
+        case COMB_GSEQ: return "gseq";
+        case COMB_BETWEEN: return "between";
+        case COMB_SEP_END_BY: return "sep_end_by";
+        case COMB_CHAINL1: return "chainl1";
+        case COMB_MAP: return "map";
+        case COMB_ERRMAP: return "errmap";
+        case COMB_COMMIT: return "commit";
+        case COMB_LAZY: return "lazy";
+        case COMB_VARIANT_TAG: return "variant_tag";
+        case COMB_VARIANT_PART: return "variant_part";
+        case COMB_FOR_INIT_DISPATCH: return "for_init_dispatch";
+        case COMB_ASSIGNMENT_GUARD: return "assignment_guard";
+        case COMB_LABEL_GUARD: return "label_guard";
+        case P_EOI: return "eoi";
+        default: return "unknown";
+    }
+}
+
+typedef struct comb_entry {
+    const parser_comb_stat_t* stat;
+} comb_entry_t;
+
+static int compare_comb_entries(const void* a, const void* b) {
+    const comb_entry_t* ea = (const comb_entry_t*)a;
+    const comb_entry_t* eb = (const comb_entry_t*)b;
+    const parser_comb_stat_t* sa = ea->stat;
+    const parser_comb_stat_t* sb = eb->stat;
+    uint64_t aval = sa->total_failure_consumed;
+    uint64_t bval = sb->total_failure_consumed;
+    if (aval < bval) return 1;
+    if (aval > bval) return -1;
+    if (sa->failure_with_consumption < sb->failure_with_consumption) return 1;
+    if (sa->failure_with_consumption > sb->failure_with_consumption) return -1;
+    if (sa->failures < sb->failures) return 1;
+    if (sa->failures > sb->failures) return -1;
+    return 0;
+}
+
+static void print_comb_profile(size_t top_n) {
+    size_t count = 0;
+    const parser_comb_stat_t* stats = parser_comb_stats_snapshot(&count);
+    if (stats == NULL || count == 0) {
+        printf("\n== Combinator Hotspots ==\n  <no stats available>\n");
+        return;
+    }
+    comb_entry_t* entries = (comb_entry_t*)malloc(count * sizeof(comb_entry_t));
+    if (!entries) {
+        printf("\n== Combinator Hotspots ==\n  <allocation failed>\n");
+        return;
+    }
+    size_t used = 0;
+    for (size_t i = 1; i < count; ++i) {
+        if (stats[i].calls == 0) continue;
+        entries[used++].stat = &stats[i];
+    }
+    if (used == 0) {
+        free(entries);
+        printf("\n== Combinator Hotspots ==\n  <no parser activity recorded>\n");
+        return;
+    }
+    qsort(entries, used, sizeof(comb_entry_t), compare_comb_entries);
+    if (top_n == 0 || top_n > used) {
+        top_n = used;
+    }
+    printf("\n== Combinator Hotspots (top %zu by failure consumption) ==\n", top_n);
+    printf("%-4s %-40s %-12s %8s %8s %8s %10s %10s %12s\n",
+           "#", "Parser", "Type", "Calls", "Fails", "Fail>0", "AvgFail", "MaxFail", "TotalFail");
+    for (size_t i = 0; i < top_n; ++i) {
+        const parser_comb_stat_t* st = entries[i].stat;
+        double avg_fail = st->failure_with_consumption ?
+            (double)st->total_failure_consumed / (double)st->failure_with_consumption : 0.0;
+        const char* name = st->name ? st->name : "<unnamed>";
+        printf("%-4zu %-40.40s %-12s %8zu %8zu %8zu %10.1f %10zu %12zu\n",
+               i + 1,
+               name,
+               parser_type_to_string(st->type),
+               st->calls,
+               st->failures,
+               st->failure_with_consumption,
+               avg_fail,
+               st->max_failure_consumed,
+               st->total_failure_consumed);
+    }
+    free(entries);
+}
+
 // Helper function to print ParseError with partial AST
 static void print_error_chain(ParseError* error, int depth) {
     if (error == NULL) {
@@ -247,6 +363,8 @@ int main(int argc, char *argv[]) {
     bool parse_procedure = false;
     char *filename = NULL;
     bool profile = false;
+    bool profile_combinators = false;
+    size_t profile_combinators_top = 15;
     double file_read_seconds = 0.0;
     double preprocess_seconds = 0.0;
     double parser_init_seconds = 0.0;
@@ -265,14 +383,56 @@ int main(int argc, char *argv[]) {
             parse_procedure = true;
         } else if (strcmp(argv[i], "--profile") == 0 || strcmp(argv[i], "--benchmark") == 0) {
             profile = true;
+        } else if (strncmp(argv[i], "--profile-combinators", 21) == 0) {
+            profile = true;
+            profile_combinators = true;
+            const char* value = argv[i] + 21;
+            if (*value == '=' || *value == ':') {
+                value++;
+                if (*value == '\0') {
+                    fprintf(stderr, "Invalid value for --profile-combinators\n");
+                    return 1;
+                }
+                char* endptr = NULL;
+                unsigned long parsed = strtoul(value, &endptr, 10);
+                if (endptr == value || *endptr != '\0') {
+                    fprintf(stderr, "Invalid value for --profile-combinators: %s\n", value);
+                    return 1;
+                }
+                profile_combinators_top = parsed;
+            } else if (*value != '\0') {
+                fprintf(stderr, "Unknown option '%s'\n", argv[i]);
+                return 1;
+            }
+        } else if (strncmp(argv[i], "--memo-mode=", 12) == 0) {
+            const char* mode = argv[i] + 12;
+            if (strcasecmp(mode, "full") == 0) {
+                parser_set_memo_mode(PARSER_MEMO_FULL);
+            } else if (strcasecmp(mode, "failures") == 0 || strcasecmp(mode, "failure") == 0 ||
+                       strcasecmp(mode, "fail") == 0) {
+                parser_set_memo_mode(PARSER_MEMO_FAILURES_ONLY);
+            } else if (strcasecmp(mode, "off") == 0 || strcasecmp(mode, "none") == 0 ||
+                       strcasecmp(mode, "disable") == 0 || strcasecmp(mode, "disabled") == 0) {
+                parser_set_memo_mode(PARSER_MEMO_DISABLED);
+            } else {
+                fprintf(stderr, "Unknown memo mode '%s'. Expected full|failures|off\n", mode);
+                return 1;
+            }
         } else {
             filename = argv[i];
         }
     }
 
     if (filename == NULL) {
-        fprintf(stderr, "Usage: %s [--print-ast] [--parse-procedure] [--profile] <filename>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--print-ast] [--parse-procedure] [--profile] [--profile-combinators[=N]] [--memo-mode=<full|failures|off>] <filename>\n", argv[0]);
         return 1;
+    }
+
+    if (profile_combinators) {
+        parser_comb_stats_set_enabled(true);
+        parser_comb_stats_reset();
+    } else {
+        parser_comb_stats_set_enabled(false);
     }
 
     // Read file content
@@ -443,6 +603,9 @@ int main(int argc, char *argv[]) {
             if (profile && stats_ready) {
                 print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
             }
+            if (profile_combinators) {
+                print_comb_profile(profile_combinators_top);
+            }
             return 1;
         }
         if (print_ast) {
@@ -460,6 +623,9 @@ int main(int argc, char *argv[]) {
         if (profile && stats_ready) {
             print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
         }
+        if (profile_combinators) {
+            print_comb_profile(profile_combinators_top);
+        }
         return 1;
     }
 
@@ -470,6 +636,9 @@ int main(int argc, char *argv[]) {
     free(file_content);
     if (profile && stats_ready) {
         print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
+    }
+    if (profile_combinators) {
+        print_comb_profile(profile_combinators_top);
     }
 
     return 0;
