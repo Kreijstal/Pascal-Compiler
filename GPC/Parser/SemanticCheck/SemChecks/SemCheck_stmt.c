@@ -728,7 +728,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
                         temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                     }
-                    call_expr->expr_data.function_call_data.resolved_func = temp_call.stmt_data.procedure_call_data.resolved_proc;
+                    call_expr->expr_data.function_call_data.call_hash_type = temp_call.stmt_data.procedure_call_data.call_hash_type;
+                    call_expr->expr_data.function_call_data.call_gpc_type = temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                    call_expr->expr_data.function_call_data.is_call_info_valid =
+                        temp_call.stmt_data.procedure_call_data.is_call_info_valid;
                 }
                 else
                 {

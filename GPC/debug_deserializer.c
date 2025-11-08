@@ -5,6 +5,7 @@
 #include "Parser/ParseTree/tree_types.h"
 #include "Parser/ParseTree/type_tags.h"
 #include "Parser/ParseTree/tree.h"
+#include "Parser/SemanticCheck/HashTable/HashTable.h"
 
 struct Expression *deserialize_expression(FILE *fp) {
     int type;
@@ -73,6 +74,9 @@ struct Expression *deserialize_expression(FILE *fp) {
             expr->expr_data.function_call_data.args_expr = NULL; // Not deserializing args
             expr->expr_data.function_call_data.resolved_func = NULL;
             expr->expr_data.function_call_data.mangled_id = NULL;
+            expr->expr_data.function_call_data.is_call_info_valid = 0;
+            expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
+            expr->expr_data.function_call_data.call_gpc_type = NULL;
             break;
         }
         case EXPR_TYPECAST: {

@@ -2156,6 +2156,9 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.mangled_id = NULL;
     new_expr->expr_data.function_call_data.args_expr = args;
     new_expr->expr_data.function_call_data.resolved_func = NULL;
+    new_expr->expr_data.function_call_data.is_call_info_valid = 0;
+    new_expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
+    new_expr->expr_data.function_call_data.call_gpc_type = NULL;
 
     return new_expr;
 }
