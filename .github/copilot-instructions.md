@@ -59,10 +59,10 @@ cd quasi-msys2
 echo "UCRT64" > msystem.txt  # or MINGW64
 
 # Install required packages
-make install _gcc _gmp _meson _ninja _python _flex _bison
+make install _gcc _gmp _meson _ninja _python
 
 # Configure and build (from project root)
-bash -c 'source quasi-msys2/env/all.src && meson setup builddir-cross --cross-file quasi-msys2/env/meson_cross_file.ini --buildtype=release -Dwith_gmp=enabled'
+bash -c 'source quasi-msys2/env/all.src && meson setup builddir-cross  --buildtype=release -Dwith_gmp=enabled'
 bash -c 'source quasi-msys2/env/all.src && meson compile -C builddir-cross'
 
 # Run tests with Wine
@@ -73,12 +73,6 @@ bash -c 'source quasi-msys2/env/all.src && meson test -C builddir-cross'
 - `wine` - Run Windows executables on Linux
 - `llvm`, `clang`, `lld` - Cross-compilation toolchain
 - `wget`, `tar`, `zstd`, `gawk`, `gpg` - For quasi-msys2 package management
-
-**Quick test script:**
-```bash
-# Automated test script (requires network access to MSYS2 repos)
-./test-cross-compile.sh [UCRT64|MINGW64]
-```
 
 ### Build Outputs
 
@@ -253,10 +247,3 @@ All workflows are triggered on pull requests and pushes to any branch.
 - Check `builddir/meson-logs/` for build issues
 - Use GDB for debugging compiled executables
 
-## Documentation
-
-- Main README: `README.md`
-- GPC-specific: `GPC/README.txt`
-- cparser integration: `CPARSER_INTEGRATION.md`
-- Performance analysis: `PARSER_PERFORMANCE_ANALYSIS.md`
-- Benchmark summary: `BENCHMARK_SUMMARY.md`
