@@ -22,6 +22,7 @@ GpcType* create_primitive_type(int primitive_tag) {
     assert(type != NULL);
     type->kind = TYPE_KIND_PRIMITIVE;
     type->info.primitive_type_tag = primitive_tag;
+    type->ref_count = 1;
     // Size will be determined later in semcheck
     return type;
 }
@@ -31,6 +32,7 @@ GpcType* create_pointer_type(GpcType *points_to) {
     assert(type != NULL);
     type->kind = TYPE_KIND_POINTER;
     type->info.points_to = points_to; // Takes ownership of points_to
+    type->ref_count = 1;
     return type;
 }
 
@@ -40,6 +42,7 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type) {
     type->kind = TYPE_KIND_PROCEDURE;
     type->info.proc_info.params = params; // Takes ownership
     type->info.proc_info.return_type = return_type; // Takes ownership
+    type->ref_count = 1;
     
     #ifdef DEBUG_GPC_TYPE_CREATION
     fprintf(stderr, "DEBUG: create_procedure_type: params=%p, return_type=%p (is_function=%d)\n",
@@ -56,6 +59,7 @@ GpcType* create_array_type(GpcType *element_type, int start_index, int end_index
     type->info.array_info.element_type = element_type; // Takes ownership
     type->info.array_info.start_index = start_index;
     type->info.array_info.end_index = end_index;
+    type->ref_count = 1;
     return type;
 }
 
@@ -64,6 +68,7 @@ GpcType* create_record_type(struct RecordType *record_info) {
     assert(type != NULL);
     type->kind = TYPE_KIND_RECORD;
     type->info.record_info = record_info; // Record is owned by the AST
+    type->ref_count = 1;
     return type;
 }
 
@@ -199,6 +204,7 @@ GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab 
         if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
             target_node != NULL && target_node->type != NULL) {
             /* Return the target's GpcType (reference, not clone) */
+            gpc_type_retain(target_node->type);
             return target_node->type;
         }
     }
@@ -209,16 +215,25 @@ GpcType* create_gpc_type_from_type_alias(struct TypeAlias *alias, struct SymTab 
 
 // --- Destructor Implementation ---
 
+void gpc_type_retain(GpcType *type) {
+    if (type == NULL)
+        return;
+    assert(type->ref_count > 0);
+    type->ref_count++;
+}
+
 void destroy_gpc_type(GpcType *type) {
     if (type == NULL) return;
+    assert(type->ref_count > 0);
+    type->ref_count--;
+    if (type->ref_count > 0)
+        return;
 
     switch (type->kind) {
         case TYPE_KIND_POINTER:
             destroy_gpc_type(type->info.points_to);
             break;
         case TYPE_KIND_PROCEDURE:
-            // The list itself contains Tree_t*, which are owned by the AST
-            // and should not be freed here. Just free the list nodes.
             DestroyList(type->info.proc_info.params);
             destroy_gpc_type(type->info.proc_info.return_type);
             break;
@@ -226,10 +241,8 @@ void destroy_gpc_type(GpcType *type) {
             destroy_gpc_type(type->info.array_info.element_type);
             break;
         case TYPE_KIND_PRIMITIVE:
-            // Nothing to free
             break;
         case TYPE_KIND_RECORD:
-            // record_info is owned by the AST, not by us
             break;
     }
     free(type);
@@ -319,6 +332,7 @@ GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int 
             /* Return a shared reference from the symbol table - caller doesn't own it */
             if (owns_type != NULL)
                 *owns_type = 0;
+            gpc_type_retain(type_node->type);
             return type_node->type;
         }
         /* If we couldn't resolve the named type, return NULL */
@@ -967,8 +981,10 @@ GpcType* gpc_type_build_function_return(struct TypeAlias *inline_alias,
         return inline_type;
     }
 
-    if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+    if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
+        gpc_type_retain(resolved_type_node->type);
         return resolved_type_node->type;
+    }
 
     if (primitive_tag != -1)
         return create_primitive_type(primitive_tag);

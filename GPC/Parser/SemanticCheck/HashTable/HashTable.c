@@ -110,6 +110,8 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
             return 1;
         }
         
+        if (params->type != NULL)
+            gpc_type_retain(params->type);
         hash_node->canonical_id = canonical_id;
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -143,6 +145,8 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
             return 1;
         }
         
+        if (params->type != NULL)
+            gpc_type_retain(params->type);
         hash_node->canonical_id = canonical_id;
         table->table[hash] = PushListNodeFront(list, CreateListNode(hash_node, LIST_UNSPECIFIED));
         return 0;
@@ -157,7 +161,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
         .mangled_id = mangled_id,
         .hash_type = hash_type,
         .type = type,
-        .var_type = HASHVAR_UNTYPED,  // Will be set from GpcType
+        .var_type = HASHVAR_UNTYPED,
         .record_type = NULL,
         .type_alias = NULL
     };
@@ -273,6 +277,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->canonical_id);
             if (hash_node->const_string_value != NULL)
                 free(hash_node->const_string_value);
+            if (hash_node->type != NULL)
+                destroy_gpc_type(hash_node->type);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 

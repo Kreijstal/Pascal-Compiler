@@ -1544,8 +1544,12 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.label_declarations = label_decl;
     new_tree->tree_data.subprogram_data.return_type = -1;
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
+    new_tree->tree_data.subprogram_data.inline_return_type = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
+    new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.requires_static_link = 0;
+    new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -1574,6 +1578,9 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.inline_return_type = inline_return_type;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
+    new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.requires_static_link = 0;
+    new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
