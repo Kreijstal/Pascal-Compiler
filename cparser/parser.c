@@ -859,6 +859,16 @@ input_t * new_input() {
     return in;
 }
 
+// Free input and associated memo table
+void free_input(input_t *in) {
+    if (in == NULL) return;
+    if (in->memo) {
+        memo_table_destroy(in->memo);
+        in->memo = NULL;
+    }
+    free(in);
+}
+
 // Initialize input buffer with proper line/column tracking
 void init_input_buffer(input_t *in, char *buffer, int length) {
     if (in->memo) {
