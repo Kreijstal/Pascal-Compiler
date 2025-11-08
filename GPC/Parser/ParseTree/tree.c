@@ -931,6 +931,8 @@ void destroy_tree(Tree_t *tree)
           destroy_list(tree->tree_data.arr_decl_data.ids);
           if (tree->tree_data.arr_decl_data.type_id != NULL)
             free(tree->tree_data.arr_decl_data.type_id);
+          if (tree->tree_data.arr_decl_data.range_str != NULL)
+            free(tree->tree_data.arr_decl_data.range_str);
           if (tree->tree_data.arr_decl_data.initializer != NULL)
               destroy_stmt(tree->tree_data.arr_decl_data.initializer);
           if (tree->tree_data.arr_decl_data.static_label != NULL)
@@ -1668,7 +1670,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
 }
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    struct Statement *initializer)
+    char *range_str, struct Statement *initializer)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1681,6 +1683,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.type_id = type_id;
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
+    new_tree->tree_data.arr_decl_data.range_str = range_str;
     new_tree->tree_data.arr_decl_data.initializer = initializer;
     new_tree->tree_data.arr_decl_data.is_typed_const = 0;
     new_tree->tree_data.arr_decl_data.has_static_storage = 0;
