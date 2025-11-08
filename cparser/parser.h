@@ -87,6 +87,8 @@ typedef enum {
     COMB_LABEL_GUARD,
     COMB_STATEMENT_DISPATCH,
     COMB_CLASS_MEMBER_DISPATCH,
+    COMB_KEYWORD_DISPATCH,
+    COMB_TYPE_DISPATCH,
     COMB_LAZY,
     COMB_VARIANT_TAG,
     COMB_VARIANT_PART,
@@ -236,14 +238,14 @@ typedef struct for_init_dispatch_args {
     combinator_t* identifier_parser;
 } for_init_dispatch_args_t;
 
-typedef struct statement_keyword_entry {
+typedef struct pascal_keyword_entry {
     const char* keyword;
     size_t length;
     combinator_t* parser;
-} statement_keyword_entry_t;
+} pascal_keyword_entry_t;
 
 typedef struct statement_dispatch_args {
-    statement_keyword_entry_t* entries;
+    pascal_keyword_entry_t* entries;
     size_t entry_count;
     combinator_t* label_parser;
     combinator_t* assignment_parser;
@@ -259,6 +261,30 @@ typedef struct class_member_dispatch_args {
     combinator_t* property_parser;
     combinator_t* field_parser;
 } class_member_dispatch_args_t;
+
+typedef struct keyword_dispatch_args {
+    pascal_keyword_entry_t* entries;
+    size_t entry_count;
+    const char** skip_keywords;
+    size_t skip_keyword_count;
+    combinator_t* fallback_parser;
+} keyword_dispatch_args_t;
+
+typedef struct type_dispatch_args {
+    combinator_t* helper_parser;
+    combinator_t* reference_parser;
+    combinator_t* interface_parser;
+    combinator_t* class_parser;
+    combinator_t* record_parser;
+    combinator_t* enumerated_parser;
+    combinator_t* array_parser;
+    combinator_t* set_parser;
+    combinator_t* range_parser;
+    combinator_t* pointer_parser;
+    combinator_t* specialize_parser;
+    combinator_t* constructed_parser;
+    combinator_t* identifier_parser;
+} type_dispatch_args_t;
 
 // --- Helper Function Prototypes ---
 void* safe_malloc(size_t size);

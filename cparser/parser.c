@@ -1852,6 +1852,70 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 }
                 break;
             }
+            case COMB_KEYWORD_DISPATCH: {
+                keyword_dispatch_args_t* args = (keyword_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->entries != NULL) {
+                        for (size_t i = 0; i < args->entry_count; ++i) {
+                            if (args->entries[i].parser != NULL) {
+                                free_combinator_recursive(args->entries[i].parser, visited, extras);
+                            }
+                        }
+                        free(args->entries);
+                    }
+                    if (args->fallback_parser != NULL) {
+                        free_combinator_recursive(args->fallback_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_TYPE_DISPATCH: {
+                type_dispatch_args_t* args = (type_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->helper_parser) {
+                        free_combinator_recursive(args->helper_parser, visited, extras);
+                    }
+                    if (args->reference_parser) {
+                        free_combinator_recursive(args->reference_parser, visited, extras);
+                    }
+                    if (args->interface_parser) {
+                        free_combinator_recursive(args->interface_parser, visited, extras);
+                    }
+                    if (args->class_parser) {
+                        free_combinator_recursive(args->class_parser, visited, extras);
+                    }
+                    if (args->record_parser) {
+                        free_combinator_recursive(args->record_parser, visited, extras);
+                    }
+                    if (args->enumerated_parser) {
+                        free_combinator_recursive(args->enumerated_parser, visited, extras);
+                    }
+                    if (args->array_parser) {
+                        free_combinator_recursive(args->array_parser, visited, extras);
+                    }
+                    if (args->set_parser) {
+                        free_combinator_recursive(args->set_parser, visited, extras);
+                    }
+                    if (args->range_parser) {
+                        free_combinator_recursive(args->range_parser, visited, extras);
+                    }
+                    if (args->pointer_parser) {
+                        free_combinator_recursive(args->pointer_parser, visited, extras);
+                    }
+                    if (args->specialize_parser) {
+                        free_combinator_recursive(args->specialize_parser, visited, extras);
+                    }
+                    if (args->constructed_parser) {
+                        free_combinator_recursive(args->constructed_parser, visited, extras);
+                    }
+                    if (args->identifier_parser) {
+                        free_combinator_recursive(args->identifier_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
             case COMB_LAZY: {
                 lazy_args* args = (lazy_args*)comb->args;
                 if (args != NULL) {
