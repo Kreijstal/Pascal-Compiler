@@ -658,17 +658,11 @@ static ast_t* wrap_program_params(ast_t* params) {
 
 // Custom parser for main block content that parses statements properly
 static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_name) {
-    // Parse statements until encountering the END keyword handled by the caller.
-    // Reuse the statement parser so the main program block supports the same
-    // constructs as regular compound statements (case, loops, nested blocks, etc.).
-
-    // `lazy` needs a stable pointer-to-pointer so recursive constructs like CASE
-    // branches can reuse the same statement parser instance.  Wrap the parser in a
-    // heap-allocated pointer so the lifetime matches the combinator graph.
-    combinator_t** stmt_parser_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser_ref = new_combinator();
-    init_pascal_statement_parser(stmt_parser_ref);
-
+    main_block_args_t* mb_args = (main_block_args_t*)args;
+    if (mb_args == NULL || mb_args->stmt_parser == NULL || *mb_args->stmt_parser == NULL) {
+        return make_failure(in, strdup("main block statement parser unavailable"));
+    }
+    combinator_t** stmt_parser_ref = mb_args->stmt_parser;
     // Statements in a BEGIN..END block follow the same semicolon rules as any
     // compound statement: statements are separated by semicolons with an optional
     // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
@@ -677,7 +671,7 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
 
     combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
         leading_semicolons,
-        sep_by(lazy_owned(stmt_parser_ref), token(match(";"))),
+        sep_by(lazy(stmt_parser_ref), token(match(";"))),
         optional(token(match(";"))),
         NULL
     );
@@ -689,11 +683,12 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     return stmt_result;
 }
 
-static combinator_t* main_block_content(tag_t tag) {
+static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
     combinator_t* comb = new_combinator();
-    prim_args* args = safe_malloc(sizeof(prim_args));
-    args->tag = tag;
+    main_block_args_t* args = safe_malloc(sizeof(main_block_args_t));
+    args->stmt_parser = stmt_parser_ref;
     comb->args = args;
+    comb->type = COMB_MAIN_BLOCK_CONTENT;
     comb->fn = main_block_content_fn;
     return comb;
 }
@@ -1529,8 +1524,14 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
 
 // Pascal Complete Program Parser - for full Pascal programs
 void init_pascal_complete_program_parser(combinator_t** p) {
+    // Create procedure/function parsers for use in complete program
+    // Need to create a modified procedure parser that supports var parameters
+    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *stmt_parser = new_combinator();
+    init_pascal_statement_parser(stmt_parser);
+
     // Use `between` to parse the content inside `begin` and `end`, then `map` to wrap it.
-    combinator_t* main_block_content_parser = main_block_content(PASCAL_T_NONE);
+    combinator_t* main_block_content_parser = main_block_content(stmt_parser);
     combinator_t* main_block_body = between(
         token(keyword_ci("begin")),
         token(keyword_ci("end")),
@@ -1731,12 +1732,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
     const_section->extra_to_free = program_const_expr_parser;
-
-    // Create procedure/function parsers for use in complete program
-    // Need to create a modified procedure parser that supports var parameters
-    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser = new_combinator();
-    init_pascal_statement_parser(stmt_parser);
 
     // Return type: : type (for functions)
     // Support complex types like arrays, sets, pointers, etc., not just simple identifiers

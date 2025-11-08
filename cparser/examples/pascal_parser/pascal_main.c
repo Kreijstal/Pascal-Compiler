@@ -600,7 +600,7 @@ int main(int argc, char *argv[]) {
             free(preprocessed_content);
             free(file_content);
             free_combinator(parser);
-            free(in);
+            free_input(in);
             free(ast_nil);
             if (profile && stats_ready) {
                 print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
@@ -620,7 +620,7 @@ int main(int argc, char *argv[]) {
         free(preprocessed_content);
         free(file_content);
         free_combinator(parser);
-        free(in);
+        free_input(in);
         free(ast_nil);
         if (profile && stats_ready) {
             print_profile_report(filename, file_read_seconds, preprocess_seconds, parser_init_seconds, parse_seconds, stats);
@@ -632,7 +632,7 @@ int main(int argc, char *argv[]) {
     }
 
     free_combinator(parser);
-    free(in);
+    free_input(in);
     free(ast_nil);
     free(preprocessed_content);
     free(file_content);
