@@ -2,16 +2,263 @@
 #include "pascal_parser.h"
 #include "pascal_expression.h"
 #include "pascal_keywords.h"
+#include "pascal_peek.h"
+#include "pascal_statement_keywords.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#define strncasecmp _strnicmp
+#endif
+
+static bool peek_label_statement(input_t* in) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+    int length = in->length > 0 ? in->length : (int)strlen(in->buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return false;
+    }
+    const char* buffer = in->buffer;
+    unsigned char ch = (unsigned char)buffer[pos];
+    if (!(isalpha(ch) || ch == '_' || isdigit(ch))) {
+        return false;
+    }
+    if (isdigit(ch)) {
+        while (pos < length && isdigit((unsigned char)buffer[pos])) {
+            pos++;
+        }
+    } else {
+        while (pos < length && (isalnum((unsigned char)buffer[pos]) || buffer[pos] == '_')) {
+            pos++;
+        }
+    }
+    int after = skip_pascal_layout_preview(in, pos);
+    if (after < length && buffer[after] == ':' &&
+        !(after + 1 < length && buffer[after + 1] == '=')) {
+        return true;
+    }
+    return false;
+}
+
+static bool peek_assignment_operator(input_t* in) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+    const char* buffer = in->buffer;
+    int length = in->length > 0 ? in->length : (int)strlen(buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    const int scan_limit = pos + 512 < length ? pos + 512 : length;
+    bool in_string = false;
+    while (pos < scan_limit) {
+        unsigned char ch = (unsigned char)buffer[pos];
+        if (in_string) {
+            if (ch == '\'') {
+                if (pos + 1 < length && buffer[pos + 1] == '\'') {
+                    pos += 2;
+                    continue;
+                }
+                in_string = false;
+                pos++;
+                continue;
+            }
+            pos++;
+            continue;
+        }
+        if (ch == '\'') {
+            in_string = true;
+            pos++;
+            continue;
+        }
+        if (ch == '{') {
+            pos++;
+            while (pos < length && buffer[pos] != '}') {
+                pos++;
+            }
+            if (pos < length) pos++;
+            continue;
+        }
+        if (ch == '(' && pos + 1 < length && buffer[pos + 1] == '*') {
+            pos += 2;
+            while ((pos + 1) < length && !(buffer[pos] == '*' && buffer[pos + 1] == ')')) {
+                pos++;
+            }
+            if ((pos + 1) < length) {
+                pos += 2;
+            } else {
+                pos = length;
+            }
+            continue;
+        }
+        if (ch == '/' && pos + 1 < length && buffer[pos + 1] == '/') {
+            pos += 2;
+            while (pos < length && buffer[pos] != '\n' && buffer[pos] != '\r') {
+                pos++;
+            }
+            continue;
+        }
+        if (isspace(ch)) {
+            pos = skip_pascal_layout_preview(in, pos);
+            continue;
+        }
+        if (ch == ':' && pos + 1 < length && buffer[pos + 1] == '=') {
+            return true;
+        }
+        if (ch == '+' && pos + 1 < length && buffer[pos + 1] == '=') {
+            return true;
+        }
+        if (ch == ';' || ch == '\n' || ch == '\r') {
+            return false;
+        }
+        pos++;
+    }
+    return false;
+}
 
 static ast_t* wrap_with_contexts(ast_t* contexts) {
     if (contexts == NULL || contexts == ast_nil) {
         return ast_nil;
     }
     return ast1(PASCAL_T_WITH_CONTEXTS, contexts);
+}
+
+static bool slice_matches_keyword_ci(const char* slice, size_t len, const char* keyword) {
+    if (slice == NULL || keyword == NULL) {
+        return false;
+    }
+    size_t key_len = strlen(keyword);
+    if (key_len != len) {
+        return false;
+    }
+    return strncasecmp(slice, keyword, len) == 0;
+}
+
+static bool is_reserved_keyword_slice(const char* slice, size_t len) {
+    if (slice == NULL || len == 0) {
+        return false;
+    }
+    for (int i = 0; pascal_reserved_keywords[i] != NULL; ++i) {
+        const char* keyword = pascal_reserved_keywords[i];
+        if (slice_matches_keyword_ci(slice, len, keyword)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_name) {
+    (void)parser_name;
+    statement_dispatch_args_t* dispatch = (statement_dispatch_args_t*)args;
+    if (dispatch == NULL) {
+        return make_failure(in, strdup("statement dispatcher misconfigured"));
+    }
+    if (in == NULL || in->buffer == NULL) {
+        return make_failure(in, strdup("statement dispatcher missing input"));
+    }
+
+    const char* buffer = in->buffer;
+    int length = in->length > 0 ? in->length : (int)strlen(buffer);
+    if (length <= 0) {
+        return make_failure_v2(in, parser_name, strdup("Empty input while parsing statement"), NULL);
+    }
+
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return make_failure_v2(in, parser_name, strdup("Unexpected end of input while parsing statement"), NULL);
+    }
+
+    const char* slice = buffer + pos;
+    unsigned char ch = (unsigned char)*slice;
+    bool starts_identifier = (ch == '_' || isalpha(ch));
+    bool starts_digit = isdigit(ch);
+
+    if (starts_identifier) {
+        int cursor = pos + 1;
+        while (cursor < length) {
+            unsigned char next = (unsigned char)buffer[cursor];
+            if (!(isalnum(next) || next == '_')) {
+                break;
+            }
+            cursor++;
+        }
+        size_t ident_len = (size_t)(cursor - pos);
+        size_t buffer_len = ident_len + 1;
+        char stack_buf[32];
+        char* keyword_buf = stack_buf;
+        bool heap_keyword = false;
+        if (buffer_len > sizeof(stack_buf)) {
+            keyword_buf = (char*)safe_malloc(buffer_len);
+            heap_keyword = true;
+        }
+        memcpy(keyword_buf, slice, ident_len);
+        keyword_buf[ident_len] = '\0';
+        for (size_t i = 0; i < ident_len; ++i) {
+            keyword_buf[i] = (char)tolower((unsigned char)keyword_buf[i]);
+        }
+        const struct statement_keyword_record* keyword_record = statement_keyword_lookup(keyword_buf, ident_len);
+        if (heap_keyword) {
+            free(keyword_buf);
+        }
+        if (keyword_record != NULL &&
+            dispatch->keyword_parsers != NULL &&
+            (size_t)keyword_record->id < dispatch->keyword_count) {
+            combinator_t* keyword_parser = dispatch->keyword_parsers[keyword_record->id];
+            if (keyword_parser != NULL) {
+                return parse(in, keyword_parser);
+            }
+        }
+
+        if (dispatch->label_parser != NULL && peek_label_statement(in)) {
+            return parse(in, dispatch->label_parser);
+        }
+
+        if (is_reserved_keyword_slice(slice, ident_len)) {
+            return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
+        }
+
+        if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
+            return parse(in, dispatch->assignment_parser);
+        }
+
+        if (dispatch->expr_parser != NULL) {
+            return parse(in, dispatch->expr_parser);
+        }
+
+        return make_failure_v2(in, parser_name, strdup("Unable to dispatch identifier-led statement"), NULL);
+    }
+
+    if (starts_digit) {
+        if (dispatch->label_parser != NULL && peek_label_statement(in)) {
+            return parse(in, dispatch->label_parser);
+        }
+        if (dispatch->expr_parser != NULL) {
+            return parse(in, dispatch->expr_parser);
+        }
+        return make_failure_v2(in, parser_name, strdup("Unable to dispatch numeric-led statement"), NULL);
+    }
+
+    if (dispatch->expr_parser != NULL) {
+        return parse(in, dispatch->expr_parser);
+    }
+
+    return make_failure_v2(in, parser_name, strdup("No matching statement parser"), NULL);
+}
+
+static ParseResult for_init_dispatch_fn(input_t* in, void* args, char* parser_name) {
+    (void)parser_name;
+    for_init_dispatch_args_t* dispatch = (for_init_dispatch_args_t*)args;
+    if (dispatch == NULL) {
+        return make_failure(in, strdup("for-initializer dispatcher misconfigured"));
+    }
+    if (peek_assignment_operator(in)) {
+        return parse(in, dispatch->assignment_parser);
+    }
+    return parse(in, dispatch->identifier_parser);
 }
 
 // ASM block body parser - uses proper until() combinator instead of manual scanning
@@ -397,11 +644,13 @@ void init_pascal_statement_parser(combinator_t** p) {
         token(create_keyword_parser("downto", PASCAL_T_DOWNTO)),         // downto keyword (case-insensitive)
         NULL
     );
-    combinator_t* for_initializer = multi(new_combinator(), PASCAL_T_NONE,
-        assignment,                             // try explicit initializer first (y := 1)
-        simple_identifier,                      // fall back to existing variable (for y to ...)
-        NULL
-    );
+    for_init_dispatch_args_t* for_init_args = (for_init_dispatch_args_t*)safe_malloc(sizeof(for_init_dispatch_args_t));
+    for_init_args->assignment_parser = assignment;
+    for_init_args->identifier_parser = simple_identifier;
+    combinator_t* for_initializer = new_combinator();
+    for_initializer->type = COMB_FOR_INIT_DISPATCH;
+    for_initializer->fn = for_init_dispatch_fn;
+    for_initializer->args = for_init_args;
     combinator_t* for_stmt = seq(new_combinator(), PASCAL_T_FOR_STMT,
         token(keyword_ci("for")),                // for keyword (case-insensitive)
         commit(seq(new_combinator(), PASCAL_T_NONE,
@@ -612,30 +861,42 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // Main statement parser: try different types of statements (order matters!)
-    // Note: VAR sections are handled by the complete program parser context
-    multi(*stmt_parser, PASCAL_T_NONE,
-        begin_end_block,                      // compound statements (must come before expr_stmt)
-        labeled_stmt,                         // labeled statements (before other identifier-based statements)
-        goto_stmt,                            // goto statements
-        try_finally,                          // try-finally blocks
-        try_except,                           // try-except blocks
-        case_stmt,                            // case statements (before other keyword statements)
-        raise_stmt,                           // raise statements
-        inherited_stmt,                       // inherited statements
-        break_stmt,                           // break statements
-        exit_stmt,                            // exit statements
-        break_stmt,                           // break statements
-        asm_stmt,                             // inline assembly blocks
-        if_stmt,                              // if statements
-        for_stmt,                             // for statements
-        repeat_stmt,                          // repeat statements
-        while_stmt,                           // while statements
-        with_stmt,                            // with statements
-        assignment,                            // assignment statements
-        expr_stmt,                            // expression statements (must be last)
+    combinator_t* try_stmt = multi(new_combinator(), PASCAL_T_TRY_BLOCK,
+        try_finally,
+        try_except,
         NULL
     );
 
+    statement_dispatch_args_t* dispatch_args = (statement_dispatch_args_t*)safe_malloc(sizeof(statement_dispatch_args_t));
+    memset(dispatch_args, 0, sizeof(*dispatch_args));
+    dispatch_args->keyword_count = STMT_KW_COUNT;
+    dispatch_args->keyword_parsers = (combinator_t**)safe_malloc(sizeof(combinator_t*) * STMT_KW_COUNT);
+    for (size_t i = 0; i < STMT_KW_COUNT; ++i) {
+        dispatch_args->keyword_parsers[i] = NULL;
+    }
+    dispatch_args->keyword_parsers[STMT_KW_BEGIN] = begin_end_block;
+    dispatch_args->keyword_parsers[STMT_KW_GOTO] = goto_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_TRY] = try_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_CASE] = case_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_RAISE] = raise_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_INHERITED] = inherited_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_BREAK] = break_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_EXIT] = exit_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_ASM] = asm_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_IF] = if_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_FOR] = for_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_REPEAT] = repeat_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_WHILE] = while_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_WITH] = with_stmt;
+    dispatch_args->label_parser = labeled_stmt;
+    dispatch_args->assignment_parser = assignment;
+    dispatch_args->expr_parser = expr_stmt;
+
+    combinator_t* stmt_dispatch = new_combinator();
+    stmt_dispatch->type = COMB_STATEMENT_DISPATCH;
+    stmt_dispatch->fn = statement_dispatch_fn;
+    stmt_dispatch->args = dispatch_args;
+
+    *stmt_parser = stmt_dispatch;
     (*p)->extra_to_free = expr_parser;
 }

@@ -13,6 +13,10 @@
 #include <stdio.h>
 #include "../../../Parser/List/List.h"
 
+#ifndef GPC_ENABLE_REG_DEBUG
+#define GPC_ENABLE_REG_DEBUG 0
+#endif
+
 #define DOUBLEWORD 4
 
 extern int g_stack_home_space_bytes;
@@ -87,6 +91,10 @@ int get_num_registers_free(RegStack_t *);
 int get_num_registers_alloced(RegStack_t *);
 
 void free_reg_stack(RegStack_t *);
+
+#if GPC_ENABLE_REG_DEBUG
+extern const char *g_reg_debug_context;
+#endif
 
 /********* Register_t **********/
 typedef struct Register

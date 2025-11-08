@@ -48,6 +48,7 @@ static ParseResult any_char_fn(input_t * in, void * args, char* parser_name);
 static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name);
 static ParseResult expr_fn(input_t * in, void * args, char* parser_name);
 static ast_t* ensure_ast_nil_initialized();
+static void* safe_realloc(void* ptr, size_t size);
 
 
 //=============================================================================
@@ -56,6 +57,212 @@ static ast_t* ensure_ast_nil_initialized();
 
 ast_t * ast_nil = NULL;
 static size_t next_combinator_id = 1;
+static parser_stats_t g_parser_stats = {0};
+static bool g_parser_stats_enabled = false;
+static parser_memo_mode_t g_memo_mode = PARSER_MEMO_FAILURES_ONLY;
+static bool g_comb_stats_enabled = false;
+static parser_comb_stat_t* g_comb_stats = NULL;
+static size_t g_comb_stats_capacity = 0;
+static size_t g_comb_stats_used = 0;
+static void comb_stats_free_names(void);
+static void comb_stats_set_name(parser_comb_stat_t* entry, const char* name);
+#define AST_POOLING 1
+
+#if AST_POOLING
+static ast_t* ast_free_list = NULL;
+#endif
+static ParseError* parse_error_free_list = NULL;
+
+void parser_stats_reset(void) {
+    g_parser_stats_enabled = true;
+    memset(&g_parser_stats, 0, sizeof(g_parser_stats));
+    parser_comb_stats_reset();
+}
+
+parser_stats_t parser_stats_snapshot(void) {
+    return g_parser_stats;
+}
+
+void parser_set_memo_mode(parser_memo_mode_t mode) {
+    g_memo_mode = mode;
+}
+
+#if AST_POOLING
+static ast_t* allocate_ast_node(void) {
+    if (ast_free_list != NULL) {
+        ast_t* node = ast_free_list;
+        ast_free_list = ast_free_list->next;
+        memset(node, 0, sizeof(ast_t));
+        return node;
+    }
+    ast_t* node = (ast_t*)safe_malloc(sizeof(ast_t));
+    memset(node, 0, sizeof(ast_t));
+    return node;
+}
+
+static void recycle_ast_node(ast_t* node) {
+    if (node == NULL) {
+        return;
+    }
+    node->next = ast_free_list;
+    ast_free_list = node;
+}
+#else
+static ast_t* allocate_ast_node(void) {
+    ast_t* node = (ast_t*)safe_malloc(sizeof(ast_t));
+    memset(node, 0, sizeof(ast_t));
+    return node;
+}
+
+static void recycle_ast_node(ast_t* node) {
+    free(node);
+}
+#endif
+
+static ParseError* allocate_parse_error(void) {
+    if (parse_error_free_list != NULL) {
+        ParseError* err = parse_error_free_list;
+        parse_error_free_list = parse_error_free_list->cause;
+        memset(err, 0, sizeof(ParseError));
+        return err;
+    }
+    ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
+    memset(err, 0, sizeof(ParseError));
+    return err;
+}
+
+static void recycle_parse_error(ParseError* err) {
+    if (err == NULL) {
+        return;
+    }
+    err->cause = parse_error_free_list;
+    parse_error_free_list = err;
+}
+
+void parser_comb_stats_set_enabled(bool enabled) {
+    if (enabled == g_comb_stats_enabled) {
+        if (enabled && g_comb_stats == NULL) {
+            g_comb_stats_capacity = 0;
+            g_comb_stats_used = 0;
+        }
+        return;
+    }
+    if (!enabled) {
+        g_comb_stats_enabled = false;
+        comb_stats_free_names();
+        free(g_comb_stats);
+        g_comb_stats = NULL;
+        g_comb_stats_capacity = 0;
+        g_comb_stats_used = 0;
+        return;
+    }
+    g_comb_stats_enabled = true;
+    g_comb_stats_capacity = 0;
+    g_comb_stats_used = 0;
+    g_comb_stats = NULL;
+}
+
+void parser_comb_stats_reset(void) {
+    if (!g_comb_stats_enabled || g_comb_stats == NULL) {
+        return;
+    }
+    comb_stats_free_names();
+    memset(g_comb_stats, 0, g_comb_stats_capacity * sizeof(parser_comb_stat_t));
+    g_comb_stats_used = 0;
+}
+
+const parser_comb_stat_t* parser_comb_stats_snapshot(size_t* count) {
+    if (!g_comb_stats_enabled || g_comb_stats == NULL) {
+        if (count) {
+            *count = 0;
+        }
+        return NULL;
+    }
+    if (count) {
+        *count = g_comb_stats_used + 1;
+    }
+    return g_comb_stats;
+}
+
+static void comb_stats_grow(size_t memo_id) {
+    if (!g_comb_stats_enabled) {
+        return;
+    }
+    size_t required = memo_id + 1;
+    if (required <= g_comb_stats_capacity) {
+        return;
+    }
+    size_t new_capacity = g_comb_stats_capacity ? g_comb_stats_capacity : 64;
+    while (new_capacity <= memo_id) {
+        new_capacity *= 2;
+    }
+    size_t new_size = new_capacity * sizeof(parser_comb_stat_t);
+    parser_comb_stat_t* new_block = (parser_comb_stat_t*)safe_realloc(g_comb_stats, new_size);
+    size_t old_size = g_comb_stats_capacity * sizeof(parser_comb_stat_t);
+    if (new_block && new_size > old_size) {
+        memset((char*)new_block + old_size, 0, new_size - old_size);
+    }
+    g_comb_stats = new_block;
+    g_comb_stats_capacity = new_capacity;
+}
+
+static parser_comb_stat_t* comb_stats_entry(size_t memo_id) {
+    if (!g_comb_stats_enabled || memo_id == 0) {
+        return NULL;
+    }
+    comb_stats_grow(memo_id);
+    if (memo_id > g_comb_stats_used) {
+        g_comb_stats_used = memo_id;
+    }
+    parser_comb_stat_t* entry = &g_comb_stats[memo_id];
+    if (entry->memo_id == 0) {
+        entry->memo_id = memo_id;
+    }
+    return entry;
+}
+
+static parser_comb_stat_t* comb_stats_lookup(size_t memo_id) {
+    if (!g_comb_stats_enabled || memo_id == 0 || memo_id > g_comb_stats_used) {
+        return NULL;
+    }
+    return &g_comb_stats[memo_id];
+}
+
+static void comb_stats_record(parser_comb_stat_t* entry, bool success, size_t consumed) {
+    if (entry == NULL) {
+        return;
+    }
+    if (success) {
+        entry->successes++;
+        entry->total_success_consumed += consumed;
+    } else {
+        entry->failures++;
+        if (consumed > 0) {
+            entry->failure_with_consumption++;
+            entry->total_failure_consumed += consumed;
+            if (consumed > entry->max_failure_consumed) {
+                entry->max_failure_consumed = consumed;
+            }
+        }
+    }
+}
+
+static void comb_stats_free_names(void) {
+    if (g_comb_stats == NULL || g_comb_stats_capacity == 0) {
+        return;
+    }
+    for (size_t i = 0; i < g_comb_stats_capacity; ++i) {
+        free(g_comb_stats[i].name);
+        g_comb_stats[i].name = NULL;
+    }
+}
+
+static void comb_stats_set_name(parser_comb_stat_t* entry, const char* name) {
+    if (entry == NULL || entry->name != NULL || name == NULL) {
+        return;
+    }
+    entry->name = strdup(name);
+}
 
 //=============================================================================
 // PACKRAT MEMOIZATION SUPPORT
@@ -266,7 +473,7 @@ char* parser_format_context(input_t* in, int line, int col, int index) {
 }
 
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected) {
-    ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
+    ParseError* err = allocate_parse_error();
     err->line = in ? in->line : 0;
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
@@ -287,7 +494,7 @@ ParseResult make_failure(input_t* in, char* message) {
 }
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
-    ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
+    ParseError* err = allocate_parse_error();
     err->line = in ? in->line : 0;
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
@@ -316,17 +523,14 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     }
     
     ParseError* original_error = original_result.value.error;
-    ParseError* new_err = (ParseError*)safe_malloc(sizeof(ParseError));
-    if (new_err == NULL) {
-        return make_failure(in, "Memory allocation failed for error wrapper");
-    }
+    ParseError* new_err = allocate_parse_error();
     
     new_err->line = original_error->line;
     new_err->col = original_error->col;
     new_err->index = original_error->index;
     new_err->message = strdup(message);
     if (new_err->message == NULL) {
-        free(new_err);
+        recycle_parse_error(new_err);
         return make_failure(in, "Memory allocation failed for error message");
     }
     new_err->cause = original_error;
@@ -340,7 +544,7 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
 }
 
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause) {
-    ParseError* err = (ParseError*)safe_malloc(sizeof(ParseError));
+    ParseError* err = allocate_parse_error();
     ParseError* cause_error = cause.value.error;
     if (cause_error) {
         err->line = cause_error->line;
@@ -383,6 +587,15 @@ void* safe_malloc(size_t size) {
     return ptr;
 }
 
+static void* safe_realloc(void* ptr, size_t size) {
+    void* new_ptr = realloc(ptr, size);
+    if (!new_ptr && size != 0) {
+        fprintf(stderr, "FATAL: safe_realloc failed to allocate %zu bytes at %s:%d\n", size, __FILE__, __LINE__);
+        abort();
+    }
+    return new_ptr;
+}
+
 /* HARDENED: Changed exit(1) to abort() for immediate crash. */
 void exception(const char * err) {
    fprintf(stderr, "FATAL: %s at %s:%d\n", err, __FILE__, __LINE__);
@@ -390,13 +603,14 @@ void exception(const char * err) {
 }
 
 ast_t * new_ast() {
-    ast_t* ast = (ast_t *) safe_malloc(sizeof(ast_t));
+    ast_t* ast = allocate_ast_node();
     ast->typ = 0; // Default tag
     ast->child = NULL;
     ast->next = NULL;
     ast->sym = NULL;
     ast->line = 0;
     ast->col = 0;
+    g_parser_stats.ast_nodes_created++;
     return ast;
 }
 
@@ -423,6 +637,7 @@ ast_t* copy_ast(ast_t* orig) {
     if (orig == NULL) return NULL;
     if (orig == ensure_ast_nil_initialized()) return ensure_ast_nil_initialized();
     ast_t* new = new_ast();
+    g_parser_stats.ast_nodes_copied++;
     new->typ = orig->typ;
     new->line = orig->line;
     new->col = orig->col;
@@ -455,7 +670,7 @@ static ParseError* clone_parse_error(const ParseError* original) {
         return NULL;
     }
 
-    ParseError* copy = (ParseError*)safe_malloc(sizeof(ParseError));
+    ParseError* copy = allocate_parse_error();
     copy->line = original->line;
     copy->col = original->col;
     copy->index = original->index;
@@ -474,6 +689,7 @@ static ParseResult clone_parse_result(const ParseResult* original) {
         return (ParseResult){ .is_success = false, .value.error = NULL };
     }
 
+    g_parser_stats.memo_result_clones++;
     ParseResult copy;
     copy.is_success = original->is_success;
     if (original->is_success) {
@@ -604,6 +820,7 @@ static memo_entry_t* memo_table_insert(memo_table_t* table, size_t combinator_id
     entry->next = table->buckets[index];
     table->buckets[index] = entry;
     table->size++;
+    g_parser_stats.memo_entries_created++;
     return entry;
 }
 
@@ -626,6 +843,7 @@ static ParseResult memo_entry_replay(memo_entry_t* entry, input_t* in) {
         return (ParseResult){ .is_success = false, .value.error = NULL };
     }
 
+    g_parser_stats.memo_replays++;
     if (in != NULL) {
         in->start = entry->final_state.start;
         in->line = entry->final_state.line;
@@ -639,6 +857,16 @@ input_t * new_input() {
     input_t * in = (input_t *) safe_malloc(sizeof(input_t));
     in->buffer = NULL; in->alloc = 0; in->length = 0; in->start = 0; in->line = 1; in->col = 1; in->memo = NULL;
     return in;
+}
+
+// Free input and associated memo table
+void free_input(input_t *in) {
+    if (in == NULL) return;
+    if (in->memo) {
+        memo_table_destroy(in->memo);
+        in->memo = NULL;
+    }
+    free(in);
 }
 
 // Initialize input buffer with proper line/column tracking
@@ -1096,19 +1324,61 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (!comb || !comb->fn) exception("Attempted to parse with a NULL or uninitialized combinator.");
     if (in == NULL) exception("Attempted to parse with NULL input.");
 
+    if (g_parser_stats_enabled) {
+        g_parser_stats.parse_calls++;
+    }
     if (in->memo == NULL) {
         in->memo = memo_table_create();
     }
 
     int position = in->start;
     size_t combinator_id = comb->memo_id;
+    parser_comb_stat_t* cstats = NULL;
+    size_t comb_stats_index = 0;
+    if (g_comb_stats_enabled) {
+        cstats = comb_stats_entry(combinator_id);
+        if (cstats) {
+            comb_stats_index = combinator_id;
+            cstats->calls++;
+            comb_stats_set_name(cstats, comb->name);
+            cstats->type = comb->type;
+        }
+    }
     memo_entry_t* entry = memo_table_lookup(in->memo, combinator_id, position);
     if (entry && entry->has_result) {
-        return memo_entry_replay(entry, in);
+        bool can_replay =
+            (entry->result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
+            (!entry->result.is_success && g_memo_mode != PARSER_MEMO_DISABLED);
+        if (can_replay) {
+            if (g_parser_stats_enabled) {
+                g_parser_stats.memo_hits++;
+            }
+            ParseResult replay = memo_entry_replay(entry, in);
+            if (g_parser_stats_enabled) {
+                if (replay.is_success) {
+                    g_parser_stats.parse_successes++;
+                } else {
+                    g_parser_stats.parse_failures++;
+                }
+            }
+            if (comb_stats_index != 0) {
+                parser_comb_stat_t* cstats_lookup = comb_stats_lookup(comb_stats_index);
+                comb_stats_set_name(cstats_lookup, comb->name);
+                size_t consumed = (size_t)(in->start - position);
+                comb_stats_record(cstats_lookup, replay.is_success, consumed);
+            }
+            return replay;
+        }
     }
 
     if (entry && entry->in_progress) {
+        if (g_parser_stats_enabled) {
+            g_parser_stats.memo_recursions++;
+        }
         char* message = strdup("Left recursion detected.");
+        if (g_parser_stats_enabled) {
+            g_parser_stats.parse_failures++;
+        }
         return make_failure_v2(in, comb->name, message, NULL);
     }
 
@@ -1116,12 +1386,36 @@ ParseResult parse(input_t * in, combinator_t * comb) {
         entry = memo_table_insert(in->memo, combinator_id, position);
     }
 
+    if (g_parser_stats_enabled) {
+        g_parser_stats.memo_misses++;
+    }
     entry->in_progress = true;
     ParseResult result = comb->fn(in, (void *)comb->args, comb->name);
     InputState final_state;
     save_input_state(in, &final_state);
     entry->in_progress = false;
-    memo_table_store_result(entry, &result, &final_state);
+    bool should_store =
+        (result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
+        (!result.is_success && g_memo_mode != PARSER_MEMO_DISABLED);
+    if (should_store) {
+        memo_table_store_result(entry, &result, &final_state);
+    } else if (entry->has_result) {
+        free_parse_result_contents(&entry->result);
+        entry->has_result = false;
+    }
+    if (g_parser_stats_enabled) {
+        if (result.is_success) {
+            g_parser_stats.parse_successes++;
+        } else {
+            g_parser_stats.parse_failures++;
+        }
+    }
+    if (comb_stats_index != 0) {
+        parser_comb_stat_t* cstats_lookup = comb_stats_lookup(comb_stats_index);
+        comb_stats_set_name(cstats_lookup, comb->name);
+        size_t consumed = (size_t)(final_state.start - position);
+        comb_stats_record(cstats_lookup, result.is_success, consumed);
+    }
     return result;
 }
 
@@ -1160,19 +1454,36 @@ void free_error(ParseError* err) {
     if (err->unexpected) free(err->unexpected);
     if (err->context) free(err->context);
     free(err->message);
-    free_error(err->cause);
+    ParseError* nested = err->cause;
+    err->parser_name = NULL;
+    err->unexpected = NULL;
+    err->context = NULL;
+    err->message = NULL;
+    err->cause = NULL;
+    if (nested) {
+        free_error(nested);
+    }
     if (err->partial_ast != NULL) {
         free_ast(err->partial_ast);
+        err->partial_ast = NULL;
     }
-    free(err);
+    recycle_parse_error(err);
 }
 
 void free_ast(ast_t* ast) {
     if (ast == NULL || ast == ensure_ast_nil_initialized()) return;
-    free_ast(ast->child);
-    free_ast(ast->next);
-    if (ast->sym) { free(ast->sym->name); free(ast->sym); }
-    free(ast);
+    ast_t* child = ast->child;
+    ast_t* sibling = ast->next;
+    ast->child = NULL;
+    ast->next = NULL;
+    if (ast->sym) {
+        free(ast->sym->name);
+        free(ast->sym);
+        ast->sym = NULL;
+    }
+    free_ast(child);
+    free_ast(sibling);
+    recycle_ast_node(ast);
 }
 
 // Initialize ast_nil if not already initialized
@@ -1450,12 +1761,162 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 free(args);
                 break;
             }
+            case COMB_COMMIT: {
+                combinator_t* inner = (combinator_t*)comb->args;
+                if (inner != NULL) {
+                    free_combinator_recursive(inner, visited, extras);
+                }
+                break;
+            }
             case P_UNTIL: {
                 until_args* args = (until_args*)comb->args;
                 if (args != NULL) {
                     if (args->delimiter != NULL) {
                         free_combinator_recursive(args->delimiter, visited, extras);
                     }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_FOR_INIT_DISPATCH: {
+                for_init_dispatch_args_t* args = (for_init_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->assignment_parser) {
+                        free_combinator_recursive(args->assignment_parser, visited, extras);
+                    }
+                    if (args->identifier_parser) {
+                        free_combinator_recursive(args->identifier_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_ASSIGNMENT_GUARD:
+            case COMB_LABEL_GUARD: {
+                if (comb->args != NULL) {
+                    free_combinator_recursive((combinator_t*)comb->args, visited, extras);
+                }
+                break;
+            }
+            case COMB_STATEMENT_DISPATCH: {
+                statement_dispatch_args_t* args = (statement_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->keyword_parsers != NULL) {
+                        for (size_t i = 0; i < args->keyword_count; ++i) {
+                            if (args->keyword_parsers[i] != NULL) {
+                                free_combinator_recursive(args->keyword_parsers[i], visited, extras);
+                            }
+                        }
+                        free(args->keyword_parsers);
+                    }
+                    if (args->label_parser != NULL) {
+                        free_combinator_recursive(args->label_parser, visited, extras);
+                    }
+                    if (args->assignment_parser != NULL) {
+                        free_combinator_recursive(args->assignment_parser, visited, extras);
+                    }
+                    if (args->expr_parser != NULL) {
+                        free_combinator_recursive(args->expr_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_CLASS_MEMBER_DISPATCH: {
+                class_member_dispatch_args_t* args = (class_member_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->constructor_parser) {
+                        free_combinator_recursive(args->constructor_parser, visited, extras);
+                    }
+                    if (args->destructor_parser) {
+                        free_combinator_recursive(args->destructor_parser, visited, extras);
+                    }
+                    if (args->procedure_parser) {
+                        free_combinator_recursive(args->procedure_parser, visited, extras);
+                    }
+                    if (args->function_parser) {
+                        free_combinator_recursive(args->function_parser, visited, extras);
+                    }
+                    if (args->operator_parser) {
+                        free_combinator_recursive(args->operator_parser, visited, extras);
+                    }
+                    if (args->property_parser) {
+                        free_combinator_recursive(args->property_parser, visited, extras);
+                    }
+                    if (args->field_parser) {
+                        free_combinator_recursive(args->field_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_KEYWORD_DISPATCH: {
+                keyword_dispatch_args_t* args = (keyword_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->entries != NULL) {
+                        for (size_t i = 0; i < args->entry_count; ++i) {
+                            if (args->entries[i].parser != NULL) {
+                                free_combinator_recursive(args->entries[i].parser, visited, extras);
+                            }
+                        }
+                        free(args->entries);
+                    }
+                    if (args->fallback_parser != NULL) {
+                        free_combinator_recursive(args->fallback_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_TYPE_DISPATCH: {
+                type_dispatch_args_t* args = (type_dispatch_args_t*)comb->args;
+                if (args != NULL) {
+                    if (args->helper_parser) {
+                        free_combinator_recursive(args->helper_parser, visited, extras);
+                    }
+                    if (args->reference_parser) {
+                        free_combinator_recursive(args->reference_parser, visited, extras);
+                    }
+                    if (args->interface_parser) {
+                        free_combinator_recursive(args->interface_parser, visited, extras);
+                    }
+                    if (args->class_parser) {
+                        free_combinator_recursive(args->class_parser, visited, extras);
+                    }
+                    if (args->record_parser) {
+                        free_combinator_recursive(args->record_parser, visited, extras);
+                    }
+                    if (args->enumerated_parser) {
+                        free_combinator_recursive(args->enumerated_parser, visited, extras);
+                    }
+                    if (args->array_parser) {
+                        free_combinator_recursive(args->array_parser, visited, extras);
+                    }
+                    if (args->set_parser) {
+                        free_combinator_recursive(args->set_parser, visited, extras);
+                    }
+                    if (args->range_parser) {
+                        free_combinator_recursive(args->range_parser, visited, extras);
+                    }
+                    if (args->pointer_parser) {
+                        free_combinator_recursive(args->pointer_parser, visited, extras);
+                    }
+                    if (args->specialize_parser) {
+                        free_combinator_recursive(args->specialize_parser, visited, extras);
+                    }
+                    if (args->constructed_parser) {
+                        free_combinator_recursive(args->constructed_parser, visited, extras);
+                    }
+                    if (args->identifier_parser) {
+                        free_combinator_recursive(args->identifier_parser, visited, extras);
+                    }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_MAIN_BLOCK_CONTENT: {
+                main_block_args_t* args = (main_block_args_t*)comb->args;
+                if (args != NULL) {
                     free(args);
                 }
                 break;

@@ -75,6 +75,7 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
+void codegen_release_function_call_mangled_id(struct Expression *expr);
 
 /* (DEPRECATED) */
 ListNode_t *codegen_expr_varid(struct Expression *, ListNode_t *, CodeGenContext *ctx);

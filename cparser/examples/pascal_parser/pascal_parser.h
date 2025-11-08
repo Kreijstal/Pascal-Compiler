@@ -180,8 +180,6 @@ void print_pascal_ast(ast_t* ast);
 const char* pascal_tag_to_string(tag_t tag);
 
 // --- New Enhanced Functions ---
-combinator_t* pascal_comment();
-combinator_t* pascal_whitespace();
 combinator_t* pascal_token(combinator_t* p);
 combinator_t* token(combinator_t* p);  // Backward compatibility wrapper
 combinator_t* pascal_identifier(tag_t tag);  // Pascal identifier that excludes reserved keywords

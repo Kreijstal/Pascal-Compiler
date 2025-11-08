@@ -325,7 +325,13 @@ struct Expression
             char *id;
             char *mangled_id;
             ListNode_t *args_expr;
-        struct HashNode *resolved_func;
+            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after PopScope. */
+            
+            /* Cached information copied during semantic checking so codegen
+             * no longer depends on HashNode lifetime. */
+            int call_hash_type;              /* HashType enum value */
+            struct GpcType *call_gpc_type;   /* Procedure/function signature */
+            int is_call_info_valid;          /* 1 if cached info is usable */
         } function_call_data;
 
         /* Integer number */

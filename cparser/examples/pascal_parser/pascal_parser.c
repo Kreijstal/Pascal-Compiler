@@ -13,70 +13,81 @@
 extern ast_t* ast_nil;  // From parser.c
 
 // --- Helper Functions ---
-static bool is_whitespace_char(char c) {
-    return isspace((unsigned char)c);
+static bool consume_pascal_layout(input_t* in) {
+    if (in->start >= in->length) {
+        return false;
+    }
+    const char* buffer = in->buffer;
+    int pos = in->start;
+    char c = buffer[pos];
+
+    if (isspace((unsigned char)c)) {
+        read1(in);
+        return true;
+    }
+
+    if (c == '{') {
+        read1(in); // consume '{'
+        while (in->start < in->length) {
+            char ch = read1(in);
+            if (ch == '}') {
+                break;
+            }
+        }
+        return true;
+    }
+
+    if (c == '(' && (pos + 1) < in->length && buffer[pos + 1] == '*') {
+        read1(in); // '('
+        read1(in); // '*'
+        while (in->start < in->length) {
+            char ch = read1(in);
+            if (ch == '*' && in->start < in->length && in->buffer[in->start] == ')') {
+                read1(in);
+                break;
+            }
+        }
+        return true;
+    }
+
+    if (c == '/' && (pos + 1) < in->length && buffer[pos + 1] == '/') {
+        read1(in); // '/'
+        read1(in); // '/'
+        while (in->start < in->length) {
+            char ch = read1(in);
+            if (ch == '\n' || ch == '\r') {
+                break;
+            }
+        }
+        return true;
+    }
+
+    return false;
 }
 
-// Pascal-style comment parser using proper combinators: { comment content }
-combinator_t* pascal_comment() {
-    return seq(new_combinator(), PASCAL_T_NONE,
-        match("{"),
-        until(match("}"), PASCAL_T_NONE),
-        match("}"),
-        NULL);
+static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    (void)parser_name;
+    while (consume_pascal_layout(in)) {
+        // keep consuming layout elements
+    }
+    return make_success(ast_nil);
 }
 
-// Pascal-style parentheses comment parser: (* comment content *)
-combinator_t* pascal_paren_comment() {
-    return seq(new_combinator(), PASCAL_T_NONE,
-        match("(*"),
-        until(match("*)"), PASCAL_T_NONE),
-        match("*)"),
-        NULL);
-}
-
-// C++-style comment parser: // comment content until end of line
-combinator_t* cpp_comment() {
-    return seq(new_combinator(), PASCAL_T_NONE,
-        match("//"),
-        until(match("\n"), PASCAL_T_NONE),
-        optional(match("\n")),  // consume the newline if present
-        NULL);
-}
-
-// Compiler directive parser: {$directive parameter}
-combinator_t* compiler_directive(tag_t tag) {
-    return right(
-        match("{$"),
-        left(
-            until(match("}"), tag),
-            match("}")
-        )
-    );
-}
-
-// Enhanced whitespace parser that handles whitespace, Pascal comments, C++ comments, and compiler directives
-combinator_t* pascal_whitespace() {
-    combinator_t* ws_char = satisfy(is_whitespace_char, PASCAL_T_NONE);
-    combinator_t* pascal_comment_parser = pascal_comment();
-    combinator_t* pascal_paren_comment_parser = pascal_paren_comment();
-    combinator_t* cpp_comment_parser = cpp_comment();
-    combinator_t* directive = compiler_directive(PASCAL_T_NONE);  // Treat directives as ignorable whitespace
-    combinator_t* ws_or_comment = multi(new_combinator(), PASCAL_T_NONE,
-        ws_char,
-        pascal_comment_parser,
-        pascal_paren_comment_parser,
-        cpp_comment_parser,
-        directive,  // Include compiler directives in whitespace
-        NULL
-    );
-    return many(ws_or_comment);
+static combinator_t* pascal_layout_parser(void) {
+    combinator_t* comb = new_combinator();
+    comb->type = P_LAYOUT;
+    comb->fn = pascal_layout_fn;
+    comb->args = NULL;
+    comb->name = strdup("pascal_layout");
+    return comb;
 }
 
 // Renamed token parser with better Pascal-aware whitespace handling
 combinator_t* pascal_token(combinator_t* p) {
-    combinator_t* ws = pascal_whitespace();
-    return right(ws, left(p, pascal_whitespace()));
+    combinator_t* leading = pascal_layout_parser();
+    combinator_t* trailing = pascal_layout_parser();
+    return right(leading, left(p, trailing));
 }
 
 // Backward compatibility: keep old token() function name for existing code
@@ -333,5 +344,3 @@ void print_pascal_ast(ast_t* ast) {
     print_ast_recursive(ast, 0);
     printf("\n");
 }
-
-

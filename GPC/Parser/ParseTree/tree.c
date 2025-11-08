@@ -1174,6 +1174,8 @@ void destroy_expr(struct Expression *expr)
 
         case EXPR_FUNCTION_CALL:
           free(expr->expr_data.function_call_data.id);
+          if (expr->expr_data.function_call_data.mangled_id != NULL)
+              free(expr->expr_data.function_call_data.mangled_id);
           destroy_list(expr->expr_data.function_call_data.args_expr);
           break;
 
@@ -1544,8 +1546,12 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.label_declarations = label_decl;
     new_tree->tree_data.subprogram_data.return_type = -1;
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
+    new_tree->tree_data.subprogram_data.inline_return_type = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
+    new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.requires_static_link = 0;
+    new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -1555,7 +1561,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
     ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
-    int return_type, char *return_type_id, int cname_flag, int overload_flag)
+    int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1571,8 +1577,12 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.label_declarations = label_decl;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
+    new_tree->tree_data.subprogram_data.inline_return_type = inline_return_type;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
+    new_tree->tree_data.subprogram_data.nesting_level = 0;
+    new_tree->tree_data.subprogram_data.requires_static_link = 0;
+    new_tree->tree_data.subprogram_data.defined_in_unit = 0;
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
@@ -2148,6 +2158,9 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.mangled_id = NULL;
     new_expr->expr_data.function_call_data.args_expr = args;
     new_expr->expr_data.function_call_data.resolved_func = NULL;
+    new_expr->expr_data.function_call_data.is_call_info_valid = 0;
+    new_expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
+    new_expr->expr_data.function_call_data.call_gpc_type = NULL;
 
     return new_expr;
 }

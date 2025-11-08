@@ -13,6 +13,13 @@
 #include "../../../Parser/List/List.h"
 #include "../../../identifier_utils.h"
 
+#if GPC_ENABLE_REG_DEBUG
+const char *g_reg_debug_context = "default";
+#define REG_DEBUG_LOG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define REG_DEBUG_LOG(...) ((void)0)
+#endif
+
 /* Sets num_args_alloced to 0 */
 void free_arg_regs(void)
 {
@@ -624,6 +631,10 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
 
             cur->next = reg_stack->registers_free;
             reg_stack->registers_free = cur;
+#if GPC_ENABLE_REG_DEBUG
+            if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
+                fprintf(stderr, "[reg-debug] free  %s (%s)\n", reg->bit_64, g_reg_debug_context);
+#endif
             return;
         }
         prev = cur;
@@ -674,7 +685,10 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
         reg_stack->registers_allocated = register_node;
 
         reg = (Register_t *)register_node->cur;
-
+#if GPC_ENABLE_REG_DEBUG
+        if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
+            fprintf(stderr, "[reg-debug] alloc %s (%s)\n", reg->bit_64, g_reg_debug_context);
+#endif
         return reg;
     }
     else
@@ -939,3 +953,4 @@ StackNode_t *add_static_array(char *label, int total_size, int element_size, int
 
     return new_node;
 }
+#include <string.h>

@@ -49,5 +49,6 @@ struct RecordType *semcheck_with_resolve_record_type(SymTab_t *symtab,
     struct Expression *context_expr, int expr_type, int line_num);
 
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node);
+void semcheck_mark_call_requires_static_link(HashNode_t *node);
 
 #endif

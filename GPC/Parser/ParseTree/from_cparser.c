@@ -3498,9 +3498,14 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
 
         ast_t *cur = stmt_node->child;
         while (cur != NULL) {
-            if (cur->typ == PASCAL_T_FINALLY_BLOCK || cur->typ == PASCAL_T_EXCEPT_BLOCK) {
-                ListBuilder *target = (cur->typ == PASCAL_T_FINALLY_BLOCK) ? &finally_builder : &except_builder;
-                ast_t *inner = cur->child;
+            ast_t *unwrapped = unwrap_pascal_node(cur);
+            if (unwrapped == NULL) {
+                cur = cur->next;
+                continue;
+            }
+            if (unwrapped->typ == PASCAL_T_FINALLY_BLOCK || unwrapped->typ == PASCAL_T_EXCEPT_BLOCK) {
+                ListBuilder *target = (unwrapped->typ == PASCAL_T_FINALLY_BLOCK) ? &finally_builder : &except_builder;
+                ast_t *inner = unwrapped->child;
                 while (inner != NULL) {
                     struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(inner));
                     if (inner_stmt != NULL)
@@ -3508,7 +3513,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                     inner = inner->next;
                 }
             } else {
-                struct Statement *try_stmt = convert_statement(unwrap_pascal_node(cur));
+                struct Statement *try_stmt = convert_statement(unwrapped);
                 if (try_stmt != NULL)
                     list_builder_append(&try_builder, try_stmt, LIST_STMT);
             }
@@ -3518,6 +3523,17 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         ListNode_t *try_stmts = list_builder_finish(&try_builder);
         ListNode_t *finally_stmts = list_builder_finish(&finally_builder);
         ListNode_t *except_stmts = list_builder_finish(&except_builder);
+
+        if (finally_stmts == NULL && except_stmts == NULL) {
+            if (try_stmts == NULL)
+                return NULL;
+            if (try_stmts->next == NULL) {
+                struct Statement *passthrough = (struct Statement *)try_stmts->cur;
+                DestroyList(try_stmts);
+                return passthrough;
+            }
+            return mk_compoundstatement(stmt_node->line, try_stmts);
+        }
 
         if (finally_stmts != NULL)
             return mk_tryfinally(stmt_node->line, try_stmts, finally_stmts);
@@ -3902,9 +3918,55 @@ static Tree_t *convert_function(ast_t *func_node) {
 
     char *return_type_id = NULL;
     int return_type = UNKNOWN_TYPE;
+    struct TypeAlias *inline_return_type = NULL;
 
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
-        return_type = convert_type_spec(cur->child, &return_type_id, NULL, NULL);
+        TypeInfo type_info;
+        return_type = convert_type_spec(cur->child, &return_type_id, NULL, &type_info);
+        
+        /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
+        if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
+            type_info.is_enum || type_info.is_file || type_info.is_record) {
+            inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
+            if (inline_return_type != NULL) {
+                memset(inline_return_type, 0, sizeof(struct TypeAlias));
+                inline_return_type->base_type = return_type;
+                inline_return_type->target_type_id = return_type_id;
+                
+                if (type_info.is_array) {
+                    inline_return_type->is_array = 1;
+                    inline_return_type->array_start = type_info.start;
+                    inline_return_type->array_end = type_info.end;
+                    inline_return_type->array_element_type = type_info.element_type;
+                    inline_return_type->array_element_type_id = type_info.element_type_id;
+                    inline_return_type->is_open_array = type_info.is_open_array;
+                }
+                
+                if (type_info.is_pointer) {
+                    inline_return_type->is_pointer = 1;
+                    inline_return_type->pointer_type = type_info.pointer_type;
+                    inline_return_type->pointer_type_id = type_info.pointer_type_id;
+                }
+                
+                if (type_info.is_set) {
+                    inline_return_type->is_set = 1;
+                    inline_return_type->set_element_type = type_info.set_element_type;
+                    inline_return_type->set_element_type_id = type_info.set_element_type_id;
+                }
+                
+                if (type_info.is_enum) {
+                    inline_return_type->is_enum = 1;
+                    inline_return_type->enum_literals = type_info.enum_literals;
+                }
+                
+                if (type_info.is_file) {
+                    inline_return_type->is_file = 1;
+                    inline_return_type->file_type = type_info.file_type;
+                    inline_return_type->file_type_id = type_info.file_type_id;
+                }
+            }
+        }
+        
         cur = cur->next;
     }
 
@@ -3993,7 +4055,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                label_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
-                               return_type, return_type_id, is_external, 0);
+                               return_type, return_type_id, inline_return_type, is_external, 0);
     return tree;
 }
 

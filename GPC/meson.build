@@ -92,15 +92,24 @@ ctypes_helper = shared_library('ctypes_helper',
   install: false,
 )
 
+valgrind_prog = find_program('valgrind', required: false)
+run_valgrind_option = get_option('run_valgrind_tests')
+valgrind_platform_ok = host_machine.system() == 'linux'
+run_valgrind_tests = run_valgrind_option and valgrind_platform_ok and valgrind_prog.found()
+
 python = find_program('python3')
 env = environment()
 env.set('RUN_BUGGY_TEST', get_option('run_buggy_test').to_string())
 env.set('MESON_BUILD_ROOT', meson.project_build_root())
-env.set('RUN_VALGRIND_TESTS', get_option('run_valgrind_tests').to_string())
+env.set('RUN_VALGRIND_TESTS', run_valgrind_tests ? 'true' : 'false')
 env.set('CC', ' '.join(compiler.cmd_array()))
 env.set('GPC_RUNTIME_LIB', gpc_runtime_lib.full_path())
 env.set('GPC_CTYPES_HELPER', ctypes_helper.full_path())
 env.set('GPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
+
+if run_valgrind_tests
+  env.set('VALGRIND_BIN', valgrind_prog.full_path())
+endif
 
 ctypes_helper_link = ctypes_helper.full_path()
 if host_machine.system() == 'windows'

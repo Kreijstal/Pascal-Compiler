@@ -27,6 +27,8 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 /* Helper functions for transitioning from legacy type fields to GpcType */
+static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type);
+static int codegen_dynamic_array_descriptor_bytes(int element_size);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -214,7 +216,6 @@ void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_
 
     info->mangled_name = mangled_name;
     info->lexical_depth = lexical_depth;
-
     ListNode_t *entry = CreateListNode(info, LIST_UNSPECIFIED);
     if (ctx->static_link_procs == NULL)
         ctx->static_link_procs = entry;
@@ -1282,8 +1283,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     StackNode_t *static_link = NULL;
 
     /* Process arguments first to allocate their stack space */
-    /* Only procedures that actually capture outer scope require a static link.
-     * Class methods are the only exception because they pass `self` instead. */
+    /* Nested procedures always receive a static link so they can forward it to callees,
+     * even if they don't themselves capture any outer scope state. Class methods still
+     * use the implicit `self` parameter instead. */
     int will_need_static_link = (!is_class_method &&
         proc->requires_static_link);
     
@@ -1352,6 +1354,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     StackNode_t *return_var;
     StackNode_t *return_dest_slot = NULL;
     int has_record_return = 0;
+    int returns_dynamic_array = 0;
+    int dynamic_array_descriptor_size = 0;
+    int dynamic_array_element_size = 0;
+    int dynamic_array_lower_bound = 0;
     long long record_return_size = 0;
 
     func = &func_tree->tree_data.subprogram_data;
@@ -1390,21 +1396,32 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
         GpcType *return_type = gpc_type_get_return_type(func_node->type);
-        if (return_type != NULL && gpc_type_is_record(return_type))
+        if (return_type != NULL)
         {
-            struct RecordType *record_desc = gpc_type_get_record(return_type);
-            if (record_desc != NULL &&
-                codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record_desc,
-                    &record_return_size) == 0 && record_return_size > 0 &&
-                record_return_size <= INT_MAX)
+            if (gpc_type_is_record(return_type))
             {
-                has_record_return = 1;
+                struct RecordType *record_desc = gpc_type_get_record(return_type);
+                if (record_desc != NULL &&
+                    codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record_desc,
+                        &record_return_size) == 0 && record_return_size > 0 &&
+                    record_return_size <= INT_MAX)
+                {
+                    has_record_return = 1;
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine size for record return value of %s.", func->id);
+                    record_return_size = 0;
+                }
             }
-            else
+            else if (return_type->kind == TYPE_KIND_ARRAY &&
+                     gpc_type_is_dynamic_array(return_type))
             {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine size for record return value of %s.", func->id);
-                record_return_size = 0;
+                returns_dynamic_array = 1;
+                dynamic_array_element_size = codegen_dynamic_array_element_size_from_type(ctx, return_type);
+                dynamic_array_descriptor_size = codegen_dynamic_array_descriptor_bytes(dynamic_array_element_size);
+                dynamic_array_lower_bound = return_type->info.array_info.start_index;
             }
         }
     }
@@ -1464,7 +1481,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     
     int return_size = DOUBLEWORD;
-    if (has_record_return)
+    if (returns_dynamic_array)
+        return_size = dynamic_array_descriptor_size;
+    else if (has_record_return)
         return_size = (int)record_return_size;
     else if (func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PROCEDURE)
@@ -1501,7 +1520,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             return_size = DOUBLEWORD;
     }
 
-    return_var = add_l_x(func->id, return_size);
+    if (returns_dynamic_array)
+        return_var = add_dynamic_array(func->id, dynamic_array_element_size, dynamic_array_lower_bound);
+    else
+        return_var = add_l_x(func->id, return_size);
 
     if (has_record_return)
         return_dest_slot = add_l_x("__record_return_dest__", (int)sizeof(void *));
@@ -1525,7 +1547,49 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
-    if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
+    if (returns_dynamic_array)
+    {
+#if GPC_ENABLE_REG_DEBUG
+        const char *prev_reg_ctx = g_reg_debug_context;
+        g_reg_debug_context = "dyn_array_return";
+#endif
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate register for dynamic array return.");
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                return_var->offset, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", dynamic_array_descriptor_size);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%esi\n", dynamic_array_descriptor_size);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = add_inst(inst_list, "\tcall\tgpc_dynarray_clone_descriptor\n");
+            free_arg_regs();
+            free_reg(get_reg_stack(), addr_reg);
+        }
+#if GPC_ENABLE_REG_DEBUG
+        g_reg_debug_context = prev_reg_ctx;
+#endif
+    }
+    else if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
     {
         Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
         Register_t *src_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -1648,6 +1712,63 @@ static void add_result_alias_for_return_var(StackNode_t *return_var)
                 cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
         }
     }
+}
+
+static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type)
+{
+    if (array_type == NULL || array_type->kind != TYPE_KIND_ARRAY)
+        return DOUBLEWORD;
+
+    GpcType *element_type = array_type->info.array_info.element_type;
+    if (element_type == NULL)
+        return DOUBLEWORD;
+
+    switch (element_type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+        {
+            int tag = gpc_type_get_primitive_tag(element_type);
+            switch (tag)
+            {
+                case LONGINT_TYPE:
+                case REAL_TYPE:
+                case STRING_TYPE:
+                case POINTER_TYPE:
+                    return 8;
+                case CHAR_TYPE:
+                case BOOL:
+                    return 1;
+                default:
+                    return DOUBLEWORD;
+            }
+        }
+        case TYPE_KIND_RECORD:
+        {
+            struct RecordType *record = gpc_type_get_record(element_type);
+            long long size = 0;
+            if (record != NULL &&
+                codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, record, &size) == 0 &&
+                size > 0 && size <= INT_MAX)
+                return (int)size;
+            return DOUBLEWORD;
+        }
+        case TYPE_KIND_POINTER:
+        case TYPE_KIND_PROCEDURE:
+            return 8;
+        case TYPE_KIND_ARRAY:
+            return DOUBLEWORD;
+        default:
+            return DOUBLEWORD;
+    }
+}
+
+static int codegen_dynamic_array_descriptor_bytes(int element_size)
+{
+    int descriptor_size = 4 * DOUBLEWORD;
+    int needed = element_size * 2;
+    if (needed > descriptor_size)
+        descriptor_size = needed;
+    return descriptor_size;
 }
 
 /* Code generation for an anonymous function/procedure
@@ -2086,3 +2207,6 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
     }
     return inst_list;
 }
+#if GPC_ENABLE_REG_DEBUG
+extern const char *g_reg_debug_context;
+#endif
