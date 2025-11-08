@@ -3,6 +3,7 @@
 #include "pascal_expression.h"
 #include "pascal_keywords.h"
 #include "pascal_peek.h"
+#include "pascal_statement_keywords.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,36 +151,6 @@ static bool is_reserved_keyword_slice(const char* slice, size_t len) {
     return false;
 }
 
-static const pascal_keyword_entry_t* find_statement_keyword(const statement_dispatch_args_t* dispatch, const char* slice, size_t len) {
-    if (dispatch == NULL || dispatch->entries == NULL || slice == NULL || len == 0) {
-        return NULL;
-    }
-    for (size_t i = 0; i < dispatch->entry_count; ++i) {
-        const pascal_keyword_entry_t* entry = &dispatch->entries[i];
-        if (entry->parser == NULL || entry->keyword == NULL) {
-            continue;
-        }
-        if (entry->length == len && strncasecmp(slice, entry->keyword, len) == 0) {
-            return entry;
-        }
-    }
-    return NULL;
-}
-
-static void register_statement_keyword(statement_dispatch_args_t* dispatch, size_t capacity, size_t* index, const char* keyword, combinator_t* parser) {
-    if (dispatch == NULL || dispatch->entries == NULL || index == NULL || keyword == NULL || parser == NULL) {
-        return;
-    }
-    if (*index >= capacity) {
-        return;
-    }
-    pascal_keyword_entry_t* entry = &dispatch->entries[*index];
-    entry->keyword = keyword;
-    entry->length = strlen(keyword);
-    entry->parser = parser;
-    (*index)++;
-}
-
 static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_name) {
     (void)parser_name;
     statement_dispatch_args_t* dispatch = (statement_dispatch_args_t*)args;
@@ -216,9 +187,30 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             cursor++;
         }
         size_t ident_len = (size_t)(cursor - pos);
-        const pascal_keyword_entry_t* entry = find_statement_keyword(dispatch, slice, ident_len);
-        if (entry != NULL && entry->parser != NULL) {
-            return parse(in, entry->parser);
+        size_t buffer_len = ident_len + 1;
+        char stack_buf[32];
+        char* keyword_buf = stack_buf;
+        bool heap_keyword = false;
+        if (buffer_len > sizeof(stack_buf)) {
+            keyword_buf = (char*)safe_malloc(buffer_len);
+            heap_keyword = true;
+        }
+        memcpy(keyword_buf, slice, ident_len);
+        keyword_buf[ident_len] = '\0';
+        for (size_t i = 0; i < ident_len; ++i) {
+            keyword_buf[i] = (char)tolower((unsigned char)keyword_buf[i]);
+        }
+        const struct statement_keyword_record* keyword_record = statement_keyword_lookup(keyword_buf, ident_len);
+        if (heap_keyword) {
+            free(keyword_buf);
+        }
+        if (keyword_record != NULL &&
+            dispatch->keyword_parsers != NULL &&
+            (size_t)keyword_record->id < dispatch->keyword_count) {
+            combinator_t* keyword_parser = dispatch->keyword_parsers[keyword_record->id];
+            if (keyword_parser != NULL) {
+                return parse(in, keyword_parser);
+            }
         }
 
         if (dispatch->label_parser != NULL && peek_label_statement(in)) {
@@ -875,29 +867,27 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    const size_t statement_keyword_capacity = 14;
     statement_dispatch_args_t* dispatch_args = (statement_dispatch_args_t*)safe_malloc(sizeof(statement_dispatch_args_t));
     memset(dispatch_args, 0, sizeof(*dispatch_args));
-    dispatch_args->entries = (pascal_keyword_entry_t*)safe_malloc(sizeof(pascal_keyword_entry_t) * statement_keyword_capacity);
-    memset(dispatch_args->entries, 0, sizeof(pascal_keyword_entry_t) * statement_keyword_capacity);
-
-    size_t entry_index = 0;
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "begin", begin_end_block);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "goto", goto_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "try", try_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "case", case_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "raise", raise_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "inherited", inherited_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "break", break_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "exit", exit_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "asm", asm_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "if", if_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "for", for_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "repeat", repeat_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "while", while_stmt);
-    register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "with", with_stmt);
-
-    dispatch_args->entry_count = entry_index;
+    dispatch_args->keyword_count = STMT_KW_COUNT;
+    dispatch_args->keyword_parsers = (combinator_t**)safe_malloc(sizeof(combinator_t*) * STMT_KW_COUNT);
+    for (size_t i = 0; i < STMT_KW_COUNT; ++i) {
+        dispatch_args->keyword_parsers[i] = NULL;
+    }
+    dispatch_args->keyword_parsers[STMT_KW_BEGIN] = begin_end_block;
+    dispatch_args->keyword_parsers[STMT_KW_GOTO] = goto_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_TRY] = try_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_CASE] = case_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_RAISE] = raise_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_INHERITED] = inherited_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_BREAK] = break_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_EXIT] = exit_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_ASM] = asm_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_IF] = if_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_FOR] = for_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_REPEAT] = repeat_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_WHILE] = while_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_WITH] = with_stmt;
     dispatch_args->label_parser = labeled_stmt;
     dispatch_args->assignment_parser = assignment;
     dispatch_args->expr_parser = expr_stmt;

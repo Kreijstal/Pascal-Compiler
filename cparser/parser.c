@@ -1801,13 +1801,13 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             case COMB_STATEMENT_DISPATCH: {
                 statement_dispatch_args_t* args = (statement_dispatch_args_t*)comb->args;
                 if (args != NULL) {
-                    if (args->entries != NULL) {
-                        for (size_t i = 0; i < args->entry_count; ++i) {
-                            if (args->entries[i].parser != NULL) {
-                                free_combinator_recursive(args->entries[i].parser, visited, extras);
+                    if (args->keyword_parsers != NULL) {
+                        for (size_t i = 0; i < args->keyword_count; ++i) {
+                            if (args->keyword_parsers[i] != NULL) {
+                                free_combinator_recursive(args->keyword_parsers[i], visited, extras);
                             }
                         }
-                        free(args->entries);
+                        free(args->keyword_parsers);
                     }
                     if (args->label_parser != NULL) {
                         free_combinator_recursive(args->label_parser, visited, extras);

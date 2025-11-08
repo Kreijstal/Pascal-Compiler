@@ -14,6 +14,7 @@ pascal_parser_sources = [
   'cparser/examples/pascal_parser/pascal_keywords.c',
   'cparser/examples/pascal_parser/pascal_preprocessor.c',
   'cparser/examples/pascal_parser/pascal_peek.c',
+  'cparser/examples/pascal_parser/pascal_statement_keywords_hash.c',
 ]
 
 parser_inc = include_directories('cparser')
