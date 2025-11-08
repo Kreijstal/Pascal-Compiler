@@ -4,6 +4,7 @@
 #include "pascal_expression.h"
 #include "pascal_type.h"
 #include "pascal_keywords.h"
+#include "pascal_peek.h"
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -108,6 +109,23 @@ static combinator_t* create_label_section(void) {
         token(keyword_ci("label")),
         sep_by(create_label_identifier(), token(match(","))),
         token(match(";")),
+        NULL
+    );
+}
+
+static combinator_t* make_generic_type_prefix(void) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        optional(token(keyword_ci("generic"))),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("<")),
+        NULL
+    );
+}
+
+static combinator_t* make_inferred_var_prefix(void) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match(":=")),
         NULL
     );
 }
@@ -607,6 +625,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),                 // semicolon (optional for last decl)
         NULL
     );
+    generic_type_decl = right(peek(make_generic_type_prefix()), generic_type_decl);
 
     // Regular type declaration: TFoo = Integer
     combinator_t* regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
@@ -658,8 +677,10 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* inferred_var_decl_guarded = right(peek(make_inferred_var_prefix()), inferred_var_decl);
+
     combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
-        inferred_var_decl,
+        inferred_var_decl_guarded,
         typed_var_decl,
         NULL
     );
@@ -1248,8 +1269,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* inferred_program_var_guarded = right(peek(make_inferred_var_prefix()), inferred_program_var_decl);
+
     combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
-        inferred_program_var_decl,
+        inferred_program_var_guarded,
         typed_program_var_decl,
         NULL
     );
@@ -1303,6 +1326,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(";")),                           // semicolon
         NULL
     );
+    generic_type_decl_prog = right(peek(make_generic_type_prefix()), generic_type_decl_prog);
 
     // Regular type declaration: TFoo = Integer
     combinator_t* regular_type_decl_prog = seq(new_combinator(), PASCAL_T_TYPE_DECL,
