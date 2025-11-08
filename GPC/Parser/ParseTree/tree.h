@@ -127,6 +127,7 @@ typedef struct Tree
 
             int s_range;
             int e_range;
+            char *range_str;  /* Original range string (e.g., "1..N") for constant resolution */
             struct Statement *initializer;
             int is_typed_const;
             int has_static_storage;
@@ -200,7 +201,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer, struct RecordType *inline_record_type);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
-    struct Statement *initializer);
+    char *range_str, struct Statement *initializer);
 
 Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *value);
 

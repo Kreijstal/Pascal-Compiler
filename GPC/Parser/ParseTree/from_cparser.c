@@ -1562,8 +1562,12 @@ static ListNode_t *convert_param(ast_t *param_node) {
         {
             int element_type = type_info.element_type;
             char *element_type_id = type_info.element_type_id != NULL ? strdup(type_info.element_type_id) : NULL;
+            char *range_str = NULL;
+            if (type_info.array_dimensions != NULL && type_info.array_dimensions->cur != NULL) {
+                range_str = strdup((char *)type_info.array_dimensions->cur);
+            }
             param_decl = mk_arraydecl(param_node->line, id_node, element_type, element_type_id,
-                                      type_info.start, type_info.end, NULL);
+                                      type_info.start, type_info.end, range_str, NULL);
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
@@ -1707,8 +1711,14 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
         
+        /* Extract the range string from array_dimensions if available */
+        char *range_str = NULL;
+        if (type_info.array_dimensions != NULL && type_info.array_dimensions->cur != NULL) {
+            range_str = strdup((char *)type_info.array_dimensions->cur);
+        }
+        
         Tree_t *decl = mk_arraydecl(decl_node->line, ids, element_type, element_type_id,
-                                    type_info.start, type_info.end, initializer_stmt);
+                                    type_info.start, type_info.end, range_str, initializer_stmt);
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         return decl;
@@ -2010,8 +2020,12 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         initializer = mk_compoundstatement(const_decl_node->line, assignments);
 
     ListNode_t *ids = CreateListNode(*id_ptr, LIST_STRING);
+    char *range_str = NULL;
+    if (type_info->array_dimensions != NULL && type_info->array_dimensions->cur != NULL) {
+        range_str = strdup((char *)type_info->array_dimensions->cur);
+    }
     Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
-                                      type_info->element_type_id, start, end, initializer);
+                                      type_info->element_type_id, start, end, range_str, initializer);
     type_info->element_type_id = NULL;
 
     if (type_info->array_dimensions != NULL) {

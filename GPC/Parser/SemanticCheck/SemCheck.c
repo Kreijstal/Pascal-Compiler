@@ -2161,10 +2161,80 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     assert(element_type != NULL && "Array element type must be createable from VarType");
                 }
                 
+                /* Resolve array bounds from constant identifiers if necessary.
+                 * This handles inline array declarations like: var arr: array[1..N] of integer
+                 * where N is a const. The parser stores the original range string (e.g., "1..N")
+                 * in range_str, which we parse and resolve here. */
+                int start_bound = tree->tree_data.arr_decl_data.s_range;
+                int end_bound = tree->tree_data.arr_decl_data.e_range;
+                
+                if (tree->tree_data.arr_decl_data.range_str != NULL)
+                {
+                    char *range_str = tree->tree_data.arr_decl_data.range_str;
+                    char *sep = strstr(range_str, "..");
+                    
+                    if (sep != NULL)
+                    {
+                        /* Parse "start..end" format */
+                        size_t start_len = sep - range_str;
+                        char *start_str = (char *)malloc(start_len + 1);
+                        char *end_str = strdup(sep + 2);
+                        
+                        if (start_str != NULL && end_str != NULL)
+                        {
+                            strncpy(start_str, range_str, start_len);
+                            start_str[start_len] = '\0';
+                            
+                            /* Trim whitespace */
+                            char *s = start_str;
+                            while (*s == ' ' || *s == '\t') s++;
+                            char *e = end_str;
+                            while (*e == ' ' || *e == '\t') e++;
+                            char *p = s + strlen(s) - 1;
+                            while (p > s && (*p == ' ' || *p == '\t')) *p-- = '\0';
+                            p = e + strlen(e) - 1;
+                            while (p > e && (*p == ' ' || *p == '\t')) *p-- = '\0';
+                            
+                            /* Try to resolve start bound as constant */
+                            long long start_val = 0;
+                            if (resolve_const_identifier(symtab, s, &start_val) == 0)
+                            {
+                                start_bound = (int)start_val;
+                            }
+                            else
+                            {
+                                /* Try parsing as integer literal */
+                                char *endptr;
+                                long num = strtol(s, &endptr, 10);
+                                if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                    start_bound = (int)num;
+                            }
+                            
+                            /* Try to resolve end bound as constant */
+                            long long end_val = 0;
+                            if (resolve_const_identifier(symtab, e, &end_val) == 0)
+                            {
+                                end_bound = (int)end_val;
+                            }
+                            else
+                            {
+                                /* Try parsing as integer literal */
+                                char *endptr;
+                                long num = strtol(e, &endptr, 10);
+                                if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                    end_bound = (int)num;
+                            }
+                            
+                            free(start_str);
+                            free(end_str);
+                        }
+                    }
+                }
+                
                 GpcType *array_type = create_array_type(
                     element_type,
-                    tree->tree_data.arr_decl_data.s_range,
-                    tree->tree_data.arr_decl_data.e_range
+                    start_bound,
+                    end_bound
                 );
                 assert(array_type != NULL && "Failed to create array type");
                 
@@ -2179,8 +2249,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (temp_alias != NULL)
                     {
                         temp_alias->is_array = 1;
-                        temp_alias->array_start = tree->tree_data.arr_decl_data.s_range;
-                        temp_alias->array_end = tree->tree_data.arr_decl_data.e_range;
+                        temp_alias->array_start = start_bound;
+                        temp_alias->array_end = end_bound;
                         temp_alias->array_element_type_id = strdup(tree->tree_data.arr_decl_data.type_id);
                         temp_alias->array_element_type = tree->tree_data.arr_decl_data.type;
                         
