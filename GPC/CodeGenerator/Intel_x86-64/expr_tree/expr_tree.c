@@ -878,6 +878,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list, ctx, func_type, expr->expr_data.function_call_data.id, arg_start_index);
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
+        codegen_release_function_call_mangled_id(expr);
         if (expr_uses_qword_gpctype(expr))
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
         else

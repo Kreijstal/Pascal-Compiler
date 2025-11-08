@@ -1174,6 +1174,8 @@ void destroy_expr(struct Expression *expr)
 
         case EXPR_FUNCTION_CALL:
           free(expr->expr_data.function_call_data.id);
+          if (expr->expr_data.function_call_data.mangled_id != NULL)
+              free(expr->expr_data.function_call_data.mangled_id);
           destroy_list(expr->expr_data.function_call_data.args_expr);
           break;
 

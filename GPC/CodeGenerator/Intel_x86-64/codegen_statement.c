@@ -951,6 +951,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                 src_expr->expr_data.function_call_data.mangled_id);
             inst_list = add_inst(inst_list, buffer);
+            codegen_release_function_call_mangled_id(src_expr);
 
             free_reg(get_reg_stack(), dest_reg);
             free_arg_regs();

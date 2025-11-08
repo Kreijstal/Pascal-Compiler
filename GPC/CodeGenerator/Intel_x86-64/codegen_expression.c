@@ -302,6 +302,18 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag)
     return (expr->resolved_type == type_tag);
 }
 
+void codegen_release_function_call_mangled_id(struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+}
+
 int codegen_expr_is_signed(const struct Expression *expr)
 {
     return expr_is_signed_gpctype(expr);

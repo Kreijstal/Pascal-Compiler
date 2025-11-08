@@ -27,6 +27,7 @@
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
+#include "../../List/List.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
@@ -3693,6 +3694,16 @@ int semcheck_funccall(int *type_return,
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, id);
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
+    if (mangled_name == NULL)
+    {
+        fprintf(stderr, "Error: failed to mangle function name for call to %s\n",
+            id != NULL ? id : "(unknown)");
+        *type_return = UNKNOWN_TYPE;
+        destroy_list(overload_candidates);
+        return ++return_val;
+    }
+
+    int final_status = 0;
 
     int match_count = 0;
 
@@ -3767,7 +3778,18 @@ int semcheck_funccall(int *type_return,
 
     if (num_best_matches == 1)
     {
-        expr->expr_data.function_call_data.mangled_id = strdup(best_match->mangled_id);
+        char *resolved_name = strdup(best_match->mangled_id);
+        if (resolved_name == NULL)
+        {
+            fprintf(stderr, "Error: failed to duplicate mangled name for %s\n",
+                best_match->id ? best_match->id : "(anonymous)");
+            *type_return = UNKNOWN_TYPE;
+            final_status = ++return_val;
+            goto funccall_cleanup;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+            free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = resolved_name;
         semcheck_set_function_call_target(expr, best_match);
         hash_return = best_match;
         scope_return = 0; // FIXME
@@ -3776,13 +3798,15 @@ int semcheck_funccall(int *type_return,
     {
         fprintf(stderr, "Error on line %d, call to function %s does not match any available overload\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
-        return ++return_val;
+        final_status = ++return_val;
+        goto funccall_cleanup;
     }
     else
     {
         fprintf(stderr, "Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
-        return ++return_val;
+        final_status = ++return_val;
+        goto funccall_cleanup;
     }
 
 
@@ -3929,5 +3953,12 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    return return_val;
+    final_status = return_val;
+
+funccall_cleanup:
+    if (overload_candidates != NULL)
+        DestroyList(overload_candidates);
+    if (mangled_name != NULL)
+        free(mangled_name);
+    return final_status;
 }
