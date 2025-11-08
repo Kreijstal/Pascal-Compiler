@@ -2032,7 +2032,7 @@ static int semcheck_recordaccess(int *type_return,
             if (inner_expr != NULL)
             {
                 /* Create a new RECORD_ACCESS for inner_expr.field */
-                struct Expression *new_record_access = (struct Expression *)malloc(sizeof(struct Expression));
+                struct Expression *new_record_access = (struct Expression *)calloc(1, sizeof(struct Expression));
                 if (new_record_access == NULL)
                 {
                     fprintf(stderr, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
