@@ -153,6 +153,7 @@ void expr_altern(combinator_t * exp, int prec, tag_t tag, combinator_t * comb);
 
 // --- Input Stream Helpers ---
 input_t * new_input();
+void free_input(input_t *in);
 char read1(input_t * in);
 void set_ast_position(ast_t* ast, input_t* in);
 void init_input_buffer(input_t *in, char *buffer, int length);

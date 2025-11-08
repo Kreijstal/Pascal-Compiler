@@ -96,7 +96,7 @@ void test_pnot_combinator(void) {
     free_error(res2.value.error);
     free_combinator(p2);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_peek_combinator(void) {
@@ -114,7 +114,7 @@ void test_peek_combinator(void) {
     free_error(res2.value.error);
     free_combinator(p2);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_gseq_combinator(void) {
@@ -133,7 +133,7 @@ void test_gseq_combinator(void) {
     free_error(res2.value.error);
     free_combinator(p2);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_between_combinator(void) {
@@ -147,7 +147,7 @@ void test_between_combinator(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_sep_by_combinator(void) {
@@ -166,7 +166,7 @@ void test_sep_by_combinator(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_sep_by1_combinator(void) {
@@ -231,7 +231,7 @@ void test_sep_end_by_combinator(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 static combinator_t* add_op() {
@@ -255,7 +255,7 @@ void test_chainl1_combinator(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_any_char_combinator(void) {
@@ -272,7 +272,7 @@ void test_any_char_combinator(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 static ast_t* to_uppercase(ast_t* ast) {
@@ -296,7 +296,7 @@ void test_map_combinator(void) {
     free_ast(res.value.ast);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_multi_prefers_furthest_error(void) {
@@ -333,7 +333,7 @@ void test_multi_prefers_furthest_error(void) {
     free_error(res.value.error);
     free_combinator(parser);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 static ParseError* add_context_to_error(ParseError* err) {
@@ -365,7 +365,7 @@ void test_errmap_combinator(void) {
     free_error(res.value.error);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 static bool is_digit_predicate(char c) {
@@ -394,7 +394,7 @@ void test_satisfy_combinator(void) {
     free_combinator(p);
 
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_partial_ast_functionality(void) {
@@ -433,7 +433,7 @@ void test_partial_ast_functionality(void) {
     free_error(wrapped_result.value.error);
     free_combinator(p);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_expression_parser_partial_ast(void) {
@@ -489,7 +489,7 @@ void test_expression_parser_partial_ast(void) {
     free_combinator(expr_parser);
     free_combinator(failing_parser);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_expression_parser_invalid_input(void) {
@@ -525,7 +525,7 @@ void test_expression_parser_invalid_input(void) {
     free_ast(result.value.ast);
     free_combinator(expr_parser);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 void test_expression_parser_behavior(void) {
@@ -561,7 +561,7 @@ void test_expression_parser_behavior(void) {
     free_ast(result.value.ast);
     free_combinator(expr_parser);
     free(input->buffer);
-    free(input);
+    free_input(input);
 }
 
 TEST_LIST = {
