@@ -32,6 +32,7 @@
 #include "pascal_declaration.h"
 
 #include "flags.h"
+#include "benchmark.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParseTree/from_cparser.h"
 #include "Parser/pascal_frontend.h"
@@ -71,6 +72,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
     fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
     fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
+    fprintf(stderr, "    --benchmark           Enable detailed performance profiling\n");
 }
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -338,6 +340,11 @@ static void set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "Timing instrumentation enabled.\n\n");
             set_time_passes_flag();
+        }
+        else if (strcmp(arg, "--benchmark") == 0 || strcmp(arg, "-benchmark") == 0)
+        {
+            fprintf(stderr, "Detailed performance profiling enabled.\n\n");
+            set_benchmark_flag();
         }
         else
         {
@@ -679,6 +686,15 @@ int main(int argc, char **argv)
     if (optional_count > 0)
         set_flags(argv + 3, optional_count);
 
+    /* Initialize benchmarking if enabled */
+    if (benchmark_flag())
+    {
+        benchmark_init();
+        benchmark_enable(true);
+        atexit(benchmark_print_summary);
+        atexit(benchmark_print_call_counts);
+    }
+
     if (time_passes_flag())
         atexit(emit_timing_summary);
 
@@ -697,7 +713,15 @@ int main(int argc, char **argv)
     Tree_t *prelude_tree = NULL;
     bool track_time = time_passes_flag();
     double stdlib_start = track_time ? current_time_seconds() : 0.0;
+    
+    if (benchmark_flag())
+        benchmark_start_phase(BENCH_PHASE_PARSE_TOTAL);
+    
     bool parsed_stdlib = parse_pascal_file(stdlib_path, &prelude_tree, convert_to_tree);
+    
+    if (benchmark_flag())
+        benchmark_end_phase(BENCH_PHASE_PARSE_TOTAL);
+    
     if (track_time)
     {
         g_time_parse_stdlib += current_time_seconds() - stdlib_start;
@@ -718,7 +742,15 @@ int main(int argc, char **argv)
 
     Tree_t *user_tree = NULL;
     double user_start = track_time ? current_time_seconds() : 0.0;
+    
+    if (benchmark_flag())
+        benchmark_start_phase(BENCH_PHASE_PARSE_TOTAL);
+    
     bool parsed_user = parse_pascal_file(input_file, &user_tree, convert_to_tree);
+    
+    if (benchmark_flag())
+        benchmark_end_phase(BENCH_PHASE_PARSE_TOTAL);
+    
     if (track_time)
     {
         g_time_parse_user += current_time_seconds() - user_start;
@@ -830,7 +862,15 @@ int main(int argc, char **argv)
 
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
+    
+    if (benchmark_flag())
+        benchmark_start_phase(BENCH_PHASE_SEMANTIC_TOTAL);
+    
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+    
+    if (benchmark_flag())
+        benchmark_end_phase(BENCH_PHASE_SEMANTIC_TOTAL);
+    
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
     int exit_code = 0;
