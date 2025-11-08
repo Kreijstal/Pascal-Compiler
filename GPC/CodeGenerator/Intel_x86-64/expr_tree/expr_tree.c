@@ -803,13 +803,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
-        /* For function calls, get the GpcType from the resolved_func if available.
-         * Note: This still has a potential use-after-free if resolved_func points to freed memory.
-         * TODO: Add cached GpcType to FunctionCall structure like we did for ProcedureCall. */
+        /* For function calls, get the GpcType from cached call info populated during semcheck.
+         * Fall back to a fresh symbol lookup when metadata is unavailable. */
         struct GpcType *func_type = NULL;
-        if (expr->expr_data.function_call_data.resolved_func != NULL)
+        if (expr->expr_data.function_call_data.is_call_info_valid)
         {
-            func_type = expr->expr_data.function_call_data.resolved_func->type;
+            func_type = expr->expr_data.function_call_data.call_gpc_type;
+        }
+        if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
+            expr->expr_data.function_call_data.id != NULL)
+        {
+            HashNode_t *func_node = NULL;
+            if (FindIdent(&func_node, ctx->symtab,
+                    expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
+            {
+                func_type = func_node->type;
+            }
         }
         
         /* Check if the function being called requires a static link */

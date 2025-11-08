@@ -216,7 +216,6 @@ void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_
 
     info->mangled_name = mangled_name;
     info->lexical_depth = lexical_depth;
-
     ListNode_t *entry = CreateListNode(info, LIST_UNSPECIFIED);
     if (ctx->static_link_procs == NULL)
         ctx->static_link_procs = entry;

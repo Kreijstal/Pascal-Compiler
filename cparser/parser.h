@@ -77,13 +77,22 @@ struct ParseResult {
 // Main parser struct
 typedef enum {
     P_MATCH, P_MATCH_RAW, P_INTEGER, P_CIDENT, P_STRING, P_UNTIL, P_SUCCEED, P_ANY_CHAR, P_SATISFY, P_CI_KEYWORD,
+    P_LAYOUT,
     COMB_EXPECT, COMB_SEQ, COMB_MULTI, COMB_FLATMAP, COMB_MANY, COMB_EXPR,
     COMB_OPTIONAL, COMB_SEP_BY, COMB_SEP_BY1, COMB_LEFT, COMB_RIGHT, COMB_NOT, COMB_PEEK,
     COMB_GSEQ, COMB_BETWEEN, COMB_SEP_END_BY, COMB_CHAINL1, COMB_MAP, COMB_ERRMAP,
     COMB_COMMIT,
+    COMB_FOR_INIT_DISPATCH,
+    COMB_ASSIGNMENT_GUARD,
+    COMB_LABEL_GUARD,
+    COMB_STATEMENT_DISPATCH,
+    COMB_CLASS_MEMBER_DISPATCH,
+    COMB_KEYWORD_DISPATCH,
+    COMB_TYPE_DISPATCH,
     COMB_LAZY,
     COMB_VARIANT_TAG,
     COMB_VARIANT_PART,
+    COMB_MAIN_BLOCK_CONTENT,
     P_EOI
 } parser_type_t;
 
@@ -119,6 +128,48 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
 
 extern ast_t * ast_nil;
 
+// --- Profiling & Diagnostics ---
+typedef struct parser_stats {
+    size_t parse_calls;
+    size_t parse_successes;
+    size_t parse_failures;
+    size_t memo_hits;
+    size_t memo_misses;
+    size_t memo_recursions;
+    size_t memo_entries_created;
+    size_t memo_replays;
+    size_t memo_result_clones;
+    size_t ast_nodes_created;
+    size_t ast_nodes_copied;
+} parser_stats_t;
+
+void parser_stats_reset(void);
+parser_stats_t parser_stats_snapshot(void);
+
+typedef enum {
+    PARSER_MEMO_FULL,
+    PARSER_MEMO_FAILURES_ONLY,
+    PARSER_MEMO_DISABLED
+} parser_memo_mode_t;
+
+void parser_set_memo_mode(parser_memo_mode_t mode);
+
+typedef struct parser_comb_stat {
+    size_t memo_id;
+    char* name;
+    parser_type_t type;
+    size_t calls;
+    size_t successes;
+    size_t failures;
+    size_t failure_with_consumption;
+    size_t total_failure_consumed;
+    size_t max_failure_consumed;
+    size_t total_success_consumed;
+} parser_comb_stat_t;
+
+void parser_comb_stats_set_enabled(bool enabled);
+void parser_comb_stats_reset(void);
+const parser_comb_stat_t* parser_comb_stats_snapshot(size_t* count);
 
 //=============================================================================
 // Public Function Prototypes
@@ -182,6 +233,63 @@ ParseResult make_success(ast_t* ast);
 ParseResult make_failure(input_t* in, char* message);
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected);
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause);
+
+typedef struct for_init_dispatch_args {
+    combinator_t* assignment_parser;
+    combinator_t* identifier_parser;
+} for_init_dispatch_args_t;
+
+typedef struct pascal_keyword_entry {
+    const char* keyword;
+    size_t length;
+    combinator_t* parser;
+} pascal_keyword_entry_t;
+
+typedef struct statement_dispatch_args {
+    combinator_t** keyword_parsers;
+    size_t keyword_count;
+    combinator_t* label_parser;
+    combinator_t* assignment_parser;
+    combinator_t* expr_parser;
+} statement_dispatch_args_t;
+
+typedef struct class_member_dispatch_args {
+    combinator_t* constructor_parser;
+    combinator_t* destructor_parser;
+    combinator_t* procedure_parser;
+    combinator_t* function_parser;
+    combinator_t* operator_parser;
+    combinator_t* property_parser;
+    combinator_t* field_parser;
+} class_member_dispatch_args_t;
+
+typedef struct keyword_dispatch_args {
+    pascal_keyword_entry_t* entries;
+    size_t entry_count;
+    const char** skip_keywords;
+    size_t skip_keyword_count;
+    combinator_t* fallback_parser;
+} keyword_dispatch_args_t;
+
+typedef struct type_dispatch_args {
+    combinator_t* helper_parser;
+    combinator_t* reference_parser;
+    combinator_t* interface_parser;
+    combinator_t* class_parser;
+    combinator_t* record_parser;
+    combinator_t* enumerated_parser;
+    combinator_t* array_parser;
+    combinator_t* set_parser;
+    combinator_t* range_parser;
+    combinator_t* pointer_parser;
+    combinator_t* specialize_parser;
+    combinator_t* constructed_parser;
+    combinator_t* identifier_parser;
+} type_dispatch_args_t;
+
+typedef struct main_block_args {
+    combinator_t** stmt_parser;
+} main_block_args_t;
 
 // --- Helper Function Prototypes ---
 void* safe_malloc(size_t size);

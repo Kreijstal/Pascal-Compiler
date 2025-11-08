@@ -4,11 +4,26 @@
 #include "pascal_expression.h"
 #include "pascal_type.h"
 #include "pascal_keywords.h"
+#include "pascal_peek.h"
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
 #include <stdbool.h>
+
+// Windows compatibility: strndup is not available on Windows
+#ifdef _WIN32
+static char* strndup(const char* s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char* buf = (char*)malloc(len + 1);
+    if (buf == NULL)
+        return NULL;
+    memcpy(buf, s, len);
+    buf[len] = '\0';
+    return buf;
+}
+#endif
 
 extern ast_t* ast_nil;
 
@@ -56,6 +71,305 @@ static ast_t* map_external_directive(ast_t* ast) {
 
 static ast_t* map_assembler_directive(ast_t* ast) {
     return make_modifier_node(ast, "assembler");
+}
+
+static keyword_dispatch_args_t* create_keyword_dispatch(size_t capacity) {
+    keyword_dispatch_args_t* args = (keyword_dispatch_args_t*)safe_malloc(sizeof(keyword_dispatch_args_t));
+    memset(args, 0, sizeof(*args));
+    if (capacity > 0) {
+        args->entries = (pascal_keyword_entry_t*)safe_malloc(sizeof(pascal_keyword_entry_t) * capacity);
+        memset(args->entries, 0, sizeof(pascal_keyword_entry_t) * capacity);
+    } else {
+        args->entries = NULL;
+    }
+    args->entry_count = 0;
+    args->skip_keywords = NULL;
+    args->skip_keyword_count = 0;
+    args->fallback_parser = NULL;
+    return args;
+}
+
+static void register_keyword_entry(keyword_dispatch_args_t* args, size_t capacity, size_t* index, const char* keyword, combinator_t* parser) {
+    if (args == NULL || args->entries == NULL || index == NULL || parser == NULL || keyword == NULL) {
+        return;
+    }
+    if (*index >= capacity) {
+        return;
+    }
+    pascal_keyword_entry_t* entry = &args->entries[*index];
+    entry->keyword = keyword;
+    entry->length = strlen(keyword);
+    entry->parser = parser;
+    (*index)++;
+}
+
+static bool dispatch_word_should_skip(const keyword_dispatch_args_t* args, const pascal_word_slice_t* word) {
+    if (args == NULL || args->skip_keywords == NULL || word == NULL || word->start == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < args->skip_keyword_count; ++i) {
+        const char* candidate = args->skip_keywords[i];
+        if (candidate != NULL && pascal_word_equals_ci(word, candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool keyword_dispatch_peek_word(const keyword_dispatch_args_t* args, const input_t* in, pascal_word_slice_t* out) {
+    if (args == NULL || in == NULL || out == NULL) {
+        return false;
+    }
+    pascal_word_slice_t slice;
+    int pos = in->start;
+    size_t guard = 0;
+    while (true) {
+        if (!pascal_peek_word_after(in, pos, &slice)) {
+            return false;
+        }
+        if (!dispatch_word_should_skip(args, &slice)) {
+            *out = slice;
+            return true;
+        }
+        pos = skip_pascal_layout_preview(in, slice.end_pos);
+        if (++guard > 4) {
+            return false;
+        }
+    }
+}
+
+static ParseResult keyword_dispatch_fn(input_t* in, void* args, char* parser_name) {
+    keyword_dispatch_args_t* dispatch = (keyword_dispatch_args_t*)args;
+    if (dispatch == NULL) {
+        return make_failure(in, strdup("keyword dispatcher misconfigured"));
+    }
+    pascal_word_slice_t word = {0};
+    if (!keyword_dispatch_peek_word(dispatch, in, &word)) {
+        if (dispatch->fallback_parser != NULL) {
+            return parse(in, dispatch->fallback_parser);
+        }
+        return make_failure(in, strdup("keyword dispatcher did not find a match"));
+    }
+    for (size_t i = 0; i < dispatch->entry_count; ++i) {
+        pascal_keyword_entry_t* entry = &dispatch->entries[i];
+        if (entry->keyword == NULL || entry->parser == NULL) {
+            continue;
+        }
+        if (pascal_word_equals_ci(&word, entry->keyword)) {
+            return parse(in, entry->parser);
+        }
+    }
+    if (dispatch->fallback_parser != NULL) {
+        return parse(in, dispatch->fallback_parser);
+    }
+    char* unexpected = strndup(word.start, word.length);
+    return make_failure_v2(in, parser_name, strdup("Unexpected keyword in dispatcher"), unexpected);
+}
+
+static int resolve_input_length_local(const input_t* in) {
+    if (in == NULL) {
+        return 0;
+    }
+    if (in->length > 0) {
+        return in->length;
+    }
+    if (in->buffer == NULL) {
+        return 0;
+    }
+    return (int)strlen(in->buffer);
+}
+
+static bool looks_like_range_literal(const input_t* in, int pos) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+    const char* buffer = in->buffer;
+    int length = resolve_input_length_local(in);
+    int limit = pos + 512;
+    if (limit > length) {
+        limit = length;
+    }
+    bool in_string = false;
+    while (pos < limit) {
+        unsigned char ch = (unsigned char)buffer[pos];
+        if (in_string) {
+            if (ch == '\'') {
+                if (pos + 1 < length && buffer[pos + 1] == '\'') {
+                    pos += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            pos++;
+            continue;
+        }
+        if (ch == '\'') {
+            in_string = true;
+            pos++;
+            continue;
+        }
+        if (ch == '{') {
+            pos++;
+            while (pos < length && buffer[pos] != '}') {
+                pos++;
+            }
+            if (pos < length) pos++;
+            continue;
+        }
+        if (ch == '(' && pos + 1 < length && buffer[pos + 1] == '*') {
+            pos += 2;
+            while ((pos + 1) < length && !(buffer[pos] == '*' && buffer[pos + 1] == ')')) {
+                pos++;
+            }
+            if ((pos + 1) < length) {
+                pos += 2;
+            } else {
+                pos = length;
+            }
+            continue;
+        }
+        if (ch == '/' && pos + 1 < length && buffer[pos + 1] == '/') {
+            pos += 2;
+            while (pos < length && buffer[pos] != '\n' && buffer[pos] != '\r') {
+                pos++;
+            }
+            continue;
+        }
+        if (ch == ';' || ch == ')' || ch == ',') {
+            break;
+        }
+        if (ch == '.' && pos + 1 < length && buffer[pos + 1] == '.') {
+            return true;
+        }
+        pos++;
+    }
+    return false;
+}
+
+static bool looks_like_constructed_type(const input_t* in, int pos) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+    int length = resolve_input_length_local(in);
+    const char* buffer = in->buffer;
+    pascal_word_slice_t slice;
+    if (!pascal_peek_word_after(in, pos, &slice)) {
+        return false;
+    }
+    int cursor = slice.end_pos;
+    while (cursor < length) {
+        cursor = skip_pascal_layout_preview(in, cursor);
+        if (cursor >= length) {
+            break;
+        }
+        if (buffer[cursor] != '.') {
+            break;
+        }
+        cursor++;
+        if (!pascal_peek_word_after(in, cursor, &slice)) {
+            return false;
+        }
+        cursor = slice.end_pos;
+    }
+    cursor = skip_pascal_layout_preview(in, cursor);
+    return (cursor < length && buffer[cursor] == '<');
+}
+
+static ParseResult run_type_branch(input_t* in, combinator_t* branch) {
+    if (branch == NULL) {
+        return make_failure(in, strdup("type dispatcher missing branch parser"));
+    }
+    ParseResult res = parse(in, branch);
+    if (res.is_success) {
+        res.value.ast = ast1(PASCAL_T_TYPE_SPEC, res.value.ast);
+    }
+    return res;
+}
+
+static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* parser_name) {
+    type_dispatch_args_t* dispatch = (type_dispatch_args_t*)args;
+    if (dispatch == NULL) {
+        return make_failure(in, strdup("type dispatcher misconfigured"));
+    }
+    if (in == NULL || in->buffer == NULL) {
+        return make_failure(in, strdup("type dispatcher missing input"));
+    }
+    const char* buffer = in->buffer;
+    int length = resolve_input_length_local(in);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return make_failure_v2(in, parser_name, strdup("Unexpected end of input while parsing type"), NULL);
+    }
+    unsigned char ch = (unsigned char)buffer[pos];
+
+    if (dispatch->pointer_parser && ch == '^') {
+        return run_type_branch(in, dispatch->pointer_parser);
+    }
+    if (dispatch->enumerated_parser && ch == '(') {
+        return run_type_branch(in, dispatch->enumerated_parser);
+    }
+    if (dispatch->range_parser && (isdigit(ch) || ch == '\'' || ch == '$' || ch == '%' || ch == '#' || ch == '&' || ch == '+' || ch == '-')) {
+        return run_type_branch(in, dispatch->range_parser);
+    }
+
+    pascal_word_slice_t word;
+    if (pascal_peek_word_after(in, pos, &word)) {
+        if (dispatch->helper_parser && pascal_word_equals_ci(&word, "type")) {
+            pascal_word_slice_t next;
+            if (pascal_peek_word_after(in, word.end_pos, &next) && pascal_word_equals_ci(&next, "helper")) {
+                return run_type_branch(in, dispatch->helper_parser);
+            }
+        }
+        if (dispatch->reference_parser && pascal_word_equals_ci(&word, "reference")) {
+            return run_type_branch(in, dispatch->reference_parser);
+        }
+        if (dispatch->interface_parser && pascal_word_equals_ci(&word, "interface")) {
+            return run_type_branch(in, dispatch->interface_parser);
+        }
+        if (dispatch->class_parser && pascal_word_equals_ci(&word, "class")) {
+            return run_type_branch(in, dispatch->class_parser);
+        }
+        if (dispatch->record_parser && pascal_word_equals_ci(&word, "record")) {
+            return run_type_branch(in, dispatch->record_parser);
+        }
+        if (dispatch->array_parser && pascal_word_equals_ci(&word, "array")) {
+            return run_type_branch(in, dispatch->array_parser);
+        }
+        if (dispatch->set_parser && pascal_word_equals_ci(&word, "set")) {
+            return run_type_branch(in, dispatch->set_parser);
+        }
+        if (dispatch->specialize_parser && pascal_word_equals_ci(&word, "specialize")) {
+            return run_type_branch(in, dispatch->specialize_parser);
+        }
+        if (dispatch->record_parser && pascal_word_equals_ci(&word, "packed")) {
+            pascal_word_slice_t next;
+            if (pascal_peek_word_after(in, word.end_pos, &next)) {
+                if (dispatch->record_parser && pascal_word_equals_ci(&next, "record")) {
+                    return run_type_branch(in, dispatch->record_parser);
+                }
+                if (dispatch->array_parser && pascal_word_equals_ci(&next, "array")) {
+                    return run_type_branch(in, dispatch->array_parser);
+                }
+                if (dispatch->set_parser && pascal_word_equals_ci(&next, "set")) {
+                    return run_type_branch(in, dispatch->set_parser);
+                }
+            }
+        }
+    }
+
+    if (dispatch->range_parser && looks_like_range_literal(in, pos)) {
+        return run_type_branch(in, dispatch->range_parser);
+    }
+
+    if (dispatch->constructed_parser && looks_like_constructed_type(in, pos)) {
+        return run_type_branch(in, dispatch->constructed_parser);
+    }
+
+    if (dispatch->identifier_parser) {
+        return run_type_branch(in, dispatch->identifier_parser);
+    }
+
+    return make_failure_v2(in, parser_name, strdup("Unable to classify type definition"), NULL);
 }
 
 static ast_t* discard_ast(ast_t* ast) {
@@ -108,6 +422,23 @@ static combinator_t* create_label_section(void) {
         token(keyword_ci("label")),
         sep_by(create_label_identifier(), token(match(","))),
         token(match(";")),
+        NULL
+    );
+}
+
+static combinator_t* make_generic_type_prefix(void) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        optional(token(keyword_ci("generic"))),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match("<")),
+        NULL
+    );
+}
+
+static combinator_t* make_inferred_var_prefix(void) {
+    return seq(new_combinator(), PASCAL_T_NONE,
+        token(cident(PASCAL_T_IDENTIFIER)),
+        token(match(":=")),
         NULL
     );
 }
@@ -341,17 +672,11 @@ static ast_t* wrap_program_params(ast_t* params) {
 
 // Custom parser for main block content that parses statements properly
 static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_name) {
-    // Parse statements until encountering the END keyword handled by the caller.
-    // Reuse the statement parser so the main program block supports the same
-    // constructs as regular compound statements (case, loops, nested blocks, etc.).
-
-    // `lazy` needs a stable pointer-to-pointer so recursive constructs like CASE
-    // branches can reuse the same statement parser instance.  Wrap the parser in a
-    // heap-allocated pointer so the lifetime matches the combinator graph.
-    combinator_t** stmt_parser_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser_ref = new_combinator();
-    init_pascal_statement_parser(stmt_parser_ref);
-
+    main_block_args_t* mb_args = (main_block_args_t*)args;
+    if (mb_args == NULL || mb_args->stmt_parser == NULL || *mb_args->stmt_parser == NULL) {
+        return make_failure(in, strdup("main block statement parser unavailable"));
+    }
+    combinator_t** stmt_parser_ref = mb_args->stmt_parser;
     // Statements in a BEGIN..END block follow the same semicolon rules as any
     // compound statement: statements are separated by semicolons with an optional
     // trailing semicolon.  Use sep_by/optional to mirror the begin-end handling in
@@ -360,7 +685,7 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
 
     combinator_t* stmt_sequence = seq(new_combinator(), PASCAL_T_NONE,
         leading_semicolons,
-        sep_by(lazy_owned(stmt_parser_ref), token(match(";"))),
+        sep_by(lazy(stmt_parser_ref), token(match(";"))),
         optional(token(match(";"))),
         NULL
     );
@@ -372,11 +697,12 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     return stmt_result;
 }
 
-static combinator_t* main_block_content(tag_t tag) {
+static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
     combinator_t* comb = new_combinator();
-    prim_args* args = safe_malloc(sizeof(prim_args));
-    args->tag = tag;
+    main_block_args_t* args = safe_malloc(sizeof(main_block_args_t));
+    args->stmt_parser = stmt_parser_ref;
     comb->args = args;
+    comb->type = COMB_MAIN_BLOCK_CONTENT;
     comb->fn = main_block_content_fn;
     return comb;
 }
@@ -500,22 +826,37 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* type_definition = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
-        type_helper_type,
-        reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
-        interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
-        class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end (try first)
-        record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
-        enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
-        array_type(PASCAL_T_ARRAY_TYPE),                // array types like ARRAY[0..9] OF integer
-        set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
-        range_type(PASCAL_T_RANGE_TYPE),                // range types like 1..100
-        pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^integer
-        specialize_type,
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),             // simple aliases like Foo = integer
-        constructed_type,                               // constructed types like TFoo<Integer> (try last to avoid conflicts)
-        NULL
-    );
+    combinator_t* reference_type = reference_to_type(PASCAL_T_REFERENCE_TO_TYPE);
+    combinator_t* iface_type = interface_type(PASCAL_T_INTERFACE_TYPE);
+    combinator_t* class_spec = class_type(PASCAL_T_CLASS_TYPE);
+    combinator_t* record_spec = record_type(PASCAL_T_RECORD_TYPE);
+    combinator_t* enum_spec = enumerated_type(PASCAL_T_ENUMERATED_TYPE);
+    combinator_t* array_spec = array_type(PASCAL_T_ARRAY_TYPE);
+    combinator_t* set_spec = set_type(PASCAL_T_SET);
+    combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
+    combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
+    combinator_t* simple_identifier = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+
+    type_dispatch_args_t* type_args = (type_dispatch_args_t*)safe_malloc(sizeof(type_dispatch_args_t));
+    memset(type_args, 0, sizeof(*type_args));
+    type_args->helper_parser = type_helper_type;
+    type_args->reference_parser = reference_type;
+    type_args->interface_parser = iface_type;
+    type_args->class_parser = class_spec;
+    type_args->record_parser = record_spec;
+    type_args->enumerated_parser = enum_spec;
+    type_args->array_parser = array_spec;
+    type_args->set_parser = set_spec;
+    type_args->range_parser = range_spec;
+    type_args->pointer_parser = pointer_spec;
+    type_args->specialize_parser = specialize_type;
+    type_args->constructed_parser = constructed_type;
+    type_args->identifier_parser = simple_identifier;
+
+    combinator_t* type_definition = new_combinator();
+    type_definition->type = COMB_TYPE_DISPATCH;
+    type_definition->fn = type_definition_dispatch_fn;
+    type_definition->args = type_args;
 
     // Const section: const name : type = value; ...
     // Use the full expression parser so typed constants support the same
@@ -607,6 +948,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(match(";"))),                 // semicolon (optional for last decl)
         NULL
     );
+    generic_type_decl = right(peek(make_generic_type_prefix()), generic_type_decl);
 
     // Regular type declaration: TFoo = Integer
     combinator_t* regular_type_decl = seq(new_combinator(), PASCAL_T_TYPE_DECL,
@@ -658,8 +1000,10 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* inferred_var_decl_guarded = right(peek(make_inferred_var_prefix()), inferred_var_decl);
+
     combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
-        inferred_var_decl,
+        inferred_var_decl_guarded,
         typed_var_decl,
         NULL
     );
@@ -677,14 +1021,21 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    keyword_dispatch_args_t* local_decl_args = create_keyword_dispatch(3);
+    size_t local_decl_index = 0;
+    register_keyword_entry(local_decl_args, 3, &local_decl_index, "var", var_section);
+    register_keyword_entry(local_decl_args, 3, &local_decl_index, "const", const_section);
+    register_keyword_entry(local_decl_args, 3, &local_decl_index, "type", type_section);
+    local_decl_args->entry_count = local_decl_index;
+
+    combinator_t* local_decl_dispatch = new_combinator();
+    local_decl_dispatch->type = COMB_KEYWORD_DISPATCH;
+    local_decl_dispatch->fn = keyword_dispatch_fn;
+    local_decl_dispatch->args = local_decl_args;
+
     // Function/procedure body that can contain local declarations
     combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
-        many(multi(new_combinator(), PASCAL_T_NONE,    // Optional local declarations
-            var_section,                               // local variables
-            const_section,                             // local constants
-            type_section,                              // local types
-            NULL
-        )),
+        many(local_decl_dispatch),
         lazy(stmt_parser),                         // main statement block
         NULL
     );
@@ -924,42 +1275,64 @@ void init_pascal_unit_parser(combinator_t** p) {
     set_combinator_name(class_operator_impl, "class_operator_impl");
 
     // Interface section declarations: uses, const, type, procedure/function headers
-    combinator_t* interface_declaration = multi(new_combinator(), PASCAL_T_NONE,
-        uses_section,
-        const_section,
-        resourcestring_section,
-        type_section,
-        threadvar_section,
-        var_section,
-        procedure_header,
-        function_header,
-        NULL
-    );
-    
+    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(8);
+    size_t interface_entry_index = 0;
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "uses", uses_section);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "const", const_section);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "resourcestring", resourcestring_section);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "type", type_section);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "threadvar", threadvar_section);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "var", var_section);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "procedure", procedure_header);
+    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "function", function_header);
+    interface_dispatch_args->entry_count = interface_entry_index;
+
+    combinator_t* interface_declaration = new_combinator();
+    interface_declaration->type = COMB_KEYWORD_DISPATCH;
+    interface_declaration->fn = keyword_dispatch_fn;
+    interface_declaration->args = interface_dispatch_args;
+
     combinator_t* interface_declarations = many(interface_declaration);
     
-    // Implementation section can contain both simple implementations and method implementations
-    // as well as uses, const, type, and var sections
-    // Try header-only declarations (forward/external/assembler) before full implementations
-    combinator_t* implementation_definition = multi(new_combinator(), PASCAL_T_NONE,
-        uses_section,                                // uses clauses in implementation
-        const_section,                               // const declarations in implementation
-        resourcestring_section,
-        type_section,                                // type declarations in implementation
-        threadvar_section,
-        var_section,                                 // var declarations in implementation
-        headeronly_procedure_decl,                   // forward/external/assembler procedure declarations
-        headeronly_function_decl,                    // forward/external/assembler function declarations
-        constructor_impl,                            // constructor Class.Method implementations
-        destructor_impl,                             // destructor Class.Method implementations
-        method_procedure_impl,                       // procedure Class.Method implementations
-        class_operator_impl,                         // class operator implementations
-        method_function_impl,                        // function Class.Method implementations
-        procedure_impl,                              // simple procedure implementations
-        function_impl,                               // simple function implementations
+    combinator_t* procedure_definitions = multi(new_combinator(), PASCAL_T_NONE,
+        headeronly_procedure_decl,
+        method_procedure_impl,
+        procedure_impl,
         NULL
     );
-    set_combinator_name(implementation_definition, "implementation_definition");
+    set_combinator_name(procedure_definitions, "procedure_definition_choice");
+
+    combinator_t* function_definitions = multi(new_combinator(), PASCAL_T_NONE,
+        headeronly_function_decl,
+        method_function_impl,
+        function_impl,
+        NULL
+    );
+    set_combinator_name(function_definitions, "function_definition_choice");
+
+    keyword_dispatch_args_t* implementation_dispatch_args = create_keyword_dispatch(11);
+    size_t implementation_entry_index = 0;
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "uses", uses_section);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "const", const_section);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "resourcestring", resourcestring_section);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "type", type_section);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "threadvar", threadvar_section);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "var", var_section);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "constructor", constructor_impl);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "destructor", destructor_impl);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "procedure", procedure_definitions);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "function", function_definitions);
+    register_keyword_entry(implementation_dispatch_args, 11, &implementation_entry_index, "operator", class_operator_impl);
+    implementation_dispatch_args->entry_count = implementation_entry_index;
+    static const char* implementation_skip_tokens[] = {"class"};
+    implementation_dispatch_args->skip_keywords = implementation_skip_tokens;
+    implementation_dispatch_args->skip_keyword_count = 1;
+
+    combinator_t* implementation_definition = new_combinator();
+    implementation_definition->type = COMB_KEYWORD_DISPATCH;
+    implementation_definition->fn = keyword_dispatch_fn;
+    implementation_definition->args = implementation_dispatch_args;
+    set_combinator_name(implementation_definition, "implementation_definition_dispatch");
 
     combinator_t* implementation_definitions = many(implementation_definition);
     set_combinator_name(implementation_definitions, "implementation_definitions");
@@ -1165,8 +1538,14 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
 
 // Pascal Complete Program Parser - for full Pascal programs
 void init_pascal_complete_program_parser(combinator_t** p) {
+    // Create procedure/function parsers for use in complete program
+    // Need to create a modified procedure parser that supports var parameters
+    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *stmt_parser = new_combinator();
+    init_pascal_statement_parser(stmt_parser);
+
     // Use `between` to parse the content inside `begin` and `end`, then `map` to wrap it.
-    combinator_t* main_block_content_parser = main_block_content(PASCAL_T_NONE);
+    combinator_t* main_block_content_parser = main_block_content(stmt_parser);
     combinator_t* main_block_body = between(
         token(keyword_ci("begin")),
         token(keyword_ci("end")),
@@ -1248,8 +1627,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* inferred_program_var_guarded = right(peek(make_inferred_var_prefix()), inferred_program_var_decl);
+
     combinator_t* var_decl = multi(new_combinator(), PASCAL_T_NONE,
-        inferred_program_var_decl,
+        inferred_program_var_guarded,
         typed_program_var_decl,
         NULL
     );
@@ -1303,6 +1684,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(match(";")),                           // semicolon
         NULL
     );
+    generic_type_decl_prog = right(peek(make_generic_type_prefix()), generic_type_decl_prog);
 
     // Regular type declaration: TFoo = Integer
     combinator_t* regular_type_decl_prog = seq(new_combinator(), PASCAL_T_TYPE_DECL,
@@ -1364,12 +1746,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
     const_section->extra_to_free = program_const_expr_parser;
-
-    // Create procedure/function parsers for use in complete program
-    // Need to create a modified procedure parser that supports var parameters
-    combinator_t** stmt_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *stmt_parser = new_combinator();
-    init_pascal_statement_parser(stmt_parser);
 
     // Return type: : type (for functions)
     // Support complex types like arrays, sets, pointers, etc., not just simple identifiers

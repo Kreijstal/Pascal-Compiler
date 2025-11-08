@@ -38,6 +38,34 @@ static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
     int *type_second, struct Expression *expr2);
 int is_and_or(int *type);
+
+static void semcheck_reset_function_call_cache(struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
+    expr->expr_data.function_call_data.call_gpc_type = NULL;
+    expr->expr_data.function_call_data.is_call_info_valid = 0;
+}
+
+static void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    if (target == NULL)
+    {
+        semcheck_reset_function_call_cache(expr);
+        return;
+    }
+
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    expr->expr_data.function_call_data.call_hash_type = target->hash_type;
+    expr->expr_data.function_call_data.call_gpc_type = target->type;
+    expr->expr_data.function_call_data.is_call_info_valid = 1;
+}
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 int semcheck_arrayaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
@@ -705,7 +733,7 @@ static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
             return 1;
         }
 
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        semcheck_reset_function_call_cache(expr);
         *type_return = CHAR_TYPE;
         expr->resolved_type = CHAR_TYPE;
         return 0;
@@ -777,7 +805,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
                 free(expr->expr_data.function_call_data.mangled_id);
                 expr->expr_data.function_call_data.mangled_id = NULL;
             }
-            expr->expr_data.function_call_data.resolved_func = NULL;
+            semcheck_reset_function_call_cache(expr);
 
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = ordinal_value;
@@ -807,7 +835,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
                 free(expr->expr_data.function_call_data.mangled_id);
                 expr->expr_data.function_call_data.mangled_id = NULL;
             }
-            expr->expr_data.function_call_data.resolved_func = NULL;
+            semcheck_reset_function_call_cache(expr);
 
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = ordinal_value;
@@ -849,7 +877,7 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             return 1;
         }
 
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        semcheck_reset_function_call_cache(expr);
         *type_return = LONGINT_TYPE;
         expr->resolved_type = LONGINT_TYPE;
         return 0;
@@ -904,7 +932,7 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        semcheck_reset_function_call_cache(expr);
         expr->resolved_type = LONGINT_TYPE;
         *type_return = LONGINT_TYPE;
         return 0;
@@ -973,7 +1001,7 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        semcheck_reset_function_call_cache(expr);
         expr->resolved_type = STRING_TYPE;
         *type_return = STRING_TYPE;
         return 0;
@@ -1034,7 +1062,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        semcheck_reset_function_call_cache(expr);
         expr->resolved_type = BOOL;
         *type_return = BOOL;
         return 0;
@@ -1702,7 +1730,7 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        semcheck_reset_function_call_cache(expr);
 
         expr->type = EXPR_INUM;
         expr->expr_data.i_num = computed_size;
@@ -2543,21 +2571,31 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
                 fprintf(stderr, "DEBUG resolve_gpc: No cached resolved_gpc_type, looking up function\n");
             }
             
-            /* Fallback: For function calls, try to get the return type from the resolved function */
-            HashNode_t *func_node = expr->expr_data.function_call_data.resolved_func;
-            if (func_node == NULL && expr->expr_data.function_call_data.id != NULL)
+            /* Prefer cached call info populated during semantic checking */
+            if (expr->expr_data.function_call_data.is_call_info_valid &&
+                expr->expr_data.function_call_data.call_gpc_type != NULL)
             {
-                FindIdent(&func_node, symtab, expr->expr_data.function_call_data.id);
+                GpcType *call_type = expr->expr_data.function_call_data.call_gpc_type;
+                if (call_type->kind == TYPE_KIND_PROCEDURE &&
+                    call_type->info.proc_info.return_type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return call_type->info.proc_info.return_type;
+                }
             }
-            
-            if (func_node != NULL && func_node->type != NULL)
+
+            if (expr->expr_data.function_call_data.id != NULL && symtab != NULL)
             {
-                if (func_node->type->kind == TYPE_KIND_PROCEDURE && 
+                HashNode_t *func_node = NULL;
+                if (FindIdent(&func_node, symtab,
+                        expr->expr_data.function_call_data.id) >= 0 &&
+                    func_node != NULL && func_node->type != NULL &&
+                    func_node->type->kind == TYPE_KIND_PROCEDURE &&
                     func_node->type->info.proc_info.return_type != NULL)
                 {
                     fprintf(stderr, "DEBUG resolve_gpc: Returning proc return type: %s\n",
                             gpc_type_to_string(func_node->type->info.proc_info.return_type));
-                    /* Return the function's return type - caller doesn't own it */
                     if (owns_type != NULL)
                         *owns_type = 0;
                     return func_node->type->info.proc_info.return_type;
@@ -3375,7 +3413,7 @@ int semcheck_varid(int *type_return,
             expr->expr_data.function_call_data.id = func_id;
             expr->expr_data.function_call_data.args_expr = NULL;
             expr->expr_data.function_call_data.mangled_id = NULL;
-            expr->expr_data.function_call_data.resolved_func = NULL;
+            semcheck_reset_function_call_cache(expr);
             
             return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
         }
@@ -3730,7 +3768,7 @@ int semcheck_funccall(int *type_return,
     if (num_best_matches == 1)
     {
         expr->expr_data.function_call_data.mangled_id = strdup(best_match->mangled_id);
-        expr->expr_data.function_call_data.resolved_func = best_match;
+        semcheck_set_function_call_target(expr, best_match);
         hash_return = best_match;
         scope_return = 0; // FIXME
     }

@@ -3498,9 +3498,14 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
 
         ast_t *cur = stmt_node->child;
         while (cur != NULL) {
-            if (cur->typ == PASCAL_T_FINALLY_BLOCK || cur->typ == PASCAL_T_EXCEPT_BLOCK) {
-                ListBuilder *target = (cur->typ == PASCAL_T_FINALLY_BLOCK) ? &finally_builder : &except_builder;
-                ast_t *inner = cur->child;
+            ast_t *unwrapped = unwrap_pascal_node(cur);
+            if (unwrapped == NULL) {
+                cur = cur->next;
+                continue;
+            }
+            if (unwrapped->typ == PASCAL_T_FINALLY_BLOCK || unwrapped->typ == PASCAL_T_EXCEPT_BLOCK) {
+                ListBuilder *target = (unwrapped->typ == PASCAL_T_FINALLY_BLOCK) ? &finally_builder : &except_builder;
+                ast_t *inner = unwrapped->child;
                 while (inner != NULL) {
                     struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(inner));
                     if (inner_stmt != NULL)
@@ -3508,7 +3513,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                     inner = inner->next;
                 }
             } else {
-                struct Statement *try_stmt = convert_statement(unwrap_pascal_node(cur));
+                struct Statement *try_stmt = convert_statement(unwrapped);
                 if (try_stmt != NULL)
                     list_builder_append(&try_builder, try_stmt, LIST_STMT);
             }
@@ -3518,6 +3523,17 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         ListNode_t *try_stmts = list_builder_finish(&try_builder);
         ListNode_t *finally_stmts = list_builder_finish(&finally_builder);
         ListNode_t *except_stmts = list_builder_finish(&except_builder);
+
+        if (finally_stmts == NULL && except_stmts == NULL) {
+            if (try_stmts == NULL)
+                return NULL;
+            if (try_stmts->next == NULL) {
+                struct Statement *passthrough = (struct Statement *)try_stmts->cur;
+                DestroyList(try_stmts);
+                return passthrough;
+            }
+            return mk_compoundstatement(stmt_node->line, try_stmts);
+        }
 
         if (finally_stmts != NULL)
             return mk_tryfinally(stmt_node->line, try_stmts, finally_stmts);

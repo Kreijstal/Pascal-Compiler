@@ -926,16 +926,26 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, ret_ptr_reg);
             inst_list = add_inst(inst_list, buffer);
 
-            HashNode_t *func_node = src_expr->expr_data.function_call_data.resolved_func;
-            if (func_node == NULL && ctx != NULL && ctx->symtab != NULL &&
+            struct GpcType *func_type = NULL;
+            if (src_expr->expr_data.function_call_data.is_call_info_valid)
+            {
+                func_type = src_expr->expr_data.function_call_data.call_gpc_type;
+            }
+            
+            if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
                 src_expr->expr_data.function_call_data.id != NULL)
             {
-                FindIdent(&func_node, ctx->symtab, src_expr->expr_data.function_call_data.id);
+                HashNode_t *func_node = NULL;
+                if (FindIdent(&func_node, ctx->symtab,
+                        src_expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
+                {
+                    func_type = func_node->type;
+                }
             }
 
             inst_list = codegen_pass_arguments(
                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_node ? func_node->type : NULL, 
+                func_type, 
                 src_expr->expr_data.function_call_data.id, 1);
 
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
