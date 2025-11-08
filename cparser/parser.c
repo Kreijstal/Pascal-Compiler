@@ -1761,6 +1761,13 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 free(args);
                 break;
             }
+            case COMB_COMMIT: {
+                combinator_t* inner = (combinator_t*)comb->args;
+                if (inner != NULL) {
+                    free_combinator_recursive(inner, visited, extras);
+                }
+                break;
+            }
             case P_UNTIL: {
                 until_args* args = (until_args*)comb->args;
                 if (args != NULL) {
@@ -1773,15 +1780,6 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             }
             case COMB_FOR_INIT_DISPATCH: {
                 for_init_dispatch_args_t* args = (for_init_dispatch_args_t*)comb->args;
-                if (args != NULL) {
-                    if (args->assignment_parser) {
-                        free_combinator_recursive(args->assignment_parser, visited, extras);
-                    }
-                    if (args->identifier_parser) {
-                        free_combinator_recursive(args->identifier_parser, visited, extras);
-                    }
-                    free(args);
-                }
                 if (args != NULL) {
                     if (args->assignment_parser) {
                         free_combinator_recursive(args->assignment_parser, visited, extras);
@@ -1912,6 +1910,13 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     if (args->identifier_parser) {
                         free_combinator_recursive(args->identifier_parser, visited, extras);
                     }
+                    free(args);
+                }
+                break;
+            }
+            case COMB_MAIN_BLOCK_CONTENT: {
+                main_block_args_t* args = (main_block_args_t*)comb->args;
+                if (args != NULL) {
                     free(args);
                 }
                 break;

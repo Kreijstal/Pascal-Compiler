@@ -92,6 +92,7 @@ typedef enum {
     COMB_LAZY,
     COMB_VARIANT_TAG,
     COMB_VARIANT_PART,
+    COMB_MAIN_BLOCK_CONTENT,
     P_EOI
 } parser_type_t;
 
@@ -285,6 +286,10 @@ typedef struct type_dispatch_args {
     combinator_t* constructed_parser;
     combinator_t* identifier_parser;
 } type_dispatch_args_t;
+
+typedef struct main_block_args {
+    combinator_t** stmt_parser;
+} main_block_args_t;
 
 // --- Helper Function Prototypes ---
 void* safe_malloc(size_t size);
