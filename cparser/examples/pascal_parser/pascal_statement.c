@@ -150,12 +150,12 @@ static bool is_reserved_keyword_slice(const char* slice, size_t len) {
     return false;
 }
 
-static const statement_keyword_entry_t* find_statement_keyword(const statement_dispatch_args_t* dispatch, const char* slice, size_t len) {
+static const pascal_keyword_entry_t* find_statement_keyword(const statement_dispatch_args_t* dispatch, const char* slice, size_t len) {
     if (dispatch == NULL || dispatch->entries == NULL || slice == NULL || len == 0) {
         return NULL;
     }
     for (size_t i = 0; i < dispatch->entry_count; ++i) {
-        const statement_keyword_entry_t* entry = &dispatch->entries[i];
+        const pascal_keyword_entry_t* entry = &dispatch->entries[i];
         if (entry->parser == NULL || entry->keyword == NULL) {
             continue;
         }
@@ -173,7 +173,7 @@ static void register_statement_keyword(statement_dispatch_args_t* dispatch, size
     if (*index >= capacity) {
         return;
     }
-    statement_keyword_entry_t* entry = &dispatch->entries[*index];
+    pascal_keyword_entry_t* entry = &dispatch->entries[*index];
     entry->keyword = keyword;
     entry->length = strlen(keyword);
     entry->parser = parser;
@@ -216,7 +216,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             cursor++;
         }
         size_t ident_len = (size_t)(cursor - pos);
-        const statement_keyword_entry_t* entry = find_statement_keyword(dispatch, slice, ident_len);
+        const pascal_keyword_entry_t* entry = find_statement_keyword(dispatch, slice, ident_len);
         if (entry != NULL && entry->parser != NULL) {
             return parse(in, entry->parser);
         }
@@ -878,8 +878,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     const size_t statement_keyword_capacity = 14;
     statement_dispatch_args_t* dispatch_args = (statement_dispatch_args_t*)safe_malloc(sizeof(statement_dispatch_args_t));
     memset(dispatch_args, 0, sizeof(*dispatch_args));
-    dispatch_args->entries = (statement_keyword_entry_t*)safe_malloc(sizeof(statement_keyword_entry_t) * statement_keyword_capacity);
-    memset(dispatch_args->entries, 0, sizeof(statement_keyword_entry_t) * statement_keyword_capacity);
+    dispatch_args->entries = (pascal_keyword_entry_t*)safe_malloc(sizeof(pascal_keyword_entry_t) * statement_keyword_capacity);
+    memset(dispatch_args->entries, 0, sizeof(pascal_keyword_entry_t) * statement_keyword_capacity);
 
     size_t entry_index = 0;
     register_statement_keyword(dispatch_args, statement_keyword_capacity, &entry_index, "begin", begin_end_block);
