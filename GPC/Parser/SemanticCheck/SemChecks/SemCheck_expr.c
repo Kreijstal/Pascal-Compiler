@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#include <stdbool.h>
 #ifndef _WIN32
 #include <strings.h>
 #else

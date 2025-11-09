@@ -1335,3 +1335,9 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
 
     return result;
 }
+
+/* Wrapper for memcpy to be called from assembly code */
+void *gpc_memcpy_wrapper(void *dest, const void *src, size_t n)
+{
+    return memcpy(dest, src, n);
+}

@@ -36,3 +36,7 @@ __pycache__/
 *.pyc
 quasi-msys2/
 builddir-cross/
+minimal_array_bug*
+test_*
+btpc_*
+*.s
