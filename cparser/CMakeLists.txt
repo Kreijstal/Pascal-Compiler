@@ -74,6 +74,8 @@ if(BUILD_INTEGRATION_TESTS)
         examples/pascal_parser/pascal_expression.c
         examples/pascal_parser/pascal_statement.c
         examples/pascal_parser/pascal_declaration.c
+        examples/pascal_parser/pascal_peek.c
+        examples/pascal_parser/pascal_statement_keywords_hash.c
     )
     target_link_libraries(pascal_parser_lib PUBLIC parser_lib)
     target_include_directories(pascal_parser_lib PUBLIC ${CMAKE_SOURCE_DIR})

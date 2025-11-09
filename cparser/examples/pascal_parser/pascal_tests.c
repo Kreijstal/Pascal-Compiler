@@ -4554,6 +4554,153 @@ void test_pascal_unit_forward_declaration(void) {
     free_input(input);
 }
 
+void test_external_variants(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("external_variants.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_external_program_variants(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("external_program.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_external_simple_debug(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("external_simple.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_external_library_debug(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("external_library.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_external_minimal_debug(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("external_minimal.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+void test_external_no_args_debug(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("external_no_args.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+        TEST_ASSERT(0);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -4705,5 +4852,11 @@ TEST_LIST = {
     { "test_pascal_program_forward_declaration", test_pascal_program_forward_declaration },
     { "test_pascal_program_external_declaration", test_pascal_program_external_declaration },
     { "test_pascal_unit_forward_declaration", test_pascal_unit_forward_declaration },
+    { "test_external_variants", test_external_variants },
+    { "test_external_program_variants", test_external_program_variants },
+    { "test_external_simple_debug", test_external_simple_debug },
+    { "test_external_library_debug", test_external_library_debug },
+    { "test_external_minimal_debug", test_external_minimal_debug },
+    { "test_external_no_args_debug", test_external_no_args_debug },
     { NULL, NULL }
 };
