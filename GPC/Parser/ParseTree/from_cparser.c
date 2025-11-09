@@ -781,14 +781,18 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         if (lower->sym != NULL && lower->sym->name != NULL) {
                             /* Simple identifier or literal */
                             lower_str = strdup(lower->sym->name);
+                            assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
                         } else if (lower->child != NULL && lower->child->sym != NULL && lower->child->sym->name != NULL) {
                             /* Unary expression like -1 */
-                            if (lower->typ == 15) { /* typ=15 is unary minus */
+                            if (lower->typ == PASCAL_T_NEG) {
                                 char buffer[64];
-                                snprintf(buffer, sizeof(buffer), "-%s", lower->child->sym->name);
+                                int written = snprintf(buffer, sizeof(buffer), "-%s", lower->child->sym->name);
+                                assert(written >= 0 && written < (int)sizeof(buffer) && "Buffer overflow in lower bound formatting");
                                 lower_str = strdup(buffer);
+                                assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
                             } else {
                                 lower_str = strdup(lower->child->sym->name);
+                                assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
                             }
                         }
                     }
@@ -798,14 +802,18 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         if (upper->sym != NULL && upper->sym->name != NULL) {
                             /* Simple identifier or literal */
                             upper_str = strdup(upper->sym->name);
+                            assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
                         } else if (upper->child != NULL && upper->child->sym != NULL && upper->child->sym->name != NULL) {
                             /* Unary expression */
-                            if (upper->typ == 15) { /* typ=15 is unary minus */
+                            if (upper->typ == PASCAL_T_NEG) {
                                 char buffer[64];
-                                snprintf(buffer, sizeof(buffer), "-%s", upper->child->sym->name);
+                                int written = snprintf(buffer, sizeof(buffer), "-%s", upper->child->sym->name);
+                                assert(written >= 0 && written < (int)sizeof(buffer) && "Buffer overflow in upper bound formatting");
                                 upper_str = strdup(buffer);
+                                assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
                             } else {
                                 upper_str = strdup(upper->child->sym->name);
+                                assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
                             }
                         }
                     }

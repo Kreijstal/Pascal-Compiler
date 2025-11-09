@@ -386,6 +386,76 @@ static inline void discard_failure(ParseResult result) {
     }
 }
 
+// Custom parser function to handle identifier with optional [size] subscript
+// This supports type aliases like: TAlfa = string[20];
+static ParseResult identifier_with_optional_subscript_fn(input_t* in, void* args, char* parser_name) {
+    InputState state;
+    save_input_state(in, &state);
+    
+    // Parse the base identifier (e.g., "string")
+    combinator_t* base_id = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult base_res = parse(in, base_id);
+    free_combinator(base_id);
+    
+    if (!base_res.is_success) {
+        return base_res;
+    }
+    
+    ast_t* identifier_ast = base_res.value.ast;
+    
+    // Check for optional [size] subscript (e.g., [20])
+    InputState subscript_state;
+    save_input_state(in, &subscript_state);
+    
+    combinator_t* open_bracket = token(match("["));
+    ParseResult open_res = parse(in, open_bracket);
+    free_combinator(open_bracket);
+    
+    if (open_res.is_success) {
+        free_ast(open_res.value.ast);
+        
+        // Parse the size expression
+        combinator_t* size_expr = new_combinator();
+        init_pascal_expression_parser(&size_expr, NULL);
+        ParseResult size_res = parse(in, size_expr);
+        free_combinator(size_expr);
+        
+        if (!size_res.is_success) {
+            discard_failure(size_res);
+            free_ast(identifier_ast);
+            restore_input_state(in, &subscript_state);
+            return make_failure(in, strdup("Expected size expression in type subscript"));
+        }
+        
+        // Parse closing ]
+        combinator_t* close_bracket = token(match("]"));
+        ParseResult close_res = parse(in, close_bracket);
+        free_combinator(close_bracket);
+        
+        if (!close_res.is_success) {
+            discard_failure(close_res);
+            free_ast(size_res.value.ast);
+            free_ast(identifier_ast);
+            restore_input_state(in, &subscript_state);
+            return make_failure(in, strdup("Expected ']' after type subscript"));
+        }
+        free_ast(close_res.value.ast);
+        
+        // For now, we discard the size and treat string[N] as string
+        // This matches the behavior in pascal_type.c for array element types
+        free_ast(size_res.value.ast);
+        // identifier_ast remains as just the identifier
+    } else {
+        discard_failure(open_res);
+        restore_input_state(in, &subscript_state);
+    }
+    
+    ParseResult result;
+    result.is_success = true;
+    result.value.ast = identifier_ast;
+    return result;
+}
+
 static bool is_modifier_keyword(ast_t* node) {
     if (node == NULL || node->sym == NULL || node->sym->name == NULL)
         return false;
@@ -835,7 +905,13 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* set_spec = set_type(PASCAL_T_SET);
     combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
     combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
-    combinator_t* simple_identifier = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    
+    // Create parser for identifier with optional subscript (e.g., string[20])
+    combinator_t* simple_identifier = new_combinator();
+    simple_identifier->type = COMB_TYPE_DISPATCH;
+    simple_identifier->fn = identifier_with_optional_subscript_fn;
+    simple_identifier->args = NULL;
+    set_combinator_name(simple_identifier, "identifier_with_optional_subscript");
 
     type_dispatch_args_t* type_args = (type_dispatch_args_t*)safe_malloc(sizeof(type_dispatch_args_t));
     memset(type_args, 0, sizeof(*type_args));
@@ -1597,7 +1673,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
-        token(cident(PASCAL_T_IDENTIFIER)),             // custom types
+        token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),  // custom types with optional [size]
         constructed_type,                               // constructed types like TFoo<Integer> (try last to avoid conflicts)
         NULL
     );

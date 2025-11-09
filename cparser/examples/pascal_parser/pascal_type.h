@@ -16,5 +16,6 @@ combinator_t* set_type(tag_t tag);
 combinator_t* procedure_type(tag_t tag);
 combinator_t* function_type(tag_t tag);
 combinator_t* reference_to_type(tag_t tag);
+combinator_t* pascal_identifier_with_subscript(tag_t tag);
 
 #endif // PASCAL_TYPE_H
