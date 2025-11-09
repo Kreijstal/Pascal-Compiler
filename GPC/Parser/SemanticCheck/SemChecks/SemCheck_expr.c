@@ -3790,6 +3790,27 @@ int semcheck_funccall(int *type_return,
         if (expr->expr_data.function_call_data.mangled_id != NULL)
             free(expr->expr_data.function_call_data.mangled_id);
         expr->expr_data.function_call_data.mangled_id = resolved_name;
+        if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            Tree_t *proc_def = best_match->type->info.proc_info.definition;
+            if (proc_def != NULL)
+            {
+                bool no_body = (proc_def->tree_data.subprogram_data.statement_list == NULL);
+                if (no_body && proc_def->tree_data.subprogram_data.id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id =
+                        strdup(proc_def->tree_data.subprogram_data.id);
+                }
+                else if (proc_def->tree_data.subprogram_data.cname_flag &&
+                         proc_def->tree_data.subprogram_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id =
+                        strdup(proc_def->tree_data.subprogram_data.mangled_id);
+                }
+            }
+        }
         semcheck_set_function_call_target(expr, best_match);
         semcheck_mark_call_requires_static_link(best_match);
         hash_return = best_match;
@@ -3841,25 +3862,48 @@ int semcheck_funccall(int *type_return,
         /* NEW: Also set the resolved GpcType for this expression */
         fprintf(stderr, "DEBUG funccall %s: hash_return->type=%p, kind=%d\n",
                 id, (void*)hash_return->type, hash_return->type ? hash_return->type->kind : -1);
-        if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
-        {
-            GpcType *return_type = gpc_type_get_return_type(hash_return->type);
-            fprintf(stderr, "DEBUG funccall %s: return_type=%p\n", id, (void*)return_type);
-            if (return_type != NULL)
+            if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
             {
-                fprintf(stderr, "DEBUG funccall %s: return_type kind=%d, %s\n", 
-                        id, return_type->kind, gpc_type_to_string(return_type));
-                expr->resolved_gpc_type = return_type;
-                fprintf(stderr, "DEBUG: Set function call resolved_gpc_type: %s\n", 
-                        gpc_type_to_string(return_type));
-                if (return_type->kind == TYPE_KIND_ARRAY)
-                    semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
+                GpcType *return_type = gpc_type_get_return_type(hash_return->type);
+                fprintf(stderr, "DEBUG funccall %s: return_type=%p\n", id, (void*)return_type);
+                if (return_type != NULL)
+                {
+                    fprintf(stderr, "DEBUG funccall %s: return_type kind=%d, %s\n", 
+                            id, return_type->kind, gpc_type_to_string(return_type));
+                    expr->resolved_gpc_type = return_type;
+                    fprintf(stderr, "DEBUG: Set function call resolved_gpc_type: %s\n", 
+                            gpc_type_to_string(return_type));
+                    if (return_type->kind == TYPE_KIND_ARRAY)
+                        semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
+                    else
+                        semcheck_clear_array_info(expr);
+                    if (return_type->kind == TYPE_KIND_PRIMITIVE &&
+                        return_type->info.primitive_type_tag == UNKNOWN_TYPE)
+                    {
+                        char *target_return_id = hash_return->type->info.proc_info.return_type_id;
+                        fprintf(stderr, "DEBUG: return_type_id for %s = %s\n", id,
+                                target_return_id ? target_return_id : "NULL");
+                        if (target_return_id != NULL)
+                        {
+                            HashNode_t *type_node = semcheck_find_type_node_with_gpc_type(symtab, target_return_id);
+                            if (type_node != NULL && type_node->type != NULL)
+                            {
+                                destroy_gpc_type(return_type);
+                                gpc_type_retain(type_node->type);
+                                hash_return->type->info.proc_info.return_type = type_node->type;
+                                return_type = type_node->type;
+                                expr->resolved_gpc_type = type_node->type;
+                                if (return_type->kind == TYPE_KIND_ARRAY)
+                                    semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
+                                else
+                                    semcheck_clear_array_info(expr);
+                            }
+                        }
+                    }
+                }
                 else
-                    semcheck_clear_array_info(expr);
-            }
-            else
-            {
-                expr->resolved_gpc_type = NULL;
+                {
+                    expr->resolved_gpc_type = NULL;
                 fprintf(stderr, "DEBUG: No return type for function\n");
                 semcheck_clear_array_info(expr);
             }

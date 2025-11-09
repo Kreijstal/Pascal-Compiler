@@ -43,6 +43,8 @@ typedef struct {
     // For functions, this points to the return type.
     // For procedures, this is NULL.
     GpcType *return_type;
+    struct Tree *definition;  /* AST node for procedure/function (if available) */
+    char *return_type_id;     /* Cached identifier used for return type lookup */
 } ProcedureTypeInfo;
 
 // For TYPE_KIND_ARRAY
