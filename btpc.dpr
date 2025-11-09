@@ -2690,8 +2690,10 @@ begin
  StringCopy(Keywords[SymFUNC],'FUNCTION            ');
  StringCopy(Keywords[SymPROC],'PROCEDURE           ');
 
+{ DEBUG: These lines don't compile - Int64 doesn't accept pointer types and SizeOf doesn't work on arrays
  Writeln('DEBUG: Types address=',Int64(@Types));
  Writeln('DEBUG: Sizeof(Types)=',SizeOf(Types));
+}
 
  Types[TypeINT].Size:=4;
  Types[TypeINT].Kind:=KindSIMPLE;

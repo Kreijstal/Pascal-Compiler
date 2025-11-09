@@ -3102,11 +3102,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             STATIC_LINK_NONE = 0,
             STATIC_LINK_FROM_RBP,
             STATIC_LINK_FROM_SLOT,
-            STATIC_LINK_FROM_REG
+            STATIC_LINK_FROM_REG,
+            STATIC_LINK_FROM_SPILL
         } static_link_source = STATIC_LINK_NONE;
         int static_link_slot_offset = 0;
         Register_t *static_link_reg = NULL;
         int static_link_expr_active = 0;
+        StackNode_t *static_link_spill = NULL;
 
         if (should_pass_static_link)
         {
@@ -3131,7 +3133,10 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
             else
             {
-                static_link_source = STATIC_LINK_FROM_REG;
+                /* We need to traverse multiple scopes to get the static link.
+                 * We must spill the result to a stack slot BEFORE evaluating arguments,
+                 * because argument evaluation may call codegen_acquire_static_link again
+                 * for different scope depths, which would free and reuse the register. */
                 int levels_to_traverse = (current_depth - callee_depth) + 1;
                 codegen_begin_expression(ctx);
                 static_link_expr_active = 1;
@@ -3142,6 +3147,23 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                         "ERROR: Failed to acquire static link for call to %s.",
                         unmangled_name);
                 }
+                else
+                {
+                    /* Spill the static link to a temporary stack slot to preserve it
+                     * during argument evaluation */
+                    static_link_spill = add_l_t("static_link_spill");
+                    char spill_buffer[64];
+                    snprintf(spill_buffer, sizeof(spill_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        static_link_reg->bit_64, static_link_spill->offset);
+                    inst_list = add_inst(inst_list, spill_buffer);
+                    free_reg(get_reg_stack(), static_link_reg);
+                    static_link_reg = NULL;
+                    static_link_source = STATIC_LINK_FROM_SPILL;
+                }
+                /* End the expression context to allow argument evaluation to use
+                 * codegen_acquire_static_link independently */
+                codegen_end_expression(ctx);
+                static_link_expr_active = 0;
             }
         }
         
@@ -3166,6 +3188,15 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                     snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         static_link_slot_offset, link_dest_reg);
                     inst_list = add_inst(inst_list, link_buffer);
+                    break;
+                case STATIC_LINK_FROM_SPILL:
+                    /* Restore from spill slot where we saved it before argument evaluation */
+                    if (static_link_spill != NULL)
+                    {
+                        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            static_link_spill->offset, link_dest_reg);
+                        inst_list = add_inst(inst_list, link_buffer);
+                    }
                     break;
                 case STATIC_LINK_FROM_REG:
                     if (static_link_reg != NULL)
