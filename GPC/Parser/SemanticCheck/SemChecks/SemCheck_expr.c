@@ -2252,7 +2252,12 @@ static int semcheck_recordaccess(int *type_return,
         field_type = resolved_type;
 
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 && type_node != NULL)
+        if (FindIdent(&type_node, symtab, field_desc->type_id) == -1 || type_node == NULL)
+        {
+            type_node = semcheck_find_type_node_with_gpc_type(symtab, field_desc->type_id);
+        }
+
+        if (type_node != NULL)
         {
             struct RecordType *record_type = get_record_type_from_node(type_node);
             if (record_type != NULL)
@@ -3439,9 +3444,11 @@ int semcheck_varid(int *type_return,
             fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
             ++return_val;
         }
+        int node_is_array = hashnode_is_array(hash_return);
+
         if(hash_return->hash_type != HASHTYPE_VAR &&
             hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
-            hash_return->hash_type != HASHTYPE_ARRAY)
+            !node_is_array)
         {
             if(hash_return->hash_type == HASHTYPE_CONST && mutating == 0)
             {
@@ -3459,7 +3466,7 @@ int semcheck_varid(int *type_return,
             }
         }
         set_type_from_hashtype(type_return, hash_return);
-        if (hash_return->hash_type == HASHTYPE_ARRAY)
+        if (node_is_array)
             semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
         else
             semcheck_clear_array_info(expr);
