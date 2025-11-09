@@ -2446,16 +2446,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
-    /* Static arrays need to copy all elements, not just the first one */
-    if (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr))
-        return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
-
     if (var_expr->type == EXPR_VAR_ID)
     {
         if (expr_is_dynamic_array(var_expr))
         {
             inst_list = codegen_assign_dynamic_array(var_expr, assign_expr, inst_list, ctx);
             return inst_list;
+        }
+
+        /* Static arrays need to copy all elements, not just the first one */
+        if (var_expr->is_array_expr)
+        {
+            return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
         }
 
         int scope_depth = 0;
