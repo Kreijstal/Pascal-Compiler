@@ -102,6 +102,7 @@ env = environment()
 env.set('RUN_BUGGY_TEST', get_option('run_buggy_test').to_string())
 env.set('MESON_BUILD_ROOT', meson.project_build_root())
 env.set('RUN_VALGRIND_TESTS', run_valgrind_tests ? 'true' : 'false')
+
 env.set('CC', ' '.join(compiler.cmd_array()))
 env.set('GPC_RUNTIME_LIB', gpc_runtime_lib.full_path())
 env.set('GPC_CTYPES_HELPER', ctypes_helper.full_path())

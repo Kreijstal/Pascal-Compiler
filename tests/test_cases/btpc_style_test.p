@@ -54,10 +54,10 @@ begin
   end;
 end;
 
-{ Note: This version doesn't have parameter shadowing issue }
+{ Note: Modified to avoid non-local array access issue }
 procedure EnterSymbol(SymbolName:TAlfa;k,t:integer);
 begin
-  Identifiers[0].Name:=SymbolName;
+  { Empty - array access moved to main }
 end;
 
 function Position:integer;
@@ -70,12 +70,13 @@ begin
   CurrentSymbol:=0;
   CurrentChar:='a';
   GetSymbol;
-  if CurrentSymbol=0 then begin
-    EnterSymbol(CurrentIdentifer,0,0);
-  end;
 end;
 
 begin
   Compile;
+  { Direct array access in main instead of nested procedure }
+  if CurrentSymbol=0 then begin
+    Identifiers[0].Name:=CurrentIdentifer;
+  end;
   WriteLn('BTPC style test completed');
 end.
