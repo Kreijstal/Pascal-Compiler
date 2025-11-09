@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#include <ctype.h>
 #include "register_types.h"
 #include "codegen.h"
 #include "codegen_statement.h"
@@ -448,6 +449,215 @@ static void codegen_reset_loop_stack(CodeGenContext *ctx)
     ctx->loop_capacity = 0;
 }
 
+/* -------------------------------------------------------------------------
+ * Debug helpers for annotated assembly output
+ * ------------------------------------------------------------------------- */
+static void asm_debug_comment(FILE *out, const char *tag, int indent, const char *fmt, ...)
+{
+    if (out == NULL || tag == NULL || fmt == NULL)
+        return;
+    if (indent < 0)
+        indent = 0;
+
+    fprintf(out, "# [%s] ", tag);
+    for (int i = 0; i < indent; ++i)
+        fputs("  ", out);
+
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(out, fmt, args);
+    va_end(args);
+    fputc('\n', out);
+}
+
+static const char *hash_type_to_string(enum HashType type)
+{
+    switch (type)
+    {
+        case HASHTYPE_VAR: return "var";
+        case HASHTYPE_ARRAY: return "array";
+        case HASHTYPE_CONST: return "const";
+        case HASHTYPE_PROCEDURE: return "procedure";
+        case HASHTYPE_FUNCTION: return "function";
+        case HASHTYPE_FUNCTION_RETURN: return "function-return";
+        case HASHTYPE_BUILTIN_PROCEDURE: return "builtin-proc";
+        case HASHTYPE_TYPE: return "type";
+        default: return "unknown";
+    }
+}
+
+static const char *var_type_to_string(enum VarType type)
+{
+    switch (type)
+    {
+        case HASHVAR_INTEGER: return "integer";
+        case HASHVAR_LONGINT: return "longint";
+        case HASHVAR_REAL: return "real";
+        case HASHVAR_PROCEDURE: return "procedure";
+        case HASHVAR_UNTYPED: return "untyped";
+        case HASHVAR_PCHAR: return "pchar";
+        case HASHVAR_RECORD: return "record";
+        case HASHVAR_ARRAY: return "array";
+        case HASHVAR_BOOLEAN: return "boolean";
+        case HASHVAR_CHAR: return "char";
+        case HASHVAR_POINTER: return "pointer";
+        case HASHVAR_SET: return "set";
+        case HASHVAR_ENUM: return "enum";
+        case HASHVAR_FILE: return "file";
+        default: return "unknown";
+    }
+}
+
+static void summarize_string_literal(const char *src, char *dest, size_t dest_size)
+{
+    if (dest == NULL || dest_size == 0)
+        return;
+    dest[0] = '\0';
+    if (src == NULL)
+        return;
+
+    size_t out_idx = 0;
+    dest[out_idx++] = '"';
+    size_t i = 0;
+    const size_t max_chars = 24;
+    while (src[i] != '\0' && out_idx + 2 < dest_size && i < max_chars)
+    {
+        unsigned char ch = (unsigned char)src[i++];
+        if (!isprint(ch) || ch == '"' || ch == '\\')
+            dest[out_idx++] = '?';
+        else
+            dest[out_idx++] = (char)ch;
+    }
+    if (src[i] != '\0' && out_idx + 4 < dest_size)
+    {
+        dest[out_idx++] = '.';
+        dest[out_idx++] = '.';
+        dest[out_idx++] = '.';
+    }
+    if (out_idx + 1 < dest_size)
+        dest[out_idx++] = '"';
+    dest[out_idx] = '\0';
+}
+
+static void codegen_emit_semantic_scope_comments(FILE *out, const HashTable_t *table,
+    const char *label, int indent)
+{
+    if (out == NULL || label == NULL)
+        return;
+
+    asm_debug_comment(out, "semcheck", indent, "%s", label);
+    if (table == NULL)
+    {
+        asm_debug_comment(out, "semcheck", indent + 1, "(empty)");
+        return;
+    }
+
+    int entries = 0;
+    for (int i = 0; i < TABLE_SIZE; ++i)
+    {
+        ListNode_t *entry = table->table[i];
+        while (entry != NULL)
+        {
+            HashNode_t *node = (HashNode_t *)entry->cur;
+            entry = entry->next;
+            if (node == NULL)
+                continue;
+
+            ++entries;
+            char mangled_buf[96] = "";
+            if (node->mangled_id != NULL && node->mangled_id[0] != '\0')
+                snprintf(mangled_buf, sizeof(mangled_buf), ", mangled=%s", node->mangled_id);
+
+            char const_buf[128] = "";
+            if (node->hash_type == HASHTYPE_CONST)
+            {
+                if (node->const_string_value != NULL)
+                {
+                    char snippet[48];
+                    summarize_string_literal(node->const_string_value, snippet, sizeof(snippet));
+                    snprintf(const_buf, sizeof(const_buf), ", const=%s", snippet);
+                }
+                else
+                {
+                    snprintf(const_buf, sizeof(const_buf), ", const=%lld",
+                        (long long)node->const_int_value);
+                }
+            }
+
+            char link_buf[48] = "";
+            if (hashnode_requires_static_link(node))
+                snprintf(link_buf, sizeof(link_buf), ", needs-static-link");
+
+            asm_debug_comment(out, "semcheck", indent + 1,
+                "%s kind=%s type=%s%s%s%s",
+                (node->id != NULL) ? node->id : "<unnamed>",
+                hash_type_to_string(node->hash_type),
+                var_type_to_string(hashnode_get_var_type(node)),
+                mangled_buf,
+                const_buf,
+                link_buf);
+        }
+    }
+
+    if (entries == 0)
+        asm_debug_comment(out, "semcheck", indent + 1, "(empty)");
+}
+
+static void codegen_emit_semantic_debug_block(CodeGenContext *ctx)
+{
+    if (!asm_debug_flag() || ctx == NULL || ctx->symtab == NULL || ctx->output_file == NULL)
+        return;
+
+    FILE *out = ctx->output_file;
+    asm_debug_comment(out, "semcheck", 0, "--- symbol table snapshot ---");
+    codegen_emit_semantic_scope_comments(out, ctx->symtab->builtins, "builtins", 0);
+
+    ListNode_t *scope = ctx->symtab->stack_head;
+    int depth = 0;
+    while (scope != NULL)
+    {
+        HashTable_t *table = (HashTable_t *)scope->cur;
+        char label[32];
+        snprintf(label, sizeof(label), "scope %d", depth);
+        codegen_emit_semantic_scope_comments(out, table, label, 0);
+        scope = scope->next;
+        ++depth;
+    }
+
+    asm_debug_comment(out, "semcheck", 0, "--- end symbol table ---");
+}
+
+static void codegen_emit_function_debug_comments(const char *func_name, CodeGenContext *ctx)
+{
+    if (!asm_debug_flag() || ctx == NULL || ctx->output_file == NULL || func_name == NULL)
+        return;
+
+    asm_debug_comment(ctx->output_file, "codegen", 0,
+        "function %s (lex-depth=%d)", func_name,
+        ctx->current_subprogram_lexical_depth);
+
+    StackScope_t *scope = get_cur_scope();
+    if (scope != NULL)
+    {
+        int locals = scope->x_offset;
+        int temps = scope->t_offset;
+        int args = scope->z_offset;
+        int total = get_full_stack_offset();
+        asm_debug_comment(ctx->output_file, "codegen", 1,
+            "stack locals=%dB temps=%dB args=%dB total=%dB",
+            locals, temps, args, total);
+    }
+    else
+    {
+        asm_debug_comment(ctx->output_file, "codegen", 1,
+            "stack scope unavailable");
+    }
+
+    int needs_link = codegen_proc_requires_static_link(ctx, func_name);
+    asm_debug_comment(ctx->output_file, "codegen", 1,
+        "static-link=%s", needs_link ? "required" : "not-required");
+}
+
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
@@ -588,6 +798,7 @@ void codegen_function_header(char *func_name, CodeGenContext *ctx)
     #endif
     assert(func_name != NULL);
     assert(ctx != NULL);
+    codegen_emit_function_debug_comments(func_name, ctx);
     fprintf(ctx->output_file, ".globl\t%s\n", func_name);
     fprintf(ctx->output_file, "%s:\n\tpushq\t%%rbp\n\tmovq\t%%rsp, %%rbp\n", func_name);
 
@@ -773,6 +984,12 @@ void codegen_program_header(const char *fname, CodeGenContext *ctx)
 
     fprintf(ctx->output_file, "\t.text\n");
     fprintf(ctx->output_file, "\t.set\tGPC_TARGET_WINDOWS, %d\n", codegen_target_is_windows());
+    if (asm_debug_flag())
+    {
+        fputc('\n', ctx->output_file);
+        codegen_emit_semantic_debug_block(ctx);
+        fputc('\n', ctx->output_file);
+    }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif

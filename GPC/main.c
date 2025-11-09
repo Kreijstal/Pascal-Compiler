@@ -498,6 +498,11 @@ void set_flags(char **optional_args, int count)
                 exit(1);
             }
         }
+        else if(strcmp(arg, "--asm-debug") == 0 || strcmp(arg, "--asm-debug-comments") == 0)
+        {
+            fprintf(stderr, "Assembly debug comments enabled.\n\n");
+            set_asm_debug_flag();
+        }
         else
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
