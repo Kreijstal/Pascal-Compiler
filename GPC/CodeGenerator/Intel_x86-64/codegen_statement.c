@@ -2638,8 +2638,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     int dest_is_static_array = (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr)) ||
         expr_is_static_array_like(var_expr, ctx);
+    int src_is_static_array = expr_is_static_array_like(assign_expr, ctx);
 
-    if (dest_is_static_array)
+    if (dest_is_static_array && src_is_static_array)
     {
         /* Static array assignment (including record fields) */
         return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
@@ -2657,7 +2658,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     field_is_static_array = 1;
             }
 
-            if (field_is_static_array)
+            if (field_is_static_array && src_is_static_array)
                 return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
         }
     }
