@@ -188,6 +188,14 @@ static ListNode_t *gencode_real_negate(const char *value_operand,
     return add_inst(inst_list, buffer);
 }
 
+/*
+ * Convert a 64-bit register name to its 32-bit equivalent.
+ * This function is idempotent - if the input is already a 32-bit register, it returns it unchanged.
+ * Examples:
+ *   %rax -> %eax
+ *   %r8  -> %r8d
+ *   %r8d -> %r8d (already 32-bit, returns unchanged)
+ */
 static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
 {
     if (reg_name == NULL)
@@ -230,6 +238,13 @@ static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf
 
     if (reg_name[2] >= '0' && reg_name[2] <= '9')
     {
+        /* Check if it's already a 32-bit register (ends with 'd') */
+        size_t len = strlen(reg_name);
+        if (len > 0 && reg_name[len - 1] == 'd')
+        {
+            /* Already a 32-bit register, return as-is */
+            return reg_name;
+        }
         snprintf(buffer, buf_size, "%%r%sd", reg_name + 2);
         return buffer;
     }
@@ -237,6 +252,10 @@ static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf
     return reg_name;
 }
 
+/*
+ * Convert any register to its 32-bit equivalent if it's a 64-bit register.
+ * Returns the register unchanged if it's already 32-bit or not a register that needs conversion.
+ */
 static const char *reg_to_reg32(const char *reg_name, char *buffer, size_t buf_size)
 {
     if (reg_name == NULL)
@@ -246,6 +265,12 @@ static const char *reg_to_reg32(const char *reg_name, char *buffer, size_t buf_s
     return reg_name;
 }
 
+/*
+ * Convert a 32-bit register name to its 8-bit equivalent.
+ * Examples:
+ *   %eax -> %al
+ *   %r8d -> %r8b
+ */
 static const char *reg32_to_reg8(const char *reg_name, char *buffer, size_t buf_size)
 {
     if (reg_name == NULL)
@@ -284,6 +309,14 @@ static const char *reg32_to_reg8(const char *reg_name, char *buffer, size_t buf_
     return NULL;
 }
 
+/*
+ * Convert a 32-bit register name to its 64-bit equivalent.
+ * This function is idempotent - if the input is already a 64-bit register, it returns it unchanged.
+ * Examples:
+ *   %eax -> %rax
+ *   %r8d -> %r8
+ *   %r8  -> %r8 (already 64-bit, returns unchanged)
+ */
 static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size)
 {
     if (reg_name == NULL)
