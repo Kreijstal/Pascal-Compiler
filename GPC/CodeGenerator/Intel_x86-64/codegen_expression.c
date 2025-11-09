@@ -2430,8 +2430,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
 
         int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
+        int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
+        
+        /* Also check if we're passing a static array argument (even if not declared as var param) */
+        int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
 
-        if(is_var_param)
+        /* Arrays and var parameters are passed by reference */
+        if(is_var_param || is_array_param || is_array_arg)
         {
             // Pass by reference
             if (!codegen_expr_is_addressable(arg_expr))

@@ -2040,9 +2040,24 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
 
                     // Var parameters are passed by reference (as pointers), so always use 64-bit
-                    // Also use 64-bit for strings and explicit pointers
+                    // Also use 64-bit for strings, explicit pointers, and arrays
                     int is_var_param = symbol_is_var_param;
-                    int use_64bit = is_var_param ||
+                    int is_array_type = 0;
+                    
+                    /* Check if this parameter is an array type */
+                    if (arg_symbol != NULL && arg_symbol->type != NULL &&
+                        gpc_type_is_array(arg_symbol->type))
+                    {
+                        is_array_type = 1;
+                    }
+                    /* Also check if the resolved type is an array */
+                    else if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
+                             gpc_type_is_array(resolved_type_node->type))
+                    {
+                        is_array_type = 1;
+                    }
+                    
+                    int use_64bit = is_var_param || is_array_type ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE || type == PROCEDURE);
                     arg_reg = use_64bit ?
@@ -2054,7 +2069,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         exit(1);
                     }
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
-                    if (arg_stack != NULL && symbol_is_var_param)
+                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
                         arg_stack->is_reference = 1;
                     if (use_64bit)
                         snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
