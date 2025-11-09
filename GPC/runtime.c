@@ -696,6 +696,58 @@ char *gpc_unix_get_domainname_string(void)
     return gpc_string_duplicate(buffer);
 }
 
+char *gpc_windows_get_hostname_string(void)
+{
+#ifdef _WIN32
+    char buffer[256];
+    DWORD size = (DWORD)sizeof(buffer);
+    if (GetComputerNameA(buffer, &size))
+    {
+        buffer[sizeof(buffer) - 1] = '\0';
+        /* Convert to lowercase for consistency with Unix behavior */
+        for (size_t i = 0; buffer[i] != '\0'; i++)
+        {
+            buffer[i] = (char)tolower((unsigned char)buffer[i]);
+        }
+        return gpc_string_duplicate(buffer);
+    }
+    return gpc_alloc_empty_string();
+#else
+    return gpc_alloc_empty_string();
+#endif
+}
+
+char *gpc_windows_get_domainname_string(void)
+{
+#ifdef _WIN32
+    char fqdn[256];
+    DWORD size = sizeof(fqdn);
+    /* Try to get DNS domain name on Windows */
+    if (GetComputerNameExA(ComputerNameDnsFullyQualified, fqdn, &size))
+    {
+        char *dot = strchr(fqdn, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            return gpc_string_duplicate(dot + 1);
+        }
+    }
+    /* Fallback: try DNS hostname */
+    size = sizeof(fqdn);
+    if (GetComputerNameExA(ComputerNameDnsHostname, fqdn, &size))
+    {
+        char *dot = strchr(fqdn, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            return gpc_string_duplicate(dot + 1);
+        }
+    }
+    return gpc_alloc_empty_string();
+#else
+    return gpc_alloc_empty_string();
+#endif
+}
+
+
 void gpc_string_assign(char **target, const char *value)
 {
     if (target == NULL)
