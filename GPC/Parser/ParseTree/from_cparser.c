@@ -22,6 +22,130 @@
 #include "GpcType.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 
+/* ============================================================================
+ * Circular Reference Detection for AST Traversal
+ * ============================================================================
+ * The parser can create circular AST structures where node->next or node->child
+ * point back to themselves or ancestors, causing infinite loops. This module
+ * provides a visited set mechanism to detect and prevent such loops.
+ */
+
+/* Simple hash set implementation for tracking visited AST nodes */
+#define VISITED_SET_INITIAL_CAPACITY 256
+#define VISITED_SET_LOAD_FACTOR 0.75
+
+typedef struct VisitedSetEntry {
+    ast_t *node;
+    struct VisitedSetEntry *next;
+} VisitedSetEntry;
+
+typedef struct {
+    VisitedSetEntry **buckets;
+    size_t capacity;
+    size_t size;
+} VisitedSet;
+
+static VisitedSet *visited_set_create(void) {
+    VisitedSet *set = (VisitedSet *)malloc(sizeof(VisitedSet));
+    if (set == NULL) return NULL;
+    
+    set->capacity = VISITED_SET_INITIAL_CAPACITY;
+    set->size = 0;
+    set->buckets = (VisitedSetEntry **)calloc(set->capacity, sizeof(VisitedSetEntry *));
+    if (set->buckets == NULL) {
+        free(set);
+        return NULL;
+    }
+    
+    return set;
+}
+
+static void visited_set_destroy(VisitedSet *set) {
+    if (set == NULL) return;
+    
+    for (size_t i = 0; i < set->capacity; i++) {
+        VisitedSetEntry *entry = set->buckets[i];
+        while (entry != NULL) {
+            VisitedSetEntry *next = entry->next;
+            free(entry);
+            entry = next;
+        }
+    }
+    
+    free(set->buckets);
+    free(set);
+}
+
+static size_t visited_set_hash(ast_t *node, size_t capacity) {
+    /* Simple pointer hash */
+    uintptr_t addr = (uintptr_t)node;
+    return (size_t)(addr % capacity);
+}
+
+static bool visited_set_contains(VisitedSet *set, ast_t *node) {
+    if (set == NULL || node == NULL) return false;
+    
+    size_t index = visited_set_hash(node, set->capacity);
+    VisitedSetEntry *entry = set->buckets[index];
+    
+    while (entry != NULL) {
+        if (entry->node == node) {
+            return true;
+        }
+        entry = entry->next;
+    }
+    
+    return false;
+}
+
+static bool visited_set_add(VisitedSet *set, ast_t *node) {
+    if (set == NULL || node == NULL) return false;
+    
+    /* Check if already present */
+    if (visited_set_contains(set, node)) {
+        return true; /* Already visited - indicates circular reference */
+    }
+    
+    /* Add new entry */
+    size_t index = visited_set_hash(node, set->capacity);
+    VisitedSetEntry *new_entry = (VisitedSetEntry *)malloc(sizeof(VisitedSetEntry));
+    if (new_entry == NULL) return false;
+    
+    new_entry->node = node;
+    new_entry->next = set->buckets[index];
+    set->buckets[index] = new_entry;
+    set->size++;
+    
+    return false; /* Not a duplicate */
+}
+
+/* Macro for safe AST iteration with circular reference detection.
+ * Usage: SAFE_AST_ITER(visited_set, node, { ... body ... })
+ * The macro will break the loop if a circular reference is detected.
+ */
+#define SAFE_AST_ITER(visited_set, node_var) \
+    for (ast_t *node_var = NULL, *__iter_tmp = node_var; \
+         ((node_var = __iter_tmp) != NULL || (__iter_tmp = node_var) != NULL) && \
+         (!visited_set_add(visited_set, node_var)); \
+         __iter_tmp = node_var->next)
+
+/* Helper to check if continuing iteration is safe */
+static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
+    if (node == NULL) return false;
+    if (node == ast_nil) return false;
+    
+    /* Check if we've visited this node before (circular reference) */
+    if (visited_set_contains(visited, node)) {
+        fprintf(stderr, "WARNING: Circular AST reference detected at node %p (type=%d)\n", 
+                (void*)node, node->typ);
+        return false;
+    }
+    
+    /* Mark as visited */
+    visited_set_add(visited, node);
+    return true;
+}
+
 typedef struct {
     int is_array;
     int start;
@@ -1856,15 +1980,29 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
 static ListNode_t *convert_var_section(ast_t *section_node) {
     ListBuilder decls_builder;
     list_builder_init(&decls_builder);
+    
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for var section traversal\n");
+        return NULL;
+    }
+    
     ast_t *cur = section_node->child;
-
     while (cur != NULL && cur->typ == PASCAL_T_VAR_DECL) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, cur)) {
+            fprintf(stderr, "ERROR: Circular reference detected in var section, stopping traversal\n");
+            break;
+        }
+        
         Tree_t *decl = convert_var_decl(cur);
         if (decl != NULL)
             list_builder_append(&decls_builder, decl, LIST_TREE);
         cur = cur->next;
     }
 
+    visited_set_destroy(visited);
     return list_builder_finish(&decls_builder);
 }
 
@@ -2222,8 +2360,21 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
     while (*tail != NULL)
         tail = &(*tail)->next;
 
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for const traversal\n");
+        return;
+    }
+
     ast_t *const_decl = const_section->child;
     while (const_decl != NULL) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, const_decl)) {
+            fprintf(stderr, "ERROR: Circular reference detected in const section, stopping traversal\n");
+            break;
+        }
+        
         if (const_decl->typ == PASCAL_T_CONST_DECL) {
             Tree_t *decl = convert_const_decl(const_decl, var_builder, type_section, const_section);
             if (decl != NULL) {
@@ -2234,6 +2385,8 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
         }
         const_decl = const_decl->next;
     }
+    
+    visited_set_destroy(visited);
 }
 
 static Tree_t *convert_type_decl(ast_t *type_decl_node) {
@@ -2449,8 +2602,21 @@ static void append_uses_from_section(ast_t *uses_node, ListNode_t **dest) {
     while (*tail != NULL)
         tail = &(*tail)->next;
 
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for uses traversal\n");
+        return;
+    }
+
     ast_t *unit = uses_node->child;
     while (unit != NULL) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, unit)) {
+            fprintf(stderr, "ERROR: Circular reference detected in uses section, stopping traversal\n");
+            break;
+        }
+        
         if (unit->typ == PASCAL_T_USES_UNIT) {
             char *dup = dup_symbol(unit);
             if (dup != NULL) {
@@ -2461,14 +2627,29 @@ static void append_uses_from_section(ast_t *uses_node, ListNode_t **dest) {
         }
         unit = unit->next;
     }
+    
+    visited_set_destroy(visited);
 }
 
 static void append_labels_from_section(ast_t *label_node, ListBuilder *builder) {
     if (label_node == NULL || builder == NULL)
         return;
 
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for labels traversal\n");
+        return;
+    }
+
     ast_t *cur = label_node->child;
     while (cur != NULL) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, cur)) {
+            fprintf(stderr, "ERROR: Circular reference detected in label section, stopping traversal\n");
+            break;
+        }
+        
         ast_t *node = unwrap_pascal_node(cur);
         if (node == NULL)
             node = cur;
@@ -2480,6 +2661,8 @@ static void append_labels_from_section(ast_t *label_node, ListBuilder *builder) 
         }
         cur = cur->next;
     }
+    
+    visited_set_destroy(visited);
 }
 
 static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest) {
@@ -2490,8 +2673,21 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
     while (*tail != NULL)
         tail = &(*tail)->next;
 
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for type traversal\n");
+        return;
+    }
+
     ast_t *type_decl = type_section->child;
     while (type_decl != NULL) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, type_decl)) {
+            fprintf(stderr, "ERROR: Circular reference detected in type section, stopping traversal\n");
+            break;
+        }
+        
         if (type_decl->typ == PASCAL_T_TYPE_DECL) {
             Tree_t *decl = convert_type_decl(type_decl);
             if (decl != NULL) {
@@ -2502,6 +2698,8 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         }
         type_decl = type_decl->next;
     }
+    
+    visited_set_destroy(visited);
 }
 
 static int map_relop_tag(int tag) {
@@ -3121,6 +3319,14 @@ static struct Expression *convert_expression(ast_t *expr_node) {
 static ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListBuilder builder;
     list_builder_init(&builder);
+    
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for expression list traversal\n");
+        return NULL;
+    }
+    
     ast_t *cur = arg_node;
 
     /*
@@ -3128,6 +3334,12 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
      * layer so we only convert real expressions and preserve field-width wrappers explicitly.
      */
     while (cur != NULL && cur != ast_nil) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, cur)) {
+            fprintf(stderr, "ERROR: Circular reference detected in expression list, stopping traversal\n");
+            break;
+        }
+        
         ast_t *unwrapped = unwrap_pascal_node(cur);
         if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH) {
             struct Expression *expr = convert_field_width_expr(unwrapped);
@@ -3141,6 +3353,7 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
         cur = cur->next;
     }
 
+    visited_set_destroy(visited);
     return list_builder_finish(&builder);
 }
 
@@ -3689,9 +3902,22 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
 static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
     ListBuilder builder;
     list_builder_init(&builder);
+    
+    /* Create visited set to detect circular references */
+    VisitedSet *visited = visited_set_create();
+    if (visited == NULL) {
+        fprintf(stderr, "ERROR: Failed to allocate visited set for statement list traversal\n");
+        return NULL;
+    }
+    
     ast_t *cur = stmt_list_node;
-
     while (cur != NULL && cur != ast_nil) {
+        /* Check for circular reference before processing */
+        if (!is_safe_to_continue(visited, cur)) {
+            fprintf(stderr, "ERROR: Circular reference detected in statement list, stopping traversal\n");
+            break;
+        }
+        
         ast_t *unwrapped = unwrap_pascal_node(cur);
         if (unwrapped == NULL) {
             cur = cur->next;
@@ -3709,6 +3935,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         cur = cur->next;
     }
 
+    visited_set_destroy(visited);
     return list_builder_finish(&builder);
 }
 
@@ -4178,9 +4405,23 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t **subprograms_tail = &subprograms;
         struct Statement *body = NULL;
 
+        /* Create visited set to detect circular references in top-level sections */
+        VisitedSet *visited = visited_set_create();
+        if (visited == NULL) {
+            fprintf(stderr, "ERROR: Failed to allocate visited set for program sections\n");
+            free(program_id);
+            return NULL;
+        }
+
         /* Start iterating from the first child, or the node after the program header */
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
+            /* Check for circular reference before processing */
+            if (!is_safe_to_continue(visited, section)) {
+                fprintf(stderr, "ERROR: Circular reference detected in program sections, stopping traversal\n");
+                break;
+            }
+            
             switch (section->typ) {
             case PASCAL_T_CONST_SECTION:
                 append_const_decls_from_section(section, &const_decls, &var_decls_builder, type_section_ast);
@@ -4229,6 +4470,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             section = section->next;
         }
 
+        visited_set_destroy(visited);
+        
         ListNode_t *label_decls = list_builder_finish(&label_builder);
         Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
                                   list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
@@ -4263,7 +4506,21 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ast_t *initialization_node = NULL;
         ast_t *finalization_node = NULL;
 
+        /* Create visited set for unit-level sections */
+        VisitedSet *visited_unit = visited_set_create();
+        if (visited_unit == NULL) {
+            fprintf(stderr, "ERROR: Failed to allocate visited set for unit sections\n");
+            free(unit_id);
+            return NULL;
+        }
+
         while (section != NULL) {
+            /* Check for circular reference */
+            if (!is_safe_to_continue(visited_unit, section)) {
+                fprintf(stderr, "ERROR: Circular reference detected in unit sections, stopping traversal\n");
+                break;
+            }
+            
             if (section->typ == PASCAL_T_INTERFACE_SECTION) {
                 interface_node = section;
             } else if (section->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
@@ -4275,87 +4532,115 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             section = section->next;
         }
+        
+        visited_set_destroy(visited_unit);
 
         if (interface_node != NULL && interface_node->typ == PASCAL_T_INTERFACE_SECTION) {
-            ast_t *section = interface_node->child;
-            while (section != NULL) {
-                ast_t *node = unwrap_pascal_node(section);
-                if (node != NULL) {
-                    switch (node->typ) {
-                    case PASCAL_T_USES_SECTION:
-                        append_uses_from_section(node, &interface_uses);
-                        break;
-                    case PASCAL_T_TYPE_SECTION:
-                        interface_type_section_ast = node;  /* Save for const array enum resolution */
-                        append_type_decls_from_section(node, &interface_type_decls);
-                        break;
-                    case PASCAL_T_CONST_SECTION:
-                        append_const_decls_from_section(node, &interface_const_decls,
-                                                        &interface_var_builder, interface_type_section_ast);
-                        break;
-                    case PASCAL_T_VAR_SECTION:
-                        list_builder_extend(&interface_var_builder, convert_var_section(node));
-                        break;
-                    default:
+            /* Create visited set for interface sections */
+            VisitedSet *visited_if = visited_set_create();
+            if (visited_if == NULL) {
+                fprintf(stderr, "ERROR: Failed to allocate visited set for interface sections\n");
+            } else {
+                ast_t *section = interface_node->child;
+                while (section != NULL) {
+                    /* Check for circular reference */
+                    if (!is_safe_to_continue(visited_if, section)) {
+                        fprintf(stderr, "ERROR: Circular reference detected in interface sections, stopping traversal\n");
                         break;
                     }
+                    
+                    ast_t *node = unwrap_pascal_node(section);
+                    if (node != NULL) {
+                        switch (node->typ) {
+                        case PASCAL_T_USES_SECTION:
+                            append_uses_from_section(node, &interface_uses);
+                            break;
+                        case PASCAL_T_TYPE_SECTION:
+                            interface_type_section_ast = node;  /* Save for const array enum resolution */
+                            append_type_decls_from_section(node, &interface_type_decls);
+                            break;
+                        case PASCAL_T_CONST_SECTION:
+                            append_const_decls_from_section(node, &interface_const_decls,
+                                                            &interface_var_builder, interface_type_section_ast);
+                            break;
+                        case PASCAL_T_VAR_SECTION:
+                            list_builder_extend(&interface_var_builder, convert_var_section(node));
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    section = section->next;
                 }
-                section = section->next;
+                visited_set_destroy(visited_if);
             }
         }
 
         if (implementation_node != NULL && implementation_node->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
-            ast_t *definition = implementation_node->child;
-            while (definition != NULL) {
-                ast_t *node = unwrap_pascal_node(definition);
-                if (node != NULL) {
-                    switch (node->typ) {
-                    case PASCAL_T_USES_SECTION:
-                        append_uses_from_section(node, &implementation_uses);
+            /* Create visited set for implementation sections */
+            VisitedSet *visited_impl = visited_set_create();
+            if (visited_impl == NULL) {
+                fprintf(stderr, "ERROR: Failed to allocate visited set for implementation sections\n");
+            } else {
+                ast_t *definition = implementation_node->child;
+                while (definition != NULL) {
+                    /* Check for circular reference */
+                    if (!is_safe_to_continue(visited_impl, definition)) {
+                        fprintf(stderr, "ERROR: Circular reference detected in implementation sections, stopping traversal\n");
                         break;
-                    case PASCAL_T_TYPE_SECTION:
-                        implementation_type_section_ast = node;  /* Save for const array enum resolution */
-                        append_type_decls_from_section(node, &implementation_type_decls);
-                        break;
-                    case PASCAL_T_CONST_SECTION:
-                        append_const_decls_from_section(node, &implementation_const_decls,
-                                                        &implementation_var_builder, implementation_type_section_ast);
-                        break;
-                    case PASCAL_T_VAR_SECTION:
-                        list_builder_extend(&implementation_var_builder, convert_var_section(node));
-                        break;
-                    case PASCAL_T_PROCEDURE_DECL: {
-                        Tree_t *proc = convert_procedure(node);
-                        if (proc != NULL) {
-                            ListNode_t *list_node = CreateListNode(proc, LIST_TREE);
-                            *subprograms_tail = list_node;
-                            subprograms_tail = &list_node->next;
+                    }
+                    
+                    ast_t *node = unwrap_pascal_node(definition);
+                    if (node != NULL) {
+                        switch (node->typ) {
+                        case PASCAL_T_USES_SECTION:
+                            append_uses_from_section(node, &implementation_uses);
+                            break;
+                        case PASCAL_T_TYPE_SECTION:
+                            implementation_type_section_ast = node;  /* Save for const array enum resolution */
+                            append_type_decls_from_section(node, &implementation_type_decls);
+                            break;
+                        case PASCAL_T_CONST_SECTION:
+                            append_const_decls_from_section(node, &implementation_const_decls,
+                                                            &implementation_var_builder, implementation_type_section_ast);
+                            break;
+                        case PASCAL_T_VAR_SECTION:
+                            list_builder_extend(&implementation_var_builder, convert_var_section(node));
+                            break;
+                        case PASCAL_T_PROCEDURE_DECL: {
+                            Tree_t *proc = convert_procedure(node);
+                            if (proc != NULL) {
+                                ListNode_t *list_node = CreateListNode(proc, LIST_TREE);
+                                *subprograms_tail = list_node;
+                                subprograms_tail = &list_node->next;
+                            }
+                            break;
                         }
-                        break;
-                    }
-                    case PASCAL_T_FUNCTION_DECL: {
-                        Tree_t *func = convert_function(node);
-                        if (func != NULL) {
-                            ListNode_t *list_node = CreateListNode(func, LIST_TREE);
-                            *subprograms_tail = list_node;
-                            subprograms_tail = &list_node->next;
+                        case PASCAL_T_FUNCTION_DECL: {
+                            Tree_t *func = convert_function(node);
+                            if (func != NULL) {
+                                ListNode_t *list_node = CreateListNode(func, LIST_TREE);
+                                *subprograms_tail = list_node;
+                                subprograms_tail = &list_node->next;
+                            }
+                            break;
                         }
-                        break;
-                    }
-                    case PASCAL_T_METHOD_IMPL: {
-                        Tree_t *method_tree = convert_method_impl(node);
-                        if (method_tree != NULL) {
-                            ListNode_t *list_node = CreateListNode(method_tree, LIST_TREE);
-                            *subprograms_tail = list_node;
-                            subprograms_tail = &list_node->next;
+                        case PASCAL_T_METHOD_IMPL: {
+                            Tree_t *method_tree = convert_method_impl(node);
+                            if (method_tree != NULL) {
+                                ListNode_t *list_node = CreateListNode(method_tree, LIST_TREE);
+                                *subprograms_tail = list_node;
+                                subprograms_tail = &list_node->next;
+                            }
+                            break;
                         }
-                        break;
+                        default:
+                            break;
+                        }
                     }
-                    default:
-                        break;
-                    }
+                    definition = definition->next;
                 }
-                definition = definition->next;
+                visited_set_destroy(visited_impl);
             }
         }
 
