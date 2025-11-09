@@ -861,47 +861,39 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         int have_depth = codegen_proc_static_link_depth(ctx, func_mangled_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
         int should_pass_static_link = (callee_needs_static_link && have_depth);
+
+        enum {
+            STATIC_LINK_NONE = 0,
+            STATIC_LINK_FROM_RBP,
+            STATIC_LINK_FROM_SLOT,
+            STATIC_LINK_FROM_REG
+        } static_link_source = STATIC_LINK_NONE;
+        int static_link_slot_offset = 0;
+        Register_t *static_link_reg = NULL;
+        int static_link_expr_active = 0;
         
         if (should_pass_static_link)
         {
             if (callee_depth > current_depth)
             {
-                /* Callee is nested inside current: pass our frame pointer */
-                const char *link_reg = current_arg_reg64(0);
-                assert(link_reg != NULL && "current_arg_reg64(0) should never return NULL");
-                char link_buffer[64];
-                snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rbp, %s\n", link_reg);
-                inst_list = add_inst(inst_list, link_buffer);
+                static_link_source = STATIC_LINK_FROM_RBP;
             }
             else if (callee_depth == current_depth)
             {
-                /* Sibling call: forward our static link */
                 StackNode_t *static_link_node = find_label("__static_link__");
                 if (static_link_node != NULL)
                 {
-                    char link_buffer[64];
-                    const char *link_reg = current_arg_reg64(0);
-                    assert(link_reg != NULL && "current_arg_reg64(0) should never return NULL");
-                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                        static_link_node->offset, link_reg);
-                    inst_list = add_inst(inst_list, link_buffer);
+                    static_link_source = STATIC_LINK_FROM_SLOT;
+                    static_link_slot_offset = static_link_node->offset;
                 }
             }
-            else if (current_depth > callee_depth)
+            else
             {
-                /* Callee is in outer scope: traverse static link chain */
-                int levels_to_traverse = current_depth - callee_depth;
+                static_link_source = STATIC_LINK_FROM_REG;
+                int levels_to_traverse = (current_depth - callee_depth) + 1;
                 codegen_begin_expression(ctx);
-                Register_t *link_reg = codegen_acquire_static_link(ctx, &inst_list, levels_to_traverse);
-                if (link_reg != NULL)
-                {
-                    char link_buffer[64];
-                    const char *dest_reg = current_arg_reg64(0);
-                    assert(dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
-                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %s\n", link_reg->bit_64, dest_reg);
-                    inst_list = add_inst(inst_list, link_buffer);
-                }
-                codegen_end_expression(ctx);
+                static_link_expr_active = 1;
+                static_link_reg = codegen_acquire_static_link(ctx, &inst_list, levels_to_traverse);
             }
         }
         
@@ -909,6 +901,41 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         int arg_start_index = should_pass_static_link ? 1 : 0;
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
             inst_list, ctx, func_type, expr->expr_data.function_call_data.id, arg_start_index);
+
+        if (should_pass_static_link)
+        {
+            const char *dest_reg = current_arg_reg64(0);
+            assert(dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
+            char link_buffer[64];
+            switch (static_link_source)
+            {
+                case STATIC_LINK_FROM_RBP:
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%%rbp, %s\n", dest_reg);
+                    inst_list = add_inst(inst_list, link_buffer);
+                    break;
+                case STATIC_LINK_FROM_SLOT:
+                    snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        static_link_slot_offset, dest_reg);
+                    inst_list = add_inst(inst_list, link_buffer);
+                    break;
+                case STATIC_LINK_FROM_REG:
+                    if (static_link_reg != NULL)
+                    {
+                        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, %s\n",
+                            static_link_reg->bit_64, dest_reg);
+                        inst_list = add_inst(inst_list, link_buffer);
+                        free_reg(get_reg_stack(), static_link_reg);
+                        static_link_reg = NULL;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (static_link_expr_active)
+            codegen_end_expression(ctx);
+
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         codegen_release_function_call_mangled_id(expr);
