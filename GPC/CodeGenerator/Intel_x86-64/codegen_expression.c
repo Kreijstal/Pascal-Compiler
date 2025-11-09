@@ -179,16 +179,14 @@ static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_
     if (element_size == 1)
     {
         const char *reg8 = codegen_register_name8(value_reg);
-        if (reg8 == NULL)
-            reg8 = value_reg->bit_32;
+        assert(reg8 != NULL && "8-bit register name not found for store operation");
         snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", reg8, offset);
         return add_inst(inst_list, buffer);
     }
     else if (element_size == 2)
     {
         const char *reg16 = codegen_register_name16(value_reg);
-        if (reg16 == NULL)
-            reg16 = value_reg->bit_32;
+        assert(reg16 != NULL && "16-bit register name not found for store operation");
         snprintf(buffer, sizeof(buffer), "\tmovw\t%s, -%d(%%rbp)\n", reg16, offset);
         return add_inst(inst_list, buffer);
     }

@@ -16,6 +16,9 @@
 #include <unistd.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #define GPC_HAVE_GETDOMAINNAME 1
@@ -226,6 +229,29 @@ int gpc_unix_get_domainname(char *buffer, size_t buffer_size)
             strncpy(buffer, dot + 1, buffer_size - 1);
             buffer[buffer_size - 1] = '\0';
             return 0;
+        }
+        /* Try DNS lookup for FQDN */
+        struct addrinfo hints, *info = NULL;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_CANONNAME;
+        
+        if (getaddrinfo(hostname, NULL, &hints, &info) == 0)
+        {
+            if (info != NULL && info->ai_canonname != NULL)
+            {
+                dot = strchr(info->ai_canonname, '.');
+                if (dot != NULL && *(dot + 1) != '\0')
+                {
+                    strncpy(buffer, dot + 1, buffer_size - 1);
+                    buffer[buffer_size - 1] = '\0';
+                    freeaddrinfo(info);
+                    return 0;
+                }
+            }
+            if (info != NULL)
+                freeaddrinfo(info);
         }
     }
     return -1;

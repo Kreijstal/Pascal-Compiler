@@ -31,3 +31,4 @@ tests/output/
 __pycache__/
 *.pyc
 
+quasi-msys2/
