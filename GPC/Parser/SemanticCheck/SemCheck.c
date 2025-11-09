@@ -148,6 +148,36 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     Tree_t *parent_subprogram);
 
 /* Resolve the return type for a function declaration once so callers share the same GpcType. */
+HashNode_t *semcheck_find_type_node_with_gpc_type(SymTab_t *symtab, const char *type_id)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    HashNode_t *result = NULL;
+    ListNode_t *all_nodes = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *cur = all_nodes;
+    while (cur != NULL)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL)
+        {
+            if (node->type != NULL)
+            {
+                result = node;
+                break;
+            }
+            if (result == NULL)
+                result = node;
+        }
+        cur = cur->next;
+    }
+
+    if (all_nodes != NULL)
+        DestroyList(all_nodes);
+
+    return result;
+}
+
 static GpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count)
 {
@@ -159,8 +189,8 @@ static GpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     HashNode_t *type_node = NULL;
     if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
     {
-        if (FindIdent(&type_node, symtab, subprogram->tree_data.subprogram_data.return_type_id) == -1 ||
-            type_node == NULL)
+        type_node = semcheck_find_type_node_with_gpc_type(symtab, subprogram->tree_data.subprogram_data.return_type_id);
+        if (type_node == NULL)
         {
             semantic_error(subprogram->line_num, 0, "undefined type %s",
                 subprogram->tree_data.subprogram_data.return_type_id);
@@ -1378,9 +1408,9 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
             }
         } else {
-            /* Fall back to legacy API for types we can't convert yet */
-            func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
-                record_info, alias_info);
+        /* Fall back to legacy API for types we can't convert yet */
+        func_return = PushTypeOntoScope(symtab, tree->tree_data.type_decl_data.id, var_type,
+            record_info, alias_info);
         }
 
         /* Note: Enum literals are declared in predeclare_enum_literals() during first pass.
@@ -2466,6 +2496,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             subprogram->tree_data.subprogram_data.args_var,
             NULL  /* procedures have no return type */
         );
+        if (proc_type != NULL)
+        {
+            proc_type->info.proc_info.definition = subprogram;
+            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                proc_type->info.proc_info.return_type_id =
+                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+        }
         
         /* ARCHITECTURAL FIX: Resolve array bounds in parameter types now that constants are in scope */
         if (proc_type != NULL && proc_type->info.proc_info.params != NULL)
@@ -2516,6 +2553,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             subprogram->tree_data.subprogram_data.args_var,
             NULL
         );
+        if (proc_type_recursive != NULL)
+        {
+            proc_type_recursive->info.proc_info.definition = subprogram;
+            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                proc_type_recursive->info.proc_info.return_type_id =
+                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+        }
+        if (proc_type_recursive != NULL)
+            proc_type_recursive->info.proc_info.definition = subprogram;
         
         // Push it again in the new scope to allow recursion
         PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
@@ -2548,6 +2594,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 subprogram->tree_data.subprogram_data.args_var,
                 return_gpc_type
             );
+            if (func_type != NULL)
+            {
+                func_type->info.proc_info.definition = subprogram;
+                if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                    func_type->info.proc_info.return_type_id =
+                        strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            }
             func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             func_type);
@@ -2563,6 +2616,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                         subprogram->tree_data.subprogram_data.args_var,
                         return_gpc_type
                     );
+                    if (func_type != NULL)
+                    {
+                        func_type->info.proc_info.definition = subprogram;
+                        if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                            func_type->info.proc_info.return_type_id =
+                                strdup(subprogram->tree_data.subprogram_data.return_type_id);
+                    }
                     existing_decl->type = func_type;
                 }
                 else if (return_gpc_type != NULL)
@@ -2739,6 +2799,12 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             subprogram->tree_data.subprogram_data.args_var,
             NULL  /* procedures have no return type */
         );
+        if (proc_type != NULL) {
+            proc_type->info.proc_info.definition = subprogram;
+            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                proc_type->info.proc_info.return_type_id =
+                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+        }
         
         // Add to current scope
         func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
@@ -2761,6 +2827,12 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             subprogram->tree_data.subprogram_data.args_var,
             return_gpc_type  /* functions have a return type */
         );
+        if (func_type != NULL) {
+            func_type->info.proc_info.definition = subprogram;
+            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                func_type->info.proc_info.return_type_id =
+                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+        }
         
         // Add to current scope
         func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,

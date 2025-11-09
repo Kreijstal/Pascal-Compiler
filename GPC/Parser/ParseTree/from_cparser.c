@@ -167,6 +167,10 @@ typedef struct {
     char *file_type_id;
     int is_record;
     struct RecordType *record_type;
+    int is_range;
+    int range_known;
+    long long range_start;
+    long long range_end;
 } TypeInfo;
 
 static void destroy_type_info_contents(TypeInfo *info) {
@@ -711,6 +715,10 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->file_type_id = NULL;
         type_info->is_record = 0;
         type_info->record_type = NULL;
+        type_info->is_range = 0;
+        type_info->range_known = 0;
+        type_info->range_start = 0;
+        type_info->range_end = 0;
     }
 
     if (type_spec == NULL)
@@ -738,6 +746,34 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             free(dup);
         }
         return result;
+    }
+    if (spec_node->typ == PASCAL_T_RANGE_TYPE) {
+        ast_t *lower = unwrap_pascal_node(spec_node->child);
+        ast_t *upper = (lower != NULL) ? unwrap_pascal_node(lower->next) : NULL;
+        long long start_value = 0;
+        long long end_value = 0;
+        int have_start = 0;
+        int have_end = 0;
+        struct Expression *lower_expr = convert_expression(lower);
+        struct Expression *upper_expr = convert_expression(upper);
+
+        if (lower_expr != NULL) {
+            have_start = (extract_constant_int(lower_expr, &start_value) == 0);
+            destroy_expr(lower_expr);
+        }
+        if (upper_expr != NULL) {
+            have_end = (extract_constant_int(upper_expr, &end_value) == 0);
+            destroy_expr(upper_expr);
+        }
+
+        if (type_info != NULL) {
+            type_info->is_range = 1;
+            type_info->range_start = start_value;
+            type_info->range_end = end_value;
+            type_info->range_known = (have_start && have_end);
+        }
+
+        return UNKNOWN_TYPE;
     }
     if (spec_node->typ == PASCAL_T_ARRAY_TYPE) {
         if (type_info != NULL) {
@@ -2397,6 +2433,28 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
     visited_set_destroy(visited);
 }
 
+static int select_range_primitive_tag(const TypeInfo *info)
+{
+    if (info == NULL || !info->is_range)
+        return LONGINT_TYPE;
+
+    if (!info->range_known)
+        return LONGINT_TYPE;
+
+    long long start = info->range_start;
+    long long end = info->range_end;
+    if (start > end) {
+        long long tmp = start;
+        start = end;
+        end = tmp;
+    }
+
+    if (start >= INT_MIN && end <= INT_MAX)
+        return INT_TYPE;
+
+    return LONGINT_TYPE;
+}
+
 static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     if (type_decl_node == NULL)
         return NULL;
@@ -2449,6 +2507,9 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     } else if (mapped_type != UNKNOWN_TYPE || type_id != NULL) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 0, mapped_type, type_id, 0, 0);
         type_id = NULL;
+    } else if (type_info.is_range) {
+        int base_tag = select_range_primitive_tag(&type_info);
+        decl = mk_typealiasdecl(type_decl_node->line, id, 0, base_tag, NULL, 0, 0);
     } else {
         decl = mk_typedecl(type_decl_node->line, id, 0, 0);
     }
@@ -4218,6 +4279,11 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
         TypeInfo type_info;
         return_type = convert_type_spec(cur->child, &return_type_id, NULL, &type_info);
+
+        if (return_type_id == NULL && cur->sym != NULL && cur->sym->name != NULL)
+        {
+            return_type_id = strdup(cur->sym->name);
+        }
         
         /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
         if (type_info.is_array || type_info.is_pointer || type_info.is_set || 

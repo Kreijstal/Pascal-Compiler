@@ -42,6 +42,8 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type) {
     type->kind = TYPE_KIND_PROCEDURE;
     type->info.proc_info.params = params; // Takes ownership
     type->info.proc_info.return_type = return_type; // Takes ownership
+    type->info.proc_info.definition = NULL;
+    type->info.proc_info.return_type_id = NULL;
     type->ref_count = 1;
     
     #ifdef DEBUG_GPC_TYPE_CREATION
@@ -236,6 +238,11 @@ void destroy_gpc_type(GpcType *type) {
         case TYPE_KIND_PROCEDURE:
             DestroyList(type->info.proc_info.params);
             destroy_gpc_type(type->info.proc_info.return_type);
+            if (type->info.proc_info.return_type_id != NULL)
+            {
+                free(type->info.proc_info.return_type_id);
+                type->info.proc_info.return_type_id = NULL;
+            }
             break;
         case TYPE_KIND_ARRAY:
             destroy_gpc_type(type->info.array_info.element_type);
@@ -973,21 +980,28 @@ GpcType* gpc_type_build_function_return(struct TypeAlias *inline_alias,
                                         int primitive_tag,
                                         SymTab_t *symtab)
 {
+    GpcType *result = NULL;
+
     if (inline_alias != NULL)
     {
-        GpcType *inline_type = create_gpc_type_from_type_alias(inline_alias, symtab);
-        if (inline_type != NULL && inline_type->type_alias == NULL)
-            gpc_type_set_type_alias(inline_type, inline_alias);
-        return inline_type;
+        result = create_gpc_type_from_type_alias(inline_alias, symtab);
+        if (result != NULL && result->type_alias == NULL)
+            gpc_type_set_type_alias(result, inline_alias);
     }
-
-    if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
+    else if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
         gpc_type_retain(resolved_type_node->type);
-        return resolved_type_node->type;
+        result = resolved_type_node->type;
+    }
+    else if (resolved_type_node != NULL) {
+        struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
+        if (alias != NULL) {
+            result = create_gpc_type_from_type_alias(alias, symtab);
+        }
+    }
+    else if (primitive_tag != -1)
+    {
+        result = create_primitive_type(primitive_tag);
     }
 
-    if (primitive_tag != -1)
-        return create_primitive_type(primitive_tag);
-
-    return NULL;
+    return result;
 }
