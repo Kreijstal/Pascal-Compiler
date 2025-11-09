@@ -739,18 +739,90 @@ combinator_t* interface_type(tag_t tag) {
     return map(interface_parser, build_class_ast);  // Reuse same AST builder
 }
 
+// Parser function for type_name with optional [size] subscript for string types
+static ParseResult type_name_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    tag_t tag = (pargs != NULL) ? pargs->tag : PASCAL_T_IDENTIFIER;
+    
+    InputState state;
+    save_input_state(in, &state);
+    
+    // Try each built-in type
+    const char* type_keywords[] = {"integer", "real", "boolean", "char", "string", "byte", "word", "longint", NULL};
+    
+    for (int i = 0; type_keywords[i] != NULL; i++) {
+        combinator_t* keyword_parser = create_keyword_parser(type_keywords[i], tag);
+        ParseResult keyword_res = parse(in, keyword_parser);
+        free_combinator(keyword_parser);
+        
+        if (keyword_res.is_success) {
+            ast_t* type_ast = keyword_res.value.ast;
+            
+            // Only check for subscript if this is "string"
+            if (strcasecmp(type_keywords[i], "string") == 0) {
+                InputState subscript_state;
+                save_input_state(in, &subscript_state);
+                
+                combinator_t* open_bracket = match("[");
+                ParseResult open_res = parse(in, open_bracket);
+                free_combinator(open_bracket);
+                
+                if (open_res.is_success) {
+                    free_ast(open_res.value.ast);
+                    
+                    // Parse the size expression
+                    combinator_t* size_expr = new_combinator();
+                    init_pascal_expression_parser(&size_expr, NULL);
+                    ParseResult size_res = parse(in, size_expr);
+                    free_combinator(size_expr);
+                    
+                    if (size_res.is_success) {
+                        // Parse closing ]
+                        combinator_t* close_bracket = match("]");
+                        ParseResult close_res = parse(in, close_bracket);
+                        free_combinator(close_bracket);
+                        
+                        if (close_res.is_success) {
+                            free_ast(close_res.value.ast);
+                            // Discard the size - treat string[n] as string for now
+                            free_ast(size_res.value.ast);
+                        } else {
+                            // Failed to parse closing bracket, restore and ignore subscript
+                            discard_failure(close_res);
+                            free_ast(size_res.value.ast);
+                            restore_input_state(in, &subscript_state);
+                        }
+                    } else {
+                        // Failed to parse size, restore and ignore subscript
+                        discard_failure(size_res);
+                        restore_input_state(in, &subscript_state);
+                    }
+                } else {
+                    discard_failure(open_res);
+                    restore_input_state(in, &subscript_state);
+                }
+            }
+            
+            ParseResult result;
+            result.is_success = true;
+            result.value.ast = type_ast;
+            return result;
+        } else {
+            discard_failure(keyword_res);
+            restore_input_state(in, &state);
+        }
+    }
+    
+    return make_failure(in, strdup("Expected built-in type name"));
+}
+
 combinator_t* type_name(tag_t tag) {
-    return multi(new_combinator(), PASCAL_T_NONE,
-        token(create_keyword_parser("integer", tag)),
-        token(create_keyword_parser("real", tag)),
-        token(create_keyword_parser("boolean", tag)),
-        token(create_keyword_parser("char", tag)),
-        token(create_keyword_parser("string", tag)),
-        token(create_keyword_parser("byte", tag)),
-        token(create_keyword_parser("word", tag)),
-        token(create_keyword_parser("longint", tag)),
-        NULL
-    );
+    combinator_t* comb = new_combinator();
+    prim_args* args = safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    comb->args = args;
+    comb->fn = type_name_fn;
+    return comb;
 }
 
 static combinator_t* create_record_field_type_spec(void) {
@@ -1431,3 +1503,82 @@ combinator_t* reference_to_type(tag_t tag) {
     comb->fn = reference_to_type_fn;
     return comb;
 }
+
+// Parser function for identifier with optional [size] subscript (e.g., string[20])
+static ParseResult pascal_identifier_with_subscript_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    tag_t tag = (pargs != NULL) ? pargs->tag : PASCAL_T_IDENTIFIER;
+    
+    InputState state;
+    save_input_state(in, &state);
+    
+    // Parse the base identifier
+    combinator_t* base_id = cident(tag);
+    ParseResult base_res = parse(in, base_id);
+    free_combinator(base_id);
+    
+    if (!base_res.is_success) {
+        return base_res;
+    }
+    
+    ast_t* identifier_ast = base_res.value.ast;
+    
+    // Check for optional [size] subscript
+    InputState subscript_state;
+    save_input_state(in, &subscript_state);
+    
+    combinator_t* open_bracket = match("[");
+    ParseResult open_res = parse(in, open_bracket);
+    free_combinator(open_bracket);
+    
+    if (open_res.is_success) {
+        free_ast(open_res.value.ast);
+        
+        // Parse the size expression
+        combinator_t* size_expr = new_combinator();
+        init_pascal_expression_parser(&size_expr, NULL);
+        ParseResult size_res = parse(in, size_expr);
+        free_combinator(size_expr);
+        
+        if (!size_res.is_success) {
+            free_ast(identifier_ast);
+            restore_input_state(in, &subscript_state);
+            return size_res;
+        }
+        
+        // Parse closing ]
+        combinator_t* close_bracket = match("]");
+        ParseResult close_res = parse(in, close_bracket);
+        free_combinator(close_bracket);
+        
+        if (!close_res.is_success) {
+            free_ast(size_res.value.ast);
+            free_ast(identifier_ast);
+            restore_input_state(in, &subscript_state);
+            return close_res;
+        }
+        free_ast(close_res.value.ast);
+        
+        // Discard the size - treat string[n] as string for now
+        // Full shortstring support would require changes throughout the type system
+        free_ast(size_res.value.ast);
+    } else {
+        discard_failure(open_res);
+        restore_input_state(in, &subscript_state);
+    }
+    
+    ParseResult result;
+    result.is_success = true;
+    result.value.ast = identifier_ast;
+    return result;
+}
+
+combinator_t* pascal_identifier_with_subscript(tag_t tag) {
+    combinator_t* comb = new_combinator();
+    prim_args* args = safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    comb->args = args;
+    comb->fn = pascal_identifier_with_subscript_fn;
+    return comb;
+}
+
