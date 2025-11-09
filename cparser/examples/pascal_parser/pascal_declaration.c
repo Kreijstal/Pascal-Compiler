@@ -61,17 +61,28 @@ static ast_t* map_out_modifier(ast_t* ast) {
 }
 
 // Maps directive keywords (forward, external, assembler) to AST nodes
-static ast_t* map_forward_directive(ast_t* ast) {
-    return make_modifier_node(ast, "forward");
-}
+// static ast_t* map_forward_directive(ast_t* ast) {
+//     ast->typ = PASCAL_T_FORWARD_DIRECTIVE;
+//     return ast;
+// }
 
-static ast_t* map_external_directive(ast_t* ast) {
-    return make_modifier_node(ast, "external");
-}
+// static ast_t* map_external_directive(ast_t* ast) {
+//     ast->typ = PASCAL_T_EXTERNAL_DIRECTIVE;
+//     return ast;
+// }
 
-static ast_t* map_assembler_directive(ast_t* ast) {
-    return make_modifier_node(ast, "assembler");
-}
+// static ast_t* map_assembler_directive(ast_t* ast) {
+//     ast->typ = PASCAL_T_ASSEMBLER_DIRECTIVE;
+//     return ast;
+// }
+
+// static ast_t* map_external_directive(ast_t* ast) {
+//     return make_modifier_node(ast, "external");
+// }
+
+// static ast_t* map_assembler_directive(ast_t* ast) {
+//     return make_modifier_node(ast, "assembler");
+// }
 
 static keyword_dispatch_args_t* create_keyword_dispatch(size_t capacity) {
     keyword_dispatch_args_t* args = (keyword_dispatch_args_t*)safe_malloc(sizeof(keyword_dispatch_args_t));
@@ -1061,9 +1072,34 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
-    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+    // Extended external directive argument components
+    combinator_t* external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("name")),
         token(string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+
+    combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("index")),
+        token(integer(PASCAL_T_INTEGER)),
+        NULL
+    );
+
+    combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        optional(external_name_clause),
+        optional(external_index_clause),
+        NULL
+    );
+
+    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+        token(string(PASCAL_T_STRING)),            // simple string argument
+        token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
+        extended_external_argument,                  // extended external arguments
         NULL
     ));
 
@@ -1077,12 +1113,12 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* routine_directives = many(routine_directive);
 
     // Directives that indicate no body should follow - preserve the directive keyword in AST
-    combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
-        map(token(keyword_ci("forward")), map_forward_directive),
-        map(token(keyword_ci("external")), map_external_directive),
-        map(token(keyword_ci("assembler")), map_assembler_directive),
-        NULL
-    );
+    // combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
+    //     map(token(keyword_ci("forward")), map_forward_directive),
+    //     map(token(keyword_ci("external")), map_external_directive),
+    //     map(token(keyword_ci("assembler")), map_assembler_directive),
+    //     NULL
+    // );
 
     // Forward/external/assembler declaration parsers for interface and implementation sections
     // These match procedure/function headers with special directives and NO body
@@ -1092,9 +1128,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),
         optional(param_list),
         token(match(";")),
-        no_body_directive,                           // forward/external/assembler directive
-        optional(directive_argument),                // optional argument (for external)
-        token(match(";")),                           // semicolon after directive
+        routine_directive,                           // forward/external/assembler directive with arguments
         many(routine_directive),                     // additional directives (overload, etc.)
         NULL
     );
@@ -1108,9 +1142,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         token(match(":")),
         token(cident(PASCAL_T_RETURN_TYPE)),
         token(match(";")),
-        no_body_directive,                           // forward/external/assembler directive
-        optional(directive_argument),                // optional argument (for external)
-        token(match(";")),                           // semicolon after directive
+        routine_directive,                           // forward/external/assembler directive with arguments
         many(routine_directive),                     // additional directives (overload, etc.)
         NULL
     );
@@ -1843,12 +1875,38 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    // Copy exact working structure from unit parser
+    combinator_t* external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("name")),
+        token(pascal_string(PASCAL_T_STRING)),
+        NULL
+    );
+
+    combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("index")),
+        token(integer(PASCAL_T_INTEGER)),
+        NULL
+    );
+
+    combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        optional(external_name_clause),
+        optional(external_index_clause),
+        NULL
+    );
+
     combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        token(string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        extended_external_argument,                  // extended external arguments (try first)
+        token(pascal_string(PASCAL_T_STRING)),      // simple string argument
+        token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
         NULL
     ));
 
+    // Routine directives with proper argument support
     combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_NONE,
         directive_keyword,
         directive_argument,
@@ -1859,37 +1917,34 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     combinator_t* program_routine_directives = many(routine_directive);
 
     // Directives that indicate no body should follow - preserve the directive keyword in AST
-    combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
-        map(token(keyword_ci("forward")), map_forward_directive),
-        map(token(keyword_ci("external")), map_external_directive),
-        map(token(keyword_ci("assembler")), map_assembler_directive),
-        NULL
-    );
+    // combinator_t* program_no_body_directive = multi(new_combinator(), PASCAL_T_IDENTIFIER,
+    //     map(token(keyword_ci("forward")), map_forward_directive),
+    //     map(token(keyword_ci("external")), map_external_directive),
+    //     map(token(keyword_ci("assembler")), map_assembler_directive),
+    //     NULL
+    // );
 
     // Header-only declaration parsers - these match procedure/function with forward/external/assembler directive and NO body
-    combinator_t* headeronly_procedure_param_list = create_simple_param_list();
     combinator_t* headeronly_procedure = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
-        token(keyword_ci("procedure")),                // procedure keyword
+        optional(token(keyword_ci("class"))),        // optional class keyword
+        token(keyword_ci("procedure")),               // procedure keyword
         token(cident(PASCAL_T_IDENTIFIER)),          // procedure name
-        headeronly_procedure_param_list,             // optional parameter list
+        optional(create_simple_param_list()),         // optional parameter list
         token(match(";")),                           // semicolon after signature
-        program_no_body_directive,                   // forward/external/assembler directive
-        optional(directive_argument),                // optional argument (for external)
-        token(match(";")),                           // semicolon after directive
+        routine_directive,                           // forward/external/assembler directive with arguments
         many(routine_directive),                     // additional directives (overload, etc.)
         NULL
     );
 
-    combinator_t* headeronly_function_param_list = create_simple_param_list();
     combinator_t* headeronly_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
+        optional(token(keyword_ci("class"))),        // optional class keyword
         token(keyword_ci("function")),               // function keyword
         token(cident(PASCAL_T_IDENTIFIER)),          // function name
-        headeronly_function_param_list,              // optional parameter list
-        return_type,                                 // return type
+        optional(create_simple_param_list()),         // optional parameter list
+        token(match(":")),                           // colon before return type
+        token(cident(PASCAL_T_RETURN_TYPE)),         // return type
         token(match(";")),                           // semicolon after signature
-        program_no_body_directive,                   // forward/external/assembler directive
-        optional(directive_argument),                // optional argument (for external)
-        token(match(";")),                           // semicolon after directive
+        routine_directive,                           // forward/external/assembler directive with arguments
         many(routine_directive),                     // additional directives (overload, etc.)
         NULL
     );
