@@ -2241,6 +2241,17 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         inst_list = codegen_call_with_shadow_space(inst_list, ctx, call_target);
 
         free_arg_regs();
+        
+        /* Invalidate static link cache after each write argument
+         * because the static link register may have been clobbered
+         * during argument evaluation or the function call.
+         * We must free the register first to avoid leaking it. */
+        if (ctx->static_link_reg != NULL)
+        {
+            free_reg(get_reg_stack(), ctx->static_link_reg);
+            ctx->static_link_reg = NULL;
+            ctx->static_link_reg_level = 0;
+        }
 
         args = args->next;
     }
