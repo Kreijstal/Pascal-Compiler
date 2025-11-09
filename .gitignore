@@ -22,10 +22,6 @@ tests/output/
 /*.log
 /*.tmp
 /*.out
-/for
-/mod_test
-/simple_test
-/test_harness
 /*.md
 /_codeql_detected_source_root
 !/README.md
@@ -34,10 +30,3 @@ tests/output/
 # Python cache
 __pycache__/
 *.pyc
-quasi-msys2/
-builddir-cross/
-minimal_array_bug*
-test_*
-btpc_*
-*.s
-btpc

@@ -14,6 +14,12 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
+
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#define GPC_HAVE_GETDOMAINNAME 1
+#endif
 #endif
 
 int64_t gpc_current_exception = 0;
@@ -159,6 +165,125 @@ uint64_t gpc_get_tick_count64(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 #endif
 }
+
+int gpc_unix_get_hostname(char *buffer, size_t buffer_size)
+{
+    if (buffer == NULL || buffer_size == 0)
+        return -1;
+#ifdef _WIN32
+    (void)buffer;
+    (void)buffer_size;
+    return -1;
+#else
+    if (gethostname(buffer, buffer_size) != 0)
+        return -1;
+    buffer[buffer_size - 1] = '\0';
+    return 0;
+#endif
+}
+
+int gpc_unix_get_domainname(char *buffer, size_t buffer_size)
+{
+    if (buffer == NULL || buffer_size == 0)
+        return -1;
+#ifdef _WIN32
+    (void)buffer;
+    (void)buffer_size;
+    return -1;
+#else
+    memset(buffer, 0, buffer_size);
+#if defined(GPC_HAVE_GETDOMAINNAME)
+    if (getdomainname(buffer, buffer_size) == 0)
+    {
+        buffer[buffer_size - 1] = '\0';
+        if (buffer[0] != '\0' && strcmp(buffer, "(none)") != 0)
+            return 0;
+    }
+#endif
+    struct utsname uts;
+    if (uname(&uts) == 0)
+    {
+        if (uts.nodename[0] != '\0')
+        {
+            char temp[256];
+            strncpy(temp, uts.nodename, sizeof(temp) - 1);
+            temp[sizeof(temp) - 1] = '\0';
+            char *dot = strchr(temp, '.');
+            if (dot != NULL && *(dot + 1) != '\0')
+            {
+                strncpy(buffer, dot + 1, buffer_size - 1);
+                buffer[buffer_size - 1] = '\0';
+                return 0;
+            }
+        }
+    }
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0)
+    {
+        char *dot = strchr(hostname, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            strncpy(buffer, dot + 1, buffer_size - 1);
+            buffer[buffer_size - 1] = '\0';
+            return 0;
+        }
+    }
+    return -1;
+#endif
+}
+
+int gpc_unix_wait_process(int pid)
+{
+#ifdef _WIN32
+    (void)pid;
+    return -1;
+#else
+    int status = 0;
+    pid_t waited = 0;
+    do
+    {
+        waited = waitpid((pid_t)pid, &status, 0);
+    } while (waited == -1 && errno == EINTR);
+
+    if (waited == -1)
+        return -1;
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return -status;
+#endif
+}
+
+int gpc_unix_w_exitcode(int return_code, int signal_code)
+{
+#ifdef _WIN32
+    (void)return_code;
+    (void)signal_code;
+    return -1;
+#else
+    return W_EXITCODE(return_code, signal_code);
+#endif
+}
+
+int gpc_unix_w_stopcode(int signal_code)
+{
+#ifdef _WIN32
+    (void)signal_code;
+    return -1;
+#else
+    return W_STOPCODE(signal_code);
+#endif
+}
+
+int gpc_unix_wifstopped(int status)
+{
+#ifdef _WIN32
+    (void)status;
+    return 0;
+#else
+    return WIFSTOPPED(status) ? 1 : 0;
+#endif
+}
+
 
 void gpc_sleep_ms(int milliseconds) {
     if (milliseconds <= 0)
@@ -529,6 +654,22 @@ static char *gpc_string_duplicate(const char *value)
     return copy;
 }
 
+char *gpc_unix_get_hostname_string(void)
+{
+    char buffer[256];
+    if (gpc_unix_get_hostname(buffer, sizeof(buffer)) != 0)
+        return gpc_alloc_empty_string();
+    return gpc_string_duplicate(buffer);
+}
+
+char *gpc_unix_get_domainname_string(void)
+{
+    char buffer[256];
+    if (gpc_unix_get_domainname(buffer, sizeof(buffer)) != 0)
+        return gpc_alloc_empty_string();
+    return gpc_string_duplicate(buffer);
+}
+
 void gpc_string_assign(char **target, const char *value)
 {
     if (target == NULL)
@@ -595,6 +736,20 @@ void gpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor,
 
     memcpy(dest_descriptor, temp_descriptor, descriptor_size);
     free(temp_descriptor);
+}
+
+long long gpc_dynarray_compute_high(const void *descriptor_ptr, long long lower_bound)
+{
+    if (descriptor_ptr == NULL)
+        return lower_bound - 1;
+
+    const gpc_dynarray_descriptor_t *descriptor =
+        (const gpc_dynarray_descriptor_t *)descriptor_ptr;
+    long long length = descriptor->length;
+    if (length <= 0)
+        return lower_bound - 1;
+
+    return lower_bound + length - 1;
 }
 
 /* Copy a string literal to a char array (fixed-size buffer)

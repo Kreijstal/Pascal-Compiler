@@ -31,9 +31,29 @@ const char* pascal_reserved_keywords[] = {
     NULL
 };
 
+static const char* expression_identifier_keywords[] = {
+    "procedure", "function", "program", "unit",
+    "record", "array", "set", "packed",
+    "object", "class",
+    "integer", "real", "boolean", "char", "string",
+    "byte", "word", "longint",
+    NULL
+};
+
 bool is_pascal_keyword(const char* str) {
     for (int i = 0; pascal_reserved_keywords[i] != NULL; i++) {
         if (strcasecmp(str, pascal_reserved_keywords[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pascal_keyword_allowed_in_expression(const char* str) {
+    if (str == NULL)
+        return false;
+    for (int i = 0; expression_identifier_keywords[i] != NULL; i++) {
+        if (strcasecmp(str, expression_identifier_keywords[i]) == 0) {
             return true;
         }
     }

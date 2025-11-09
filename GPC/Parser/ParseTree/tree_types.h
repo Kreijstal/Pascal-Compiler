@@ -254,6 +254,7 @@ enum ExprType {
     EXPR_BOOL,
     EXPR_NIL,
     EXPR_SET,
+    EXPR_ARRAY_LITERAL,
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
     EXPR_TYPECAST,
@@ -356,6 +357,13 @@ struct Expression
             ListNode_t *elements;
             int is_constant;
         } set_data;
+
+        struct ArrayLiteral
+        {
+            ListNode_t *elements; /* LIST_EXPR nodes pointing to Expression* */
+            int element_count;
+            int elements_semchecked;
+        } array_literal_data;
 
         /* Pointer dereference */
         struct PointerDeref

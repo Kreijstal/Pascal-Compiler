@@ -3,6 +3,7 @@ import argparse
 import os
 import shutil
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -1535,6 +1536,67 @@ class TestCompiler(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 2)
         self.assertEqual(lines[0].strip(), "32")
         self.assertEqual(lines[1].strip(), "1")
+        self.assertEqual(process.returncode, 0)
+
+    def test_unix_gethostname(self):
+        """Ensures the Unix unit exposes GetHostName with actual hostname output."""
+        input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_gethostname_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_gethostname_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        expected_hostname = socket.gethostname().strip()
+        self.assertEqual(process.stdout.strip(), expected_hostname)
+        self.assertEqual(process.returncode, 0)
+
+    def test_unix_getdomainname(self):
+        """Ensures GetDomainName returns the system domain (or empty when unset)."""
+        input_file = os.path.join(TEST_CASES_DIR, "unix_getdomain_demo.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        try:
+            domain_cmd = subprocess.run(
+                ["hostname", "-d"],
+                capture_output=True,
+                text=True,
+                timeout=EXEC_TIMEOUT,
+            )
+            if domain_cmd.returncode == 0:
+                expected_domain = domain_cmd.stdout.strip()
+            else:
+                expected_domain = ""
+        except FileNotFoundError:
+            expected_domain = ""
+
+        if expected_domain == "(none)":
+            expected_domain = ""
+
+        if not expected_domain:
+            fqdn = socket.getfqdn().strip()
+            if "." in fqdn:
+                expected_domain = fqdn.split(".", 1)[1]
+
+        self.assertEqual(process.stdout.strip(), expected_domain)
         self.assertEqual(process.returncode, 0)
 
     def test_set_of_enum_typed_constant_unit(self):

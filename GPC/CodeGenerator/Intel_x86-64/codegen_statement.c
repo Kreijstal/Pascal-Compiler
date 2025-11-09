@@ -222,6 +222,7 @@ static StackNode_t *codegen_alloc_temp_slot(const char *prefix)
     return add_l_t(label);
 }
 
+
 static int codegen_align_to(int value, int alignment)
 {
     if (alignment <= 0)
@@ -326,6 +327,7 @@ static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
     free_arg_regs();
     return inst_list;
 }
+
 
 static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)

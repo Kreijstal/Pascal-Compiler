@@ -2298,8 +2298,23 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 }
                 break;
             case TREE_ARR_DECL:
-                fprintf(stderr, "ERROR: Arrays not currently supported as arguments!\n");
-                exit(1);
+                arg_ids = arg_decl->tree_data.arr_decl_data.ids;
+                while(arg_ids != NULL)
+                {
+                    arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
+                    if(arg_reg == NULL)
+                    {
+                        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
+                        exit(1);
+                    }
+                    arg_stack = add_q_z((char *)arg_ids->cur);
+                    if (arg_stack != NULL)
+                        arg_stack->is_reference = 1;
+                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    arg_ids = arg_ids->next;
+                    ++arg_num;
+                }
                 break;
             default:
                 assert(0 && "Unknown argument type!");
