@@ -1063,6 +1063,28 @@ void codegen_stack_space(CodeGenContext *ctx)
     if(aligned_space != 0)
     {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
+        
+        /* Zero-initialize the allocated stack space to ensure local variables start with zero values.
+         * This is critical for code that assumes uninitialized variables are zero (like linked lists).
+         * We use rep stosq for efficient zero-filling.
+         * We need to preserve registers that may contain function parameters (rdi, rsi, rdx, rcx, r8, r9).
+         * We use r10 and r11 as scratch registers (they are caller-saved and not used for parameters).
+         */
+        int quadwords = (aligned_space + 7) / 8;  /* Round up to nearest quadword */
+        
+        /* Save parameter registers that rep stosq will clobber (rdi, rcx) */
+        fprintf(ctx->output_file, "\tmovq\t%%rdi, %%r10\n");  /* Save rdi to r10 */
+        fprintf(ctx->output_file, "\tmovq\t%%rcx, %%r11\n");  /* Save rcx to r11 */
+        
+        /* Zero-fill the allocated stack space */
+        fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rdi\n");
+        fprintf(ctx->output_file, "\txorq\t%%rax, %%rax\n");
+        fprintf(ctx->output_file, "\tmovl\t$%d, %%ecx\n", quadwords);
+        fprintf(ctx->output_file, "\trep stosq\n");
+        
+        /* Restore parameter registers */
+        fprintf(ctx->output_file, "\tmovq\t%%r10, %%rdi\n");  /* Restore rdi from r10 */
+        fprintf(ctx->output_file, "\tmovq\t%%r11, %%rcx\n");  /* Restore rcx from r11 */
     }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
