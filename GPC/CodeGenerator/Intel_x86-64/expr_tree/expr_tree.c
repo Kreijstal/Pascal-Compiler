@@ -902,6 +902,27 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
             inst_list, ctx, func_type, expr->expr_data.function_call_data.id, arg_start_index);
 
+        /* Invalidate static link cache after argument evaluation
+         * because the static link register may have been clobbered
+         * during argument evaluation. This prevents the bug where
+         * nested function calls reuse the same register for different
+         * static links, causing the wrong frame pointer to be passed. */
+        if (static_link_source == STATIC_LINK_FROM_REG && static_link_reg != NULL)
+        {
+            /* The register was already acquired above, but argument evaluation
+             * may have invalidated it. We need to reload it fresh. */
+            free_reg(get_reg_stack(), static_link_reg);
+            if (ctx->static_link_reg != NULL)
+            {
+                free_reg(get_reg_stack(), ctx->static_link_reg);
+                ctx->static_link_reg = NULL;
+                ctx->static_link_reg_level = 0;
+            }
+            /* Re-acquire the static link register after argument evaluation */
+            int levels_to_traverse = (current_depth - callee_depth) + 1;
+            static_link_reg = codegen_acquire_static_link(ctx, &inst_list, levels_to_traverse);
+        }
+
         if (should_pass_static_link)
         {
             const char *dest_reg = current_arg_reg64(0);
