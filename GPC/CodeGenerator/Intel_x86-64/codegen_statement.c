@@ -535,8 +535,15 @@ ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_lis
 ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
+    int began_expr = 0;
+    if (ctx != NULL)
+    {
+        codegen_begin_expression(ctx);
+        began_expr = 1;
+    }
+
     if (expr == NULL || ctx == NULL || out_reg == NULL)
-        return inst_list;
+        goto cleanup;
 
     if (expr->type == EXPR_VAR_ID)
     {
@@ -551,16 +558,20 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
                 Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
                 if (addr_reg == NULL)
-                    return codegen_fail_register(ctx, inst_list, out_reg,
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
                         "ERROR: Unable to allocate register for address expression.");
+                    goto cleanup;
+                }
                 char buffer[64];
                 snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
                     current_non_local_reg64(), addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 *out_reg = addr_reg;
-                return inst_list;
+                goto cleanup;
             }
-            return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+            inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+            goto cleanup;
         }
         
         int treat_as_reference = 0;
@@ -575,8 +586,11 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
-            return codegen_fail_register(ctx, inst_list, out_reg,
+        {
+            inst_list = codegen_fail_register(ctx, inst_list, out_reg,
                 "ERROR: Unable to allocate register for address expression.");
+            goto cleanup;
+        }
 
         char buffer[96];
         
@@ -594,7 +608,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     var_node->offset, addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 *out_reg = addr_reg;
-                return inst_list;
+                goto cleanup;
             }
             
             if (treat_as_reference)
@@ -609,7 +623,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
             inst_list = add_inst(inst_list, buffer);
             *out_reg = addr_reg;
-            return inst_list;
+            goto cleanup;
         }
         
         /* Local variable (scope_depth == 0) */
@@ -628,7 +642,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
             inst_list = add_inst(inst_list, buffer);
             *out_reg = addr_reg;
-            return inst_list;
+            goto cleanup;
         }
         if (var_node->is_static)
         {
@@ -644,15 +658,17 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
         inst_list = add_inst(inst_list, buffer);
         *out_reg = addr_reg;
-        return inst_list;
+        goto cleanup;
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)
     {
-        return codegen_array_element_address(expr, inst_list, ctx, out_reg);
+        inst_list = codegen_array_element_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
     }
     else if (expr->type == EXPR_RECORD_ACCESS)
     {
-        return codegen_record_field_address(expr, inst_list, ctx, out_reg);
+        inst_list = codegen_record_field_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
     }
     else if (expr->type == EXPR_POINTER_DEREF)
     {
@@ -660,19 +676,24 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         if (pointer_expr == NULL)
         {
             codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
-            return inst_list;
+            goto cleanup;
         }
 
         Register_t *addr_reg = NULL;
         inst_list = codegen_evaluate_expr(pointer_expr, inst_list, ctx, &addr_reg);
         if (addr_reg == NULL)
-            return inst_list;
+            goto cleanup;
 
         *out_reg = addr_reg;
-        return inst_list;
+        goto cleanup;
     }
 
-    return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+
+cleanup:
+    if (began_expr)
+        codegen_end_expression(ctx);
+    return inst_list;
 }
 
 static int record_type_is_mp_integer(const struct RecordType *record_type)
