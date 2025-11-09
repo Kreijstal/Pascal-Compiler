@@ -306,9 +306,32 @@ class TestCompiler(unittest.TestCase):
 
         cc_raw = os.environ.get("CC")
         if not cc_raw:
-            raise RuntimeError(
-                "CC environment variable must be set by Meson before running tests"
-            )
+            # Attempt to infer CC from Meson build directory for local pytest runs.
+            # This keeps Meson-driven CI behaviour (which sets CC explicitly)
+            # while avoiding a hard failure when running tests directly.
+            meson_private = os.path.join(build_dir, "meson-private")
+            cmdline_path = os.path.join(meson_private, "cmdline.txt")
+            inferred_cc = None
+            try:
+                if os.path.exists(cmdline_path):
+                    with open(cmdline_path, "r") as f:
+                        for token in f.read().split():
+                            if token.startswith("-Dcc="):
+                                inferred_cc = token[len("-Dcc="):]
+                                break
+            except OSError:
+                inferred_cc = None
+
+            if not inferred_cc:
+                inferred_cc = shutil.which("cc") or shutil.which("gcc")
+
+            if inferred_cc:
+                cc_raw = inferred_cc
+                os.environ["CC"] = cc_raw
+            else:
+                raise RuntimeError(
+                    "CC environment variable must be set by Meson before running tests"
+                )
         cls.c_compiler_display = cc_raw
         cls.c_compiler_cmd = shlex.split(cc_raw)
         if not cls.c_compiler_cmd:
@@ -348,6 +371,13 @@ class TestCompiler(unittest.TestCase):
 
         cls.runtime_library = os.environ.get("GPC_RUNTIME_LIB")
         if not cls.runtime_library:
+            # Try to infer the runtime library from the Meson build tree so that
+            # tests can be run via pytest without Meson explicitly setting env.
+            candidate = os.path.join(build_dir, "GPC", "libgpc_runtime.a")
+            if os.path.exists(candidate):
+                cls.runtime_library = candidate
+                os.environ["GPC_RUNTIME_LIB"] = candidate
+        if not cls.runtime_library:
             raise RuntimeError(
                 "GPC_RUNTIME_LIB environment variable is required to link generated code"
             )
@@ -357,6 +387,15 @@ class TestCompiler(unittest.TestCase):
             )
 
         cls.ctypes_helper_library = os.environ.get("GPC_CTYPES_HELPER")
+        if not cls.ctypes_helper_library:
+            # Fallback for local runs: look for ctypes_helper in Meson build dir
+            # matching the name produced in GPC/meson.build.
+            for name in ("ctypes_helper.so", "libctypes_helper.so", "ctypes_helper.dylib", "libctypes_helper.dylib"):
+                candidate = os.path.join(build_dir, "GPC", name)
+                if os.path.exists(candidate):
+                    cls.ctypes_helper_library = candidate
+                    os.environ["GPC_CTYPES_HELPER"] = candidate
+                    break
         if cls.ctypes_helper_library is not None and not os.path.exists(
             cls.ctypes_helper_library
         ):
@@ -366,6 +405,10 @@ class TestCompiler(unittest.TestCase):
             )
 
         raw_ctypes_helper_link = os.environ.get("GPC_CTYPES_HELPER_LINK")
+        if raw_ctypes_helper_link is None and cls.ctypes_helper_library is not None:
+            # Default to using the helper library itself when invoked locally.
+            raw_ctypes_helper_link = cls.ctypes_helper_library
+            os.environ["GPC_CTYPES_HELPER_LINK"] = raw_ctypes_helper_link
         cls.ctypes_helper_link = cls._resolve_ctypes_helper_link(
             raw_ctypes_helper_link,
             cls.ctypes_helper_library,
@@ -391,6 +434,17 @@ class TestCompiler(unittest.TestCase):
             if cls.ctypes_helper_library is not None
             else None
         )
+        # Ensure runtime loader can find ctypes helper when running locally.
+        if cls.ctypes_helper_dir:
+            path_var = (
+                "PATH" if IS_WINDOWS_ABI else
+                ("DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH")
+            )
+            current = os.environ.get(path_var, "")
+            if cls.ctypes_helper_dir not in current.split(os.pathsep):
+                os.environ[path_var] = (
+                    cls.ctypes_helper_dir + (os.pathsep + current if current else "")
+                )
         cls.have_gmp = os.environ.get("GPC_HAVE_GMP", "0") == "1"
 
     @classmethod
