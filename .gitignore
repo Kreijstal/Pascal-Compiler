@@ -40,3 +40,4 @@ minimal_array_bug*
 test_*
 btpc_*
 *.s
+btpc
