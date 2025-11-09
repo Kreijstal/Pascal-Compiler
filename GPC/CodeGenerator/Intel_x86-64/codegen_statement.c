@@ -54,6 +54,8 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
     Register_t *value_reg);
 static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
     Register_t *value_reg, int source_type);
 static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
@@ -911,6 +913,102 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tgpc_string_to_char_array\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+/* Assign a static array value (copy all elements) */
+static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
+        return inst_list;
+
+    /* Calculate array size: (upper - lower + 1) * element_size */
+    long long num_elements = dest_expr->array_upper_bound - dest_expr->array_lower_bound + 1;
+    long long element_size = expr_get_array_element_size(dest_expr, ctx);
+    
+    if (element_size <= 0)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to determine element size for array assignment.");
+        return inst_list;
+    }
+    
+    long long array_size = num_elements * element_size;
+    if (array_size <= 0)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Invalid array size for assignment: %lld elements * %lld bytes = %lld total.",
+            num_elements, element_size, array_size);
+        return inst_list;
+    }
+
+    /* Get address of destination */
+    Register_t *dest_reg = NULL;
+    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+    if (codegen_had_error(ctx) || dest_reg == NULL)
+    {
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    /* Get address of source */
+    Register_t *src_reg = NULL;
+    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+    if (codegen_had_error(ctx) || src_reg == NULL)
+    {
+        if (src_reg != NULL)
+            free_reg(get_reg_stack(), src_reg);
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    /* Get register for size */
+    Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (count_reg == NULL)
+    {
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate register for array copy size.");
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_size, count_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* Call memcpy(dest, src, size) */
+    /* NOTE: We must be careful about register conflicts. Load arguments in the correct order. */
+    if (codegen_target_is_windows())
+    {
+        /* Windows calling convention: RCX, RDX, R8, R9 */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V calling convention: RDI, RSI, RDX, RCX, R8, R9 */
+        /* Load arguments into call registers, avoiding conflicts */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tcall\tgpc_memcpy_wrapper\n");
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), count_reg);
+    free_reg(get_reg_stack(), src_reg);
+    free_reg(get_reg_stack(), dest_reg);
     free_arg_regs();
     return inst_list;
 }
@@ -2347,6 +2445,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     /* Character sets (set of char) need special handling like records due to 32-byte size */
     if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+
+    /* Static arrays need to copy all elements, not just the first one */
+    if (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr))
+        return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
 
     if (var_expr->type == EXPR_VAR_ID)
     {
