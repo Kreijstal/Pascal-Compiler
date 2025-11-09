@@ -2455,7 +2455,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
 
         /* Static arrays need to copy all elements, not just the first one */
-        if (var_expr->is_array_expr)
+        /* But only when assigning an array to an array, not scalar to array */
+        if (var_expr->is_array_expr && assign_expr->is_array_expr)
         {
             return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
         }
