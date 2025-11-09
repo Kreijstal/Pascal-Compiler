@@ -71,6 +71,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
     fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
     fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
+    fprintf(stderr, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
 }
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -338,6 +339,11 @@ static void set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "Timing instrumentation enabled.\n\n");
             set_time_passes_flag();
+        }
+        else if (strcmp(arg, "--asm-debug") == 0 || strcmp(arg, "--asm-debug-comments") == 0)
+        {
+            fprintf(stderr, "Assembly debug comments enabled.\n\n");
+            set_asm_debug_flag();
         }
         else
         {

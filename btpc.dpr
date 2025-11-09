@@ -2690,6 +2690,9 @@ begin
  StringCopy(Keywords[SymFUNC],'FUNCTION            ');
  StringCopy(Keywords[SymPROC],'PROCEDURE           ');
 
+ Writeln('DEBUG: Types address=',Int64(@Types));
+ Writeln('DEBUG: Sizeof(Types)=',SizeOf(Types));
+
  Types[TypeINT].Size:=4;
  Types[TypeINT].Kind:=KindSIMPLE;
  Types[TypeCHAR].Size:=4;

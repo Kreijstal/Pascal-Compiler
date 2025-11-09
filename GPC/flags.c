@@ -20,6 +20,7 @@ int FLAG_OPTIMIZE = 0;
 int FLAG_PARSE_ONLY = 0;
 static char *FLAG_DUMP_AST_PATH = NULL;
 static int FLAG_TIME_PASSES = 0;
+static int FLAG_ASM_DEBUG_COMMENTS = 0;
 
 static gpc_target_abi_t FLAG_TARGET_ABI =
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -52,6 +53,11 @@ void set_parse_only_flag(void)
 void set_time_passes_flag(void)
 {
     FLAG_TIME_PASSES = 1;
+}
+
+void set_asm_debug_flag(void)
+{
+    FLAG_ASM_DEBUG_COMMENTS = 1;
 }
 
 void set_dump_ast_path(const char *path)
@@ -100,6 +106,11 @@ int parse_only_flag(void)
 int time_passes_flag(void)
 {
     return FLAG_TIME_PASSES;
+}
+
+int asm_debug_flag(void)
+{
+    return FLAG_ASM_DEBUG_COMMENTS;
 }
 
 const char *dump_ast_path(void)
