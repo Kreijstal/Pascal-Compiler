@@ -100,6 +100,15 @@ This leads to much simpler code that's faster (less assignment statements) and i
 
 ---
 
+## Documentation
+
+Additional documentation is available in the `docs/` directory:
+
+- **[Negative Array Indexing](docs/NEGATIVE_ARRAY_INDEXING.md)**: Comprehensive guide on how negative array indices are supported, including implementation details, test coverage, and compatibility notes.
+- **[Circular AST Detection](docs/CIRCULAR_AST_DETECTION.md)**: Documentation on the circular reference detection mechanism in the parser.
+
+---
+
 ## Contributing
 This is currently only authored by me (Damon Gwinn), but if you want to contribute, just reach out to me. Always willing to accept help.
 
