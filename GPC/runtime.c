@@ -952,8 +952,9 @@ int gpc_text_eof(GPCTextFile *file)
     if (ch == EOF)
         return 1;
 
-    if (ungetc(ch, stream) == EOF)
-        return 1;
+    // Try to put the character back, but don't treat ungetc failure as EOF
+    // ungetc can fail due to buffer limitations, but that doesn't mean we're at EOF
+    ungetc(ch, stream);
 
     return 0;
 }

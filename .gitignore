@@ -30,3 +30,4 @@ tests/output/
 # Python cache
 __pycache__/
 *.pyc
+

@@ -238,6 +238,88 @@ static int expr_is_dynamic_array(const struct Expression *expr)
     return (expr != NULL && expr->is_array_expr && expr->array_is_dynamic);
 }
 
+static struct TypeAlias *codegen_lookup_type_alias(CodeGenContext *ctx, const char *type_id)
+{
+    if (ctx == NULL || ctx->symtab == NULL || type_id == NULL)
+        return NULL;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, ctx->symtab, (char *)type_id) < 0 || node == NULL)
+        return NULL;
+
+    return hashnode_get_type_alias(node);
+}
+
+static struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr)
+{
+    if (record_access_expr == NULL || record_access_expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *base_expr = record_access_expr->expr_data.record_access_data.record_expr;
+    if (base_expr == NULL)
+        return NULL;
+
+    struct RecordType *record_type = base_expr->record_type;
+    if (record_type == NULL && base_expr->array_element_record_type != NULL)
+        record_type = base_expr->array_element_record_type;
+    if (record_type == NULL && record_access_expr->record_type != NULL)
+        record_type = record_access_expr->record_type;
+    if (record_type == NULL)
+        return NULL;
+
+    const char *field_name = record_access_expr->expr_data.record_access_data.field_id;
+    if (field_name == NULL)
+        return NULL;
+
+    ListNode_t *field_node = record_type->fields;
+    while (field_node != NULL)
+    {
+        if (field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field->name != NULL && strcmp(field->name, field_name) == 0)
+                return field;
+        }
+        field_node = field_node->next;
+    }
+
+    return NULL;
+}
+
+static int expr_is_static_array_like(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_is_dynamic_array(expr))
+        return 0;
+
+    if (expr->is_array_expr)
+        return 1;
+
+    if (expr->resolved_gpc_type != NULL && gpc_type_is_array(expr->resolved_gpc_type))
+        return !gpc_type_is_dynamic_array(expr->resolved_gpc_type);
+
+    if (ctx != NULL)
+    {
+        long long elem_size = expr_get_array_element_size(expr, ctx);
+        if (elem_size > 0)
+            return 1;
+    }
+
+    struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+    if (field != NULL)
+    {
+        if (field->is_array && !field->array_is_open)
+            return 1;
+        struct TypeAlias *alias = codegen_lookup_type_alias(ctx, field->type_id);
+        if (alias != NULL && alias->is_array && !alias->is_open_array)
+            return 1;
+    }
+
+    return 0;
+}
+
 static int codegen_dynamic_array_descriptor_size(const struct Expression *expr)
 {
     const int base_size = 4 * DOUBLEWORD;
@@ -948,23 +1030,104 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         return inst_list;
 
     /* Calculate array size: (upper - lower + 1) * element_size */
-    long long num_elements = dest_expr->array_upper_bound - dest_expr->array_lower_bound + 1;
+    long long lower_bound = expr_get_array_lower_bound(dest_expr);
+    long long upper_bound = expr_get_array_upper_bound(dest_expr);
+    long long num_elements = -1;
+    if (upper_bound >= lower_bound)
+        num_elements = upper_bound - lower_bound + 1;
+
+    if (num_elements <= 0)
+    {
+        if (dest_expr->resolved_gpc_type != NULL &&
+            gpc_type_is_array(dest_expr->resolved_gpc_type))
+        {
+            int start = 0;
+            int end = -1;
+            if (gpc_type_get_array_bounds(dest_expr->resolved_gpc_type, &start, &end) == 0 &&
+                end >= start)
+            {
+                num_elements = (long long)end - (long long)start + 1;
+            }
+        }
+
+        if (num_elements <= 0)
+        {
+            struct RecordField *field = codegen_lookup_record_field(dest_expr);
+            if (field != NULL && field->is_array && !field->array_is_open)
+                num_elements = (long long)field->array_end - (long long)field->array_start + 1;
+            else if (field != NULL)
+            {
+                struct TypeAlias *alias = codegen_lookup_type_alias(ctx, field->type_id);
+                if (alias != NULL && alias->is_array && !alias->is_open_array &&
+                    alias->array_end >= alias->array_start)
+                {
+                    num_elements = (long long)alias->array_end - (long long)alias->array_start + 1;
+                }
+            }
+        }
+    }
+
     long long element_size = expr_get_array_element_size(dest_expr, ctx);
     
     if (element_size <= 0)
     {
-        codegen_report_error(ctx,
-            "ERROR: Unable to determine element size for array assignment.");
-        return inst_list;
+        struct RecordField *field = codegen_lookup_record_field(dest_expr);
+        if (field != NULL)
+        {
+            long long computed = 0;
+            if (codegen_sizeof_type_reference(ctx, field->array_element_type,
+                    field->array_element_type_id, field->nested_record, &computed) == 0 &&
+                computed > 0)
+            {
+                element_size = computed;
+            }
+            else
+            {
+                struct TypeAlias *alias = codegen_lookup_type_alias(ctx, field->type_id);
+                if (alias != NULL && alias->is_array)
+                {
+                    long long alias_size = 0;
+                    if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
+                            alias->array_element_type_id, NULL, &alias_size) == 0 &&
+                        alias_size > 0)
+                    {
+                        element_size = alias_size;
+                    }
+                }
+            }
+        }
+
+        if (element_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine element size for array assignment.");
+            return inst_list;
+        }
     }
     
     long long array_size = num_elements * element_size;
     if (array_size <= 0)
     {
-        codegen_report_error(ctx,
-            "ERROR: Invalid array size for assignment: %lld elements * %lld bytes = %lld total.",
-            num_elements, element_size, array_size);
-        return inst_list;
+        struct RecordField *field = codegen_lookup_record_field(dest_expr);
+        if (field != NULL)
+        {
+            long long total_size = 0;
+            if (codegen_sizeof_type_reference(ctx, field->type, field->type_id,
+                    field->nested_record, &total_size) == 0 && total_size > 0)
+            {
+                array_size = total_size;
+                num_elements = 1;
+                element_size = total_size;
+            }
+        }
+
+        if (array_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Invalid array size for assignment: %lld elements * %lld bytes = %lld total.",
+                num_elements, element_size, array_size);
+            return inst_list;
+        }
     }
 
     /* Get address of destination */
@@ -1003,21 +1166,23 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     inst_list = add_inst(inst_list, buffer);
 
     /* Call memcpy(dest, src, size) */
-    /* NOTE: We must be careful about register conflicts. Load arguments in the correct order. */
+    /* NOTE: We must be careful about register conflicts. Load arguments in reverse order
+     * to avoid clobbering source registers before we've moved them to their destinations. */
     if (codegen_target_is_windows())
     {
-        /* Windows calling convention: RCX, RDX, R8, R9 */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        /* Windows calling convention: RCX (dest), RDX (src), R8 (size)
+         * Move in reverse order to avoid conflicts */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        /* System V calling convention: RDI, RSI, RDX, RCX, R8, R9 */
-        /* Load arguments into call registers, avoiding conflicts */
+        /* System V calling convention: RDI (dest), RSI (src), RDX (size)
+         * Move in reverse order to avoid conflicts */
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
@@ -2243,6 +2408,17 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         inst_list = codegen_call_with_shadow_space(inst_list, ctx, call_target);
 
         free_arg_regs();
+        
+        /* Invalidate static link cache after each write argument
+         * because the static link register may have been clobbered
+         * during argument evaluation or the function call.
+         * We must free the register first to avoid leaking it. */
+        if (ctx->static_link_reg != NULL)
+        {
+            free_reg(get_reg_stack(), ctx->static_link_reg);
+            ctx->static_link_reg = NULL;
+            ctx->static_link_reg_level = 0;
+        }
 
         args = args->next;
     }
@@ -2462,6 +2638,32 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         return inst_list;
     }
 
+    int dest_is_static_array = (var_expr->is_array_expr && !expr_is_dynamic_array(var_expr)) ||
+        expr_is_static_array_like(var_expr, ctx);
+
+    if (dest_is_static_array)
+    {
+        /* Static array assignment (including record fields) */
+        return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+    }
+    else if (var_expr->type == EXPR_RECORD_ACCESS)
+    {
+        struct RecordField *field = codegen_lookup_record_field(var_expr);
+        if (field != NULL)
+        {
+            int field_is_static_array = (field->is_array && !field->array_is_open);
+            if (!field_is_static_array && field->type_id != NULL)
+            {
+                struct TypeAlias *alias = codegen_lookup_type_alias(ctx, field->type_id);
+                if (alias != NULL && alias->is_array && !alias->is_open_array)
+                    field_is_static_array = 1;
+            }
+
+            if (field_is_static_array)
+                return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+        }
+    }
+
     if (expr_get_type_tag(var_expr) == RECORD_TYPE)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
@@ -2475,13 +2677,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             inst_list = codegen_assign_dynamic_array(var_expr, assign_expr, inst_list, ctx);
             return inst_list;
-        }
-
-        /* Static arrays need to copy all elements, not just the first one */
-        /* But only when assigning an array to an array, not scalar to array */
-        if (var_expr->is_array_expr && assign_expr->is_array_expr)
-        {
-            return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
         }
 
         int scope_depth = 0;

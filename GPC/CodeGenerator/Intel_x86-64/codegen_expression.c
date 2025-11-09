@@ -404,6 +404,22 @@ int expr_get_array_lower_bound(const struct Expression *expr)
     return expr->array_lower_bound;
 }
 
+/* Helper to get array upper bound from expression, preferring resolved_gpc_type */
+int expr_get_array_upper_bound(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return -1;
+
+    if (expr->resolved_gpc_type != NULL && gpc_type_is_array(expr->resolved_gpc_type))
+    {
+        int end = -1;
+        if (gpc_type_get_array_bounds(expr->resolved_gpc_type, NULL, &end) == 0)
+            return end;
+    }
+
+    return expr->array_upper_bound;
+}
+
 /* Check if an expression represents a character set (set of char) */
 int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
