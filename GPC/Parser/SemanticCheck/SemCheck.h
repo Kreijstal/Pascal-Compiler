@@ -25,4 +25,6 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
  */
 void semantic_error(int line_num, int col_num, const char *format, ...);
 
+HashNode_t *semcheck_find_type_node_with_gpc_type(SymTab_t *symtab, const char *type_id);
+
 #endif
