@@ -1001,21 +1001,23 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     inst_list = add_inst(inst_list, buffer);
 
     /* Call memcpy(dest, src, size) */
-    /* NOTE: We must be careful about register conflicts. Load arguments in the correct order. */
+    /* NOTE: We must be careful about register conflicts. Load arguments in reverse order
+     * to avoid clobbering source registers before we've moved them to their destinations. */
     if (codegen_target_is_windows())
     {
-        /* Windows calling convention: RCX, RDX, R8, R9 */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        /* Windows calling convention: RCX (dest), RDX (src), R8 (size)
+         * Move in reverse order to avoid conflicts */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        /* System V calling convention: RDI, RSI, RDX, RCX, R8, R9 */
-        /* Load arguments into call registers, avoiding conflicts */
+        /* System V calling convention: RDI (dest), RSI (src), RDX (size)
+         * Move in reverse order to avoid conflicts */
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
