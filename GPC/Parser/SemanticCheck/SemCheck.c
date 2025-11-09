@@ -2231,6 +2231,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
+                /* CRITICAL FIX: Update the tree's s_range and e_range fields with the resolved bounds.
+                 * Downstream code (especially the x86-64 code generator) checks arr->e_range < arr->s_range
+                 * to determine if an array is dynamic. Without updating these fields, arrays declared with
+                 * constant expressions (e.g., array[1..N] where N is a const) would be incorrectly treated
+                 * as dynamic arrays, leading to segmentation faults. */
+                tree->tree_data.arr_decl_data.s_range = start_bound;
+                tree->tree_data.arr_decl_data.e_range = end_bound;
+                
                 GpcType *array_type = create_array_type(
                     element_type,
                     start_bound,

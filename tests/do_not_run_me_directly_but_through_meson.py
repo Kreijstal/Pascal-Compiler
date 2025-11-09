@@ -36,6 +36,9 @@ RUN_VALGRIND_TESTS = os.environ.get("RUN_VALGRIND_TESTS", "false").lower() in (
     "yes",
 )
 
+# Check if VALGRIND environment variable is set to enable valgrind for all tests
+VALGRIND_MODE = os.environ.get("VALGRIND", "false").lower() in ("1", "true", "yes")
+
 # Track how long individual compiler invocations take so we can identify the
 # slowest scenarios when the test suite finishes. The collected data is emitted
 # from TestCompiler.tearDownClass() and written to stderr to keep TAP output
@@ -68,6 +71,25 @@ def _has_explicit_target_flag(flags):
 # The compiler is built by Meson now, so this function is not needed.
 
 
+def run_executable_with_valgrind(executable_args, **kwargs):
+    """Run an executable, optionally with valgrind in CI mode."""
+    command = list(executable_args)
+    
+    # Use valgrind when CI mode is enabled and valgrind is available
+    if VALGRIND_MODE and shutil.which("valgrind") is not None:
+        valgrind_cmd = [
+            "valgrind",
+            "--tool=memcheck",
+            "--track-origins=yes",
+            "--num-callers=50",
+            "--error-exitcode=1",
+        ]
+        command = valgrind_cmd + command
+        print(f"--- Running executable with valgrind: {' '.join(command)} ---", file=sys.stderr)
+    
+    return subprocess.run(command, **kwargs)
+
+
 def run_compiler(input_file, output_file, flags=None):
     """Runs the GPC compiler with the given arguments."""
     if flags is None:
@@ -82,7 +104,21 @@ def run_compiler(input_file, output_file, flags=None):
     if IS_WINDOWS_ABI and not _has_explicit_target_flag(flags):
         command.append("--target-windows")
     command.extend(flags)
-    print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
+    
+    # Use valgrind when VALGRIND mode is enabled
+    if VALGRIND_MODE and shutil.which("valgrind") is not None:
+        valgrind_cmd = [
+            "valgrind",
+            "--tool=memcheck",
+            "--track-origins=yes",
+            "--num-callers=50",
+            "--error-exitcode=1",
+        ]
+        command = valgrind_cmd + command
+        print(f"--- Running compiler with valgrind: {' '.join(command)} ---", file=sys.stderr)
+    else:
+        print(f"--- Running compiler: {' '.join(command)} ---", file=sys.stderr)
+    
     start = time.perf_counter()
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -470,7 +506,7 @@ class TestCompiler(unittest.TestCase):
                 "-o",
                 executable_file,
                 asm_file,
-                self.runtime_library,
+                str(self.runtime_library),
             ])
             command.extend(list(extra_objects))
             command.extend(list(extra_link_args))
@@ -660,7 +696,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -991,7 +1027,7 @@ class TestCompiler(unittest.TestCase):
 
         # Run the executable and check the output
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file], capture_output=True, text=True, timeout=EXEC_TIMEOUT
             )
             self.assertEqual(process.stdout, "Hello, World!\n")
@@ -1741,7 +1777,7 @@ def _discover_and_add_auto_tests():
                 try:
                     # Only pass input parameter if there's actual stdin data
                     if stdin_input is not None:
-                        process = subprocess.run(
+                        process = run_executable_with_valgrind(
                             [executable_file], 
                             capture_output=True, 
                             text=True, 
@@ -1749,7 +1785,7 @@ def _discover_and_add_auto_tests():
                             input=stdin_input
                         )
                     else:
-                        process = subprocess.run(
+                        process = run_executable_with_valgrind(
                             [executable_file], 
                             capture_output=True, 
                             text=True, 

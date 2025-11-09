@@ -538,7 +538,9 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
     if (expr->type == EXPR_VAR_ID)
     {
-        StackNode_t *var_node = find_label(expr->expr_data.id);
+        int scope_depth = 0;
+        StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        
         if (var_node == NULL)
         {
             if (nonlocal_flag() == 1)
@@ -558,6 +560,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
             return codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
         }
+        
         int treat_as_reference = 0;
         if (ctx->symtab != NULL)
         {
@@ -574,6 +577,40 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 "ERROR: Unable to allocate register for address expression.");
 
         char buffer[96];
+        
+        /* For non-local variables (scope_depth > 0), use static link */
+        if (scope_depth > 0)
+        {
+            Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+            if (frame_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to acquire static link for variable %s.",
+                    expr->expr_data.id);
+                /* Fallback to local access (will be wrong but prevents crash) */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                return inst_list;
+            }
+            
+            if (treat_as_reference)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            return inst_list;
+        }
+        
+        /* Local variable (scope_depth == 0) */
         if (treat_as_reference)
         {
             if (var_node->is_static)

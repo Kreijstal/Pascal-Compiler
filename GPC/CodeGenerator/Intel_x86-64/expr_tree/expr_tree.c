@@ -1213,7 +1213,30 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
                 #endif
 
-                if(stack_node != NULL)
+                /* First check if this is a constant - constants don't need non-local access */
+                HashNode_t *node = NULL;
+                if (ctx != NULL && ctx->symtab != NULL &&
+                    FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    node != NULL && node->hash_type == HASHTYPE_CONST)
+                {
+                    /* Check if this is a real constant */
+                    if (node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
+                    {
+                        /* Real constant - encode as bit pattern using union for safe type punning */
+                        union {
+                            double d;
+                            int64_t i;
+                        } converter;
+                        converter.d = node->const_real_value;
+                        snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+                    }
+                    else
+                    {
+                        /* Integer constant */
+                        snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                    }
+                }
+                else if(stack_node != NULL)
                 {
                     if (scope_depth == 0)
                     {
@@ -1241,34 +1264,9 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 }
                 else
                 {
-                    HashNode_t *node = NULL;
-                    if (ctx != NULL && ctx->symtab != NULL &&
-                        FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
-                        node != NULL && node->hash_type == HASHTYPE_CONST)
-                    {
-                        /* Check if this is a real constant */
-                        if (node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
-                        {
-                            /* Real constant - encode as bit pattern using union for safe type punning */
-                            union {
-                                double d;
-                                int64_t i;
-                            } converter;
-                            converter.d = node->const_real_value;
-                            snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
-                        }
-                        else
-                        {
-                            /* Integer constant */
-                            snprintf(buffer, buf_len, "$%lld", node->const_int_value);
-                        }
-                    }
-                    else
-                    {
-                        fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
-                        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                        exit(1);
-                    }
+                    fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+                    fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+                    exit(1);
                 }
             }
 

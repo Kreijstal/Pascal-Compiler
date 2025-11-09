@@ -354,8 +354,7 @@ void gpc_write_newline(GPCTextFile *file)
         return;
 
     fputc('\n', dest);
-    if (dest != stdout)
-        fflush(dest);
+    fflush(dest);
 }
 
 void gpc_write_char(GPCTextFile *file, int width, int value)

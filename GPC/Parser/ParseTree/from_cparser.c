@@ -644,15 +644,61 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 if (dim->typ == PASCAL_T_RANGE_TYPE) {
                     ast_t *lower = dim->child;
                     ast_t *upper = (lower != NULL) ? lower->next : NULL;
-                    if (lower != NULL && upper != NULL && lower->sym != NULL && upper->sym != NULL) {
+                    
+                    /* Extract lower and upper bound strings, handling various AST structures:
+                     * - Simple literals/identifiers (e.g., "1", "N") have sym->name set
+                     * - Unary expressions (e.g., "-1") have child->sym->name set
+                     * This fixes array[1..N] where N is a const, and array[-1..10] with negative bounds */
+                    char *lower_str = NULL;
+                    char *upper_str = NULL;
+                    
+                    /* Get lower bound string */
+                    if (lower != NULL) {
+                        if (lower->sym != NULL && lower->sym->name != NULL) {
+                            /* Simple identifier or literal */
+                            lower_str = strdup(lower->sym->name);
+                        } else if (lower->child != NULL && lower->child->sym != NULL && lower->child->sym->name != NULL) {
+                            /* Unary expression like -1 */
+                            if (lower->typ == 15) { /* typ=15 is unary minus */
+                                char buffer[64];
+                                snprintf(buffer, sizeof(buffer), "-%s", lower->child->sym->name);
+                                lower_str = strdup(buffer);
+                            } else {
+                                lower_str = strdup(lower->child->sym->name);
+                            }
+                        }
+                    }
+                    
+                    /* Get upper bound string */
+                    if (upper != NULL) {
+                        if (upper->sym != NULL && upper->sym->name != NULL) {
+                            /* Simple identifier or literal */
+                            upper_str = strdup(upper->sym->name);
+                        } else if (upper->child != NULL && upper->child->sym != NULL && upper->child->sym->name != NULL) {
+                            /* Unary expression */
+                            if (upper->typ == 15) { /* typ=15 is unary minus */
+                                char buffer[64];
+                                snprintf(buffer, sizeof(buffer), "-%s", upper->child->sym->name);
+                                upper_str = strdup(buffer);
+                            } else {
+                                upper_str = strdup(upper->child->sym->name);
+                            }
+                        }
+                    }
+                    
+                    if (lower_str != NULL && upper_str != NULL) {
                         if (dims_builder.head == NULL) {
-                            type_info->start = atoi(lower->sym->name);
-                            type_info->end = atoi(upper->sym->name);
+                            type_info->start = atoi(lower_str);
+                            type_info->end = atoi(upper_str);
                         }
                         char buffer[128];
-                        snprintf(buffer, sizeof(buffer), "%s..%s", lower->sym->name, upper->sym->name);
+                        snprintf(buffer, sizeof(buffer), "%s..%s", lower_str, upper_str);
                         list_builder_append(&dims_builder, strdup(buffer), LIST_STRING);
+                        free(lower_str);
+                        free(upper_str);
                     } else {
+                        if (lower_str != NULL) free(lower_str);
+                        if (upper_str != NULL) free(upper_str);
                         type_info->is_open_array = 1;
                     }
                 } else if (dim->typ == PASCAL_T_IDENTIFIER) {
