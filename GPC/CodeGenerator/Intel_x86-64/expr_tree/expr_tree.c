@@ -230,6 +230,13 @@ static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf
 
     if (reg_name[2] >= '0' && reg_name[2] <= '9')
     {
+        /* Check if it's already a 32-bit register (ends with 'd') */
+        size_t len = strlen(reg_name);
+        if (len > 0 && reg_name[len - 1] == 'd')
+        {
+            /* Already a 32-bit register, return as-is */
+            return reg_name;
+        }
         snprintf(buffer, buf_size, "%%r%sd", reg_name + 2);
         return buffer;
     }
