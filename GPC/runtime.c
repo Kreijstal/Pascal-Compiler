@@ -353,6 +353,8 @@ void gpc_write_integer(GPCTextFile *file, int width, int64_t value)
         fprintf(dest, "%lld", (long long)value);
 }
 
+static size_t gpc_string_known_length(const char *value);
+
 void gpc_write_string(GPCTextFile *file, int width, const char *value)
 {
     FILE *dest = gpc_text_output_stream(file);
@@ -363,12 +365,29 @@ void gpc_write_string(GPCTextFile *file, int width, const char *value)
         value = "";
     if (width > 1024 || width < -1024)
         width = 0;
+
+    size_t len = gpc_string_known_length(value);
     if (width > 0)
-        fprintf(dest, "%*s", width, value);
+    {
+        size_t pad = (width > (int)len) ? (size_t)width - len : 0;
+        for (size_t i = 0; i < pad; ++i)
+            fputc(' ', dest);
+        if (len > 0)
+            fwrite(value, 1, len, dest);
+    }
     else if (width < 0)
-        fprintf(dest, "%-*s", -width, value);
-    else
-        fprintf(dest, "%s", value);
+    {
+        if (len > 0)
+            fwrite(value, 1, len, dest);
+        size_t target = (size_t)(-width);
+        size_t pad = (target > len) ? target - len : 0;
+        for (size_t i = 0; i < pad; ++i)
+            fputc(' ', dest);
+    }
+    else if (len > 0)
+    {
+        fwrite(value, 1, len, dest);
+    }
 }
 
 /* Write a char array with specified maximum length (for Pascal char arrays) */
@@ -511,12 +530,13 @@ void gpc_dispose(void **target)
 typedef struct GpcStringNode
 {
     char *ptr;
+    size_t length;
     struct GpcStringNode *next;
 } GpcStringNode;
 
 static GpcStringNode *gpc_string_allocations = NULL;
 
-static void gpc_string_register_allocation(char *ptr)
+static void gpc_string_register_allocation(char *ptr, size_t length)
 {
     if (ptr == NULL)
         return;
@@ -526,6 +546,7 @@ static void gpc_string_register_allocation(char *ptr)
         return;
 
     node->ptr = ptr;
+    node->length = length;
     node->next = gpc_string_allocations;
     gpc_string_allocations = node;
 }
@@ -551,13 +572,36 @@ static int gpc_string_release_allocation(char *ptr)
     return 0;
 }
 
+static GpcStringNode *gpc_string_find_allocation(const char *ptr)
+{
+    GpcStringNode *node = gpc_string_allocations;
+    while (node != NULL)
+    {
+        if (node->ptr == ptr)
+            return node;
+        node = node->next;
+    }
+    return NULL;
+}
+
+static size_t gpc_string_known_length(const char *value)
+{
+    if (value == NULL)
+        return 0;
+
+    GpcStringNode *node = gpc_string_find_allocation(value);
+    if (node != NULL)
+        return node->length;
+    return strlen(value);
+}
+
 char *gpc_alloc_empty_string(void)
 {
     char *empty = (char *)malloc(1);
     if (empty != NULL)
     {
         empty[0] = '\0';
-        gpc_string_register_allocation(empty);
+        gpc_string_register_allocation(empty, 0);
     }
     return empty;
 }
@@ -567,7 +611,7 @@ char *gpc_string_duplicate(const char *value)
     if (value == NULL)
         return gpc_alloc_empty_string();
 
-    size_t len = strlen(value);
+    size_t len = gpc_string_known_length(value);
     char *copy = (char *)malloc(len + 1);
     if (copy == NULL)
         return gpc_alloc_empty_string();
@@ -575,7 +619,7 @@ char *gpc_string_duplicate(const char *value)
     if (len > 0)
         memcpy(copy, value, len);
     copy[len] = '\0';
-    gpc_string_register_allocation(copy);
+    gpc_string_register_allocation(copy, len);
     return copy;
 }
 
@@ -645,6 +689,40 @@ void gpc_string_assign(char **target, const char *value)
 
     char *copy = gpc_string_duplicate(value);
     *target = copy;
+}
+
+void gpc_string_setlength(char **target, int64_t new_length)
+{
+    if (target == NULL)
+        return;
+
+    if (new_length < 0)
+        new_length = 0;
+
+    size_t requested = (size_t)new_length;
+    char *current = *target;
+    size_t current_len = gpc_string_known_length(current);
+    if (current_len > requested)
+        current_len = requested;
+
+    char *resized = (char *)malloc(requested + 1);
+    if (resized == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to resize string to %lld bytes.\n",
+            (long long)new_length);
+        exit(EXIT_FAILURE);
+    }
+
+    if (current_len > 0)
+        memcpy(resized, current, current_len);
+    if (requested > current_len)
+        memset(resized + current_len, 0, requested - current_len);
+    resized[requested] = '\0';
+
+    gpc_string_register_allocation(resized, requested);
+    if (current != NULL && gpc_string_release_allocation(current))
+        free(current);
+    *target = resized;
 }
 
 void *gpc_dynarray_clone_descriptor(const void *descriptor, size_t descriptor_size)
@@ -723,7 +801,7 @@ void gpc_string_to_char_array(char *dest, const char *src, size_t dest_size)
     if (dest == NULL || src == NULL || dest_size == 0)
         return;
     
-    size_t src_len = strlen(src);
+    size_t src_len = gpc_string_known_length(src);
     size_t copy_len = (src_len < dest_size) ? src_len : dest_size;
     
     memcpy(dest, src, copy_len);
@@ -1005,6 +1083,77 @@ void gpc_move(void *dest, const void *src, size_t count)
     memmove(dest, src, count);
 }
 
+void gpc_fillchar(void *dest, size_t count, int value)
+{
+    if (dest == NULL || count == 0)
+        return;
+
+    unsigned char byte_value = (unsigned char)(value & 0xFF);
+    memset(dest, byte_value, count);
+}
+
+void gpc_getmem(void **target, size_t size)
+{
+    if (target == NULL)
+        return;
+
+    if (size == 0)
+    {
+        if (*target != NULL)
+        {
+            free(*target);
+            *target = NULL;
+        }
+        return;
+    }
+
+    void *memory = malloc(size);
+    if (memory == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to allocate %zu bytes via GetMem.\n", size);
+        exit(EXIT_FAILURE);
+    }
+
+    *target = memory;
+}
+
+void gpc_freemem(void *ptr)
+{
+    if (ptr != NULL)
+        free(ptr);
+}
+
+void gpc_reallocmem(void **target, size_t new_size)
+{
+    if (target == NULL)
+        return;
+
+    if (new_size == 0)
+    {
+        if (*target != NULL)
+        {
+            free(*target);
+            *target = NULL;
+        }
+        return;
+    }
+
+    void *original = *target;
+    void *resized = NULL;
+    if (original == NULL)
+        resized = malloc(new_size);
+    else
+        resized = realloc(original, new_size);
+
+    if (resized == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to (re)allocate %zu bytes via ReallocMem.\n", new_size);
+        exit(EXIT_FAILURE);
+    }
+
+    *target = resized;
+}
+
 char *gpc_string_concat(const char *lhs, const char *rhs)
 {
     if (lhs == NULL)
@@ -1012,8 +1161,8 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     if (rhs == NULL)
         rhs = "";
 
-    size_t lhs_len = strlen(lhs);
-    size_t rhs_len = strlen(rhs);
+    size_t lhs_len = gpc_string_known_length(lhs);
+    size_t rhs_len = gpc_string_known_length(rhs);
     size_t total = lhs_len + rhs_len;
 
     char *result = (char *)malloc(total + 1);
@@ -1025,17 +1174,13 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     if (rhs_len > 0)
         memcpy(result + lhs_len, rhs, rhs_len);
     result[total] = '\0';
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, total);
     return result;
 }
 
 int64_t gpc_string_length(const char *value)
 {
-    if (value == NULL)
-        return 0;
-
-    size_t len = strlen(value);
-    return (int64_t)len;
+    return (int64_t)gpc_string_known_length(value);
 }
 
 char *gpc_string_copy(const char *value, int64_t index, int64_t count)
@@ -1063,7 +1208,7 @@ char *gpc_string_copy(const char *value, int64_t index, int64_t count)
     if (to_copy > 0)
         memcpy(result, value + start, to_copy);
     result[to_copy] = '\0';
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, to_copy);
     return result;
 }
 
@@ -1074,8 +1219,46 @@ int64_t gpc_string_compare(const char *lhs, const char *rhs)
     if (rhs == NULL)
         rhs = "";
 
-    int cmp = strcmp(lhs, rhs);
-    return (int64_t)cmp;
+    size_t lhs_len = gpc_string_known_length(lhs);
+    size_t rhs_len = gpc_string_known_length(rhs);
+    size_t min_len = (lhs_len < rhs_len) ? lhs_len : rhs_len;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(lhs, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_len < rhs_len)
+        return -1;
+    if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+int64_t gpc_string_pos(const char *substr, const char *value)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        substr = "";
+
+    size_t hay_len = gpc_string_known_length(value);
+    size_t needle_len = gpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
 }
 
 static long long gpc_val_error_position(const char *text, const char *error_ptr)
@@ -1195,7 +1378,7 @@ char *gpc_char_to_string(int64_t value)
 
     result[0] = (char)value;
     result[1] = '\0';
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, 1);
     return result;
 }
 
@@ -1224,8 +1407,23 @@ char *gpc_int_to_str(int64_t value)
         return gpc_alloc_empty_string();
 
     memcpy(result, buffer, (size_t)written + 1);
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, (size_t)written);
     return result;
+}
+
+void gpc_str_int64(int64_t value, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = gpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    char *existing = *target;
+    if (existing != NULL && gpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
 }
 
 int64_t gpc_now(void)
@@ -1457,4 +1655,9 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
 void *gpc_memcpy_wrapper(void *dest, const void *src, size_t n)
 {
     return memcpy(dest, src, n);
+}
+
+int64_t gpc_assigned(const void *ptr)
+{
+    return (ptr != NULL) ? 1 : 0;
 }

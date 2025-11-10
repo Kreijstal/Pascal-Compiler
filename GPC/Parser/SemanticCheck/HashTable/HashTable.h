@@ -73,6 +73,8 @@ typedef struct HashNode
 
     int is_var_parameter;
     int requires_static_link;
+    int defined_in_unit;
+    int unit_is_public;
 
 } HashNode_t;
 

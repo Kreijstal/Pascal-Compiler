@@ -1,5 +1,6 @@
 # THIS PROGRAM WILL NOT WORK IF YOU DO NOT COMPILE SOURCES FIRST WITH MESON
 import argparse
+import json
 import os
 import shutil
 import shlex
@@ -57,6 +58,31 @@ EXPLICIT_TARGET_FLAGS = {
     "-target-sysv",
     "--sysv-abi",
 }
+
+_COVERAGE_ENABLED_CACHE = None
+
+
+def is_coverage_enabled():
+    global _COVERAGE_ENABLED_CACHE
+    if _COVERAGE_ENABLED_CACHE is not None:
+        return _COVERAGE_ENABLED_CACHE
+
+    build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
+    options_path = os.path.join(build_dir, "meson-info", "intro-buildoptions.json")
+    try:
+        with open(options_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for opt in data:
+            if opt.get("name") == "b_coverage":
+                _COVERAGE_ENABLED_CACHE = bool(opt.get("value"))
+                break
+        else:
+            _COVERAGE_ENABLED_CACHE = False
+    except FileNotFoundError:
+        _COVERAGE_ENABLED_CACHE = False
+    except Exception:
+        _COVERAGE_ENABLED_CACHE = False
+    return _COVERAGE_ENABLED_CACHE
 
 
 def _has_explicit_target_flag(flags):
@@ -557,6 +583,8 @@ class TestCompiler(unittest.TestCase):
             command.append("-O2")
             if not IS_WINDOWS_ABI:
                 command.append("-no-pie")
+            if is_coverage_enabled():
+                command.append("--coverage")
             command.extend([
                 "-o",
                 executable_file,

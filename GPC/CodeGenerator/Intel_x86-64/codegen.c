@@ -2173,19 +2173,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(arg_ids != NULL)
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
-                    HashNode_t *arg_symbol = NULL;
-                    if (symtab != NULL)
-                        FindIdent(&arg_symbol, symtab, (char *)arg_ids->cur);
-
                     int symbol_is_var_param = tree_is_var_param;
-                    if (arg_symbol != NULL && arg_symbol->is_var_parameter)
-                        symbol_is_var_param = 1;
                     struct RecordType *record_type_info = NULL;
                     if (!symbol_is_var_param)
                     {
-                        if (arg_symbol != NULL)
-                            record_type_info = get_record_type_from_node(arg_symbol);
-                        else if (resolved_type_node != NULL)
+                        if (resolved_type_node != NULL)
                             record_type_info = get_record_type_from_node(resolved_type_node);
                     }
 
@@ -2270,14 +2262,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int is_array_type = 0;
                     
-                    /* Check if this parameter is an array type */
-                    if (arg_symbol != NULL && arg_symbol->type != NULL &&
-                        gpc_type_is_array(arg_symbol->type))
-                    {
-                        is_array_type = 1;
-                    }
-                    /* Also check if the resolved type is an array */
-                    else if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
+                    /* Determine if parameter is an array type via resolved type only */
+                    if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
                              gpc_type_is_array(resolved_type_node->type))
                     {
                         is_array_type = 1;
@@ -2289,6 +2275,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     arg_reg = use_64bit ?
                         get_arg_reg64_num(arg_start_index + arg_num) :
                         get_arg_reg32_num(arg_start_index + arg_num);
+
                     if(arg_reg == NULL)
                     {
                         fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);

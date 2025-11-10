@@ -19,9 +19,45 @@
 #include "../../../Parser/List/List.h"
 #include "../../../Parser/ParseTree/tree.h"
 #include "../../../Parser/ParseTree/tree_types.h"
+#include "../../../Parser/ParseTree/GpcType.h"
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
+
+static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (expr == NULL || ctx == NULL || target_reg == NULL)
+        return inst_list;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Length intrinsic expects one argument.");
+        return inst_list;
+    }
+
+    struct Expression *array_expr = (struct Expression *)args->cur;
+    if (array_expr == NULL)
+        return inst_list;
+
+    Register_t *desc_reg = NULL;
+    if (codegen_expr_is_addressable(array_expr))
+        inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &desc_reg);
+    else
+        inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &desc_reg);
+
+    if (codegen_had_error(ctx) || desc_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+        desc_reg->bit_64, target_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), desc_reg);
+    return inst_list;
+}
 
 /* Function to escape string literals for assembly .string directive */
 static char *escape_string_for_assembly(const char *input)
@@ -836,6 +872,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
+        const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        if (func_mangled_name != NULL && strcmp(func_mangled_name, "__gpc_dynarray_length") == 0)
+        {
+            inst_list = codegen_builtin_dynarray_length(expr, inst_list, ctx, target_reg);
+            codegen_release_function_call_mangled_id(expr);
+            return inst_list;
+        }
+
         /* For function calls, get the GpcType from cached call info populated during semcheck.
          * Fall back to a fresh symbol lookup when metadata is unavailable. */
         struct GpcType *func_type = NULL;
@@ -855,7 +899,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         
         /* Check if the function being called requires a static link */
-        const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
         int callee_needs_static_link = codegen_proc_requires_static_link(ctx, func_mangled_name);
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, func_mangled_name, &callee_depth);
@@ -1097,6 +1140,70 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     }
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
+
+    if (expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        HashNode_t *symbol_node = NULL;
+        if (ctx != NULL && ctx->symtab != NULL)
+            FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+        int treat_as_reference = 0;
+        if (stack_node != NULL && stack_node->is_reference)
+            treat_as_reference = 1;
+        else if (symbol_node != NULL && symbol_node->is_var_parameter)
+            treat_as_reference = 1;
+
+        if (treat_as_reference)
+        {
+            int expr_type = expr_get_type_tag(expr);
+            if (expr_type == UNKNOWN_TYPE && symbol_node != NULL && symbol_node->type != NULL)
+                expr_type = gpc_type_get_legacy_tag(symbol_node->type);
+
+            int is_array_like = expr->array_is_dynamic ||
+                expr->is_array_expr ||
+                (expr->resolved_gpc_type != NULL &&
+                 gpc_type_is_array(expr->resolved_gpc_type));
+
+            int should_deref = 0;
+            if (!is_array_like && expr_type != RECORD_TYPE && expr_type != SET_TYPE)
+                should_deref = 1;
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (!should_deref)
+                return inst_list;
+
+            char load_value[80];
+            switch (expr_type)
+            {
+                case STRING_TYPE:
+                case POINTER_TYPE:
+                case PROCEDURE:
+                case FILE_TYPE:
+                case REAL_TYPE:
+                case LONGINT_TYPE:
+                case UNKNOWN_TYPE:
+                    snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_64);
+                    break;
+                case CHAR_TYPE:
+                case BOOL:
+                    snprintf(load_value, sizeof(load_value), "\tmovzbl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
+                    break;
+                default:
+                    snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
+                    break;
+            }
+
+            inst_list = add_inst(inst_list, load_value);
+            return inst_list;
+        }
+    }
 
     int use_qword = codegen_type_uses_qword(expr->resolved_type);
 
@@ -1345,7 +1452,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 }
                 else
                 {
-                    fprintf(stderr, "ERROR: Non-local codegen support disabled (buggy)!\n");
+                    const char *var_name = expr != NULL ? expr->expr_data.id : "<unknown>";
+                    fprintf(stderr,
+                        "ERROR: Non-local codegen support disabled while accessing %s.\n",
+                        var_name != NULL ? var_name : "<unknown>");
                     fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
                     exit(1);
                 }

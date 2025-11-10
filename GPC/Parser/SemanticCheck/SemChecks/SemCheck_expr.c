@@ -1103,12 +1103,16 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
+    int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+
     const char *mangled_name = NULL;
     if (error_count == 0 && arg_type == STRING_TYPE)
         mangled_name = "gpc_string_length";
+    else if (error_count == 0 && is_dynamic_array)
+        mangled_name = "__gpc_dynarray_length";
     else if (error_count == 0)
     {
-        fprintf(stderr, "Error on line %d, Length currently supports only string arguments.\n", expr->line_num);
+        fprintf(stderr, "Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
         error_count++;
     }
 
@@ -1198,6 +1202,66 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         semcheck_reset_function_call_cache(expr);
         expr->resolved_type = STRING_TYPE;
         *type_return = STRING_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Pos expects exactly two arguments.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *substr_expr = (struct Expression *)args->cur;
+    struct Expression *value_expr = (struct Expression *)args->next->cur;
+
+    int substr_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && substr_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
+        ++error_count;
+    }
+
+    int value_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    if (error_count == 0 && value_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Pos target must be a string.\n", expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_string_pos");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Pos.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
         return 0;
     }
 
@@ -1334,6 +1398,56 @@ static int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symta
     expr->resolved_type = LONGINT_TYPE;
     if (type_return != NULL)
         *type_return = LONGINT_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Assigned expects exactly one argument.\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab,
+        (struct Expression *)args->cur, max_scope_lev, NO_MUTATE);
+
+    if (error_count == 0 && arg_type != POINTER_TYPE && arg_type != PROCEDURE)
+    {
+        fprintf(stderr, "Error on line %d, Assigned expects a pointer or procedure variable.\n", expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_assigned");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Assigned.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->resolved_type = BOOL;
+        *type_return = BOOL;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
     return error_count;
 }
 
@@ -3990,6 +4104,9 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Copy"))
         return semcheck_builtin_copy(type_return, symtab, expr, max_scope_lev);
 
+    if (id != NULL && pascal_identifier_equals(id, "Pos"))
+        return semcheck_builtin_pos(type_return, symtab, expr, max_scope_lev);
+
     if (id != NULL && pascal_identifier_equals(id, "EOF"))
         return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
 
@@ -3998,6 +4115,9 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "High"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
+
+    if (id != NULL && pascal_identifier_equals(id, "Assigned"))
+        return semcheck_builtin_assigned(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 

@@ -148,6 +148,14 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
     }
 }
 
+static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit, int is_public)
+{
+    if (node == NULL || !defined_in_unit)
+        return;
+    node->defined_in_unit = 1;
+    node->unit_is_public = is_public ? 1 : 0;
+}
+
 static Tree_t *g_semcheck_current_subprogram = NULL;
 
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
@@ -1457,6 +1465,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 tree->tree_data.type_decl_data.id);
             return_val += func_return;
         }
+        else
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
+            {
+                mark_hashnode_unit_info(type_node,
+                    tree->tree_data.type_decl_data.defined_in_unit,
+                    tree->tree_data.type_decl_data.unit_is_public);
+            }
+        }
 
         cur = cur->next;
     }
@@ -1500,6 +1518,16 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
+                }
             }
         }
         else if (is_real_const)
@@ -1519,6 +1547,16 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                     fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
+                }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
                 }
             }
         }
@@ -1556,6 +1594,16 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                     fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
+                }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
                 }
             }
         }
@@ -1633,6 +1681,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, string_name, string_type);
         destroy_gpc_type(string_type);
         free(string_name);
+    }
+    char *unicode_name = strdup("UnicodeString");
+    if (unicode_name != NULL) {
+        GpcType *unicode_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(unicode_type != NULL && "Failed to create UnicodeString type");
+        AddBuiltinType_Typed(symtab, unicode_name, unicode_type);
+        destroy_gpc_type(unicode_type);
+        free(unicode_name);
     }
     char *boolean_name = strdup("boolean");
     if (boolean_name != NULL) {
@@ -1729,6 +1785,38 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(move_type);
         free(move_name);
     }
+    char *fillchar_name = strdup("FillChar");
+    if (fillchar_name != NULL) {
+        GpcType *fillchar_type = create_procedure_type(NULL, NULL);
+        assert(fillchar_type != NULL && "Failed to create FillChar procedure type");
+        AddBuiltinProc_Typed(symtab, fillchar_name, fillchar_type);
+        destroy_gpc_type(fillchar_type);
+        free(fillchar_name);
+    }
+    char *getmem_name = strdup("GetMem");
+    if (getmem_name != NULL) {
+        GpcType *getmem_type = create_procedure_type(NULL, NULL);
+        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
+        AddBuiltinProc_Typed(symtab, getmem_name, getmem_type);
+        destroy_gpc_type(getmem_type);
+        free(getmem_name);
+    }
+    char *freemem_name = strdup("FreeMem");
+    if (freemem_name != NULL) {
+        GpcType *freemem_type = create_procedure_type(NULL, NULL);
+        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
+        AddBuiltinProc_Typed(symtab, freemem_name, freemem_type);
+        destroy_gpc_type(freemem_type);
+        free(freemem_name);
+    }
+    char *reallocmem_name = strdup("ReallocMem");
+    if (reallocmem_name != NULL) {
+        GpcType *reallocmem_type = create_procedure_type(NULL, NULL);
+        assert(reallocmem_type != NULL && "Failed to create ReallocMem procedure type");
+        AddBuiltinProc_Typed(symtab, reallocmem_name, reallocmem_type);
+        destroy_gpc_type(reallocmem_type);
+        free(reallocmem_name);
+    }
     char *val_name = strdup("Val");
     if (val_name != NULL) {
         GpcType *val_type = create_procedure_type(NULL, NULL);
@@ -1736,6 +1824,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, val_name, val_type);
         destroy_gpc_type(val_type);
         free(val_name);
+    }
+    char *str_name = strdup("Str");
+    if (str_name != NULL) {
+        GpcType *str_type = create_procedure_type(NULL, NULL);
+        assert(str_type != NULL && "Failed to create Str procedure type");
+        AddBuiltinProc_Typed(symtab, str_name, str_type);
+        destroy_gpc_type(str_type);
+        free(str_name);
     }
 
     char *inc_name = strdup("Inc");
@@ -1998,6 +2094,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    mark_hashnode_unit_info(var_node,
+                                        tree->tree_data.var_decl_data.defined_in_unit,
+                                        tree->tree_data.var_decl_data.unit_is_public);
                                 }
                             }
                             goto next_identifier;
@@ -2050,6 +2149,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             gpc_type_set_type_alias(array_type, alias);
                             
                             func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
+                            if (func_return == 0)
+                            {
+                                HashNode_t *var_node = NULL;
+                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                {
+                                    mark_hashnode_unit_info(var_node,
+                                        tree->tree_data.var_decl_data.defined_in_unit,
+                                        tree->tree_data.var_decl_data.unit_is_public);
+                                }
+                            }
 
                             goto next_identifier;
                         }
@@ -2125,6 +2234,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                mark_hashnode_unit_info(var_node,
+                                    tree->tree_data.var_decl_data.defined_in_unit,
+                                    tree->tree_data.var_decl_data.unit_is_public);
                             }
                         }
                         goto next_identifier;
@@ -2196,6 +2308,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        mark_hashnode_unit_info(var_node,
+                            tree->tree_data.var_decl_data.defined_in_unit,
+                            tree->tree_data.var_decl_data.unit_is_public);
                     }
                 }
             }
@@ -2366,6 +2481,26 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 semantic_error(tree->line_num, 0, "redeclaration of name %s",
                     (char *)ids->cur);
                 return_val += func_return;
+            }
+            else
+            {
+                HashNode_t *decl_node = NULL;
+                if (FindIdent(&decl_node, symtab, (char *)ids->cur) != -1 && decl_node != NULL)
+                {
+                    if (tree->type == TREE_VAR_DECL)
+                    {
+                        decl_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        mark_hashnode_unit_info(decl_node,
+                            tree->tree_data.var_decl_data.defined_in_unit,
+                            tree->tree_data.var_decl_data.unit_is_public);
+                    }
+                    else
+                    {
+                        mark_hashnode_unit_info(decl_node,
+                            tree->tree_data.arr_decl_data.defined_in_unit,
+                            tree->tree_data.arr_decl_data.unit_is_public);
+                    }
+                }
             }
 
 next_identifier:
