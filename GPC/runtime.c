@@ -16,6 +16,9 @@
 #include <unistd.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
 
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #define GPC_HAVE_GETDOMAINNAME 1
@@ -226,6 +229,29 @@ int gpc_unix_get_domainname(char *buffer, size_t buffer_size)
             strncpy(buffer, dot + 1, buffer_size - 1);
             buffer[buffer_size - 1] = '\0';
             return 0;
+        }
+        /* Try DNS lookup for FQDN */
+        struct addrinfo hints, *info = NULL;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_CANONNAME;
+        
+        if (getaddrinfo(hostname, NULL, &hints, &info) == 0)
+        {
+            if (info != NULL && info->ai_canonname != NULL)
+            {
+                dot = strchr(info->ai_canonname, '.');
+                if (dot != NULL && *(dot + 1) != '\0')
+                {
+                    strncpy(buffer, dot + 1, buffer_size - 1);
+                    buffer[buffer_size - 1] = '\0';
+                    freeaddrinfo(info);
+                    return 0;
+                }
+            }
+            if (info != NULL)
+                freeaddrinfo(info);
         }
     }
     return -1;
@@ -669,6 +695,58 @@ char *gpc_unix_get_domainname_string(void)
         return gpc_alloc_empty_string();
     return gpc_string_duplicate(buffer);
 }
+
+char *gpc_windows_get_hostname_string(void)
+{
+#ifdef _WIN32
+    char buffer[256];
+    DWORD size = (DWORD)sizeof(buffer);
+    if (GetComputerNameA(buffer, &size))
+    {
+        buffer[sizeof(buffer) - 1] = '\0';
+        /* Convert to lowercase for consistency with Unix behavior */
+        for (size_t i = 0; buffer[i] != '\0'; i++)
+        {
+            buffer[i] = (char)tolower((unsigned char)buffer[i]);
+        }
+        return gpc_string_duplicate(buffer);
+    }
+    return gpc_alloc_empty_string();
+#else
+    return gpc_alloc_empty_string();
+#endif
+}
+
+char *gpc_windows_get_domainname_string(void)
+{
+#ifdef _WIN32
+    char fqdn[256];
+    DWORD size = sizeof(fqdn);
+    /* Try to get DNS domain name on Windows */
+    if (GetComputerNameExA(ComputerNameDnsFullyQualified, fqdn, &size))
+    {
+        char *dot = strchr(fqdn, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            return gpc_string_duplicate(dot + 1);
+        }
+    }
+    /* Fallback: try DNS hostname */
+    size = sizeof(fqdn);
+    if (GetComputerNameExA(ComputerNameDnsHostname, fqdn, &size))
+    {
+        char *dot = strchr(fqdn, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            return gpc_string_duplicate(dot + 1);
+        }
+    }
+    return gpc_alloc_empty_string();
+#else
+    return gpc_alloc_empty_string();
+#endif
+}
+
 
 void gpc_string_assign(char **target, const char *value)
 {

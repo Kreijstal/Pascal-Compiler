@@ -12,6 +12,7 @@
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "pascal_preprocessor.h"
+#include "../flags.h"
 
 extern ast_t *ast_nil;
 
@@ -290,6 +291,18 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             char detail[128];
             snprintf(detail, sizeof(detail), "unable to define default symbol '%s'", default_symbols[i]);
             report_preprocessor_error(error_out, path, detail);
+            pascal_preprocessor_free(preprocessor);
+            free(buffer);
+            return false;
+        }
+    }
+
+    /* Define MSWINDOWS when targeting Windows */
+    if (target_windows_flag())
+    {
+        if (!pascal_preprocessor_define(preprocessor, "MSWINDOWS"))
+        {
+            report_preprocessor_error(error_out, path, "unable to define MSWINDOWS symbol");
             pascal_preprocessor_free(preprocessor);
             free(buffer);
             return false;
