@@ -2536,7 +2536,46 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), addr_reg);
         
-        /* Now set up arguments for scanf:
+        /* Special handling for STRING_TYPE - use gpc_text_readln_into */
+        if (expr_type == STRING_TYPE)
+        {
+            const char *file_dest64 = current_arg_reg64(0);
+            const char *string_dest64 = current_arg_reg64(1);
+            
+            /* Set file argument (or NULL for stdin) */
+            if (has_file_arg && file_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", file_spill->offset, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            
+            /* Load string address from stack */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", addr_spill->offset, string_dest64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Call gpc_text_readln_into for string reading */
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_text_readln_into");
+            free_arg_regs();
+            
+            /* Invalidate static link cache after call */
+            if (ctx->static_link_reg != NULL)
+            {
+                free_reg(get_reg_stack(), ctx->static_link_reg);
+                ctx->static_link_reg = NULL;
+                ctx->static_link_reg_level = 0;
+            }
+            
+            args = args->next;
+            continue;
+        }
+        
+        /* Now set up arguments for scanf (for non-string types):
          * arg0 (rdi/rcx): format string  
          * arg1 (rsi/rdx): address of variable to read into
          */
@@ -2558,9 +2597,6 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
                 break;
             case REAL_TYPE:
                 format_label = ".format_str_lf";
-                break;
-            case STRING_TYPE:
-                format_label = ".format_str_s";
                 break;
             default:
                 codegen_report_error(ctx, "ERROR: Unsupported type for read operation.");

@@ -1594,6 +1594,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(longint_type);
         free(longint_name);
     }
+    char *int64_name = strdup("int64");
+    if (int64_name != NULL) {
+        GpcType *int64_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(int64_type != NULL && "Failed to create int64 type");
+        AddBuiltinType_Typed(symtab, int64_name, int64_type);
+        destroy_gpc_type(int64_type);
+        free(int64_name);
+    }
     char *real_name = strdup("real");
     if (real_name != NULL) {
         GpcType *real_type = gpc_type_from_var_type(HASHVAR_REAL);
