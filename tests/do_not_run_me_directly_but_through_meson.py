@@ -72,15 +72,15 @@ def is_coverage_enabled():
     try:
         with open(options_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        for opt in data:
-            if opt.get("name") == "b_coverage":
-                _COVERAGE_ENABLED_CACHE = bool(opt.get("value"))
-                break
-        else:
-            _COVERAGE_ENABLED_CACHE = False
-    except FileNotFoundError:
-        _COVERAGE_ENABLED_CACHE = False
-    except Exception:
+        _COVERAGE_ENABLED_CACHE = next(
+            (
+                bool(opt.get("value"))
+                for opt in data
+                if opt.get("name") == "b_coverage"
+            ),
+            False,
+        )
+    except (OSError, json.JSONDecodeError):
         _COVERAGE_ENABLED_CACHE = False
     return _COVERAGE_ENABLED_CACHE
 

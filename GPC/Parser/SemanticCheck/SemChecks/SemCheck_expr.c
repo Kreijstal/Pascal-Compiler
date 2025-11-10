@@ -4042,31 +4042,39 @@ int semcheck_arrayaccess(int *type_return,
 }
 
 /* Helper to resolve the actual type tag from a TREE_VAR_DECL parameter declaration */
-static int resolve_param_type(Tree_t *var_decl, SymTab_t *symtab)
+static int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 {
-    assert(var_decl != NULL && var_decl->type == TREE_VAR_DECL);
+    assert(decl != NULL);
     assert(symtab != NULL);
     
-    int type_tag = var_decl->tree_data.var_decl_data.type;
-    char *type_id = var_decl->tree_data.var_decl_data.type_id;
-    
-    /* If type is known directly (primitive), return it */
+    int type_tag = UNKNOWN_TYPE;
+    char *type_id = NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        type_tag = decl->tree_data.var_decl_data.type;
+        type_id = decl->tree_data.var_decl_data.type_id;
+    }
+    else if (decl->type == TREE_ARR_DECL)
+    {
+        type_tag = decl->tree_data.arr_decl_data.type;
+        type_id = decl->tree_data.arr_decl_data.type_id;
+    }
+
     if (type_tag != UNKNOWN_TYPE)
         return type_tag;
-    
-    /* If type_id is provided, resolve it from symbol table */
+
     if (type_id != NULL)
     {
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
         {
-            /* Get the type tag from the type node */
             int resolved_type = UNKNOWN_TYPE;
             set_type_from_hashtype(&resolved_type, type_node);
             return resolved_type;
         }
     }
-    
+
     return UNKNOWN_TYPE;
 }
 
