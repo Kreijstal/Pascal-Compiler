@@ -1112,37 +1112,6 @@ static long long sizeof_from_type_tag(int type_tag)
     }
 }
 
-static long long sizeof_from_var_type(enum VarType var_type)
-{
-    switch(var_type)
-    {
-        case HASHVAR_INTEGER:
-            return 4;
-        case HASHVAR_LONGINT:
-            return 8;
-        case HASHVAR_REAL:
-            return 8;
-        case HASHVAR_PCHAR:
-            return POINTER_SIZE_BYTES;
-        case HASHVAR_BOOLEAN:
-            return 4;
-        case HASHVAR_PROCEDURE:
-            return POINTER_SIZE_BYTES;
-        case HASHVAR_CHAR:
-            return 1;
-        case HASHVAR_POINTER:
-            return POINTER_SIZE_BYTES;
-        case HASHVAR_SET:
-            return 4;
-        case HASHVAR_ENUM:
-            return 4;
-        case HASHVAR_FILE:
-            return POINTER_SIZE_BYTES;
-        default:
-            return -1;
-    }
-}
-
 static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
     const char *type_id, long long *size_out, int depth, int line_num)
 {
@@ -1555,13 +1524,6 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
         if (alias != NULL)
             return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
 
-        enum VarType var_type = hashnode_get_var_type(node);
-        long long base = sizeof_from_var_type(var_type);
-        if (base >= 0)
-        {
-            *size_out = base;
-            return 0;
-        }
     }
 
     /* For array size calculation */
@@ -1613,14 +1575,6 @@ static int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
     struct TypeAlias *alias = get_type_alias_from_node(node);
     if (alias != NULL)
         return sizeof_from_alias(symtab, alias, size_out, depth + 1, line_num);
-
-    enum VarType var_type = hashnode_get_var_type(node);
-    long long base = sizeof_from_var_type(var_type);
-    if (base >= 0)
-    {
-        *size_out = base;
-        return 0;
-    }
 
     fprintf(stderr, "Error on line %d, SizeOf cannot determine size of %s.\n",
         line_num, node->id != NULL ? node->id : "symbol");
@@ -2452,53 +2406,6 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         return 0;
     }
 
-    /* Fallback to legacy var_type */
-    enum VarType var_type = hashnode_get_var_type(hash_node);
-    switch(var_type)
-    {
-        case HASHVAR_INTEGER:
-            *type = INT_TYPE;
-            break;
-        case HASHVAR_LONGINT:
-            *type = LONGINT_TYPE;
-            break;
-        case HASHVAR_REAL:
-            *type = REAL_TYPE;
-            break;
-        case HASHVAR_PROCEDURE:
-            *type = PROCEDURE;
-            break;
-        case HASHVAR_PCHAR:
-             *type = STRING_TYPE;
-             break;
-        case HASHVAR_BOOLEAN:
-            *type = BOOL;
-            break;
-        case HASHVAR_CHAR:
-            *type = CHAR_TYPE;
-            break;
-        case HASHVAR_POINTER:
-            *type = POINTER_TYPE;
-            break;
-        case HASHVAR_SET:
-            *type = SET_TYPE;
-            break;
-        case HASHVAR_ENUM:
-            *type = ENUM_TYPE;
-            break;
-        case HASHVAR_FILE:
-            *type = FILE_TYPE;
-            break;
-        case HASHVAR_UNTYPED:
-            *type = UNKNOWN_TYPE;
-            break;
-        case HASHVAR_RECORD:
-            *type = RECORD_TYPE;
-            break;
-        default:
-            assert(0 && "Bad type in set_type_from_hashtype!");
-            break;
-    }
     return 0;
 }
 

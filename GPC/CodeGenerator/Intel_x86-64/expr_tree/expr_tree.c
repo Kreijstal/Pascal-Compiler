@@ -1301,7 +1301,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     node != NULL && node->hash_type == HASHTYPE_CONST)
                 {
                     /* Check if this is a real constant */
-                    if (node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
+                    if (node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
                     {
                         /* Real constant - encode as bit pattern using union for safe type punning */
                         union {

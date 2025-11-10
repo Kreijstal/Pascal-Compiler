@@ -99,7 +99,39 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 /* Helper function to get VarType from HashNode */
 static inline enum VarType get_var_type_from_node(HashNode_t *node)
 {
-    return hashnode_get_var_type(node);
+    if (node == NULL || node->type == NULL)
+        return HASHVAR_UNTYPED;
+
+    switch (node->type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+        {
+            int tag = gpc_type_get_primitive_tag(node->type);
+            switch (tag)
+            {
+                case INT_TYPE: return HASHVAR_INTEGER;
+                case LONGINT_TYPE: return HASHVAR_LONGINT;
+                case REAL_TYPE: return HASHVAR_REAL;
+                case BOOL: return HASHVAR_BOOLEAN;
+                case CHAR_TYPE: return HASHVAR_CHAR;
+                case STRING_TYPE: return HASHVAR_PCHAR;
+                case SET_TYPE: return HASHVAR_SET;
+                case ENUM_TYPE: return HASHVAR_ENUM;
+                case FILE_TYPE: return HASHVAR_FILE;
+                default: return HASHVAR_UNTYPED;
+            }
+        }
+        case TYPE_KIND_POINTER:
+            return HASHVAR_POINTER;
+        case TYPE_KIND_ARRAY:
+            return HASHVAR_ARRAY;
+        case TYPE_KIND_RECORD:
+            return HASHVAR_RECORD;
+        case TYPE_KIND_PROCEDURE:
+            return HASHVAR_PROCEDURE;
+        default:
+            return HASHVAR_UNTYPED;
+    }
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -221,7 +253,7 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
         HashNode_t *node = NULL;
         if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 &&
             node != NULL && node->hash_type == HASHTYPE_CONST &&
-            node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
+            node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
         {
             return 1;
         }
@@ -364,21 +396,10 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
             HashNode_t *node = NULL;
             if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL && node->hash_type == HASHTYPE_CONST)
             {
-                /* Check if it's a real constant */
-                if (node->type != NULL)
+                if (node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
                 {
-                    enum VarType vtype = hashnode_get_var_type(node);
-                    if (vtype == HASHVAR_REAL)
-                    {
-                        *out_value = node->const_real_value;
-                        return 0;
-                    }
-                    else
-                    {
-                        /* Integer constant promoted to real */
-                        *out_value = (double)node->const_int_value;
-                        return 0;
-                    }
+                    *out_value = node->const_real_value;
+                    return 0;
                 }
                 *out_value = (double)node->const_int_value;
                 return 0;
