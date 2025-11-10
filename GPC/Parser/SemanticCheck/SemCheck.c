@@ -1594,6 +1594,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(longint_type);
         free(longint_name);
     }
+    char *int64_name = strdup("int64");
+    if (int64_name != NULL) {
+        GpcType *int64_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(int64_type != NULL && "Failed to create int64 type");
+        AddBuiltinType_Typed(symtab, int64_name, int64_type);
+        destroy_gpc_type(int64_type);
+        free(int64_name);
+    }
     char *real_name = strdup("real");
     if (real_name != NULL) {
         GpcType *real_type = gpc_type_from_var_type(HASHVAR_REAL);
@@ -1693,6 +1701,24 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, writeln_name, writeln_type);
         destroy_gpc_type(writeln_type);
         free(writeln_name);
+    }
+
+    char *read_name = strdup("read");
+    if (read_name != NULL) {
+        GpcType *read_type = create_procedure_type(NULL, NULL);
+        assert(read_type != NULL && "Failed to create read procedure type");
+        AddBuiltinProc_Typed(symtab, read_name, read_type);
+        destroy_gpc_type(read_type);
+        free(read_name);
+    }
+
+    char *readln_name = strdup("readln");
+    if (readln_name != NULL) {
+        GpcType *readln_type = create_procedure_type(NULL, NULL);
+        assert(readln_type != NULL && "Failed to create readln procedure type");
+        AddBuiltinProc_Typed(symtab, readln_name, readln_type);
+        destroy_gpc_type(readln_type);
+        free(readln_name);
     }
 
     char *move_name = strdup("Move");
