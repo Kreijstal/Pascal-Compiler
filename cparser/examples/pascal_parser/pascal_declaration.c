@@ -507,6 +507,17 @@ static combinator_t* create_label_section(void) {
     );
 }
 
+static ast_t* wrap_external_name_clause(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_EXTERNAL_NAME;
+    node->child = parsed;
+    node->next = NULL;
+    node->sym = NULL;
+    return node;
+}
+
 static combinator_t* make_generic_type_prefix(void) {
     return seq(new_combinator(), PASCAL_T_NONE,
         optional(token(keyword_ci("generic"))),
@@ -1149,10 +1160,13 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
 
     // Extended external directive argument components
-    combinator_t* external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("name")),
-        token(string(PASCAL_T_STRING)),
-        NULL
+    combinator_t* external_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("name")),
+            token(string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_external_name_clause
     );
 
     combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
@@ -1172,10 +1186,17 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* external_name_only_argument = seq(new_combinator(), PASCAL_T_NONE,
+        external_name_clause,
+        optional(external_index_clause),
+        NULL
+    );
+
     combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+        external_name_only_argument,
+        extended_external_argument,                  // extended external arguments
         token(string(PASCAL_T_STRING)),            // simple string argument
         token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
-        extended_external_argument,                  // extended external arguments
         NULL
     ));
 
@@ -1952,10 +1973,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Copy exact working structure from unit parser
-    combinator_t* external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("name")),
-        token(pascal_string(PASCAL_T_STRING)),
-        NULL
+    combinator_t* external_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_external_name_clause
     );
 
     combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
@@ -1975,7 +1999,14 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* external_name_only_argument = seq(new_combinator(), PASCAL_T_NONE,
+        external_name_clause,
+        optional(external_index_clause),
+        NULL
+    );
+
     combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+        external_name_only_argument,
         extended_external_argument,                  // extended external arguments (try first)
         token(pascal_string(PASCAL_T_STRING)),      // simple string argument
         token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument

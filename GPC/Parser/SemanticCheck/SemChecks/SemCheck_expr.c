@@ -87,6 +87,11 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
 static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
+static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
+int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num);
 
 /* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
@@ -126,6 +131,12 @@ static int ensure_with_capacity(void);
 static struct Expression *clone_expression(const struct Expression *expr);
 static struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
     struct Expression *context_expr, int expr_type, int line_num);
+static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int is_high);
+static void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr);
+static void semcheck_replace_call_with_integer_literal(struct Expression *expr, long long value);
+static int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, struct Expression *array_expr);
 
 #define SIZEOF_RECURSION_LIMIT 64
 #define POINTER_SIZE_BYTES 8
@@ -411,6 +422,187 @@ static void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTa
     {
         expr->array_element_record_type = get_record_type_from_node(node);
     }
+}
+
+static int semcheck_convert_set_literal_to_array_literal(struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_SET)
+        return 1;
+
+    /* First pass: ensure no ranges are present */
+    ListNode_t *cur = expr->expr_data.set_data.elements;
+    while (cur != NULL)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        if (element != NULL && element->upper != NULL)
+            return 1;
+        cur = cur->next;
+    }
+
+    /* Second pass: transfer elements */
+    ListNode_t *array_list = NULL;
+    ListNode_t *array_tail = NULL;
+    int count = 0;
+
+    cur = expr->expr_data.set_data.elements;
+    while (cur != NULL)
+    {
+        struct SetElement *element = (struct SetElement *)cur->cur;
+        struct Expression *value_expr = NULL;
+        if (element != NULL)
+        {
+            value_expr = element->lower;
+            element->lower = NULL;
+            element->upper = NULL;
+        }
+
+        ListNode_t *node = CreateListNode(value_expr, LIST_EXPR);
+        if (array_list == NULL)
+        {
+            array_list = node;
+            array_tail = node;
+        }
+        else
+        {
+            array_tail->next = node;
+            array_tail = node;
+        }
+        ++count;
+
+        if (element != NULL)
+            destroy_set_element(element);
+        ListNode_t *next = cur->next;
+        free(cur);
+        cur = next;
+    }
+
+    expr->expr_data.set_data.elements = NULL;
+    expr->type = EXPR_ARRAY_LITERAL;
+    expr->expr_data.array_literal_data.elements = array_list;
+    expr->expr_data.array_literal_data.element_count = count;
+    expr->expr_data.array_literal_data.elements_semchecked = 0;
+    expr->is_array_expr = 1;
+    expr->array_is_dynamic = 1;
+    expr->array_lower_bound = 0;
+    expr->array_upper_bound = count - 1;
+    expr->array_element_type = UNKNOWN_TYPE;
+    if (expr->array_element_type_id != NULL)
+    {
+        free(expr->array_element_type_id);
+        expr->array_element_type_id = NULL;
+    }
+    expr->array_element_size = 0;
+    expr->array_element_record_type = NULL;
+    expr->resolved_type = UNKNOWN_TYPE;
+    return 0;
+}
+
+static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
+    int max_scope_lev, int expected_type, const char *expected_type_id, int line_num)
+{
+    if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL)
+        return 0;
+
+    int error_count = 0;
+    ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+    int index = 0;
+    while (cur != NULL)
+    {
+        struct Expression *element_expr = (struct Expression *)cur->cur;
+        if (element_expr == NULL)
+        {
+            ++index;
+            cur = cur->next;
+            continue;
+        }
+
+        int element_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&element_type, symtab, element_expr,
+            max_scope_lev, NO_MUTATE);
+
+        if (error_count == 0 && expected_type != UNKNOWN_TYPE &&
+            element_type != expected_type)
+        {
+            int compatible = 0;
+            if ((expected_type == LONGINT_TYPE && element_type == INT_TYPE) ||
+                (expected_type == INT_TYPE && element_type == LONGINT_TYPE))
+                compatible = 1;
+            else if (expected_type == STRING_TYPE && element_type == CHAR_TYPE)
+                compatible = 1;
+
+            if (!compatible)
+            {
+                fprintf(stderr, "Error on line %d, element %d of array literal "
+                    "does not match expected type.\n", line_num, index);
+                ++error_count;
+            }
+        }
+
+        ++index;
+        cur = cur->next;
+    }
+
+    if (error_count != 0)
+        return error_count;
+
+    if (expr->array_element_size <= 0)
+    {
+        long long element_size = 0;
+        if (sizeof_from_type_ref(symtab, expected_type, expected_type_id,
+                &element_size, 0, line_num) == 0 && element_size > 0 &&
+            element_size <= INT_MAX)
+        {
+            expr->array_element_size = (int)element_size;
+        }
+    }
+
+    expr->array_lower_bound = 0;
+    expr->array_upper_bound = expr->expr_data.array_literal_data.element_count - 1;
+    expr->is_array_expr = 1;
+    expr->array_is_dynamic = 1;
+    expr->expr_data.array_literal_data.elements_semchecked = 1;
+    return 0;
+}
+
+int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
+    SymTab_t *symtab, int max_scope_lev, int line_num)
+{
+    if (formal_decl == NULL || formal_decl->type != TREE_ARR_DECL || arg_expr == NULL)
+        return 0;
+
+    if (arg_expr->type == EXPR_SET)
+    {
+        if (semcheck_convert_set_literal_to_array_literal(arg_expr) != 0)
+        {
+            fprintf(stderr, "Error on line %d, open array literal cannot contain ranges.\n",
+                line_num);
+            return 1;
+        }
+    }
+
+    if (arg_expr->type != EXPR_ARRAY_LITERAL)
+        return 0;
+
+    int expected_type = formal_decl->tree_data.arr_decl_data.type;
+    const char *expected_type_id = formal_decl->tree_data.arr_decl_data.type_id;
+
+    if (arg_expr->array_element_type_id != NULL)
+    {
+        free(arg_expr->array_element_type_id);
+        arg_expr->array_element_type_id = NULL;
+    }
+    arg_expr->array_element_type = expected_type;
+    if (expected_type_id != NULL)
+        arg_expr->array_element_type_id = strdup(expected_type_id);
+    arg_expr->array_element_record_type = NULL;
+    arg_expr->array_element_size = 0;
+    arg_expr->array_lower_bound = 0;
+    arg_expr->array_upper_bound = arg_expr->expr_data.array_literal_data.element_count - 1;
+    arg_expr->is_array_expr = 1;
+    arg_expr->array_is_dynamic = 1;
+
+    return semcheck_typecheck_array_literal(arg_expr, symtab, max_scope_lev,
+        expected_type, expected_type_id, line_num);
 }
 
 static int ensure_with_capacity(void)
@@ -1074,8 +1266,168 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
     return error_count;
 }
 
+static void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr)
+{
+    while (args != NULL)
+    {
+        ListNode_t *next = args->next;
+        if (args->cur != NULL && args->cur != preserve_expr)
+            destroy_expr((struct Expression *)args->cur);
+        free(args);
+        args = next;
+    }
+}
+
+static void semcheck_replace_call_with_integer_literal(struct Expression *expr, long long value)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
+    expr->expr_data.function_call_data.args_expr = NULL;
+
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+    }
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    semcheck_reset_function_call_cache(expr);
+
+    expr->type = EXPR_INUM;
+    expr->expr_data.i_num = value;
+    expr->resolved_type = LONGINT_TYPE;
+}
+
+static int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, struct Expression *array_expr)
+{
+    if (expr == NULL || array_expr == NULL)
+        return 1;
+
+    ListNode_t *old_args = expr->expr_data.function_call_data.args_expr;
+    semcheck_free_call_args(old_args, array_expr);
+    expr->expr_data.function_call_data.args_expr = NULL;
+
+    struct Expression *lower_expr = mk_inum(expr->line_num, array_expr->array_lower_bound);
+    lower_expr->resolved_type = LONGINT_TYPE;
+
+    ListNode_t *new_args = CreateListNode(array_expr, LIST_EXPR);
+    new_args = PushListNodeBack(new_args, CreateListNode(lower_expr, LIST_EXPR));
+    expr->expr_data.function_call_data.args_expr = new_args;
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+        free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_dynarray_compute_high");
+    semcheck_reset_function_call_cache(expr);
+
+    int error_count = 0;
+    int arg_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&arg_type, symtab, array_expr, max_scope_lev, NO_MUTATE);
+    arg_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&arg_type, symtab, lower_expr, max_scope_lev, NO_MUTATE);
+
+    expr->resolved_type = LONGINT_TYPE;
+    if (type_return != NULL)
+        *type_return = LONGINT_TYPE;
+    return error_count;
+}
+
 static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, int is_high)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, %s expects exactly one argument.\n",
+            expr->line_num, is_high ? "High" : "Low");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (arg_expr->is_array_expr)
+    {
+        if (!arg_expr->array_is_dynamic)
+        {
+            long long lower = arg_expr->array_lower_bound;
+            long long upper = arg_expr->array_upper_bound;
+            if (is_high && upper < lower)
+            {
+                fprintf(stderr, "Error on line %d, invalid array bounds for High().\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+
+            long long bound_value = is_high ? upper : lower;
+            semcheck_replace_call_with_integer_literal(expr, bound_value);
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
+        if (!is_high)
+        {
+            semcheck_replace_call_with_integer_literal(expr, arg_expr->array_lower_bound);
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
+        return semcheck_prepare_dynarray_high_call(type_return, symtab,
+            expr, max_scope_lev, arg_expr);
+    }
+
+    if (arg_type == STRING_TYPE && !arg_expr->is_array_expr)
+    {
+        if (!is_high)
+        {
+            semcheck_replace_call_with_integer_literal(expr, 1);
+            *type_return = LONGINT_TYPE;
+            return 0;
+        }
+
+        if (expr->expr_data.function_call_data.id != NULL)
+            free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = strdup("Length");
+        if (expr->expr_data.function_call_data.id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate identifier for High(string).\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        semcheck_reset_function_call_cache(expr);
+        return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
+    }
+
+    fprintf(stderr, "Error on line %d, %s currently supports only array or string arguments.\n",
+        expr->line_num, is_high ? "High" : "Low");
+    *type_return = UNKNOWN_TYPE;
+    return 1;
+}
 
 static long long sizeof_from_type_tag(int type_tag)
 {
@@ -2474,15 +2826,9 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
             /* First, try the cached resolved_gpc_type if available */
             if (expr->resolved_gpc_type != NULL)
             {
-                fprintf(stderr, "DEBUG resolve_gpc: Using cached resolved_gpc_type: %s\n",
-                        gpc_type_to_string(expr->resolved_gpc_type));
                 if (owns_type != NULL)
                     *owns_type = 0;  /* Shared reference */
                 return expr->resolved_gpc_type;
-            }
-            else
-            {
-                fprintf(stderr, "DEBUG resolve_gpc: No cached resolved_gpc_type, looking up function\n");
             }
             
             /* Prefer cached call info populated during semantic checking */
@@ -2508,14 +2854,11 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
                     func_node->type->kind == TYPE_KIND_PROCEDURE &&
                     func_node->type->info.proc_info.return_type != NULL)
                 {
-                    fprintf(stderr, "DEBUG resolve_gpc: Returning proc return type: %s\n",
-                            gpc_type_to_string(func_node->type->info.proc_info.return_type));
                     if (owns_type != NULL)
                         *owns_type = 0;
                     return func_node->type->info.proc_info.return_type;
                 }
             }
-            fprintf(stderr, "DEBUG resolve_gpc: Failed to find return type\n");
             break;
         }
         
@@ -2682,7 +3025,25 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
             }
             break;
         }
-        
+
+        case EXPR_ARRAY_LITERAL:
+        {
+            if (expr->array_element_type == UNKNOWN_TYPE)
+                break;
+
+            GpcType *element_type = create_primitive_type(expr->array_element_type);
+            if (element_type == NULL)
+                break;
+
+            int end_index = expr->array_upper_bound;
+            if (end_index < expr->array_lower_bound)
+                end_index = expr->array_lower_bound - 1;
+
+            GpcType *array_type = create_array_type(element_type,
+                expr->array_lower_bound, end_index);
+            return array_type;
+        }
+
         case EXPR_POINTER_DEREF:
         {
             /* For pointer dereference, resolve the pointer expression's type,
@@ -2832,6 +3193,33 @@ int semcheck_expr_main(int *type_return,
         case EXPR_SET:
             *type_return = SET_TYPE;
             break;
+
+        case EXPR_ARRAY_LITERAL:
+        {
+            if (expr->array_element_type == UNKNOWN_TYPE &&
+                expr->array_element_type_id == NULL)
+            {
+                fprintf(stderr, "Error on line %d, unable to infer type for array literal.\n",
+                    expr->line_num);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+            if (!expr->expr_data.array_literal_data.elements_semchecked)
+            {
+                int arr_err = semcheck_typecheck_array_literal(expr, symtab, max_scope_lev,
+                    expr->array_element_type, expr->array_element_type_id, expr->line_num);
+                if (arr_err != 0)
+                {
+                    *type_return = UNKNOWN_TYPE;
+                    return arr_err;
+                }
+            }
+            expr->is_array_expr = 1;
+            expr->array_is_dynamic = 1;
+            expr->resolved_type = POINTER_TYPE;
+            *type_return = POINTER_TYPE;
+            return 0;
+        }
 
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
@@ -3605,6 +3993,12 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "EOF"))
         return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
 
+    if (id != NULL && pascal_identifier_equals(id, "Low"))
+        return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);
+
+    if (id != NULL && pascal_identifier_equals(id, "High"))
+        return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
+
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, id);
@@ -3660,9 +4054,16 @@ int semcheck_funccall(int *type_return,
                     int formal_type = resolve_param_type(formal_decl, symtab);
 
                     int call_type;
-                    semcheck_expr_main(&call_type, symtab, (struct Expression *)call_args->cur, max_scope_lev, NO_MUTATE);
+                    struct Expression *call_expr = (struct Expression *)call_args->cur;
+                    if (semcheck_prepare_array_literal_argument(formal_decl, call_expr,
+                            symtab, max_scope_lev, expr->line_num) != 0)
+                    {
+                        *type_return = UNKNOWN_TYPE;
+                        final_status = ++return_val;
+                        goto funccall_cleanup;
+                    }
+                    semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
 
-                    fprintf(stderr, "DEBUG overload: formal_type=%d, call_type=%d\n", formal_type, call_type);
                     if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
@@ -3693,7 +4094,26 @@ int semcheck_funccall(int *type_return,
 
     if (num_best_matches == 1)
     {
-        char *resolved_name = strdup(best_match->mangled_id);
+        const char *target_name = best_match->mangled_id;
+        if (target_name == NULL || target_name[0] == '\0')
+        {
+            if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *proc_def = best_match->type->info.proc_info.definition;
+                if (proc_def != NULL)
+                {
+                    target_name = proc_def->tree_data.subprogram_data.cname_override;
+                    if (target_name == NULL)
+                        target_name = proc_def->tree_data.subprogram_data.id;
+                }
+            }
+            if (target_name == NULL || target_name[0] == '\0')
+                target_name = best_match->id;
+        }
+
+        char *resolved_name = NULL;
+        if (target_name != NULL)
+            resolved_name = strdup(target_name);
         if (resolved_name == NULL)
         {
             fprintf(stderr, "Error: failed to duplicate mangled name for %s\n",
@@ -3711,11 +4131,16 @@ int semcheck_funccall(int *type_return,
             if (proc_def != NULL)
             {
                 bool no_body = (proc_def->tree_data.subprogram_data.statement_list == NULL);
-                if (no_body && proc_def->tree_data.subprogram_data.id != NULL)
+                if (no_body)
                 {
-                    free(expr->expr_data.function_call_data.mangled_id);
-                    expr->expr_data.function_call_data.mangled_id =
-                        strdup(proc_def->tree_data.subprogram_data.id);
+                    const char *target_name = proc_def->tree_data.subprogram_data.cname_override;
+                    if (target_name == NULL)
+                        target_name = proc_def->tree_data.subprogram_data.id;
+                    if (target_name != NULL)
+                    {
+                        free(expr->expr_data.function_call_data.mangled_id);
+                        expr->expr_data.function_call_data.mangled_id = strdup(target_name);
+                    }
                 }
                 else if (proc_def->tree_data.subprogram_data.cname_flag &&
                          proc_def->tree_data.subprogram_data.mangled_id != NULL)
@@ -3775,59 +4200,47 @@ int semcheck_funccall(int *type_return,
         set_type_from_hashtype(type_return, hash_return);
         
         /* NEW: Also set the resolved GpcType for this expression */
-        fprintf(stderr, "DEBUG funccall %s: hash_return->type=%p, kind=%d\n",
-                id, (void*)hash_return->type, hash_return->type ? hash_return->type->kind : -1);
-            if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
+        if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            GpcType *return_type = gpc_type_get_return_type(hash_return->type);
+            if (return_type != NULL)
             {
-                GpcType *return_type = gpc_type_get_return_type(hash_return->type);
-                fprintf(stderr, "DEBUG funccall %s: return_type=%p\n", id, (void*)return_type);
-                if (return_type != NULL)
+                expr->resolved_gpc_type = return_type;
+                if (return_type->kind == TYPE_KIND_ARRAY)
+                    semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
+                else
+                    semcheck_clear_array_info(expr);
+                if (return_type->kind == TYPE_KIND_PRIMITIVE &&
+                    return_type->info.primitive_type_tag == UNKNOWN_TYPE)
                 {
-                    fprintf(stderr, "DEBUG funccall %s: return_type kind=%d, %s\n", 
-                            id, return_type->kind, gpc_type_to_string(return_type));
-                    expr->resolved_gpc_type = return_type;
-                    fprintf(stderr, "DEBUG: Set function call resolved_gpc_type: %s\n", 
-                            gpc_type_to_string(return_type));
-                    if (return_type->kind == TYPE_KIND_ARRAY)
-                        semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
-                    else
-                        semcheck_clear_array_info(expr);
-                    if (return_type->kind == TYPE_KIND_PRIMITIVE &&
-                        return_type->info.primitive_type_tag == UNKNOWN_TYPE)
+                    char *target_return_id = hash_return->type->info.proc_info.return_type_id;
+                    if (target_return_id != NULL)
                     {
-                        char *target_return_id = hash_return->type->info.proc_info.return_type_id;
-                        fprintf(stderr, "DEBUG: return_type_id for %s = %s\n", id,
-                                target_return_id ? target_return_id : "NULL");
-                        if (target_return_id != NULL)
+                        HashNode_t *type_node = semcheck_find_type_node_with_gpc_type(symtab, target_return_id);
+                        if (type_node != NULL && type_node->type != NULL)
                         {
-                            HashNode_t *type_node = semcheck_find_type_node_with_gpc_type(symtab, target_return_id);
-                            if (type_node != NULL && type_node->type != NULL)
-                            {
-                                destroy_gpc_type(return_type);
-                                gpc_type_retain(type_node->type);
-                                hash_return->type->info.proc_info.return_type = type_node->type;
-                                return_type = type_node->type;
-                                expr->resolved_gpc_type = type_node->type;
-                                if (return_type->kind == TYPE_KIND_ARRAY)
-                                    semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
-                                else
-                                    semcheck_clear_array_info(expr);
-                            }
+                            destroy_gpc_type(return_type);
+                            gpc_type_retain(type_node->type);
+                            hash_return->type->info.proc_info.return_type = type_node->type;
+                            return_type = type_node->type;
+                            expr->resolved_gpc_type = type_node->type;
+                            if (return_type->kind == TYPE_KIND_ARRAY)
+                                semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
+                            else
+                                semcheck_clear_array_info(expr);
                         }
                     }
                 }
-                else
-                {
-                    expr->resolved_gpc_type = NULL;
-                fprintf(stderr, "DEBUG: No return type for function\n");
+            }
+            else
+            {
+                expr->resolved_gpc_type = NULL;
                 semcheck_clear_array_info(expr);
             }
         }
         else
         {
             expr->resolved_gpc_type = hash_return->type;
-            fprintf(stderr, "DEBUG: Set resolved_gpc_type from hash_return: %p\n",
-                    (void*)hash_return->type);
             semcheck_clear_array_info(expr);
         }
 
@@ -3863,7 +4276,6 @@ int semcheck_funccall(int *type_return,
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = resolve_param_type(arg_decl, symtab);
-                fprintf(stderr, "DEBUG: arg_type=%d, expected_type=%d, cur_arg=%d\n", arg_type, expected_type, cur_arg);
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
                     /* Allow integer/longint conversion */

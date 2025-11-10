@@ -248,6 +248,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->canonical_id);
             if (hash_node->const_string_value != NULL)
                 free(hash_node->const_string_value);
+            if (hash_node->mangled_id != NULL)
+                free(hash_node->mangled_id);
             if (hash_node->type != NULL)
                 destroy_gpc_type(hash_node->type);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
@@ -344,7 +346,19 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Set basic fields */
     hash_node->hash_type = hash_type;
     hash_node->type = type;
-    hash_node->mangled_id = mangled_id;
+    if (mangled_id != NULL)
+    {
+        hash_node->mangled_id = strdup(mangled_id);
+        if (hash_node->mangled_id == NULL)
+        {
+            free(hash_node);
+            return NULL;
+        }
+    }
+    else
+    {
+        hash_node->mangled_id = NULL;
+    }
     hash_node->referenced = 0;
     hash_node->mutated = 0;
     hash_node->is_constant = 0;
@@ -357,6 +371,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->id = strdup(id);
     if (hash_node->id == NULL)
     {
+        if (hash_node->mangled_id != NULL)
+            free(hash_node->mangled_id);
         free(hash_node);
         return NULL;
     }

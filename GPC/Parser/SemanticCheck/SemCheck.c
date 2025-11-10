@@ -79,6 +79,20 @@ int semcheck_id_not_main(char *id)
     return 0;
 }
 
+static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias)
+{
+    if (symtab == NULL || id == NULL || alias == NULL)
+        return;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, (char *)id) != -1 && node != NULL)
+    {
+        if (node->mangled_id != NULL)
+            free(node->mangled_id);
+        node->mangled_id = strdup(alias);
+    }
+}
+
 /* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
@@ -2494,8 +2508,23 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
     // --- Name Mangling Logic ---
-    if (subprogram->tree_data.subprogram_data.cname_flag) {
-        subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
+    static int debug_external = -1;
+    if (debug_external == -1)
+        debug_external = (getenv("GPC_DEBUG_EXTERNAL") != NULL);
+    const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
+    if (explicit_name != NULL) {
+        subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+    } else if (subprogram->tree_data.subprogram_data.cname_flag) {
+        const char *export_name = subprogram->tree_data.subprogram_data.id;
+        if (debug_external) {
+            fprintf(stderr, "[SemCheck] cname_flag id=%s alias=%s\n",
+                subprogram->tree_data.subprogram_data.id,
+                export_name != NULL ? export_name : "(null)");
+        }
+        if (export_name != NULL)
+            subprogram->tree_data.subprogram_data.mangled_id = strdup(export_name);
+        else
+            subprogram->tree_data.subprogram_data.mangled_id = NULL;
     } else {
         // Pass the symbol table to the mangler
         subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
@@ -2508,6 +2537,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Check if already declared (e.g., by predeclare_subprogram in two-pass approach) */
     HashNode_t *existing_decl = NULL;
     int already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
+
+    if (already_declared && existing_decl != NULL &&
+        subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        if (existing_decl->mangled_id != NULL)
+            free(existing_decl->mangled_id);
+        existing_decl->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
+    }
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
@@ -2561,6 +2598,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             proc_type);
+            semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
         }
         else
         {
@@ -2588,6 +2627,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
             subprogram->tree_data.subprogram_data.mangled_id,
             proc_type_recursive);
+        semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+            subprogram->tree_data.subprogram_data.mangled_id);
 
         new_max_scope = max_scope_lev+1;
     }
@@ -2625,6 +2666,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             func_type);
+            semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
         }
         else
         {
@@ -2801,7 +2844,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
     
     // --- Name Mangling Logic ---
-    if (subprogram->tree_data.subprogram_data.cname_flag) {
+    const char *predeclare_name = subprogram->tree_data.subprogram_data.cname_override;
+    if (predeclare_name != NULL) {
+        subprogram->tree_data.subprogram_data.mangled_id = strdup(predeclare_name);
+    } else if (subprogram->tree_data.subprogram_data.cname_flag) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
     } else {
         // Pass the symbol table to the mangler
@@ -2876,6 +2922,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 /* A return value greater than 0 indicates how many errors occurred */
 /* Forward declaration - we'll define this after semcheck_subprogram */
 static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
+static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias);
 
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram)

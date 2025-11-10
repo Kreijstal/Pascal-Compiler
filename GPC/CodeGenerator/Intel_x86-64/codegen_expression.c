@@ -40,6 +40,14 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size);
+static const char *codegen_register_name8(const Register_t *reg);
+static const char *codegen_register_name16(const Register_t *reg);
+static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_t *value_reg,
+    int offset, int element_size);
+static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+
 /* Helper to check if a formal parameter declaration expects a string type. */
 static int formal_decl_expects_string(Tree_t *decl)
 {
@@ -56,6 +64,223 @@ static int formal_decl_expects_string(Tree_t *decl)
     }
 
     return 0;
+}
+
+static unsigned long codegen_expr_next_temp_suffix(void)
+{
+    static unsigned long counter = 0;
+    return ++counter;
+}
+
+static int codegen_expr_align_to(int value, int alignment)
+{
+    if (alignment <= 0)
+        return value;
+    int remainder = value % alignment;
+    if (remainder == 0)
+        return value;
+    return value + (alignment - remainder);
+}
+
+static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size)
+{
+    if (size <= 0)
+        size = DOUBLEWORD;
+    int aligned = codegen_expr_align_to(size, DOUBLEWORD);
+    char label[32];
+    snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp",
+        codegen_expr_next_temp_suffix());
+    return add_l_x(label, aligned);
+}
+
+static const char *codegen_register_name8(const Register_t *reg)
+{
+    if (reg == NULL || reg->bit_64 == NULL)
+        return NULL;
+
+    static const struct
+    {
+        const char *wide;
+        const char *byte;
+    } register_map[] = {
+        { "%rax", "%al" },
+        { "%rbx", "%bl" },
+        { "%rcx", "%cl" },
+        { "%rdx", "%dl" },
+        { "%rsi", "%sil" },
+        { "%rdi", "%dil" },
+        { "%rbp", "%bpl" },
+        { "%rsp", "%spl" },
+        { "%r8", "%r8b" },
+        { "%r9", "%r9b" },
+        { "%r10", "%r10b" },
+        { "%r11", "%r11b" },
+        { "%r12", "%r12b" },
+        { "%r13", "%r13b" },
+        { "%r14", "%r14b" },
+        { "%r15", "%r15b" },
+    };
+
+    size_t count = sizeof(register_map) / sizeof(register_map[0]);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
+            return register_map[i].byte;
+    }
+
+    return NULL;
+}
+
+static const char *codegen_register_name16(const Register_t *reg)
+{
+    if (reg == NULL || reg->bit_64 == NULL)
+        return NULL;
+
+    static const struct
+    {
+        const char *wide;
+        const char *word;
+    } register_map[] = {
+        { "%rax", "%ax" },
+        { "%rbx", "%bx" },
+        { "%rcx", "%cx" },
+        { "%rdx", "%dx" },
+        { "%rsi", "%si" },
+        { "%rdi", "%di" },
+        { "%rbp", "%bp" },
+        { "%rsp", "%sp" },
+        { "%r8", "%r8w" },
+        { "%r9", "%r9w" },
+        { "%r10", "%r10w" },
+        { "%r11", "%r11w" },
+        { "%r12", "%r12w" },
+        { "%r13", "%r13w" },
+        { "%r14", "%r14w" },
+        { "%r15", "%r15w" },
+    };
+
+    size_t count = sizeof(register_map) / sizeof(register_map[0]);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (strcmp(reg->bit_64, register_map[i].wide) == 0)
+            return register_map[i].word;
+    }
+
+    return NULL;
+}
+
+static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_t *value_reg,
+    int offset, int element_size)
+{
+    if (value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (element_size == 1)
+    {
+        const char *reg8 = codegen_register_name8(value_reg);
+        assert(reg8 != NULL && "8-bit register name not found for store operation");
+        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", reg8, offset);
+        return add_inst(inst_list, buffer);
+    }
+    else if (element_size == 2)
+    {
+        const char *reg16 = codegen_register_name16(value_reg);
+        assert(reg16 != NULL && "16-bit register name not found for store operation");
+        snprintf(buffer, sizeof(buffer), "\tmovw\t%s, -%d(%%rbp)\n", reg16, offset);
+        return add_inst(inst_list, buffer);
+    }
+    else if (element_size == 4)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", value_reg->bit_32, offset);
+        return add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", value_reg->bit_64, offset);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL || out_reg == NULL)
+        return inst_list;
+
+    int element_size = expr_get_array_element_size(expr, ctx);
+    if (element_size <= 0)
+        element_size = DOUBLEWORD;
+
+    int element_count = expr->expr_data.array_literal_data.element_count;
+    int data_size = codegen_expr_align_to(element_count * element_size, DOUBLEWORD);
+    StackNode_t *data_slot = codegen_alloc_temp_bytes("arr_lit_data", data_size);
+    if (data_slot == NULL)
+        return inst_list;
+
+    ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+    int index = 0;
+    while (cur != NULL)
+    {
+        struct Expression *element_expr = (struct Expression *)cur->cur;
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(element_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
+            return inst_list;
+        }
+
+        int element_offset = data_slot->offset - index * element_size;
+        inst_list = codegen_store_value_to_stack(inst_list, value_reg, element_offset, element_size);
+        free_reg(get_reg_stack(), value_reg);
+
+        cur = cur->next;
+        ++index;
+    }
+
+    const int pointer_bytes = CODEGEN_POINTER_SIZE_BYTES;
+    int descriptor_size = codegen_expr_align_to(2 * pointer_bytes, pointer_bytes);
+    if (expr->array_element_size > 0)
+    {
+        int candidate = expr->array_element_size * 2;
+        if (descriptor_size < candidate)
+            descriptor_size = codegen_expr_align_to(candidate, pointer_bytes);
+    }
+    StackNode_t *desc_slot = codegen_alloc_temp_bytes("arr_lit_desc", descriptor_size);
+    if (desc_slot == NULL)
+        return inst_list;
+
+    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (addr_reg == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for array literal descriptor.");
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", data_slot->offset, addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, desc_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %s\n", element_count, addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64,
+        desc_slot->offset - pointer_bytes);
+    inst_list = add_inst(inst_list, buffer);
+
+    int field_count = descriptor_size / pointer_bytes;
+    for (int field = 2; field < field_count; ++field)
+    {
+        int field_offset = desc_slot->offset - field * pointer_bytes;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", field_offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", desc_slot->offset, addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    *out_reg = addr_reg;
+    return inst_list;
 }
 
 /* Helper function to get TypeAlias from HashNode */
@@ -2414,16 +2639,21 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         /* Arrays and var parameters are passed by reference */
         if(is_var_param || is_array_param || is_array_arg)
         {
-            // Pass by reference
-            if (!codegen_expr_is_addressable(arg_expr))
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unsupported expression type for var parameter.");
-                return inst_list;
-            }
-
             Register_t *addr_reg = NULL;
-            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+            {
+                inst_list = codegen_materialize_array_literal(arg_expr, inst_list, ctx, &addr_reg);
+            }
+            else
+            {
+                if (!codegen_expr_is_addressable(arg_expr))
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unsupported expression type for var parameter.");
+                    return inst_list;
+                }
+                inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+            }
             if (codegen_had_error(ctx) || addr_reg == NULL)
                 return inst_list;
 
