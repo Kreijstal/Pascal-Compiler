@@ -33,13 +33,18 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GPC="$REPO_ROOT/build/GPC/gpc"
-RUNTIME="$REPO_ROOT/GPC/runtime.c"
+RUNTIME_LIB="$REPO_ROOT/build/GPC/libgpc_runtime.a"
 
 command -v fpc >/dev/null || { echo "Free Pascal Compiler (fpc) not found" >&2; exit 2; }
 command -v timeout >/dev/null || { echo "'timeout' command not available" >&2; exit 2; }
 
 if [[ ! -x "$GPC" ]]; then
     echo "Gwinn compiler binary not found at $GPC" >&2
+    exit 2
+fi
+
+if [[ ! -f "$RUNTIME_LIB" ]]; then
+    echo "Runtime library not found at $RUNTIME_LIB; build the project first" >&2
     exit 2
 fi
 
@@ -64,7 +69,7 @@ fi
 
 # 2. Compile with Gwinn GPC
 "$GPC" "$INPUT" "$ASM_FILE" >/dev/null 2>&1 || exit 1
-gcc -no-pie "$ASM_FILE" "$RUNTIME" -o "$BIN_GPC" >/dev/null 2>&1 || exit 1
+gcc -no-pie "$ASM_FILE" "$RUNTIME_LIB" -o "$BIN_GPC" >/dev/null 2>&1 || exit 1
 
 # 3. Interesting iff executing the GPC binary times out after 1 second
 set +e

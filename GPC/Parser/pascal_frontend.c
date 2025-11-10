@@ -297,7 +297,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
-    /* Define MSWINDOWS when targeting Windows */
+    /* Define MSWINDOWS when targeting Windows (but not for Cygwin which has POSIX API) */
+#if defined(_WIN32) && !defined(__CYGWIN__)
     if (target_windows_flag())
     {
         if (!pascal_preprocessor_define(preprocessor, "MSWINDOWS"))
@@ -308,6 +309,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             return false;
         }
     }
+#else
+    /* On Cygwin and Unix, don't define MSWINDOWS */
+    (void)target_windows_flag;  /* Suppress unused warning */
+#endif
 
     char *preprocess_error = NULL;
     size_t preprocessed_length = 0;

@@ -68,7 +68,7 @@ gpc_cparser_exe = executable('gpc', gpc_cparser_sources,
 
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
-runtime_sources = ['runtime.c']
+runtime_sources = ['runtime.c', 'runtime_unix.c']
 runtime_deps = []
 runtime_c_args = []
 

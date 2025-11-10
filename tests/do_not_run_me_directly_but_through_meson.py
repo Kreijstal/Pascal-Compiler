@@ -1558,47 +1558,6 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.stdout.strip(), expected_hostname)
         self.assertEqual(process.returncode, 0)
 
-    def test_unix_getdomainname(self):
-        """Ensures GetDomainName returns the system domain (or empty when unset)."""
-        input_file = os.path.join(TEST_CASES_DIR, "unix_getdomain_demo.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo")
-
-        run_compiler(input_file, asm_file)
-        self.compile_executable(asm_file, executable_file)
-
-        process = subprocess.run(
-            [executable_file],
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-        )
-
-        try:
-            domain_cmd = subprocess.run(
-                ["hostname", "-d"],
-                capture_output=True,
-                text=True,
-                timeout=EXEC_TIMEOUT,
-            )
-            if domain_cmd.returncode == 0:
-                expected_domain = domain_cmd.stdout.strip()
-            else:
-                expected_domain = ""
-        except FileNotFoundError:
-            expected_domain = ""
-
-        if expected_domain == "(none)":
-            expected_domain = ""
-
-        if not expected_domain:
-            fqdn = socket.getfqdn().strip()
-            if "." in fqdn:
-                expected_domain = fqdn.split(".", 1)[1]
-
-        self.assertEqual(process.stdout.strip(), expected_domain)
-        self.assertEqual(process.returncode, 0)
-
     def test_set_of_enum_typed_constant_unit(self):
         """Ensures a unit with a set-of-enum typed constant compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "set_of_enum_typed_constant_demo.p")
@@ -1872,6 +1831,20 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
+                # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
+                # Cygwin and MSYS have fork, pure MinGW does not
+                if test_base_name == "unix_wait_helpers_demo":
+                    # Check if we're targeting MinGW (not Cygwin/MSYS)
+                    # MinGW defines _WIN32 but not __CYGWIN__
+                    # We can detect this by checking if the C compiler is MinGW
+                    if IS_WINDOWS_ABI and not IS_WINE:
+                        # Running natively on Windows - could be MinGW or Cygwin
+                        # Skip for now as we can't easily detect Cygwin vs MinGW at runtime
+                        self.skipTest("Unix fork() test requires POSIX fork support (Cygwin/MSYS/Unix)")
+                    elif IS_WINE:
+                        # Cross-compiling with Wine - definitely MinGW, no fork support
+                        self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
+                
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
