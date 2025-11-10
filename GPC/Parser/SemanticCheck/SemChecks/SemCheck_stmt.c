@@ -431,6 +431,51 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
     return return_val;
 }
 
+static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    int arg_index = 1;
+    int saw_file_arg = 0;
+    
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        int expr_type = UNKNOWN_TYPE;
+        
+        /* For read, we need to check if this is a file argument first */
+        return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, NO_MUTATE);
+        
+        if (!saw_file_arg && expr_type == FILE_TYPE)
+        {
+            saw_file_arg = 1;
+            args = args->next;
+            arg_index++;
+            continue;
+        }
+        
+        /* After file arg (if any), remaining args must be mutable lvalues */
+        /* Re-check with MUTATE flag to ensure it's an lvalue */
+        expr_type = UNKNOWN_TYPE;
+        return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, MUTATE);
+        
+        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != CHAR_TYPE && expr_type != STRING_TYPE && expr_type != REAL_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",
+                    stmt->line_num, arg_index);
+            ++return_val;
+        }
+        
+        args = args->next;
+        ++arg_index;
+    }
+
+    return return_val;
+}
+
 static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -1001,6 +1046,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "writeln",
         semcheck_builtin_write_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "read",
+        semcheck_builtin_read_like, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "readln",
+        semcheck_builtin_read_like, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

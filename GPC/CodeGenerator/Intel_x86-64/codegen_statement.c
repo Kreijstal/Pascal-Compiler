@@ -2458,6 +2458,165 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t *inst_list,
+                                             CodeGenContext *ctx, int read_line)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    char buffer[128];
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    Register_t *file_reg = NULL;
+    StackNode_t *file_spill = NULL;
+    int has_file_arg = 0;
+
+    /* Check if first argument is a file */
+    if (args != NULL)
+    {
+        struct Expression *first_expr = (struct Expression *)args->cur;
+        if (first_expr != NULL && expr_has_type_tag(first_expr, FILE_TYPE))
+        {
+            expr_node_t *file_tree = build_expr_tree(first_expr);
+            file_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (file_reg != NULL)
+            {
+                inst_list = gencode_expr_tree(file_tree, inst_list, ctx, file_reg);
+                has_file_arg = 1;
+                file_spill = add_l_t("read_file");
+                if (file_spill != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", file_reg->bit_64, file_spill->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), file_reg);
+                    file_reg = NULL;
+                }
+            }
+            else
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for read file argument.");
+            }
+            free_expr_tree(file_tree);
+            args = args->next;
+        }
+    }
+
+    /* Process each argument to read */
+    while (args != NULL)
+    {
+        struct Expression *expr = (struct Expression *)args->cur;
+        int expr_type = (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
+        
+        /* Get address of the variable to read into and save to stack */
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for read address.");
+            args = args->next;
+            continue;
+        }
+        
+        inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx))
+        {
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+        
+        /* Save address to a stack temporary to avoid register conflicts */
+        StackNode_t *addr_spill = add_l_t("read_addr");
+        if (addr_spill == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate stack space for read address.");
+            free_reg(get_reg_stack(), addr_reg);
+            args = args->next;
+            continue;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, addr_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        
+        /* Now set up arguments for scanf:
+         * arg0 (rdi/rcx): format string  
+         * arg1 (rsi/rdx): address of variable to read into
+         */
+        const char *format_dest64 = current_arg_reg64(0);
+        const char *addr_dest64 = current_arg_reg64(1);
+        
+        /* Set format string based on type */
+        const char *format_label = NULL;
+        switch (expr_type)
+        {
+            case INT_TYPE:
+                format_label = ".format_str_d";
+                break;
+            case LONGINT_TYPE:
+                format_label = ".format_str_lld";
+                break;
+            case CHAR_TYPE:
+                format_label = ".format_str_c";
+                break;
+            case REAL_TYPE:
+                format_label = ".format_str_lf";
+                break;
+            case STRING_TYPE:
+                format_label = ".format_str_s";
+                break;
+            default:
+                codegen_report_error(ctx, "ERROR: Unsupported type for read operation.");
+                args = args->next;
+                continue;
+        }
+        
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", format_label, format_dest64);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* Load address from stack temporary to argument register */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", addr_spill->offset, addr_dest64);
+        inst_list = add_inst(inst_list, buffer);
+        
+        /* Call scanf */
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_scanf");
+        free_arg_regs();
+        
+        /* Invalidate static link cache after each read argument */
+        if (ctx->static_link_reg != NULL)
+        {
+            free_reg(get_reg_stack(), ctx->static_link_reg);
+            ctx->static_link_reg = NULL;
+            ctx->static_link_reg_level = 0;
+        }
+        
+        args = args->next;
+    }
+    
+    /* If readln, consume rest of line */
+    if (read_line)
+    {
+        const char *file_dest64 = current_arg_reg64(0);
+        if (has_file_arg && file_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", file_spill->offset, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_text_readln_discard");
+        free_arg_regs();
+    }
+    
+    if (file_reg != NULL)
+        free_reg(get_reg_stack(), file_reg);
+
+    return inst_list;
+}
+
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -2497,6 +2656,24 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "writeln"))
     {
         inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 1);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "read"))
+    {
+        inst_list = codegen_builtin_read_like(stmt, inst_list, ctx, 0);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "readln"))
+    {
+        inst_list = codegen_builtin_read_like(stmt, inst_list, ctx, 1);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

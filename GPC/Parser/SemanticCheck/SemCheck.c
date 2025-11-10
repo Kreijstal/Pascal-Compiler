@@ -1695,6 +1695,24 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(writeln_name);
     }
 
+    char *read_name = strdup("read");
+    if (read_name != NULL) {
+        GpcType *read_type = create_procedure_type(NULL, NULL);
+        assert(read_type != NULL && "Failed to create read procedure type");
+        AddBuiltinProc_Typed(symtab, read_name, read_type);
+        destroy_gpc_type(read_type);
+        free(read_name);
+    }
+
+    char *readln_name = strdup("readln");
+    if (readln_name != NULL) {
+        GpcType *readln_type = create_procedure_type(NULL, NULL);
+        assert(readln_type != NULL && "Failed to create readln procedure type");
+        AddBuiltinProc_Typed(symtab, readln_name, readln_type);
+        destroy_gpc_type(readln_type);
+        free(readln_name);
+    }
+
     char *move_name = strdup("Move");
     if (move_name != NULL) {
         GpcType *move_type = create_procedure_type(NULL, NULL);

@@ -1555,7 +1555,8 @@ class TestCompiler(unittest.TestCase):
         )
 
         expected_hostname = socket.gethostname().strip()
-        self.assertEqual(process.stdout.strip(), expected_hostname)
+        # Use case-insensitive comparison since hostname case can vary by platform
+        self.assertEqual(process.stdout.strip().lower(), expected_hostname.lower())
         self.assertEqual(process.returncode, 0)
 
     def test_set_of_enum_typed_constant_unit(self):
@@ -1750,6 +1751,7 @@ class TestCompiler(unittest.TestCase):
             "              4              3              4             -7\n",
             "              0             -7              3               \n",
             "             12                             0               \n",
+            "                                           12               \n",
             "Gerade Zahlen\n",
             "4 0 12 \n",
             "Ungerade Zahlen\n",
