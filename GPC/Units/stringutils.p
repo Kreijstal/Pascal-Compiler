@@ -20,6 +20,21 @@ function StrCount(const SubStr: string; s: string): Integer;
 function StrReplace(const s, Source, Dest: string): TString;
 function Char2Boolean(ch: Char; var Dest: Boolean): Boolean;
 function Char2Digit(ch: Char): Integer;
+function AnsiContainsStr(const AText, ASubText: string): Boolean;
+function AnsiContainsText(const AText, ASubText: string): Boolean;
+function ContainsStr(const AText, ASubText: string): Boolean;
+function ContainsText(const AText, ASubText: string): Boolean;
+function AnsiStartsStr(const SubStr, S: string): Boolean;
+function AnsiStartsText(const SubStr, S: string): Boolean;
+function AnsiEndsStr(const SubStr, S: string): Boolean;
+function AnsiEndsText(const SubStr, S: string): Boolean;
+function StartsStr(const SubStr, S: string): Boolean;
+function StartsText(const SubText, Text: string): Boolean;
+function EndsStr(const SubStr, S: string): Boolean;
+function EndsText(const SubText, Text: string): Boolean;
+function DupeString(const S: string; Count: Integer): string;
+function AnsiReplaceStr(const S, OldPattern, NewPattern: string): TString;
+function AnsiReplaceText(const S, OldPattern, NewPattern: string): TString;
 function QuoteStringEscape(const s: string; EscapeChar: Char;
   QuoteHigh: Boolean): TString;
 function QuoteString(const s: string): TString;
@@ -184,6 +199,160 @@ begin
         Char2Digit := Ord(ch) - Ord('a') + 10
     else
         Char2Digit := -1;
+end;
+
+function AnsiContainsStr(const AText, ASubText: string): Boolean;
+begin
+    if ASubText = '' then
+    begin
+        AnsiContainsStr := True;
+        exit;
+    end;
+    AnsiContainsStr := Pos(ASubText, AText) > 0;
+end;
+
+function AnsiContainsText(const AText, ASubText: string): Boolean;
+begin
+    AnsiContainsText := AnsiContainsStr(LowerCase(AText), LowerCase(ASubText));
+end;
+
+function ContainsStr(const AText, ASubText: string): Boolean;
+begin
+    ContainsStr := AnsiContainsStr(AText, ASubText);
+end;
+
+function ContainsText(const AText, ASubText: string): Boolean;
+begin
+    ContainsText := AnsiContainsText(AText, ASubText);
+end;
+
+function AnsiStartsStr(const SubStr, S: string): Boolean;
+var
+    lenSub, lenS: Integer;
+begin
+    lenSub := Length(SubStr);
+    lenS := Length(S);
+    if lenSub = 0 then
+        AnsiStartsStr := True
+    else if lenSub > lenS then
+        AnsiStartsStr := False
+    else
+    begin
+        if Copy(S, 1, lenSub) = SubStr then
+            AnsiStartsStr := True
+        else
+            AnsiStartsStr := False;
+    end;
+end;
+
+function AnsiStartsText(const SubStr, S: string): Boolean;
+begin
+    AnsiStartsText := AnsiStartsStr(LowerCase(SubStr), LowerCase(S));
+end;
+
+function AnsiEndsStr(const SubStr, S: string): Boolean;
+var
+    lenSub, lenS: Integer;
+begin
+    lenSub := Length(SubStr);
+    lenS := Length(S);
+    if lenSub = 0 then
+        AnsiEndsStr := True
+    else if lenSub > lenS then
+        AnsiEndsStr := False
+    else
+    begin
+        if Copy(S, lenS - lenSub + 1, lenSub) = SubStr then
+            AnsiEndsStr := True
+        else
+            AnsiEndsStr := False;
+    end;
+end;
+
+function AnsiEndsText(const SubStr, S: string): Boolean;
+begin
+    AnsiEndsText := AnsiEndsStr(LowerCase(SubStr), LowerCase(S));
+end;
+
+function StartsStr(const SubStr, S: string): Boolean;
+begin
+    StartsStr := AnsiStartsStr(SubStr, S);
+end;
+
+function StartsText(const SubText, Text: string): Boolean;
+begin
+    StartsText := AnsiStartsText(SubText, Text);
+end;
+
+function EndsStr(const SubStr, S: string): Boolean;
+begin
+    EndsStr := AnsiEndsStr(SubStr, S);
+end;
+
+function EndsText(const SubText, Text: string): Boolean;
+begin
+    EndsText := AnsiEndsText(SubText, Text);
+end;
+
+function DupeString(const S: string; Count: Integer): string;
+var
+    i: Integer;
+    resultStr: string;
+begin
+    if Count <= 0 then
+    begin
+        DupeString := '';
+        exit;
+    end;
+    resultStr := '';
+    for i := 1 to Count do
+        resultStr := resultStr + S;
+    DupeString := resultStr;
+end;
+
+function AnsiReplaceStr(const S, OldPattern, NewPattern: string): TString;
+begin
+    AnsiReplaceStr := StrReplace(S, OldPattern, NewPattern);
+end;
+
+function AnsiReplaceText(const S, OldPattern, NewPattern: string): TString;
+var
+    lenOld, lenS, i: Integer;
+    resultStr: TString;
+    patternLower, segment: string;
+    matched: Boolean;
+begin
+    if OldPattern = '' then
+    begin
+        AnsiReplaceText := S;
+        exit;
+    end;
+
+    lenOld := Length(OldPattern);
+    lenS := Length(S);
+    patternLower := LowerCase(OldPattern);
+    resultStr := '';
+    i := 1;
+    while i <= lenS do
+    begin
+        matched := False;
+        if (i + lenOld - 1 <= lenS) then
+        begin
+            segment := Copy(S, i, lenOld);
+            if LowerCase(segment) = patternLower then
+            begin
+                resultStr := resultStr + NewPattern;
+                Inc(i, lenOld);
+                matched := True;
+            end;
+        end;
+        if not matched then
+        begin
+            resultStr := resultStr + S[i];
+            Inc(i);
+        end;
+    end;
+    AnsiReplaceText := resultStr;
 end;
 
 function QuoteStringEscape(const s: string; EscapeChar: Char;
