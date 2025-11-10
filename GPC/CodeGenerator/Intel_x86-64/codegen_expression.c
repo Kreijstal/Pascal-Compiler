@@ -450,11 +450,10 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
     /* For set literals, check if elements are characters or single-char strings */
     if (expr->type == EXPR_SET && expr->expr_data.set_data.elements != NULL)
     {
-        /* Check the first element to determine type */
-        ListNode_t *first = expr->expr_data.set_data.elements;
-        if (first != NULL && first->cur != NULL)
+        ListNode_t *node = expr->expr_data.set_data.elements;
+        while (node != NULL)
         {
-            struct SetElement *element = (struct SetElement *)first->cur;
+            struct SetElement *element = (struct SetElement *)node->cur;
             if (element->lower != NULL)
             {
                 int elem_type = element->lower->resolved_type;
@@ -468,7 +467,14 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                         strlen(element->lower->expr_data.string) == 1)
                         return 1;
                 }
+                if (element->lower->type == EXPR_CHAR_CODE)
+                    return 1;
+                if (element->lower->type == EXPR_STRING &&
+                    element->lower->expr_data.string != NULL &&
+                    strlen(element->lower->expr_data.string) == 1)
+                    return 1;
             }
+            node = node->next;
         }
     }
     
@@ -1799,6 +1805,60 @@ static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_li
     return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
 }
 
+static Register_t *codegen_clone_register_if_rcx(ListNode_t **inst_list, CodeGenContext *ctx,
+    Register_t *reg, const char *label)
+{
+    if (reg == NULL || inst_list == NULL)
+        return reg;
+
+    if (strcmp(reg->bit_64, "%rcx") != 0)
+        return reg;
+
+    static const char *preferred_regs[] = { "%rax", "%r10", "%r11", "%r8", "%r9" };
+    Register_t *replacement = NULL;
+    for (size_t i = 0; i < sizeof(preferred_regs) / sizeof(preferred_regs[0]); ++i)
+    {
+        if (get_register_64bit(get_reg_stack(), (char *)preferred_regs[i], &replacement) == 0 && replacement != NULL)
+            break;
+        replacement = NULL;
+    }
+
+    if (replacement == NULL)
+        replacement = codegen_try_get_reg(inst_list, ctx, label);
+
+    if (replacement == NULL)
+        return reg;
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", reg->bit_64, replacement->bit_64);
+    *inst_list = add_inst(*inst_list, buffer);
+    free_reg(get_reg_stack(), reg);
+    return replacement;
+}
+
+static ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || out_reg == NULL)
+        return inst_list;
+
+    Register_t *addr_reg = NULL;
+    if (codegen_expr_is_addressable(expr))
+        inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+    else
+        inst_list = codegen_set_expr(expr, inst_list, ctx, &addr_reg);
+
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+    {
+        *out_reg = NULL;
+        return inst_list;
+    }
+
+    addr_reg = codegen_clone_register_if_rcx(&inst_list, ctx, addr_reg, "char set addr spill");
+    *out_reg = addr_reg;
+    return inst_list;
+}
+
 ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -2200,7 +2260,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
 
         Register_t *set_addr_reg = NULL;
-        inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
+        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
         if (codegen_had_error(ctx) || set_addr_reg == NULL)
         {
             free_reg(get_reg_stack(), left_reg);
@@ -2308,7 +2368,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
             /* Get address of the set variable */
             Register_t *set_addr_reg = NULL;
-            inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
+            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
             if (codegen_had_error(ctx) || set_addr_reg == NULL)
             {
                 if (set_addr_reg != NULL)

@@ -1561,9 +1561,18 @@ class TestCompiler(unittest.TestCase):
             return
 
         lines = process.stdout.strip().splitlines()
-        self.assertGreaterEqual(len(lines), 2)
-        self.assertEqual(lines[0].strip(), "32")
-        self.assertEqual(lines[1].strip(), "1")
+        expected_lines = [
+            "32",
+            "1",
+            "Trim=Pascal",
+            "TrimLeft=Pascal  ",
+            "TrimRight=  Pascal",
+            "AnsiUpper=PASCAL",
+            "AnsiLower=pascal",
+            "CompareText=0",
+            "SameText=TRUE",
+        ]
+        self.assertEqual(lines, expected_lines)
         self.assertEqual(process.returncode, 0)
 
     def test_unix_gethostname(self):

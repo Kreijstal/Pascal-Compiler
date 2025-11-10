@@ -20,6 +20,12 @@ function StrToInt(const S: AnsiString): longint;
 function UpperCase(const S: AnsiString): AnsiString;
 function LowerCase(const S: AnsiString): AnsiString;
 function Trim(const S: AnsiString): AnsiString;
+function TrimLeft(const S: AnsiString): AnsiString;
+function TrimRight(const S: AnsiString): AnsiString;
+function AnsiUpperCase(const S: AnsiString): AnsiString;
+function AnsiLowerCase(const S: AnsiString): AnsiString;
+function CompareText(const S1, S2: AnsiString): Integer;
+function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
@@ -204,6 +210,65 @@ begin
         Trim := ''
     else
         Trim := Copy(S, start, finish - start + 1);
+end;
+
+function TrimLeft(const S: AnsiString): AnsiString;
+var
+    start: integer;
+begin
+    start := 1;
+    while (start <= Length(S)) and (S[start] = ' ') do
+        start := start + 1;
+    TrimLeft := Copy(S, start, Length(S) - start + 1);
+end;
+
+function TrimRight(const S: AnsiString): AnsiString;
+var
+    finish: integer;
+begin
+    finish := Length(S);
+    while (finish >= 1) and (S[finish] = ' ') do
+        finish := finish - 1;
+    TrimRight := Copy(S, 1, finish);
+end;
+
+function AnsiUpperCase(const S: AnsiString): AnsiString;
+begin
+    AnsiUpperCase := UpperCase(S);
+end;
+
+function AnsiLowerCase(const S: AnsiString): AnsiString;
+begin
+    AnsiLowerCase := LowerCase(S);
+end;
+
+function CompareText(const S1, S2: AnsiString): Integer;
+var
+    A, B: AnsiString;
+    i, minLen: Integer;
+begin
+    A := LowerCase(S1);
+    B := LowerCase(S2);
+    if Length(A) < Length(B) then
+        minLen := Length(A)
+    else
+        minLen := Length(B);
+
+    for i := 1 to minLen do
+    begin
+        if A[i] <> B[i] then
+        begin
+            CompareText := Ord(A[i]) - Ord(B[i]);
+            exit;
+        end;
+    end;
+
+    CompareText := Length(A) - Length(B);
+end;
+
+function SameText(const S1, S2: AnsiString): Boolean;
+begin
+    SameText := CompareText(S1, S2) = 0;
 end;
 
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
