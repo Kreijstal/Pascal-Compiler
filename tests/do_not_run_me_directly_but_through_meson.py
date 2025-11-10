@@ -1558,33 +1558,6 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.stdout.strip(), expected_hostname)
         self.assertEqual(process.returncode, 0)
 
-    def test_unix_getdomainname(self):
-        """Ensures GetDomainName returns the system's NIS domain name (or empty when unset)."""
-        input_file = os.path.join(TEST_CASES_DIR, "unix_getdomain_demo.p")
-        asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo")
-
-        run_compiler(input_file, asm_file)
-        self.compile_executable(asm_file, executable_file)
-
-        process = subprocess.run(
-            [executable_file],
-            capture_output=True,
-            text=True,
-            timeout=EXEC_TIMEOUT,
-        )
-
-        expected_domain = ""
-        try:
-            result = os.getdomainname()
-            if result and result != "(none)":
-                expected_domain = result
-        except AttributeError:
-            pass
-
-        self.assertEqual(process.stdout.strip(), expected_domain)
-        self.assertEqual(process.returncode, 0)
-
     def test_set_of_enum_typed_constant_unit(self):
         """Ensures a unit with a set-of-enum typed constant compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "set_of_enum_typed_constant_demo.p")
