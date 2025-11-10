@@ -1872,6 +1872,20 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
+                # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
+                # Cygwin and MSYS have fork, pure MinGW does not
+                if test_base_name == "unix_wait_helpers_demo":
+                    # Check if we're targeting MinGW (not Cygwin/MSYS)
+                    # MinGW defines _WIN32 but not __CYGWIN__
+                    # We can detect this by checking if the C compiler is MinGW
+                    if IS_WINDOWS_ABI and not IS_WINE:
+                        # Running natively on Windows - could be MinGW or Cygwin
+                        # Skip for now as we can't easily detect Cygwin vs MinGW at runtime
+                        self.skipTest("Unix fork() test requires POSIX fork support (Cygwin/MSYS/Unix)")
+                    elif IS_WINE:
+                        # Cross-compiling with Wine - definitely MinGW, no fork support
+                        self.skipTest("Unix fork() test not supported on MinGW (requires Cygwin/MSYS for fork)")
+                
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
