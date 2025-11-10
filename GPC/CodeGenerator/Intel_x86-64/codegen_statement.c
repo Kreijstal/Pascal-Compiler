@@ -2775,6 +2775,41 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             free_expr_tree(expr_tree);
         }
 
+        /*
+         * Handle register conflicts when setting up write function arguments.
+         * We need to move registers to their destinations in an order that
+         * doesn't cause intermediate values to be overwritten.
+         * 
+         * Potential conflicts:
+         * - width_reg might be in value_dest64's position
+         * - precision_reg might be in value_dest64 or width_dest64's position
+         * 
+         * Strategy: Move in reverse order of argument positions to avoid overwrites.
+         * On Windows: value=%r8 (arg2), width=%rdx (arg1), precision=%r9 (arg3)
+         * So: Move precision first, then width, then value.
+         */
+        
+        /* Move precision first (if real and has precision) */
+        if (expr_is_real && has_precision_reg)
+        {
+            inst_list = codegen_sign_extend32_to64(inst_list, precision_reg->bit_32, precision_dest64);
+            free_reg(get_reg_stack(), precision_reg);
+            has_precision_reg = 0;  /* Mark as handled */
+        }
+        
+        /* Move width next */
+        if (has_width_reg)
+        {
+            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
+            free_reg(get_reg_stack(), width_reg);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        /* Move value last */
         if (treat_as_string)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
@@ -2792,31 +2827,13 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
 
         free_reg(get_reg_stack(), value_reg);
 
-        if (has_width_reg)
+        /* Set precision to -1 if not real or not provided */
+        if (expr_is_real && !has_precision_reg)
         {
-            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
-            free_reg(get_reg_stack(), width_reg);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
-
-        if (expr_is_real)
-        {
-            if (has_precision_reg)
-            {
-                inst_list = codegen_sign_extend32_to64(inst_list, precision_reg->bit_32, precision_dest64);
-                free_reg(get_reg_stack(), precision_reg);
-            }
-            else
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
-                inst_list = add_inst(inst_list, buffer);
-            }
-        }
-        else if (has_precision_reg)
+        else if (!expr_is_real && has_precision_reg)
         {
             free_reg(get_reg_stack(), precision_reg);
         }
