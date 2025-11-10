@@ -6,6 +6,8 @@
 #include <ctype.h>
 #include <stddef.h>
 
+#include "runtime_internal.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <time.h>
@@ -14,6 +16,20 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+
+/* Define W_EXITCODE and W_STOPCODE if not available */
+#ifndef W_EXITCODE
+#define W_EXITCODE(ret, sig) ((ret) << 8 | (sig))
+#endif
+
+#ifndef W_STOPCODE
+#define W_STOPCODE(sig) ((sig) << 8 | 0x7f)
+#endif
 #endif
 
 int64_t gpc_current_exception = 0;
@@ -159,6 +175,8 @@ uint64_t gpc_get_tick_count64(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 #endif
 }
+
+
 
 void gpc_sleep_ms(int milliseconds) {
     if (milliseconds <= 0)
@@ -501,7 +519,7 @@ static int gpc_string_release_allocation(char *ptr)
     return 0;
 }
 
-static char *gpc_alloc_empty_string(void)
+char *gpc_alloc_empty_string(void)
 {
     char *empty = (char *)malloc(1);
     if (empty != NULL)
@@ -512,7 +530,7 @@ static char *gpc_alloc_empty_string(void)
     return empty;
 }
 
-static char *gpc_string_duplicate(const char *value)
+char *gpc_string_duplicate(const char *value)
 {
     if (value == NULL)
         return gpc_alloc_empty_string();
@@ -528,6 +546,58 @@ static char *gpc_string_duplicate(const char *value)
     gpc_string_register_allocation(copy);
     return copy;
 }
+
+char *gpc_windows_get_hostname_string(void)
+{
+#ifdef _WIN32
+    char buffer[256];
+    DWORD size = (DWORD)sizeof(buffer);
+    if (GetComputerNameA(buffer, &size))
+    {
+        buffer[sizeof(buffer) - 1] = '\0';
+        /* Convert to lowercase for consistency with Unix behavior */
+        for (size_t i = 0; buffer[i] != '\0'; i++)
+        {
+            buffer[i] = (char)tolower((unsigned char)buffer[i]);
+        }
+        return gpc_string_duplicate(buffer);
+    }
+    return gpc_alloc_empty_string();
+#else
+    return gpc_alloc_empty_string();
+#endif
+}
+
+char *gpc_windows_get_domainname_string(void)
+{
+#ifdef _WIN32
+    char fqdn[256];
+    DWORD size = sizeof(fqdn);
+    /* Try to get DNS domain name on Windows */
+    if (GetComputerNameExA(ComputerNameDnsFullyQualified, fqdn, &size))
+    {
+        char *dot = strchr(fqdn, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            return gpc_string_duplicate(dot + 1);
+        }
+    }
+    /* Fallback: try DNS hostname */
+    size = sizeof(fqdn);
+    if (GetComputerNameExA(ComputerNameDnsHostname, fqdn, &size))
+    {
+        char *dot = strchr(fqdn, '.');
+        if (dot != NULL && *(dot + 1) != '\0')
+        {
+            return gpc_string_duplicate(dot + 1);
+        }
+    }
+    return gpc_alloc_empty_string();
+#else
+    return gpc_alloc_empty_string();
+#endif
+}
+
 
 void gpc_string_assign(char **target, const char *value)
 {
@@ -595,6 +665,20 @@ void gpc_dynarray_assign_from_temp(void *dest_descriptor, void *temp_descriptor,
 
     memcpy(dest_descriptor, temp_descriptor, descriptor_size);
     free(temp_descriptor);
+}
+
+long long gpc_dynarray_compute_high(const void *descriptor_ptr, long long lower_bound)
+{
+    if (descriptor_ptr == NULL)
+        return lower_bound - 1;
+
+    const gpc_dynarray_descriptor_t *descriptor =
+        (const gpc_dynarray_descriptor_t *)descriptor_ptr;
+    long long length = descriptor->length;
+    if (length <= 0)
+        return lower_bound - 1;
+
+    return lower_bound + length - 1;
 }
 
 /* Copy a string literal to a char array (fixed-size buffer)
@@ -797,8 +881,9 @@ int gpc_text_eof(GPCTextFile *file)
     if (ch == EOF)
         return 1;
 
-    if (ungetc(ch, stream) == EOF)
-        return 1;
+    // Try to put the character back, but don't treat ungetc failure as EOF
+    // ungetc can fail due to buffer limitations, but that doesn't mean we're at EOF
+    ungetc(ch, stream);
 
     return 0;
 }

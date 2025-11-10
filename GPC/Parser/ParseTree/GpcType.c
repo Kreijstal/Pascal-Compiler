@@ -448,15 +448,21 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
                 symtab);
 
         case TYPE_KIND_ARRAY:
-            /* Arrays are compatible if element types match and dimensions match */
-            if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
-                return 0;
-            if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
-                return 0;
+        {
+            int lhs_dynamic = lhs_type->info.array_info.end_index < lhs_type->info.array_info.start_index;
+            int rhs_dynamic = rhs_type->info.array_info.end_index < rhs_type->info.array_info.start_index;
+            if (!lhs_dynamic && !rhs_dynamic)
+            {
+                if (lhs_type->info.array_info.start_index != rhs_type->info.array_info.start_index)
+                    return 0;
+                if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
+                    return 0;
+            }
             return are_types_compatible_for_assignment(
                 lhs_type->info.array_info.element_type,
                 rhs_type->info.array_info.element_type,
                 symtab);
+        }
 
         case TYPE_KIND_RECORD:
             /* Records are compatible if they are the same record type 

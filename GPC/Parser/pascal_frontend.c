@@ -12,6 +12,7 @@
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "pascal_preprocessor.h"
+#include "../flags.h"
 
 extern ast_t *ast_nil;
 
@@ -295,6 +296,23 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
             return false;
         }
     }
+
+    /* Define MSWINDOWS when targeting Windows (but not for Cygwin which has POSIX API) */
+#if defined(_WIN32) && !defined(__CYGWIN__)
+    if (target_windows_flag())
+    {
+        if (!pascal_preprocessor_define(preprocessor, "MSWINDOWS"))
+        {
+            report_preprocessor_error(error_out, path, "unable to define MSWINDOWS symbol");
+            pascal_preprocessor_free(preprocessor);
+            free(buffer);
+            return false;
+        }
+    }
+#else
+    /* On Cygwin and Unix, don't define MSWINDOWS */
+    (void)target_windows_flag;  /* Suppress unused warning */
+#endif
 
     char *preprocess_error = NULL;
     size_t preprocessed_length = 0;

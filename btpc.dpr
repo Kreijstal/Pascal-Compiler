@@ -577,14 +577,17 @@ end;
 
 procedure ReadChar;
 begin
+ writeln('DEBUG: ReadChar called, EOF=', EOF);
  if not EOF then begin
   read(CurrentChar);
+  writeln('DEBUG: Read char ', ord(CurrentChar));
   CurrentColumn:=CurrentColumn+1;
   if CurrentChar=#10 then begin
    CurrentLine:=CurrentLine+1;
    CurrentColumn:=0;
   end;
  end else begin
+  writeln('DEBUG: Setting CurrentChar to #0');
   CurrentChar:=#0;
  end;
 end;
@@ -617,11 +620,13 @@ begin
 end;
 
 procedure GetSymbol;
-var k,s:integer;
-    StrEnd,InStr:boolean;
-    LastChar:char;
+ var k,s:integer;
+     StrEnd,InStr:boolean;
+     LastChar:char;
 begin
+ writeln('DEBUG: GetSymbol called, CurrentChar=', ord(CurrentChar));
  while (CurrentChar>#0) and (CurrentChar<=' ') do begin
+  writeln('DEBUG: Skipping whitespace, calling ReadChar');
   ReadChar;
  end;
  if (('a'<=CurrentChar) and (CurrentChar<='z')) or (('A'<=CurrentChar) and (CurrentChar<='Z')) then begin
@@ -2758,20 +2763,27 @@ begin
  Identifiers[IdentifierPosition].FunctionAddress:=FunEOFLN;
  Identifiers[IdentifierPosition].Inside:=false;
 
+ writeln('DEBUG: Very early start');
  SymbolNameList[0]:=0;
  CurrentLevel:=0;
 
+ writeln('DEBUG: Program starting');
  CurrentLine:=1;
  CurrentColumn:=0;
 
+ writeln('DEBUG: About to call first ReadChar');
  ReadChar;
+ writeln('DEBUG: About to call first GetSymbol');
  GetSymbol;
  IsLabeled:=true;
  CodePosition:=0;
  LastOpcode:=-1;
  StackPosition:=4;
+ writeln('DEBUG: About to Expect SymPROGRAM');
  Expect(SymPROGRAM);
+ writeln('DEBUG: About to Expect TokIdent');
  Expect(TokIdent);
+ writeln('DEBUG: About to Expect TokSemi');
  Expect(TokSemi);
  EmitOpcode(OPJmp,0);
  Block(0);

@@ -53,7 +53,6 @@ typedef struct HashNode
      * When type == NULL: Node is UNTYPED (untyped procedure parameters in Pascal)
      * 
      * ALL type information queries MUST use helper functions:
-     * - hashnode_get_var_type()
      * - hashnode_get_record_type()
      * - hashnode_get_type_alias()
      * - hashnode_is_array()
@@ -206,9 +205,6 @@ static inline struct TypeAlias* hashnode_get_type_alias(const HashNode_t *node)
     /* UNTYPED nodes have no type alias */
     return NULL;
 }
-
-/* Get VarType equivalent from node (for legacy code compatibility) */
-enum VarType hashnode_get_var_type(const HashNode_t *node);
 
 /* The well-known symbol hash function
  * -----------------------------------------------------------------------------

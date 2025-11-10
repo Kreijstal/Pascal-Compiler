@@ -763,6 +763,21 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           fprintf(f, "[SET:0x%X]\n", expr->expr_data.set_data.bitmask);
           break;
 
+        case EXPR_ARRAY_LITERAL:
+        {
+          fprintf(f, "[ARRAY_LITERAL count=%d]\n",
+              expr->expr_data.array_literal_data.element_count);
+          ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+          while (cur != NULL)
+          {
+              print_indent(f, num_indent + 1);
+              fprintf(f, "[ELEMENT]:\n");
+              expr_print((struct Expression *)cur->cur, f, num_indent + 2);
+              cur = cur->next;
+          }
+          break;
+        }
+
         case EXPR_POINTER_DEREF:
           fprintf(f, "[POINTER_DEREF]\n");
           ++num_indent;
@@ -902,7 +917,9 @@ void destroy_tree(Tree_t *tree)
         case TREE_SUBPROGRAM:
           free(tree->tree_data.subprogram_data.id);
           if (tree->tree_data.subprogram_data.mangled_id != NULL)
-            free(tree->tree_data.subprogram_data.mangled_id); // <-- ADD THIS
+            free(tree->tree_data.subprogram_data.mangled_id);
+          if (tree->tree_data.subprogram_data.cname_override != NULL)
+            free(tree->tree_data.subprogram_data.cname_override);
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
 
@@ -1203,6 +1220,20 @@ void destroy_expr(struct Expression *expr)
           destroy_list(expr->expr_data.set_data.elements);
           expr->expr_data.set_data.elements = NULL;
           break;
+        case EXPR_ARRAY_LITERAL:
+        {
+          ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+          while (cur != NULL)
+          {
+            if (cur->cur != NULL)
+              destroy_expr((struct Expression *)cur->cur);
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+          }
+          expr->expr_data.array_literal_data.elements = NULL;
+          break;
+        }
 
         case EXPR_POINTER_DEREF:
           if (expr->expr_data.pointer_deref_data.pointer_expr != NULL)
@@ -1550,6 +1581,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
     new_tree->tree_data.subprogram_data.inline_return_type = NULL;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
+    new_tree->tree_data.subprogram_data.cname_override = NULL;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
@@ -1581,6 +1613,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
     new_tree->tree_data.subprogram_data.inline_return_type = inline_return_type;
     new_tree->tree_data.subprogram_data.cname_flag = cname_flag;
+    new_tree->tree_data.subprogram_data.cname_override = NULL;
     new_tree->tree_data.subprogram_data.overload_flag = overload_flag;
     new_tree->tree_data.subprogram_data.nesting_level = 0;
     new_tree->tree_data.subprogram_data.requires_static_link = 0;
@@ -2022,6 +2055,9 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->array_element_size = 0;
     expr->array_is_dynamic = 0;
     expr->array_element_record_type = NULL;
+    expr->expr_data.array_literal_data.elements = NULL;
+    expr->expr_data.array_literal_data.element_count = 0;
+    expr->expr_data.array_literal_data.elements_semchecked = 0;
 }
 
 struct Expression *mk_relop(int line_num, int type, struct Expression *left,

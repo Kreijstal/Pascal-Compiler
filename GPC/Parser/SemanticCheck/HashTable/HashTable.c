@@ -54,35 +54,6 @@ HashTable_t *InitHashTable()
     return table;
 }
 
-enum VarType primitive_tag_to_var_type(int tag)
-{
-    switch(tag)
-    {
-        case INT_TYPE:
-            return HASHVAR_INTEGER;
-        case LONGINT_TYPE:
-            return HASHVAR_LONGINT;
-        case REAL_TYPE:
-            return HASHVAR_REAL;
-        case BOOL:
-            return HASHVAR_BOOLEAN;
-        case CHAR_TYPE:
-            return HASHVAR_CHAR;
-        case STRING_TYPE:
-            return HASHVAR_PCHAR;
-        case SET_TYPE:
-            return HASHVAR_SET;
-        case ENUM_TYPE:
-            return HASHVAR_ENUM;
-        case FILE_TYPE:
-            return HASHVAR_FILE;
-        case POINTER_TYPE:
-            return HASHVAR_POINTER;
-        default:
-            return HASHVAR_UNTYPED;
-    }
-}
-
 /* Unified internal function for adding identifiers to hash table */
 static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams* params)
 {
@@ -277,6 +248,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->canonical_id);
             if (hash_node->const_string_value != NULL)
                 free(hash_node->const_string_value);
+            if (hash_node->mangled_id != NULL)
+                free(hash_node->mangled_id);
             if (hash_node->type != NULL)
                 destroy_gpc_type(hash_node->type);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
@@ -373,7 +346,19 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Set basic fields */
     hash_node->hash_type = hash_type;
     hash_node->type = type;
-    hash_node->mangled_id = mangled_id;
+    if (mangled_id != NULL)
+    {
+        hash_node->mangled_id = strdup(mangled_id);
+        if (hash_node->mangled_id == NULL)
+        {
+            free(hash_node);
+            return NULL;
+        }
+    }
+    else
+    {
+        hash_node->mangled_id = NULL;
+    }
     hash_node->referenced = 0;
     hash_node->mutated = 0;
     hash_node->is_constant = 0;
@@ -386,6 +371,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->id = strdup(id);
     if (hash_node->id == NULL)
     {
+        if (hash_node->mangled_id != NULL)
+            free(hash_node->mangled_id);
         free(hash_node);
         return NULL;
     }
@@ -430,37 +417,4 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
     
     /* No other collisions allowed */
     return 0;
-}
-
-/* Get VarType equivalent from node (for legacy code compatibility) */
-enum VarType hashnode_get_var_type(const HashNode_t *node)
-{
-    if (node == NULL)
-        return HASHVAR_UNTYPED;
-    
-    /* Prefer GpcType when available */
-    if (node->type != NULL)
-    {
-        switch (node->type->kind)
-        {
-            case TYPE_KIND_PRIMITIVE:
-            {
-                int tag = gpc_type_get_primitive_tag(node->type);
-                return primitive_tag_to_var_type(tag);
-            }
-            case TYPE_KIND_POINTER:
-                return HASHVAR_POINTER;
-            case TYPE_KIND_ARRAY:
-                return HASHVAR_ARRAY;
-            case TYPE_KIND_RECORD:
-                return HASHVAR_RECORD;
-            case TYPE_KIND_PROCEDURE:
-                return HASHVAR_PROCEDURE;
-            default:
-                return HASHVAR_UNTYPED;
-        }
-    }
-    
-    /* If type is NULL, this is an UNTYPED node */
-    return HASHVAR_UNTYPED;
 }

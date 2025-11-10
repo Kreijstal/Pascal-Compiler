@@ -40,46 +40,20 @@ static inline int node_is_record_type(HashNode_t *node)
 /* Helper function to get the primitive type tag from a node */
 static inline int get_primitive_tag_from_node(HashNode_t *node)
 {
-    if (node == NULL)
-        return -1;
-    
-    /* GpcType should be present for typed nodes */
-    if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
-    {
+    if (node == NULL || node->type == NULL)
+        return UNKNOWN_TYPE;
+
+    if (node->type->kind == TYPE_KIND_PRIMITIVE)
         return gpc_type_get_primitive_tag(node->type);
-    }
-    
-    /* Use hashnode helper to get var_type, then map to primitive tags */
-    enum VarType var_type = hashnode_get_var_type(node);
-    switch (var_type)
-    {
-        case HASHVAR_INTEGER: return INT_TYPE;
-        case HASHVAR_LONGINT: return LONGINT_TYPE;
-        case HASHVAR_REAL: return REAL_TYPE;
-        case HASHVAR_BOOLEAN: return BOOL;
-        case HASHVAR_CHAR: return CHAR_TYPE;
-        case HASHVAR_PCHAR: return STRING_TYPE;
-        case HASHVAR_SET: return SET_TYPE;
-        case HASHVAR_FILE: return FILE_TYPE;
-        case HASHVAR_ENUM: return ENUM_TYPE;
-        default: return UNKNOWN_TYPE;
-    }
+
+    return UNKNOWN_TYPE;
 }
 
 /* Helper function to check if a node is a file type */
 static inline int node_is_file_type(HashNode_t *node)
 {
-    if (node == NULL)
-        return 0;
-    
-    /* Check GpcType if present */
-    if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
-    {
-        return gpc_type_get_primitive_tag(node->type) == FILE_TYPE;
-    }
-    
-    /* Use hashnode helper */
-    return hashnode_get_var_type(node) == HASHVAR_FILE;
+    return (node != NULL && node->type != NULL &&
+            gpc_type_equals_tag(node->type, FILE_TYPE));
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -140,16 +114,6 @@ static inline int get_var_storage_size(HashNode_t *node)
             return -1;
         }
     }
-    
-    /* Fallback using hashnode helper */
-    enum VarType var_kind = hashnode_get_var_type(node);
-    if (var_kind == HASHVAR_LONGINT || var_kind == HASHVAR_REAL ||
-        var_kind == HASHVAR_PCHAR || var_kind == HASHVAR_POINTER ||
-        var_kind == HASHVAR_FILE || var_kind == HASHVAR_PROCEDURE)
-    {
-        return 8;
-    }
-    
     return DOUBLEWORD;
 }
 
@@ -486,26 +450,15 @@ static const char *hash_type_to_string(enum HashType type)
     }
 }
 
-static const char *var_type_to_string(enum VarType type)
+static const char *hashnode_type_to_string(const HashNode_t *node)
 {
-    switch (type)
-    {
-        case HASHVAR_INTEGER: return "integer";
-        case HASHVAR_LONGINT: return "longint";
-        case HASHVAR_REAL: return "real";
-        case HASHVAR_PROCEDURE: return "procedure";
-        case HASHVAR_UNTYPED: return "untyped";
-        case HASHVAR_PCHAR: return "pchar";
-        case HASHVAR_RECORD: return "record";
-        case HASHVAR_ARRAY: return "array";
-        case HASHVAR_BOOLEAN: return "boolean";
-        case HASHVAR_CHAR: return "char";
-        case HASHVAR_POINTER: return "pointer";
-        case HASHVAR_SET: return "set";
-        case HASHVAR_ENUM: return "enum";
-        case HASHVAR_FILE: return "file";
-        default: return "unknown";
-    }
+    if (node == NULL)
+        return "<null>";
+    
+    if (node->type != NULL)
+        return gpc_type_to_string(node->type);
+
+    return "untyped";
 }
 
 static void summarize_string_literal(const char *src, char *dest, size_t dest_size)
@@ -592,7 +545,7 @@ static void codegen_emit_semantic_scope_comments(FILE *out, const HashTable_t *t
                 "%s kind=%s type=%s%s%s%s",
                 (node->id != NULL) ? node->id : "<unnamed>",
                 hash_type_to_string(node->hash_type),
-                var_type_to_string(hashnode_get_var_type(node)),
+                hashnode_type_to_string(node),
                 mangled_buf,
                 const_buf,
                 link_buf);
@@ -1063,6 +1016,45 @@ void codegen_stack_space(CodeGenContext *ctx)
     if(aligned_space != 0)
     {
         fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
+        
+        /* Zero-initialize the allocated stack space to ensure local variables start with zero values.
+         * This is critical for code that assumes uninitialized variables are zero (like linked lists).
+         * We use rep stosq for efficient zero-filling.
+         * 
+         * Calling conventions differ between platforms:
+         * - Windows x64: parameters in rcx, rdx, r8, r9
+         * - System V AMD64 (Linux): parameters in rdi, rsi, rdx, rcx, r8, r9
+         * 
+         * rep stosq uses rdi (destination), rax (value), rcx (count)
+         * We need to save/restore these registers if they contain parameters.
+         * r10 and r11 are caller-saved scratch registers safe to use on both platforms.
+         */
+        int quadwords = (aligned_space + 7) / 8;  /* Round up to nearest quadword */
+        
+        if (codegen_target_is_windows())
+        {
+            /* Windows x64 calling convention: rcx, rdx, r8, r9
+             * rep stosq will clobber rcx, rdi (rdi not used for params on Windows) */
+            fprintf(ctx->output_file, "\tmovq\t%%rcx, %%r11\n");  /* Save rcx (1st param) to r11 */
+            fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rdi\n");   /* rdi = stack pointer */
+            fprintf(ctx->output_file, "\txorq\t%%rax, %%rax\n");   /* rax = 0 */
+            fprintf(ctx->output_file, "\tmovl\t$%d, %%ecx\n", quadwords);  /* ecx = count */
+            fprintf(ctx->output_file, "\trep stosq\n");            /* Zero-fill */
+            fprintf(ctx->output_file, "\tmovq\t%%r11, %%rcx\n");  /* Restore rcx */
+        }
+        else
+        {
+            /* System V AMD64 (Linux) calling convention: rdi, rsi, rdx, rcx, r8, r9
+             * rep stosq will clobber rdi, rcx */
+            fprintf(ctx->output_file, "\tmovq\t%%rdi, %%r10\n");  /* Save rdi (1st param) to r10 */
+            fprintf(ctx->output_file, "\tmovq\t%%rcx, %%r11\n");  /* Save rcx (4th param) to r11 */
+            fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rdi\n");   /* rdi = stack pointer */
+            fprintf(ctx->output_file, "\txorq\t%%rax, %%rax\n");   /* rax = 0 */
+            fprintf(ctx->output_file, "\tmovl\t$%d, %%ecx\n", quadwords);  /* ecx = count */
+            fprintf(ctx->output_file, "\trep stosq\n");            /* Zero-fill */
+            fprintf(ctx->output_file, "\tmovq\t%%r10, %%rdi\n");  /* Restore rdi */
+            fprintf(ctx->output_file, "\tmovq\t%%r11, %%rcx\n");  /* Restore rcx */
+        }
     }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1208,11 +1200,28 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (element_size <= 0)
                     {
-                        int prim_tag = get_primitive_tag_from_node(type_node);
-                        if (prim_tag == REAL_TYPE || prim_tag == LONGINT_TYPE)
-                            element_size = 8;
-                        else
-                            element_size = 4;
+                        switch (alias->array_element_type)
+                        {
+                            case LONGINT_TYPE:
+                            case REAL_TYPE:
+                            case STRING_TYPE:
+                            case POINTER_TYPE:
+                            case FILE_TYPE:
+                                element_size = 8;
+                                break;
+                            case CHAR_TYPE:
+                                element_size = 1;
+                                break;
+                            case INT_TYPE:
+                            case BOOL:
+                            case SET_TYPE:
+                            case ENUM_TYPE:
+                                element_size = 4;
+                                break;
+                            default:
+                                element_size = 4;
+                                break;
+                        }
                     }
 
                     if (alias->is_open_array)
@@ -1642,7 +1651,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
-    else if (func_node != NULL && hashnode_get_var_type(func_node) == HASHVAR_RECORD)
+    else if (func_node != NULL && func_node->type != NULL &&
+             gpc_type_is_record(func_node->type))
     {
         struct RecordType *record = hashnode_get_record_type(func_node);
         if (record != NULL)
@@ -1726,14 +1736,13 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
-    else if (func_node != NULL)
+    else if (func_node != NULL && func_node->type != NULL &&
+             func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
-        /* Use hashnode helper to get var_type */
-        enum VarType var_type = hashnode_get_var_type(func_node);
-        if (var_type == HASHVAR_LONGINT || var_type == HASHVAR_REAL ||
-            var_type == HASHVAR_PCHAR)
+        int tag = gpc_type_get_primitive_tag(func_node->type);
+        if (tag == LONGINT_TYPE || tag == REAL_TYPE || tag == STRING_TYPE)
             return_size = 8;
-        else if (var_type == HASHVAR_BOOLEAN)
+        else if (tag == BOOL)
             return_size = DOUBLEWORD;
     }
 
@@ -2298,8 +2307,23 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 }
                 break;
             case TREE_ARR_DECL:
-                fprintf(stderr, "ERROR: Arrays not currently supported as arguments!\n");
-                exit(1);
+                arg_ids = arg_decl->tree_data.arr_decl_data.ids;
+                while(arg_ids != NULL)
+                {
+                    arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
+                    if(arg_reg == NULL)
+                    {
+                        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
+                        exit(1);
+                    }
+                    arg_stack = add_q_z((char *)arg_ids->cur);
+                    if (arg_stack != NULL)
+                        arg_stack->is_reference = 1;
+                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    arg_ids = arg_ids->next;
+                    ++arg_num;
+                }
                 break;
             default:
                 assert(0 && "Unknown argument type!");

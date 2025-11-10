@@ -79,6 +79,20 @@ int semcheck_id_not_main(char *id)
     return 0;
 }
 
+static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias)
+{
+    if (symtab == NULL || id == NULL || alias == NULL)
+        return;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, (char *)id) != -1 && node != NULL)
+    {
+        if (node->mangled_id != NULL)
+            free(node->mangled_id);
+        node->mangled_id = strdup(alias);
+    }
+}
+
 /* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
@@ -99,7 +113,39 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 /* Helper function to get VarType from HashNode */
 static inline enum VarType get_var_type_from_node(HashNode_t *node)
 {
-    return hashnode_get_var_type(node);
+    if (node == NULL || node->type == NULL)
+        return HASHVAR_UNTYPED;
+
+    switch (node->type->kind)
+    {
+        case TYPE_KIND_PRIMITIVE:
+        {
+            int tag = gpc_type_get_primitive_tag(node->type);
+            switch (tag)
+            {
+                case INT_TYPE: return HASHVAR_INTEGER;
+                case LONGINT_TYPE: return HASHVAR_LONGINT;
+                case REAL_TYPE: return HASHVAR_REAL;
+                case BOOL: return HASHVAR_BOOLEAN;
+                case CHAR_TYPE: return HASHVAR_CHAR;
+                case STRING_TYPE: return HASHVAR_PCHAR;
+                case SET_TYPE: return HASHVAR_SET;
+                case ENUM_TYPE: return HASHVAR_ENUM;
+                case FILE_TYPE: return HASHVAR_FILE;
+                default: return HASHVAR_UNTYPED;
+            }
+        }
+        case TYPE_KIND_POINTER:
+            return HASHVAR_POINTER;
+        case TYPE_KIND_ARRAY:
+            return HASHVAR_ARRAY;
+        case TYPE_KIND_RECORD:
+            return HASHVAR_RECORD;
+        case TYPE_KIND_PROCEDURE:
+            return HASHVAR_PROCEDURE;
+        default:
+            return HASHVAR_UNTYPED;
+    }
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -221,7 +267,7 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
         HashNode_t *node = NULL;
         if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 &&
             node != NULL && node->hash_type == HASHTYPE_CONST &&
-            node->type != NULL && hashnode_get_var_type(node) == HASHVAR_REAL)
+            node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
         {
             return 1;
         }
@@ -364,21 +410,10 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
             HashNode_t *node = NULL;
             if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL && node->hash_type == HASHTYPE_CONST)
             {
-                /* Check if it's a real constant */
-                if (node->type != NULL)
+                if (node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
                 {
-                    enum VarType vtype = hashnode_get_var_type(node);
-                    if (vtype == HASHVAR_REAL)
-                    {
-                        *out_value = node->const_real_value;
-                        return 0;
-                    }
-                    else
-                    {
-                        /* Integer constant promoted to real */
-                        *out_value = (double)node->const_int_value;
-                        return 0;
-                    }
+                    *out_value = node->const_real_value;
+                    return 0;
                 }
                 *out_value = (double)node->const_int_value;
                 return 0;
@@ -2473,8 +2508,23 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
     // --- Name Mangling Logic ---
-    if (subprogram->tree_data.subprogram_data.cname_flag) {
-        subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
+    static int debug_external = -1;
+    if (debug_external == -1)
+        debug_external = (getenv("GPC_DEBUG_EXTERNAL") != NULL);
+    const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
+    if (explicit_name != NULL) {
+        subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+    } else if (subprogram->tree_data.subprogram_data.cname_flag) {
+        const char *export_name = subprogram->tree_data.subprogram_data.id;
+        if (debug_external) {
+            fprintf(stderr, "[SemCheck] cname_flag id=%s alias=%s\n",
+                subprogram->tree_data.subprogram_data.id,
+                export_name != NULL ? export_name : "(null)");
+        }
+        if (export_name != NULL)
+            subprogram->tree_data.subprogram_data.mangled_id = strdup(export_name);
+        else
+            subprogram->tree_data.subprogram_data.mangled_id = NULL;
     } else {
         // Pass the symbol table to the mangler
         subprogram->tree_data.subprogram_data.mangled_id = MangleFunctionName(
@@ -2487,6 +2537,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Check if already declared (e.g., by predeclare_subprogram in two-pass approach) */
     HashNode_t *existing_decl = NULL;
     int already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
+
+    if (already_declared && existing_decl != NULL &&
+        subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        if (existing_decl->mangled_id != NULL)
+            free(existing_decl->mangled_id);
+        existing_decl->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
+    }
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
@@ -2540,6 +2598,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             func_return = PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             proc_type);
+            semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
         }
         else
         {
@@ -2567,6 +2627,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
             subprogram->tree_data.subprogram_data.mangled_id,
             proc_type_recursive);
+        semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+            subprogram->tree_data.subprogram_data.mangled_id);
 
         new_max_scope = max_scope_lev+1;
     }
@@ -2604,6 +2666,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             func_return = PushFunctionOntoScope_Typed(symtab, id_to_use_for_lookup,
                             subprogram->tree_data.subprogram_data.mangled_id,
                             func_type);
+            semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
         }
         else
         {
@@ -2780,7 +2844,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
     
     // --- Name Mangling Logic ---
-    if (subprogram->tree_data.subprogram_data.cname_flag) {
+    const char *predeclare_name = subprogram->tree_data.subprogram_data.cname_override;
+    if (predeclare_name != NULL) {
+        subprogram->tree_data.subprogram_data.mangled_id = strdup(predeclare_name);
+    } else if (subprogram->tree_data.subprogram_data.cname_flag) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
     } else {
         // Pass the symbol table to the mangler
@@ -2855,6 +2922,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 /* A return value greater than 0 indicates how many errors occurred */
 /* Forward declaration - we'll define this after semcheck_subprogram */
 static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
+static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias);
 
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram)
