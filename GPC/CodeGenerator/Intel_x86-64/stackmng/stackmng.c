@@ -461,49 +461,39 @@ void free_stackmng()
 
 RegStack_t *init_reg_stack()
 {
-    /* See codegen.h for information on available general purpose registers */
-    ListNode_t *registers;
-
+    /*
+     * Initialize register pool for expression evaluation.
+     * 
+     * Strategy: Reserve the MOST COMMONLY USED argument registers to minimize
+     * conflicts with function calls, but keep enough registers available for
+     * complex expressions.
+     * 
+     * Windows x64: First 4 args in %rcx, %rdx, %r8, %r9
+     *   - Reserve: %rcx, %rdx (most common - used for 1-2 arg functions)
+     *   - Available: %rax, %rsi, %rdi, %r8, %r9, %r10, %r11 (7 registers)
+     * 
+     * Linux x64 (SysV): First 6 args in %rdi, %rsi, %rdx, %rcx, %r8, %r9
+     *   - Reserve: %rdi, %rsi, %rdx (most common - used for 1-3 arg functions)
+     *   - Available: %rax, %rcx, %r8, %r9, %r10, %r11 (6 registers)
+     * 
+     * This approach:
+     * 1. Prevents conflicts for the most common case (1-3 argument functions)
+     * 2. Keeps enough registers for complex expressions
+     * 3. The conflict handling code in codegen_statement.c handles cases
+     *    where we need r8/r9 for 3-4 argument functions
+     */
+    ListNode_t *registers = NULL;
     RegStack_t *reg_stack;
     reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
     assert(reg_stack != NULL);
 
-    /* Caller-saved general purpose registers available for expression evaluation */
+    /* %rax - return register, always safe to use for expressions */
     Register_t *rax = (Register_t *)malloc(sizeof(Register_t));
     assert(rax != NULL);
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
 
-    Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
-    assert(rcx != NULL);
-    rcx->bit_64 = strdup("%rcx");
-    rcx->bit_32 = strdup("%ecx");
-
-    Register_t *rdx = (Register_t *)malloc(sizeof(Register_t));
-    assert(rdx != NULL);
-    rdx->bit_64 = strdup("%rdx");
-    rdx->bit_32 = strdup("%edx");
-
-    Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
-    assert(rsi != NULL);
-    rsi->bit_64 = strdup("%rsi");
-    rsi->bit_32 = strdup("%esi");
-
-    Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
-    assert(rdi != NULL);
-    rdi->bit_64 = strdup("%rdi");
-    rdi->bit_32 = strdup("%edi");
-
-    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r8 != NULL);
-    r8->bit_64 = strdup("%r8");
-    r8->bit_32 = strdup("%r8d");
-
-    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r9 != NULL);
-    r9->bit_64 = strdup("%r9");
-    r9->bit_32 = strdup("%r9d");
-
+    /* %r10, %r11 - caller-saved, never used for arguments */
     Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
     assert(r10 != NULL);
     r10->bit_64 = strdup("%r10");
@@ -514,21 +504,51 @@ RegStack_t *init_reg_stack()
     r11->bit_64 = strdup("%r11");
     r11->bit_32 = strdup("%r11d");
 
+    /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
+    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r8 != NULL);
+    r8->bit_64 = strdup("%r8");
+    r8->bit_32 = strdup("%r8d");
+
+    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r9 != NULL);
+    r9->bit_64 = strdup("%r9");
+    r9->bit_32 = strdup("%r9d");
+
+    /* Build base register list */
     registers = CreateListNode(rax, LIST_UNSPECIFIED);
-    registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rdx, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
 
-    /*
-    registers = CreateListNode(rdi, LIST_UNSPECIFIED);
-    registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rbx, LIST_UNSPECIFIED));
-    */
+    /* Add platform-specific registers */
+    if (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS)
+    {
+        /* Windows: %rsi and %rdi are not argument registers */
+        Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
+        assert(rsi != NULL);
+        rsi->bit_64 = strdup("%rsi");
+        rsi->bit_32 = strdup("%esi");
+
+        Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
+        assert(rdi != NULL);
+        rdi->bit_64 = strdup("%rdi");
+        rdi->bit_32 = strdup("%edi");
+
+        registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
+        registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
+    }
+    else
+    {
+        /* Linux/SysV: %rcx is argument register 4, less commonly used than rdi/rsi/rdx */
+        Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
+        assert(rcx != NULL);
+        rcx->bit_64 = strdup("%rcx");
+        rcx->bit_32 = strdup("%ecx");
+
+        registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
+    }
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
