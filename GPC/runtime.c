@@ -23,6 +23,15 @@
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #define GPC_HAVE_GETDOMAINNAME 1
 #endif
+
+/* Define W_EXITCODE and W_STOPCODE if not available */
+#ifndef W_EXITCODE
+#define W_EXITCODE(ret, sig) ((ret) << 8 | (sig))
+#endif
+
+#ifndef W_STOPCODE
+#define W_STOPCODE(sig) ((sig) << 8 | 0x7f)
+#endif
 #endif
 
 int64_t gpc_current_exception = 0;
