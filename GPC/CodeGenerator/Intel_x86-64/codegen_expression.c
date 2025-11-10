@@ -54,12 +54,17 @@ static int formal_decl_expects_string(Tree_t *decl)
     if (decl == NULL)
         return 0;
 
-    if (decl->type == TREE_VAR_DECL)
+    if (decl->type != TREE_VAR_DECL)
+        return 0;
+
+    if (decl->tree_data.var_decl_data.type == STRING_TYPE)
+        return 1;
+
+    if (decl->tree_data.var_decl_data.type_id != NULL)
     {
-        if (decl->tree_data.var_decl_data.type == STRING_TYPE)
-            return 1;
-        if (decl->tree_data.var_decl_data.type_id != NULL &&
-            pascal_identifier_equals(decl->tree_data.var_decl_data.type_id, "string"))
+        const char *type_id = decl->tree_data.var_decl_data.type_id;
+        if (pascal_identifier_equals(type_id, "string") ||
+            pascal_identifier_equals(type_id, "ansistring"))
             return 1;
     }
 
