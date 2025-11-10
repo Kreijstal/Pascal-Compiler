@@ -1057,6 +1057,45 @@ static bool parse_defined_expression(const char **cursor,
     while (**cursor && isspace((unsigned char)**cursor)) {
         ++(*cursor);
     }
+    if (ascii_strncasecmp(*cursor, "DECLARED", 8) == 0) {
+        *cursor += 8;
+        while (**cursor && isspace((unsigned char)**cursor)) {
+            ++(*cursor);
+        }
+        bool expect_paren = false;
+        if (**cursor == '(') {
+            expect_paren = true;
+            ++(*cursor);
+        }
+        while (**cursor && isspace((unsigned char)**cursor)) {
+            ++(*cursor);
+        }
+        const char *start = *cursor;
+        if (!isalpha((unsigned char)**cursor) && **cursor != '_') {
+            return false;
+        }
+        while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_' || **cursor == '.')) {
+            ++(*cursor);
+        }
+        char *symbol = duplicate_range(start, *cursor);
+        if (!symbol) {
+            return false;
+        }
+        while (**cursor && isspace((unsigned char)**cursor)) {
+            ++(*cursor);
+        }
+        if (expect_paren) {
+            if (**cursor != ')') {
+                free(symbol);
+                return false;
+            }
+            ++(*cursor);
+        }
+        bool defined = symbol_is_defined(pp, symbol);
+        *value = defined;
+        free(symbol);
+        return true;
+    }
     if (ascii_strncasecmp(*cursor, "DEFINED", 7) == 0) {
         *cursor += 7;
         while (**cursor && isspace((unsigned char)**cursor)) {
@@ -1113,4 +1152,3 @@ static bool parse_defined_expression(const char **cursor,
     free(symbol);
     return true;
 }
-
