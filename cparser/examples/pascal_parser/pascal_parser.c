@@ -298,6 +298,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_VARIANT_PART: return "VARIANT_PART";
         case PASCAL_T_METHOD_DECL: return "METHOD_DECL";
         case PASCAL_T_METHOD_IMPL: return "METHOD_IMPL";
+        case PASCAL_T_METHOD_DIRECTIVE: return "METHOD_DIRECTIVE";
         case PASCAL_T_QUALIFIED_IDENTIFIER: return "QUALIFIED_IDENTIFIER";
         case PASCAL_T_PROPERTY_DECL: return "PROPERTY_DECL";
         case PASCAL_T_CONSTRUCTOR_DECL: return "CONSTRUCTOR_DECL";
