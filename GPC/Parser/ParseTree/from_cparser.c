@@ -4141,6 +4141,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 static Tree_t *convert_procedure(ast_t *proc_node) {
     ast_t *cur = proc_node->child;
     char *id = NULL;
+    static int debug_external_nodes = -1;
+    if (debug_external_nodes == -1)
+        debug_external_nodes = (getenv("GPC_DEBUG_EXTERNAL") != NULL);
 
     if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER)
         id = dup_symbol(cur);
@@ -4170,9 +4173,15 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
     int is_external = 0;
+    char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
 
     while (cur != NULL) {
+        if (debug_external_nodes &&
+            (cur->typ == PASCAL_T_EXTERNAL_NAME || cur->typ == PASCAL_T_STRING || cur->typ == PASCAL_T_IDENTIFIER)) {
+            fprintf(stderr, "[convert_procedure] node typ=%d line=%d sym=%s\n",
+                cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)");
+        }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             type_section_ast = cur;  /* Save for const array enum resolution */
@@ -4226,17 +4235,24 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
-            /* Check if this is a directive keyword (external/forward/assembler) */
-            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
-                if (directive != NULL && strcasecmp(directive, "external") == 0) {
-                    is_external = 1;
+                if (directive != NULL) {
+                    if (strcasecmp(directive, "external") == 0) {
+                        is_external = 1;
+                    }
                 }
                 free(directive);
             }
             break;
         }
+        case PASCAL_T_EXTERNAL_NAME:
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_STRING) {
+                if (external_alias != NULL)
+                    free(external_alias);
+                external_alias = dup_symbol(cur->child);
+            }
+            break;
         default:
             break;
         }
@@ -4246,12 +4262,19 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, list_builder_finish(&var_decls_builder), nested_subs, body, is_external, 0);
+    if (tree != NULL && external_alias != NULL)
+        tree->tree_data.subprogram_data.cname_override = external_alias;
+    else if (external_alias != NULL)
+        free(external_alias);
     return tree;
 }
 
 static Tree_t *convert_function(ast_t *func_node) {
     ast_t *cur = func_node->child;
     char *id = NULL;
+    static int debug_external_nodes = -1;
+    if (debug_external_nodes == -1)
+        debug_external_nodes = (getenv("GPC_DEBUG_EXTERNAL") != NULL);
 
     if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER)
         id = dup_symbol(cur);
@@ -4340,9 +4363,17 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
     int is_external = 0;
+    char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
 
     while (cur != NULL) {
+        if (debug_external_nodes &&
+            (cur->typ == PASCAL_T_EXTERNAL_NAME || cur->typ == PASCAL_T_STRING || cur->typ == PASCAL_T_IDENTIFIER)) {
+            fprintf(stderr, "[convert_function] node typ=%d line=%d sym=%s child_typ=%d child_sym=%s\n",
+                cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)",
+                cur->child ? cur->child->typ : -1,
+                (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
+        }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             type_section_ast = cur;  /* Save for const array enum resolution */
@@ -4396,17 +4427,24 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
-            /* Check if this is a directive keyword (external/forward/assembler) */
-            /* The directive IDENTIFIER has a child IDENTIFIER with the actual keyword */
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
-                if (directive != NULL && strcasecmp(directive, "external") == 0) {
-                    is_external = 1;
+                if (directive != NULL) {
+                    if (strcasecmp(directive, "external") == 0) {
+                        is_external = 1;
+                    }
                 }
                 free(directive);
             }
             break;
         }
+        case PASCAL_T_EXTERNAL_NAME:
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_STRING) {
+                if (external_alias != NULL)
+                    free(external_alias);
+                external_alias = dup_symbol(cur->child);
+            }
+            break;
         default:
             break;
         }
@@ -4417,6 +4455,10 @@ static Tree_t *convert_function(ast_t *func_node) {
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                label_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                return_type, return_type_id, inline_return_type, is_external, 0);
+    if (tree != NULL && external_alias != NULL)
+        tree->tree_data.subprogram_data.cname_override = external_alias;
+    else if (external_alias != NULL)
+        free(external_alias);
     return tree;
 }
 

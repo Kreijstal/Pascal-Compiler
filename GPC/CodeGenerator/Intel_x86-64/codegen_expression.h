@@ -56,6 +56,10 @@ int expr_uses_qword_gpctype(const struct Expression *expr);
  * Returns the lower bound, or 0 if not an array. */
 int expr_get_array_lower_bound(const struct Expression *expr);
 
+/* Helper to get array upper bound from expression, preferring resolved_gpc_type.
+ * Returns the upper bound, or -1 if not an array. */
+int expr_get_array_upper_bound(const struct Expression *expr);
+
 /* Helper to get array element size from expression, preferring resolved_gpc_type.
  * Returns the element size in bytes, or -1 if not determinable. */
 long long expr_get_array_element_size(const struct Expression *expr, CodeGenContext *ctx);

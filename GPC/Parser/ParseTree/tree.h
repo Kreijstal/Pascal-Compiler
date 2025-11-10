@@ -94,6 +94,7 @@ typedef struct Tree
             char *return_type_id;
             struct TypeAlias *inline_return_type;  /* For inline complex return types like array of string */
             int cname_flag;
+            char *cname_override;
             int overload_flag;
             int nesting_level; /* Lexical nesting depth: 0 = top-level, 1 = nested in program, etc. */
             int requires_static_link;

@@ -1396,6 +1396,18 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 struct Expression *arg_expr = (struct Expression *)args_given->cur;
+
+                if (arg_decl != NULL && arg_decl->type == TREE_ARR_DECL)
+                {
+                    if (semcheck_prepare_array_literal_argument(arg_decl, arg_expr,
+                            symtab, INT_MAX, stmt->line_num) != 0)
+                    {
+                        ++return_val;
+                        args_given = args_given->next;
+                        true_arg_ids = true_arg_ids->next;
+                        continue;
+                    }
+                }
                 
                 /* ALWAYS resolve both sides to GpcType for proper type checking */
                 int expected_type_owned = 0;
@@ -1403,7 +1415,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 
                 int arg_type_owned = 0;
                 GpcType *arg_gpc_type = semcheck_resolve_expression_gpc_type(symtab, arg_expr, INT_MAX, NO_MUTATE, &arg_type_owned);
-                
+
                 /* Perform type compatibility check using GpcType */
                 int types_match = 0;
                 if (expected_gpc_type == NULL || arg_gpc_type == NULL)

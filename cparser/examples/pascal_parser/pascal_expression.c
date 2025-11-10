@@ -83,24 +83,6 @@ combinator_t* pascal_identifier(tag_t tag) {
     return comb;
 }
 
-// Keywords that can be used as function names in expressions
-static const char* expression_allowed_keywords[] = {
-    "procedure", "function", "program", "unit",
-    "record", "array", "set", "packed",  // type keywords that can be variable names
-    "object", "class",                   // OOP keywords that can be variable names
-    NULL
-};
-
-// Check if a keyword is allowed as an identifier in expressions
-static bool is_expression_allowed_keyword(const char* str) {
-    for (int i = 0; expression_allowed_keywords[i] != NULL; i++) {
-        if (strcasecmp(str, expression_allowed_keywords[i]) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 // Pascal identifier parser for expressions - allows certain keywords as function names
 static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -127,7 +109,7 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
     text[len] = '\0';
 
     // Check if it's a reserved keyword that's NOT allowed in expressions
-    if (is_pascal_keyword(text) && !is_expression_allowed_keyword(text)) {
+    if (is_pascal_keyword(text) && !pascal_keyword_allowed_in_expression(text)) {
         free(text);
         restore_input_state(in, &state);
         return make_failure_v2(in, parser_name, strdup("Identifier cannot be a reserved keyword"), NULL);
