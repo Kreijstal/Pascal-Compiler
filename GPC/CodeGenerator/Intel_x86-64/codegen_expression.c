@@ -594,8 +594,6 @@ static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
 static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     long long *size_out, int depth);
 
-static long long codegen_sizeof_var_type(enum VarType var_type);
-
 int codegen_expr_is_addressable(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -656,33 +654,23 @@ static int codegen_sizeof_array_node(CodeGenContext *ctx, HashNode_t *node,
         }
         else
         {
-            /* Try GpcType first */
-            if (node->type != NULL)
+            if (node->type == NULL)
             {
-                long long base = gpc_type_sizeof(node->type);
-                if (base < 0)
-                {
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to determine element size for array %s.",
-                        node->id != NULL ? node->id : "");
-                    return 1;
-                }
-                element_size = base;
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine element size for array %s (missing type info).",
+                    node->id != NULL ? node->id : "");
+                return 1;
             }
-            else
+
+            long long base = gpc_type_sizeof(node->type);
+            if (base < 0)
             {
-                /* Use hashnode helper */
-                enum VarType var_type = hashnode_get_var_type(node);
-                long long base = codegen_sizeof_var_type(var_type);
-                if (base < 0)
-                {
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to determine element size for array %s.",
-                        node->id != NULL ? node->id : "");
-                    return 1;
-                }
-                element_size = base;
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine element size for array %s.",
+                    node->id != NULL ? node->id : "");
+                return 1;
             }
+            element_size = base;
         }
     }
 
@@ -724,30 +712,6 @@ static long long codegen_sizeof_type_tag(int type_tag)
             return 1;
         case RECORD_TYPE:
             return -1;
-        default:
-            return -1;
-    }
-}
-
-static long long codegen_sizeof_var_type(enum VarType var_type)
-{
-    switch (var_type)
-    {
-        case HASHVAR_INTEGER:
-        case HASHVAR_BOOLEAN:
-        case HASHVAR_SET:
-        case HASHVAR_ENUM:
-            return 4;
-        case HASHVAR_LONGINT:
-        case HASHVAR_REAL:
-            return 8;
-        case HASHVAR_PCHAR:
-        case HASHVAR_PROCEDURE:
-        case HASHVAR_POINTER:
-        case HASHVAR_FILE:
-            return CODEGEN_POINTER_SIZE_BYTES;
-        case HASHVAR_CHAR:
-            return 1;
         default:
             return -1;
     }
@@ -1068,7 +1032,6 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     if (alias != NULL)
         return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
 
-    /* Try GpcType first */
     if (node->type != NULL)
     {
         long long base = gpc_type_sizeof(node->type);
@@ -1078,14 +1041,11 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
             return 0;
         }
     }
-    
-    /* Use hashnode helper */
-    enum VarType var_type = hashnode_get_var_type(node);
-    long long base = codegen_sizeof_var_type(var_type);
-    if (base >= 0)
+    else
     {
-        *size_out = base;
-        return 0;
+        codegen_report_error(ctx, "ERROR: Symbol %s has no type information.",
+            node->id != NULL ? node->id : "");
+        return 1;
     }
 
     codegen_report_error(ctx, "ERROR: Unable to determine size for symbol %s.",
