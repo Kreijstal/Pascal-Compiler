@@ -1559,7 +1559,7 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(process.returncode, 0)
 
     def test_unix_getdomainname(self):
-        """Ensures GetDomainName returns the system domain (or empty when unset)."""
+        """Ensures GetDomainName returns the system's NIS domain name (or empty when unset)."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_getdomain_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_getdomain_demo")
@@ -1574,27 +1574,23 @@ class TestCompiler(unittest.TestCase):
             timeout=EXEC_TIMEOUT,
         )
 
-        try:
-            domain_cmd = subprocess.run(
-                ["hostname", "-d"],
-                capture_output=True,
-                text=True,
-                timeout=EXEC_TIMEOUT,
-            )
-            if domain_cmd.returncode == 0:
-                expected_domain = domain_cmd.stdout.strip()
-            else:
-                expected_domain = ""
-        except FileNotFoundError:
-            expected_domain = ""
+        expected_domain = ""
+        domainname_cmd_path = shutil.which("domainname")
 
-        if expected_domain == "(none)":
-            expected_domain = ""
-
-        if not expected_domain:
-            fqdn = socket.getfqdn().strip()
-            if "." in fqdn:
-                expected_domain = fqdn.split(".", 1)[1]
+        if domainname_cmd_path:
+            try:
+                domain_cmd = subprocess.run(
+                    [domainname_cmd_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=EXEC_TIMEOUT,
+                )
+                if domain_cmd.returncode == 0:
+                    result = domain_cmd.stdout.strip()
+                    if result != "(none)":
+                        expected_domain = result
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
 
         self.assertEqual(process.stdout.strip(), expected_domain)
         self.assertEqual(process.returncode, 0)
