@@ -1575,22 +1575,12 @@ class TestCompiler(unittest.TestCase):
         )
 
         expected_domain = ""
-        domainname_cmd_path = shutil.which("domainname")
-
-        if domainname_cmd_path:
-            try:
-                domain_cmd = subprocess.run(
-                    [domainname_cmd_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=EXEC_TIMEOUT,
-                )
-                if domain_cmd.returncode == 0:
-                    result = domain_cmd.stdout.strip()
-                    if result != "(none)":
-                        expected_domain = result
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                pass
+        try:
+            result = os.getdomainname()
+            if result and result != "(none)":
+                expected_domain = result
+        except AttributeError:
+            pass
 
         self.assertEqual(process.stdout.strip(), expected_domain)
         self.assertEqual(process.returncode, 0)
