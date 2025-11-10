@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -106,6 +107,37 @@ int __isoc99_scanf(const char *format, ...) {
     return result;
 }
 #endif
+
+/* Non-variadic read functions for proper Windows x64 calling convention */
+/* These avoid the issue where variadic arguments must be on stack on Windows */
+
+int gpc_read_integer(GPCTextFile *file, int32_t *ptr) {
+    if (file != NULL) {
+        return fscanf((FILE*)file, "%d", ptr);
+    }
+    return scanf("%d", ptr);
+}
+
+int gpc_read_longint(GPCTextFile *file, int64_t *ptr) {
+    if (file != NULL) {
+        return fscanf((FILE*)file, "%" PRId64, ptr);
+    }
+    return scanf("%" PRId64, ptr);
+}
+
+int gpc_read_char(GPCTextFile *file, char *ptr) {
+    if (file != NULL) {
+        return fscanf((FILE*)file, " %c", ptr);  /* Note: space before %c to skip whitespace */
+    }
+    return scanf(" %c", ptr);
+}
+
+int gpc_read_real(GPCTextFile *file, double *ptr) {
+    if (file != NULL) {
+        return fscanf((FILE*)file, "%lf", ptr);
+    }
+    return scanf("%lf", ptr);
+}
 
 void print_integer(int n) {
     printf("%d\n", n);

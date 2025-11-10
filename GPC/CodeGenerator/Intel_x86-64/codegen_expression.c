@@ -2657,7 +2657,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (codegen_had_error(ctx) || addr_reg == NULL)
                 return inst_list;
 
-            if (arg_infos != NULL)
+            /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
+                    addr_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+                
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else if (arg_infos != NULL)
             {
                 arg_infos[arg_num].reg = addr_reg;
                 arg_infos[arg_num].spill = NULL;
@@ -2751,7 +2764,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
             inst_list = add_inst(inst_list, copy_buffer);
 
-            if (arg_infos != NULL)
+            /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    result_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, copy_buffer);
+                free_reg(get_reg_stack(), result_reg);
+                
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else if (arg_infos != NULL)
             {
                 arg_infos[arg_num].reg = result_reg;
                 arg_infos[arg_num].spill = NULL;
@@ -2778,7 +2804,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 inst_list = add_inst(inst_list, buffer);
             }
 
-            if (arg_infos != NULL)
+            /* ARCHITECTURAL FIX: Immediately spill argument to stack to prevent
+             * nested function calls from clobbering this value. This ensures that
+             * even if subsequent argument evaluations (which may include nested
+             * function calls) reuse registers, we can restore the correct value. */
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
+                    top_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), top_reg);
+                
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else if (arg_infos != NULL)
             {
                 arg_infos[arg_num].reg = top_reg;
                 arg_infos[arg_num].spill = NULL;

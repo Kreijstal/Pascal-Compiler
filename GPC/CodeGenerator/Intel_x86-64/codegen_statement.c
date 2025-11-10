@@ -1771,20 +1771,60 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
 
     if (codegen_target_is_windows())
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", descriptor_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", length_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", element_size);
+        const char *arg0 = current_arg_reg64(0);  /* %rcx */
+        const char *arg1 = current_arg_reg64(1);  /* %rdx */
+        
+        /* Check if we need to swap or save/restore to avoid clobbering */
+        int descriptor_is_arg1 = (strcmp(descriptor_reg->bit_64, arg1) == 0);
+        int length_is_arg0 = (strcmp(length_reg->bit_64, arg0) == 0);
+        
+        if (descriptor_is_arg1 && length_is_arg0)
+        {
+            /* Simple swap: descriptor in %rdx, length in %rcx */
+            /* We want: descriptor in %rcx, length in %rdx */
+            /* Use xchg or save to stack */
+            StackNode_t *temp = add_l_t("setlength_temp");
+            if (temp != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", descriptor_reg->bit_64, temp->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", temp->offset, arg0);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else if (descriptor_is_arg1)
+        {
+            /* descriptor in %rdx, need it in %rcx */
+            /* Move descriptor first to avoid clobbering */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", descriptor_reg->bit_64, arg0);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* Normal case or length in %rdx */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", descriptor_reg->bit_64, arg0);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", element_size, current_arg_reg32(2));
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", descriptor_reg->bit_64);
+        const char *arg0 = current_arg_reg64(0);  /* %rdi */
+        const char *arg1 = current_arg_reg64(1);  /* %rsi */
+        
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", descriptor_reg->bit_64, arg0);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", length_reg->bit_64);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", element_size);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", element_size, current_arg_reg32(2));
         inst_list = add_inst(inst_list, buffer);
     }
 
@@ -2575,28 +2615,28 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
             continue;
         }
         
-        /* Now set up arguments for scanf (for non-string types):
-         * arg0 (rdi/rcx): format string  
+        /* Now set up arguments for non-variadic read functions:
+         * arg0 (rdi/rcx): file pointer (NULL for stdin)
          * arg1 (rsi/rdx): address of variable to read into
          */
-        const char *format_dest64 = current_arg_reg64(0);
+        const char *file_dest64 = current_arg_reg64(0);
         const char *addr_dest64 = current_arg_reg64(1);
         
-        /* Set format string based on type */
-        const char *format_label = NULL;
+        /* Determine which read function to call based on type */
+        const char *read_func = NULL;
         switch (expr_type)
         {
             case INT_TYPE:
-                format_label = ".format_str_d";
+                read_func = "gpc_read_integer";
                 break;
             case LONGINT_TYPE:
-                format_label = ".format_str_lld";
+                read_func = "gpc_read_longint";
                 break;
             case CHAR_TYPE:
-                format_label = ".format_str_c";
+                read_func = "gpc_read_char";
                 break;
             case REAL_TYPE:
-                format_label = ".format_str_lf";
+                read_func = "gpc_read_real";
                 break;
             default:
                 codegen_report_error(ctx, "ERROR: Unsupported type for read operation.");
@@ -2604,16 +2644,25 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
                 continue;
         }
         
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", format_label, format_dest64);
-        inst_list = add_inst(inst_list, buffer);
+        /* Set file argument (or NULL for stdin) */
+        if (has_file_arg && file_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", file_spill->offset, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
         
         /* Load address from stack temporary to argument register */
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", addr_spill->offset, addr_dest64);
         inst_list = add_inst(inst_list, buffer);
         
-        /* Call scanf */
+        /* Call the appropriate read function */
         inst_list = codegen_vect_reg(inst_list, 0);
-        inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_scanf");
+        inst_list = codegen_call_with_shadow_space(inst_list, ctx, read_func);
         free_arg_regs();
         
         /* Invalidate static link cache after each read argument */
