@@ -13,6 +13,9 @@ function Mean(const Values: array of Longint): Real;
 function EnsureRange(Value, RangeMin, RangeMax: Longint): Longint;
 function InRange(Value, RangeMin, RangeMax: Longint): Boolean;
 function Sign(Value: Longint): Longint;
+function Sign(Value: Real): Longint;
+function Log10(Value: Real): Real;
+function Log2(Value: Real): Real;
 function Ceil(Value: Real): Longint;
 function Floor(Value: Real): Longint;
 function DegToRad(Degrees: Real): Real;
@@ -157,6 +160,26 @@ begin
         Sign := -1
     else
         Sign := 0;
+end;
+
+function Sign(Value: Real): Longint;
+begin
+    if Value > 0.0 then
+        Sign := 1
+    else if Value < 0.0 then
+        Sign := -1
+    else
+        Sign := 0;
+end;
+
+function Log10(Value: Real): Real;
+begin
+    Log10 := Ln(Value) / Ln(10.0);
+end;
+
+function Log2(Value: Real): Real;
+begin
+    Log2 := Ln(Value) / Ln(2.0);
 end;
 
 function Ceil(Value: Real): Longint;

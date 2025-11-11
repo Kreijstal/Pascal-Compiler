@@ -84,6 +84,12 @@ static ListNode_t *codegen_builtin_reallocmem(struct Statement *stmt, ListNode_t
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx);
 
 static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
 {
@@ -2335,6 +2341,317 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
+    {
+        fprintf(stderr, "ERROR: Insert expects three arguments.\n");
+        return inst_list;
+    }
+
+    char buffer[128];
+    struct Expression *source_expr = (struct Expression *)args_expr->cur;
+    struct Expression *target_expr = (struct Expression *)args_expr->next->cur;
+    struct Expression *index_expr = (struct Expression *)args_expr->next->next->cur;
+
+    Register_t *source_reg = NULL;
+    inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
+    if (codegen_had_error(ctx) || source_reg == NULL)
+        return inst_list;
+
+    int source_is_char = (source_expr != NULL && source_expr->resolved_type == CHAR_TYPE);
+    StackNode_t *char_buffer = NULL;
+    if (source_is_char)
+    {
+        char_buffer = add_l_x("insert_char_buffer", 2);
+        if (char_buffer == NULL)
+        {
+            free_reg(get_reg_stack(), source_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate spill slot for Insert char source.");
+        }
+
+        const char *byte_reg = register_name8(source_reg);
+        if (byte_reg == NULL)
+        {
+            free_reg(get_reg_stack(), source_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to acquire byte register for Insert char source.");
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovb\t$0, -%d(%%rbp)\n", char_buffer->offset - 1);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", byte_reg, char_buffer->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", char_buffer->offset, source_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    StackNode_t *source_temp = add_l_t("insert_source");
+    if (source_temp == NULL)
+    {
+        free_reg(get_reg_stack(), source_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for Insert source.");
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", source_reg->bit_64, source_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), source_reg);
+
+    if (!codegen_expr_is_addressable(target_expr))
+    {
+        codegen_report_error(ctx, "ERROR: Insert target must be addressable.");
+        return inst_list;
+    }
+
+    Register_t *target_reg = NULL;
+    inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &target_reg);
+    if (codegen_had_error(ctx) || target_reg == NULL)
+        return inst_list;
+
+    StackNode_t *target_temp = add_l_t("insert_target");
+    if (target_temp == NULL)
+    {
+        free_reg(get_reg_stack(), target_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for Insert target.");
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, target_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), target_reg);
+
+    Register_t *index_reg = NULL;
+    inst_list = codegen_expr_with_result(index_expr, inst_list, ctx, &index_reg);
+    if (codegen_had_error(ctx) || index_reg == NULL)
+        return inst_list;
+
+    if (!expr_uses_qword_gpctype(index_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+
+    StackNode_t *index_temp = add_l_t("insert_index");
+    if (index_temp == NULL)
+    {
+        free_reg(get_reg_stack(), index_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for Insert index.");
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, index_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), index_reg);
+
+    const char *arg0 = current_arg_reg64(0);
+    const char *arg1 = current_arg_reg64(1);
+    const char *arg2 = current_arg_reg64(2);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", source_temp->offset, arg0);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", target_temp->offset, arg1);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", index_temp->offset, arg2);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_insert\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
+    {
+        fprintf(stderr, "ERROR: Delete expects three arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args_expr->cur;
+    struct Expression *index_expr = (struct Expression *)args_expr->next->cur;
+    struct Expression *count_expr = (struct Expression *)args_expr->next->next->cur;
+
+    if (!codegen_expr_is_addressable(target_expr))
+    {
+        codegen_report_error(ctx, "ERROR: Delete target must be addressable.");
+        return inst_list;
+    }
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    StackNode_t *string_temp = add_l_t("delete_target");
+    if (string_temp == NULL)
+    {
+        free_reg(get_reg_stack(), addr_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for Delete target.");
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, string_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), addr_reg);
+
+    Register_t *index_reg = NULL;
+    inst_list = codegen_expr_with_result(index_expr, inst_list, ctx, &index_reg);
+    if (codegen_had_error(ctx) || index_reg == NULL)
+        return inst_list;
+
+    if (!expr_uses_qword_gpctype(index_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+
+    StackNode_t *index_temp = add_l_t("delete_index");
+    if (index_temp == NULL)
+    {
+        free_reg(get_reg_stack(), index_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for Delete index.");
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", index_reg->bit_64, index_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), index_reg);
+
+    Register_t *count_reg = NULL;
+    inst_list = codegen_expr_with_result(count_expr, inst_list, ctx, &count_reg);
+    if (codegen_had_error(ctx) || count_reg == NULL)
+        return inst_list;
+
+    if (!expr_uses_qword_gpctype(count_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, count_reg->bit_32, count_reg->bit_64);
+
+    StackNode_t *count_temp = add_l_t("delete_count");
+    if (count_temp == NULL)
+    {
+        free_reg(get_reg_stack(), count_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for Delete count.");
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", count_reg->bit_64, count_temp->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), count_reg);
+
+    const char *arg0 = current_arg_reg64(0);
+    const char *arg1 = current_arg_reg64(1);
+    const char *arg2 = current_arg_reg64(2);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", string_temp->offset, arg0);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", index_temp->offset, arg1);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", count_temp->offset, arg2);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_string_delete\n");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: SinCos expects three arguments.");
+        return inst_list;
+    }
+
+    struct Expression *angle_expr = (struct Expression *)args_expr->cur;
+    struct Expression *sin_expr = (struct Expression *)args_expr->next->cur;
+    struct Expression *cos_expr = (struct Expression *)args_expr->next->next->cur;
+
+    Register_t *angle_reg = NULL;
+    inst_list = codegen_expr_with_result(angle_expr, inst_list, ctx, &angle_reg);
+    if (codegen_had_error(ctx) || angle_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_maybe_convert_int_like_to_real(REAL_TYPE, angle_expr,
+        angle_reg, inst_list, NULL);
+
+    StackNode_t *angle_spill = add_l_t("sincos_angle");
+    if (angle_spill == NULL)
+    {
+        free_reg(get_reg_stack(), angle_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for SinCos angle.");
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        angle_reg->bit_64, angle_spill->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), angle_reg);
+
+    if (!codegen_expr_is_addressable(sin_expr) || !codegen_expr_is_addressable(cos_expr))
+    {
+        codegen_report_error(ctx, "ERROR: SinCos output arguments must be addressable.");
+        return inst_list;
+    }
+
+    Register_t *sin_addr = NULL;
+    inst_list = codegen_address_for_expr(sin_expr, inst_list, ctx, &sin_addr);
+    if (codegen_had_error(ctx) || sin_addr == NULL)
+        return inst_list;
+    StackNode_t *sin_spill = add_l_t("sincos_sin");
+    if (sin_spill == NULL)
+    {
+        free_reg(get_reg_stack(), sin_addr);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for SinCos sine target.");
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        sin_addr->bit_64, sin_spill->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), sin_addr);
+
+    Register_t *cos_addr = NULL;
+    inst_list = codegen_address_for_expr(cos_expr, inst_list, ctx, &cos_addr);
+    if (codegen_had_error(ctx) || cos_addr == NULL)
+        return inst_list;
+    StackNode_t *cos_spill = add_l_t("sincos_cos");
+    if (cos_spill == NULL)
+    {
+        free_reg(get_reg_stack(), cos_addr);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate spill slot for SinCos cosine target.");
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        cos_addr->bit_64, cos_spill->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), cos_addr);
+
+    const char *arg0 = current_arg_reg64(0);
+    const char *arg1 = current_arg_reg64(1);
+    const char *arg2 = current_arg_reg64(2);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", angle_spill->offset, arg0);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", sin_spill->offset, arg1);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", cos_spill->offset, arg2);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_sincos_bits");
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -3423,6 +3740,33 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Insert"))
+    {
+        inst_list = codegen_builtin_insert(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Delete"))
+    {
+        inst_list = codegen_builtin_delete(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SinCos"))
+    {
+        inst_list = codegen_builtin_sincos(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
     {
         inst_list = codegen_builtin_val(stmt, inst_list, ctx);
@@ -3486,8 +3830,12 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
+    const char *proc_name_hint = stmt->stmt_data.procedure_call_data.id;
+    if (proc_name_hint == NULL)
+        proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
+
     inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 
-        stmt->stmt_data.procedure_call_data.id, 0);
+        proc_name_hint, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target == NULL)

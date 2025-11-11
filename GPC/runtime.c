@@ -10,6 +10,9 @@
 
 #include "runtime_internal.h"
 
+static const double GPC_PI = 3.14159265358979323846264338327950288;
+static uint64_t gpc_rand_state = 0x9e3779b97f4a7c15ULL;
+
 #ifdef _WIN32
 #include <windows.h>
 #include <time.h>
@@ -726,6 +729,88 @@ void gpc_string_setlength(char **target, int64_t new_length)
     *target = resized;
 }
 
+void gpc_string_delete(char **target, int64_t index, int64_t count)
+{
+    if (target == NULL || index <= 0 || count <= 0)
+        return;
+
+    char *source = *target;
+    size_t length = gpc_string_known_length(source);
+    if (length == 0)
+        return;
+
+    if (index > (int64_t)length)
+        return;
+
+    size_t start = (size_t)(index - 1);
+    size_t remove = (size_t)count;
+    if (remove > length - start)
+        remove = length - start;
+
+    size_t new_length = length - remove;
+    char *result = (char *)malloc(new_length + 1);
+    if (result == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to delete substring (%lld bytes).\n",
+            (long long)remove);
+        exit(EXIT_FAILURE);
+    }
+
+    if (start > 0)
+        memcpy(result, source, start);
+    size_t tail = length - start - remove;
+    if (tail > 0)
+        memcpy(result + start, source + start + remove, tail);
+    result[new_length] = '\0';
+
+    gpc_string_register_allocation(result, new_length);
+    if (source != NULL && gpc_string_release_allocation(source))
+        free(source);
+    *target = result;
+}
+
+void gpc_string_insert(const char *value, char **target, int64_t index)
+{
+    if (target == NULL || value == NULL)
+        return;
+
+    size_t insert_len = gpc_string_known_length(value);
+    if (insert_len == 0)
+        return;
+
+    char *dest = *target;
+    size_t dest_len = gpc_string_known_length(dest);
+
+    if (index <= 0)
+        index = 1;
+    if (index > (int64_t)dest_len + 1)
+        index = (int64_t)dest_len + 1;
+
+    size_t pos = (size_t)(index - 1);
+    size_t new_len = dest_len + insert_len;
+
+    char *result = (char *)malloc(new_len + 1);
+    if (result == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to insert substring (%zu bytes).\n",
+            insert_len);
+        exit(EXIT_FAILURE);
+    }
+
+    if (pos > 0 && dest != NULL)
+        memcpy(result, dest, pos);
+    if (insert_len > 0)
+        memcpy(result + pos, value, insert_len);
+    if (dest != NULL && pos < dest_len)
+        memcpy(result + pos + insert_len, dest + pos, dest_len - pos);
+    result[new_len] = '\0';
+
+    gpc_string_register_allocation(result, new_len);
+    if (dest != NULL && gpc_string_release_allocation(dest))
+        free(dest);
+    *target = result;
+}
+
 void *gpc_dynarray_clone_descriptor(const void *descriptor, size_t descriptor_size)
 {
     if (descriptor_size == 0)
@@ -1383,6 +1468,34 @@ char *gpc_char_to_string(int64_t value)
     return result;
 }
 
+int64_t gpc_upcase_char(int64_t value)
+{
+    unsigned char ch = (unsigned char)(value & 0xFF);
+    if (ch >= 'a' && ch <= 'z')
+        ch = (unsigned char)(ch - ('a' - 'A'));
+    return (int64_t)ch;
+}
+
+int64_t gpc_is_odd(int64_t value)
+{
+    return (value & 1) ? 1 : 0;
+}
+
+int32_t gpc_sqr_int32(int32_t value)
+{
+    return value * value;
+}
+
+int64_t gpc_sqr_int64(int64_t value)
+{
+    return value * value;
+}
+
+double gpc_sqr_real(double value)
+{
+    return value * value;
+}
+
 int64_t gpc_ord_string(const char *value)
 {
     if (value == NULL || value[0] == '\0')
@@ -1688,14 +1801,186 @@ double gpc_sin(double value)
     return sin(value);
 }
 
+double gpc_csc(double value)
+{
+    return 1.0 / sin(value);
+}
+
 double gpc_cos(double value)
 {
     return cos(value);
 }
 
+double gpc_sec(double value)
+{
+    return 1.0 / cos(value);
+}
+
+double gpc_tan(double value)
+{
+    return tan(value);
+}
+
+double gpc_cot(double value)
+{
+    return cos(value) / sin(value);
+}
+
+double gpc_sinh(double value)
+{
+    return sinh(value);
+}
+
+double gpc_csch(double value)
+{
+    return 1.0 / sinh(value);
+}
+
+double gpc_cosh(double value)
+{
+    return cosh(value);
+}
+
+double gpc_sech(double value)
+{
+    return 1.0 / cosh(value);
+}
+
+double gpc_tanh(double value)
+{
+    return tanh(value);
+}
+
+double gpc_coth(double value)
+{
+    double s = sinh(value);
+    return s != 0.0 ? cosh(value) / s : (value >= 0.0 ? INFINITY : -INFINITY);
+}
+
 double gpc_arctan(double value)
 {
     return atan(value);
+}
+
+double gpc_arccot(double value)
+{
+    return (GPC_PI / 2.0) - atan(value);
+}
+
+double gpc_arctan2(double y, double x)
+{
+    return atan2(y, x);
+}
+
+double gpc_arcsin(double value)
+{
+    return asin(value);
+}
+
+double gpc_arccos(double value)
+{
+    return acos(value);
+}
+
+double gpc_arcsinh(double value)
+{
+    return asinh(value);
+}
+
+double gpc_arctanh(double value)
+{
+    return atanh(value);
+}
+
+double gpc_arccosh(double value)
+{
+    return acosh(value);
+}
+
+double gpc_arcsech(double value)
+{
+    if (value <= 0.0)
+        return INFINITY;
+    return acosh(1.0 / value);
+}
+
+double gpc_arccsch(double value)
+{
+    if (value == 0.0)
+        return (value >= 0.0) ? INFINITY : -INFINITY;
+    return asinh(1.0 / value);
+}
+
+double gpc_arccoth(double value)
+{
+    if (value == 0.0)
+        return (value >= 0.0) ? INFINITY : -INFINITY;
+    return atanh(1.0 / value);
+}
+
+double gpc_deg_to_rad(double value)
+{
+    return value * (GPC_PI / 180.0);
+}
+
+double gpc_rad_to_deg(double value)
+{
+    return value * (180.0 / GPC_PI);
+}
+
+double gpc_deg_to_grad(double value)
+{
+    return value * (400.0 / 360.0);
+}
+
+double gpc_grad_to_deg(double value)
+{
+    return value * (360.0 / 400.0);
+}
+
+double gpc_grad_to_rad(double value)
+{
+    return (value / 200.0) * GPC_PI;
+}
+
+double gpc_rad_to_grad(double value)
+{
+    return value * (200.0 / GPC_PI);
+}
+
+double gpc_cycle_to_rad(double value)
+{
+    return value * (2.0 * GPC_PI);
+}
+
+double gpc_rad_to_cycle(double value)
+{
+    return value / (2.0 * GPC_PI);
+}
+
+double gpc_ln(double value)
+{
+    return log(value);
+}
+
+double gpc_logn(double base, double value)
+{
+    return log(value) / log(base);
+}
+
+double gpc_exp(double value)
+{
+    return exp(value);
+}
+
+double gpc_power(double base, double exponent)
+{
+    return pow(base, exponent);
+}
+
+double gpc_hypot(double x, double y)
+{
+    return hypot(x, y);
 }
 
 long long gpc_round(double value)
@@ -1723,4 +2008,81 @@ long long gpc_int(double value)
 double gpc_frac(double value)
 {
     return value - (double)gpc_trunc(value);
+}
+
+long long gpc_ceil(double value)
+{
+    return (long long)ceil(value);
+}
+
+long long gpc_floor(double value)
+{
+    return (long long)floor(value);
+}
+static uint64_t gpc_rand_next(void)
+{
+    gpc_rand_state = gpc_rand_state * 2862933555777941757ULL + 3037000493ULL;
+    return gpc_rand_state;
+}
+
+void gpc_randomize(void)
+{
+    uint64_t seed = ((uint64_t)time(NULL) << 32) ^ (uint64_t)clock();
+    if (seed == 0)
+        seed = 0x9e3779b97f4a7c15ULL;
+    gpc_rand_state = seed;
+}
+
+double gpc_random_real(void)
+{
+    uint64_t value = gpc_rand_next();
+    return (double)(value >> 11) * (1.0 / 9007199254740992.0);
+}
+
+double gpc_random_real_upper(double upper)
+{
+    if (upper <= 0.0)
+        return 0.0;
+    return gpc_random_real() * upper;
+}
+
+int64_t gpc_random_int(int64_t upper)
+{
+    if (upper <= 0)
+        return 0;
+    uint64_t value = gpc_rand_next();
+    uint64_t range = (uint64_t)upper;
+    return (int64_t)(value % range);
+}
+
+int64_t gpc_random_range(int64_t low, int64_t high)
+{
+    if (high <= low)
+        return low;
+    uint64_t diff = (uint64_t)(high - low);
+    uint64_t value = gpc_rand_next();
+    uint64_t offset = value % diff;
+    return low + (int64_t)offset;
+}
+
+int64_t gpc_get_randseed(void)
+{
+    return (int64_t)gpc_rand_state;
+}
+
+void gpc_set_randseed(int64_t seed)
+{
+    if ((uint64_t)seed == 0)
+        gpc_rand_state = 0x9e3779b97f4a7c15ULL;
+    else
+        gpc_rand_state = (uint64_t)seed;
+}
+
+void gpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
+{
+    double angle = gpc_bits_to_double(angle_bits);
+    if (sin_out != NULL)
+        *sin_out = sin(angle);
+    if (cos_out != NULL)
+        *cos_out = cos(angle);
 }

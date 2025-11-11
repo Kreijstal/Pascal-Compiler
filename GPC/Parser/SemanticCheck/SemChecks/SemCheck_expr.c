@@ -88,6 +88,29 @@ static struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const ch
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
+static int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev, const char *display_name,
+    const char *mangled_name, int result_type);
+static int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
+static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
@@ -1563,6 +1586,394 @@ static int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
         {
             fprintf(stderr, "Error: failed to allocate mangled name for %s.\n",
                 display_name);
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->resolved_type = result_type;
+        *type_return = result_type;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, ArcTan2 expects exactly two arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *y_expr = (struct Expression *)args->cur;
+    struct Expression *x_expr = (struct Expression *)args->next->cur;
+    int y_type = UNKNOWN_TYPE;
+    int x_type = UNKNOWN_TYPE;
+    int error_count = 0;
+
+    error_count += semcheck_expr_main(&y_type, symtab, y_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&x_type, symtab, x_expr, max_scope_lev, NO_MUTATE);
+
+    if (y_type != REAL_TYPE && y_type != INT_TYPE && y_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, ArcTan2 expects numeric arguments.\n",
+            expr->line_num);
+        ++error_count;
+    }
+    if (x_type != REAL_TYPE && x_type != INT_TYPE && x_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, ArcTan2 expects numeric arguments.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_arctan2");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for ArcTan2.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_type = REAL_TYPE;
+    expr->resolved_gpc_type = create_primitive_type(REAL_TYPE);
+    *type_return = REAL_TYPE;
+    return 0;
+}
+
+static int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Hypot expects exactly two arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *x_expr = (struct Expression *)args->cur;
+    struct Expression *y_expr = (struct Expression *)args->next->cur;
+    int x_type = UNKNOWN_TYPE;
+    int y_type = UNKNOWN_TYPE;
+    int error_count = 0;
+
+    error_count += semcheck_expr_main(&x_type, symtab, x_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&y_type, symtab, y_expr, max_scope_lev, NO_MUTATE);
+
+    if (x_type != REAL_TYPE && x_type != INT_TYPE && x_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Hypot expects numeric arguments.\n",
+            expr->line_num);
+        ++error_count;
+    }
+    if (y_type != REAL_TYPE && y_type != INT_TYPE && y_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Hypot expects numeric arguments.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_hypot");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for Hypot.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_type = REAL_TYPE;
+    expr->resolved_gpc_type = create_primitive_type(REAL_TYPE);
+    *type_return = REAL_TYPE;
+    return 0;
+}
+
+static int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, LogN expects exactly two arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *base_expr = (struct Expression *)args->cur;
+    struct Expression *value_expr = (struct Expression *)args->next->cur;
+    int base_type = UNKNOWN_TYPE;
+    int value_type = UNKNOWN_TYPE;
+    int error_count = 0;
+
+    error_count += semcheck_expr_main(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+
+    if (base_type != REAL_TYPE && base_type != INT_TYPE && base_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, LogN expects numeric arguments.\n",
+            expr->line_num);
+        ++error_count;
+    }
+    if (value_type != REAL_TYPE && value_type != INT_TYPE && value_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, LogN expects numeric arguments.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_logn");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for LogN.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_type = REAL_TYPE;
+    expr->resolved_gpc_type = create_primitive_type(REAL_TYPE);
+    *type_return = REAL_TYPE;
+    return 0;
+}
+
+
+static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, UpCase expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    if (error_count == 0 && arg_type != CHAR_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, UpCase expects a char argument.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_upcase_char");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for UpCase.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->resolved_type = CHAR_TYPE;
+        *type_return = CHAR_TYPE;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Odd expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Odd expects an integer argument.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_is_odd");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Odd.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->resolved_type = BOOL;
+        *type_return = BOOL;
+        return 0;
+    }
+
+    *type_return = UNKNOWN_TYPE;
+    return error_count;
+}
+
+static int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Sqr expects exactly one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    int arg_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    const char *mangled_name = NULL;
+    int result_type = UNKNOWN_TYPE;
+
+    if (error_count == 0)
+    {
+        if (arg_type == REAL_TYPE)
+        {
+            mangled_name = "gpc_sqr_real";
+            result_type = REAL_TYPE;
+        }
+        else if (arg_type == LONGINT_TYPE)
+        {
+            mangled_name = "gpc_sqr_int64";
+            result_type = LONGINT_TYPE;
+        }
+        else if (arg_type == INT_TYPE)
+        {
+            mangled_name = "gpc_sqr_int32";
+            result_type = INT_TYPE;
+        }
+        else
+        {
+            fprintf(stderr, "Error on line %d, Sqr expects integer or real arguments.\n",
+                expr->line_num);
+            ++error_count;
+        }
+    }
+
+    if (error_count == 0)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Sqr.\n");
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
@@ -4255,6 +4666,7 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Abs"))
         return semcheck_builtin_abs(type_return, symtab, expr, max_scope_lev);
 
+
     if (id != NULL && pascal_identifier_equals(id, "Sqrt"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sqrt", "gpc_sqrt", REAL_TYPE);
@@ -4263,13 +4675,138 @@ int semcheck_funccall(int *type_return,
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Sin", "gpc_sin", REAL_TYPE);
 
+    if (id != NULL && pascal_identifier_equals(id, "Csc"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Csc", "gpc_csc", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Sinh"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Sinh", "gpc_sinh", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Csch"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Csch", "gpc_csch", REAL_TYPE);
+
     if (id != NULL && pascal_identifier_equals(id, "Cos"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Cos", "gpc_cos", REAL_TYPE);
 
+    if (id != NULL && pascal_identifier_equals(id, "Sec"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Sec", "gpc_sec", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Cosh"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Cosh", "gpc_cosh", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Sech"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Sech", "gpc_sech", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Tan"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Tan", "gpc_tan", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Cot"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Cot", "gpc_cot", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Tanh"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Tanh", "gpc_tanh", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Coth"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Coth", "gpc_coth", REAL_TYPE);
+
     if (id != NULL && pascal_identifier_equals(id, "ArcTan"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "ArcTan", "gpc_arctan", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcCot"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcCot", "gpc_arccot", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcTan2"))
+        return semcheck_builtin_arctan2(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Hypot"))
+        return semcheck_builtin_hypot(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcSin"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcSin", "gpc_arcsin", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcCos"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcCos", "gpc_arccos", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcCosh"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcCosh", "gpc_arccosh", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcSech"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcSech", "gpc_arcsech", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcCsch"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcCsch", "gpc_arccsch", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcCoth"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcCoth", "gpc_arccoth", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcSinh"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcSinh", "gpc_arcsinh", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "ArcTanh"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "ArcTanh", "gpc_arctanh", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "DegToRad"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "DegToRad", "gpc_deg_to_rad", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "RadToDeg"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "RadToDeg", "gpc_rad_to_deg", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "DegToGrad"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "DegToGrad", "gpc_deg_to_grad", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "GradToDeg"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "GradToDeg", "gpc_grad_to_deg", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "GradToRad"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "GradToRad", "gpc_grad_to_rad", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "RadToGrad"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "RadToGrad", "gpc_rad_to_grad", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "CycleToRad"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "CycleToRad", "gpc_cycle_to_rad", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "RadToCycle"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "RadToCycle", "gpc_rad_to_cycle", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Ln"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Ln", "gpc_ln", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "LogN"))
+        return semcheck_builtin_logn(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Exp"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Exp", "gpc_exp", REAL_TYPE);
 
     if (id != NULL && pascal_identifier_equals(id, "Round"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
@@ -4286,6 +4823,35 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Frac"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
             "Frac", "gpc_frac", REAL_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Ceil"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Ceil", "gpc_ceil", LONGINT_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "Floor"))
+        return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
+            "Floor", "gpc_floor", LONGINT_TYPE);
+
+    if (id != NULL && pascal_identifier_equals(id, "UpCase"))
+        return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Odd"))
+        return semcheck_builtin_odd(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Sqr"))
+        return semcheck_builtin_sqr(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Power"))
+        return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "Random"))
+        return semcheck_builtin_random(type_return, symtab, expr, max_scope_lev);
+    
+    if (id != NULL && pascal_identifier_equals(id, "RandomRange"))
+        return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
+
+    if (id != NULL && pascal_identifier_equals(id, "RandSeed"))
+        return semcheck_builtin_randseed(type_return, symtab, expr, max_scope_lev);
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
@@ -4637,4 +5203,281 @@ funccall_cleanup:
     if (mangled_name != NULL)
         free(mangled_name);
     return final_status;
+}
+static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_real");
+        if (expr->expr_data.function_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for Random.\n");
+            *type_return = UNKNOWN_TYPE;
+            return 1;
+        }
+        semcheck_reset_function_call_cache(expr);
+        if (expr->resolved_gpc_type != NULL)
+        {
+            destroy_gpc_type(expr->resolved_gpc_type);
+            expr->resolved_gpc_type = NULL;
+        }
+        expr->resolved_gpc_type = create_primitive_type(REAL_TYPE);
+        expr->resolved_type = REAL_TYPE;
+        *type_return = REAL_TYPE;
+        return 0;
+    }
+
+    if (args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Random expects zero or one argument.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *upper_expr = (struct Expression *)args->cur;
+    int upper_type = UNKNOWN_TYPE;
+    int error_count = semcheck_expr_main(&upper_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
+    int is_real_upper = (upper_type == REAL_TYPE);
+    if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Random parameter must be numeric.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    if (is_real_upper)
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_real_upper");
+    else
+        expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_int");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for Random.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (is_real_upper)
+        expr->resolved_type = REAL_TYPE;
+    else if (upper_type == LONGINT_TYPE)
+        expr->resolved_type = LONGINT_TYPE;
+    else
+        expr->resolved_type = INT_TYPE;
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_gpc_type = create_primitive_type(expr->resolved_type);
+    *type_return = expr->resolved_type;
+    return 0;
+}
+
+static int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, RandomRange expects exactly two arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *low_expr = (struct Expression *)args->cur;
+    struct Expression *high_expr = (struct Expression *)args->next->cur;
+    int low_type = UNKNOWN_TYPE;
+    int high_type = UNKNOWN_TYPE;
+    int error_count = 0;
+
+    error_count += semcheck_expr_main(&low_type, symtab, low_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&high_type, symtab, high_expr, max_scope_lev, NO_MUTATE);
+
+    if (low_type != INT_TYPE && low_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, RandomRange lower bound must be integer.\n",
+            expr->line_num);
+        ++error_count;
+    }
+    if (high_type != INT_TYPE && high_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, RandomRange upper bound must be integer.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_range");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for RandomRange.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+
+    int result_type = (low_type == LONGINT_TYPE || high_type == LONGINT_TYPE)
+        ? LONGINT_TYPE : INT_TYPE;
+    expr->resolved_type = result_type;
+    expr->resolved_gpc_type = create_primitive_type(result_type);
+    *type_return = result_type;
+    return 0;
+}
+
+static int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Power expects exactly two arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *base_expr = (struct Expression *)args->cur;
+    struct Expression *exp_expr = (struct Expression *)args->next->cur;
+    int base_type = UNKNOWN_TYPE;
+    int exp_type = UNKNOWN_TYPE;
+    int error_count = 0;
+
+    error_count += semcheck_expr_main(&base_type, symtab, base_expr, max_scope_lev, NO_MUTATE);
+    error_count += semcheck_expr_main(&exp_type, symtab, exp_expr, max_scope_lev, NO_MUTATE);
+
+    if (base_type != REAL_TYPE && base_type != INT_TYPE && base_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Power base must be numeric.\n", expr->line_num);
+        ++error_count;
+    }
+    if (exp_type != REAL_TYPE && exp_type != INT_TYPE && exp_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Power exponent must be numeric.\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    if (error_count != 0)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_power");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for Power.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_type = REAL_TYPE;
+    expr->resolved_gpc_type = create_primitive_type(REAL_TYPE);
+    *type_return = REAL_TYPE;
+    return 0;
+}
+
+static int semcheck_builtin_randseed(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    (void)symtab;
+    (void)max_scope_lev;
+
+    assert(type_return != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    if (expr->expr_data.function_call_data.args_expr != NULL)
+    {
+        fprintf(stderr, "Error on line %d, RandSeed expects no arguments.\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup("gpc_get_randseed");
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for RandSeed.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_type = LONGINT_TYPE;
+    expr->resolved_gpc_type = create_primitive_type(LONGINT_TYPE);
+    *type_return = LONGINT_TYPE;
+    return 0;
 }

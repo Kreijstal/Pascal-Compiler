@@ -1025,8 +1025,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         /* Pass arguments, shifted by 1 if static link is passed */
         int arg_start_index = should_pass_static_link ? 1 : 0;
+        const char *proc_name_hint = expr->expr_data.function_call_data.id;
+        const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
+        if (proc_name_hint == NULL)
+            proc_name_hint = mangled_name_hint;
+
         inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
-            inst_list, ctx, func_type, expr->expr_data.function_call_data.id, arg_start_index);
+            inst_list, ctx, func_type, proc_name_hint, arg_start_index);
 
         /* Invalidate static link cache after argument evaluation
          * because the static link register may have been clobbered

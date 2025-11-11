@@ -20,6 +20,7 @@
 #else
 #define strcasecmp _stricmp
 #endif
+#include <math.h>
 #include "SemCheck.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
@@ -1731,6 +1732,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(pointer_name);
     }
 
+    AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
+
     /* Builtin procedures - procedures have no return type */
     char *setlength_name = strdup("SetLength");
     if (setlength_name != NULL) {
@@ -1833,6 +1836,31 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(str_type);
         free(str_name);
     }
+    char *insert_name = strdup("Insert");
+    if (insert_name != NULL) {
+        GpcType *insert_type = create_procedure_type(NULL, NULL);
+        assert(insert_type != NULL && "Failed to create Insert procedure type");
+        AddBuiltinProc_Typed(symtab, insert_name, insert_type);
+        destroy_gpc_type(insert_type);
+        free(insert_name);
+    }
+    char *delete_name = strdup("Delete");
+    if (delete_name != NULL) {
+        GpcType *delete_type = create_procedure_type(NULL, NULL);
+        assert(delete_type != NULL && "Failed to create Delete procedure type");
+        AddBuiltinProc_Typed(symtab, delete_name, delete_type);
+        destroy_gpc_type(delete_type);
+        free(delete_name);
+    }
+
+    char *sincos_name = strdup("SinCos");
+    if (sincos_name != NULL) {
+        GpcType *sincos_type = create_procedure_type(NULL, NULL);
+        assert(sincos_type != NULL && "Failed to create SinCos procedure type");
+        AddBuiltinProc_Typed(symtab, sincos_name, sincos_type);
+        destroy_gpc_type(sincos_type);
+        free(sincos_name);
+    }
 
     char *inc_name = strdup("Inc");
     if (inc_name != NULL) {
@@ -1868,6 +1896,24 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, exclude_name, exclude_type);
         destroy_gpc_type(exclude_type);
         free(exclude_name);
+    }
+
+    char *randomize_name = strdup("Randomize");
+    if (randomize_name != NULL) {
+        GpcType *randomize_type = create_procedure_type(NULL, NULL);
+        assert(randomize_type != NULL && "Failed to create Randomize procedure type");
+        AddBuiltinProc_Typed(symtab, randomize_name, randomize_type);
+        destroy_gpc_type(randomize_type);
+        free(randomize_name);
+    }
+
+    char *setrandseed_name = strdup("SetRandSeed");
+    if (setrandseed_name != NULL) {
+        GpcType *setrandseed_type = create_procedure_type(NULL, NULL);
+        assert(setrandseed_type != NULL && "Failed to create SetRandSeed procedure type");
+        AddBuiltinProc_Typed(symtab, setrandseed_name, setrandseed_type);
+        destroy_gpc_type(setrandseed_type);
+        free(setrandseed_name);
     }
 
     char *new_name = strdup("New");
@@ -1953,7 +1999,93 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(ord_type);
         free(ord_name);
     }
-    
+
+    char *odd_name = strdup("Odd");
+    if (odd_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
+        assert(return_type != NULL && "Failed to create return type for Odd");
+        GpcType *odd_type = create_procedure_type(NULL, return_type);
+        assert(odd_type != NULL && "Failed to create Odd function type");
+        AddBuiltinFunction_Typed(symtab, odd_name, odd_type);
+        destroy_gpc_type(odd_type);
+        free(odd_name);
+    }
+    char *upcase_name = strdup("UpCase");
+    if (upcase_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_CHAR);
+        assert(return_type != NULL && "Failed to create return type for UpCase");
+        GpcType *upcase_type = create_procedure_type(NULL, return_type);
+        assert(upcase_type != NULL && "Failed to create UpCase function type");
+        AddBuiltinFunction_Typed(symtab, upcase_name, upcase_type);
+        destroy_gpc_type(upcase_type);
+        free(upcase_name);
+    }
+
+    char *randseed_name = strdup("RandSeed");
+    if (randseed_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for RandSeed");
+        GpcType *randseed_type = create_procedure_type(NULL, return_type);
+        assert(randseed_type != NULL && "Failed to create RandSeed function type");
+        AddBuiltinFunction_Typed(symtab, randseed_name, randseed_type);
+        destroy_gpc_type(randseed_type);
+        free(randseed_name);
+    }
+
+    char *sqr_name = strdup("Sqr");
+    if (sqr_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for Sqr");
+        GpcType *sqr_type = create_procedure_type(NULL, return_type);
+        assert(sqr_type != NULL && "Failed to create Sqr function type");
+        AddBuiltinFunction_Typed(symtab, sqr_name, sqr_type);
+        destroy_gpc_type(sqr_type);
+        free(sqr_name);
+    }
+
+    char *ln_name = strdup("Ln");
+    if (ln_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(return_type != NULL && "Failed to create return type for Ln");
+        GpcType *ln_type = create_procedure_type(NULL, return_type);
+        assert(ln_type != NULL && "Failed to create Ln function type");
+        AddBuiltinFunction_Typed(symtab, ln_name, ln_type);
+        destroy_gpc_type(ln_type);
+        free(ln_name);
+    }
+
+    char *exp_name = strdup("Exp");
+    if (exp_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(return_type != NULL && "Failed to create return type for Exp");
+        GpcType *exp_type = create_procedure_type(NULL, return_type);
+        assert(exp_type != NULL && "Failed to create Exp function type");
+        AddBuiltinFunction_Typed(symtab, exp_name, exp_type);
+        destroy_gpc_type(exp_type);
+        free(exp_name);
+    }
+
+    char *random_name = strdup("Random");
+    if (random_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(return_type != NULL && "Failed to create return type for Random");
+        GpcType *random_type = create_procedure_type(NULL, return_type);
+        assert(random_type != NULL && "Failed to create Random function type");
+        AddBuiltinFunction_Typed(symtab, random_name, random_type);
+        destroy_gpc_type(random_type);
+        free(random_name);
+    }
+    char *randomrange_name = strdup("RandomRange");
+    if (randomrange_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for RandomRange");
+        GpcType *randomrange_type = create_procedure_type(NULL, return_type);
+        assert(randomrange_type != NULL && "Failed to create RandomRange function type");
+        AddBuiltinFunction_Typed(symtab, randomrange_name, randomrange_type);
+        destroy_gpc_type(randomrange_type);
+        free(randomrange_name);
+    }
+
     char *high_name = strdup("High");
     if (high_name != NULL) {
         GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);

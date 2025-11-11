@@ -95,9 +95,32 @@ static int codegen_expected_type_for_builtin(const char *name)
         pascal_identifier_equals(name, "Int") ||
         pascal_identifier_equals(name, "Round") ||
         pascal_identifier_equals(name, "Frac") ||
+        pascal_identifier_equals(name, "Ln") ||
+        pascal_identifier_equals(name, "Exp") ||
         pascal_identifier_equals(name, "Sqrt") ||
         pascal_identifier_equals(name, "Sin") ||
+        pascal_identifier_equals(name, "Csc") ||
+        pascal_identifier_equals(name, "Sinh") ||
+        pascal_identifier_equals(name, "Csch") ||
         pascal_identifier_equals(name, "Cos") ||
+        pascal_identifier_equals(name, "Sec") ||
+        pascal_identifier_equals(name, "Cosh") ||
+        pascal_identifier_equals(name, "Sech") ||
+        pascal_identifier_equals(name, "Tan") ||
+        pascal_identifier_equals(name, "Cot") ||
+        pascal_identifier_equals(name, "Tanh") ||
+        pascal_identifier_equals(name, "Coth") ||
+        pascal_identifier_equals(name, "ArcSin") ||
+        pascal_identifier_equals(name, "ArcCos") ||
+        pascal_identifier_equals(name, "ArcCosh") ||
+        pascal_identifier_equals(name, "ArcSech") ||
+        pascal_identifier_equals(name, "ArcCsch") ||
+        pascal_identifier_equals(name, "ArcTan2") ||
+        pascal_identifier_equals(name, "Hypot") ||
+        pascal_identifier_equals(name, "ArcSinh") ||
+        pascal_identifier_equals(name, "ArcTanh") ||
+        pascal_identifier_equals(name, "ArcCot") ||
+        pascal_identifier_equals(name, "ArcCoth") ||
         pascal_identifier_equals(name, "ArcTan") ||
         pascal_identifier_equals(name, "DegToRad") ||
         pascal_identifier_equals(name, "RadToDeg") ||
@@ -106,10 +129,25 @@ static int codegen_expected_type_for_builtin(const char *name)
         pascal_identifier_equals(name, "GradToRad") ||
         pascal_identifier_equals(name, "RadToGrad") ||
         pascal_identifier_equals(name, "CycleToRad") ||
-        pascal_identifier_equals(name, "RadToCycle"))
+        pascal_identifier_equals(name, "RadToCycle") ||
+        pascal_identifier_equals(name, "Ln") ||
+        pascal_identifier_equals(name, "Log10") ||
+        pascal_identifier_equals(name, "Log2") ||
+        pascal_identifier_equals(name, "LogN") ||
+        pascal_identifier_equals(name, "Exp"))
     {
         return REAL_TYPE;
     }
+
+    if (pascal_identifier_equals(name, "Random"))
+        return LONGINT_TYPE;
+    if (pascal_identifier_equals(name, "RandomRange"))
+        return LONGINT_TYPE;
+    if (pascal_identifier_equals(name, "Power"))
+        return REAL_TYPE;
+    if (pascal_identifier_equals(name, "Ceil") ||
+        pascal_identifier_equals(name, "Floor"))
+        return REAL_TYPE;
 
     return UNKNOWN_TYPE;
 }
@@ -2816,6 +2854,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         int expected_type = codegen_param_expected_type(formal_arg_decl);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
             expected_type = codegen_expected_type_for_builtin(procedure_name);
+        if (expected_type == UNKNOWN_TYPE && procedure_name != NULL &&
+            pascal_identifier_equals(procedure_name, "Sqr"))
+        {
+            int arg_type = expr_get_type_tag(arg_expr);
+            if (arg_type == REAL_TYPE)
+                expected_type = REAL_TYPE;
+            else if (arg_type == LONGINT_TYPE)
+                expected_type = LONGINT_TYPE;
+            else if (arg_type == INT_TYPE)
+                expected_type = INT_TYPE;
+        }
+        if (procedure_name != NULL &&
+            pascal_identifier_equals(procedure_name, "Random"))
+        {
+            int arg_type = expr_get_type_tag(arg_expr);
+            if (arg_type == REAL_TYPE)
+                expected_type = REAL_TYPE;
+            else if (arg_type == LONGINT_TYPE)
+                expected_type = LONGINT_TYPE;
+            else if (arg_type == INT_TYPE)
+                expected_type = INT_TYPE;
+            else if (expected_type == UNKNOWN_TYPE)
+                expected_type = LONGINT_TYPE;
+        }
         int is_pointer_like = (is_var_param || is_array_param || is_array_arg);
 
         if (arg_infos != NULL)
