@@ -952,29 +952,27 @@ void test_pascal_relational_operators(void) {
     for (int i = 0; i < 6; i++) {
         combinator_t* p = new_combinator();
         init_pascal_expression_parser(&p, NULL);
-
         input_t* input = new_input();
         input->buffer = strdup(expressions[i]);
         input->length = strlen(expressions[i]);
-
         ParseResult res = parse(input, p);
-
         TEST_ASSERT(res.is_success);
         TEST_ASSERT(res.value.ast->typ == expected_tags[i]);
-
         free_ast(res.value.ast);        free(input->buffer);
         free_input(input);
     }
+}
+
 }
 
 // Test boolean operators
 void test_pascal_boolean_operators(void) {
     const char* expressions[] = {
         "true and false", "true or false", "not true", "true xor false"
-    };
+
     pascal_tag_t expected_tags[] = {
         PASCAL_T_AND, PASCAL_T_OR, PASCAL_T_NOT, PASCAL_T_XOR
-    };
+
     
     for (int i = 0; i < 4; i++) {
         combinator_t* p = new_combinator();
@@ -996,15 +994,21 @@ void test_pascal_boolean_operators(void) {
 
 // Test bitwise shift operators
 void test_pascal_bitwise_operators(void) {
-    const char* expressions[] = {
-        "8 shl 2", "8 shr 1", "8 rol 3", "8 ror 2"
-    };
-    pascal_tag_t expected_tags[] = {
-        PASCAL_T_SHL, PASCAL_T_SHR, PASCAL_T_ROL, PASCAL_T_ROR
-    };
+    const char* expressions[] = { "8 shl 2", "8 shr 1", "8 rol 3", "8 ror 2" };
+    pascal_tag_t expected_tags[] = { PASCAL_T_SHL, PASCAL_T_SHR, PASCAL_T_ROL, PASCAL_T_ROR };
 
-    for (int i = 0; i < 4; i++) {
-        combinator_t* p = new_combinator();
+
+
+
+
+
+
+
+
+
+
+
+
         init_pascal_expression_parser(&p, NULL);
 
         input_t* input = new_input();
@@ -1202,6 +1206,114 @@ void test_pascal_char_set(void) {
     TEST_ASSERT(strcmp(elem1->sym->name, "a") == 0);
 
     free_ast(res.value.ast);    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: routine-local repeated const sections with typed record/array consts
+    combinator_t* p = get_program_parser();
+    const char* src =
+        "program P;\n"
+        "function W: integer; stdcall;\n"
+        "const A = 1;\n"
+        "const R: record a: integer; end = (a:7);\n"
+        "const Arr: array[1..3] of integer = (1,2,3);\n"
+        "var v: integer;\n"
+        "begin v := A; W := v; end;\n"
+        "begin end.";
+    input_t* input = new_input();
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast); else free_error(res.value.error);
+    free(input->buffer); free_input(input);
+}
+
+// Regression: case statement with begin..end branch inside routine
+    combinator_t* p = get_program_parser();
+    const char* src =
+        "program P;\n"
+        "function W: integer; stdcall;\n"
+        "var Msg: integer;\n"
+        "begin\n"
+        "  case Msg of 1: begin W := 1; end; end;\n"
+        "end;\n"
+        "begin end.";
+    input_t* input = new_input();
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast); else free_error(res.value.error);
+    free(input->buffer); free_input(input);
+}
+
+// Regression: routine directive between header and body should parse
+void test_program_routine_directive_before_body(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program p;\n"
+        "function About: integer; stdcall;\n"
+        "begin\n  About := 0;\nend;\n"
+        "begin\nend.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) { free_ast(res.value.ast); } else { free_error(res.value.error); }
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: type declaration with function type + stdcall
+void test_type_subroutine_with_stdcall(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program p;\n"
+        "type TWNDPROC = function (Wnd: HWND; Msg: DWORD; wParam: ptruint; lParam: ptrint): integer; stdcall;\n"
+        "begin\nend.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) { free_ast(res.value.ast); } else { free_error(res.value.error); }
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: var absolute clause
+void test_var_absolute_clause(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program p;\n"
+        "var\n  ListBox: HWND absolute ListBoxInt;\n"
+        "begin\nend.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) { free_ast(res.value.ast); } else { free_error(res.value.error); }
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: library header and exports section
+void test_library_header_and_exports(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "library MyLib;\n"
+        "exports DllFunction index 1;\n"
+        "begin\nend.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) { free_ast(res.value.ast); } else { free_error(res.value.error); }
+    free(input->buffer);
     free_input(input);
 }
 
@@ -4858,5 +4970,10 @@ TEST_LIST = {
     { "test_external_library_debug", test_external_library_debug },
     { "test_external_minimal_debug", test_external_minimal_debug },
     { "test_external_no_args_debug", test_external_no_args_debug },
+    { "test_program_routine_directive_before_body", test_program_routine_directive_before_body },
+    { "test_type_subroutine_with_stdcall", test_type_subroutine_with_stdcall },
+    { "test_var_absolute_clause", test_var_absolute_clause },
+    { "test_library_header_and_exports", test_library_header_and_exports },
     { NULL, NULL }
-};
+
+

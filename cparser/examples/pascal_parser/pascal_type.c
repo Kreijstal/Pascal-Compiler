@@ -258,64 +258,38 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(of_res.value.ast);
     free_combinator(of_keyword);
 
-    // Parse element type - can be a simple identifier or identifier[size] for String[n]
-    combinator_t* base_type_id = token(cident(PASCAL_T_IDENTIFIER));
-    ParseResult base_res = parse(in, base_type_id);
+    // Parse element type - support full type specs (record, set, pointer, identifier with optional [size], etc.)
     ast_t* element_ast = NULL;
-    if (!base_res.is_success) {
-        discard_failure(base_res);
-        free_combinator(base_type_id);
-        free_ast(indices_ast);
-        return fail_with_message("Expected element type after 'OF'", in, &state, parser_name);
-    }
-    element_ast = base_res.value.ast;
-    free_combinator(base_type_id);
-    
-    // Check for optional [size] after type name (e.g., String[7])
-    // For now, we parse and discard the size since full shortstring support isn't implemented
-    InputState subscript_state;
-    save_input_state(in, &subscript_state);
-    combinator_t* subscript_open = token(match("["));
-    ParseResult subscript_open_res = parse(in, subscript_open);
-    free_combinator(subscript_open);
-    
-    if (subscript_open_res.is_success) {
-        free_ast(subscript_open_res.value.ast);
-        
-        // Parse the size expression
-        combinator_t* size_expr = new_combinator();
-        init_pascal_expression_parser(&size_expr, NULL);
-        ParseResult size_res = parse(in, size_expr);
-        free_combinator(size_expr);
-        
-        if (!size_res.is_success) {
-            discard_failure(size_res);
-            free_ast(element_ast);
+    {
+        // Try a rich element type first: record/class/interface/proc/func/set/pointer/range
+        combinator_t* packed_record = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
+            token(keyword_ci("packed")),
+            record_type(PASCAL_T_RECORD_TYPE),
+            NULL
+        );
+        combinator_t* rich_element_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+            array_type(PASCAL_T_ARRAY_TYPE),
+            packed_record,
+            record_type(PASCAL_T_RECORD_TYPE),
+            interface_type(PASCAL_T_INTERFACE_TYPE),
+            class_type(PASCAL_T_CLASS_TYPE),
+            procedure_type(PASCAL_T_PROCEDURE_TYPE),
+            function_type(PASCAL_T_FUNCTION_TYPE),
+            set_type(PASCAL_T_SET),
+            pointer_type(PASCAL_T_POINTER_TYPE),
+            range_type(PASCAL_T_RANGE_TYPE),
+            token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        );
+        ParseResult el_res = parse(in, rich_element_type);
+        free_combinator(rich_element_type);
+        if (!el_res.is_success) {
+            discard_failure(el_res);
             free_ast(indices_ast);
-            return fail_with_message("Expected size expression in type subscript", in, &subscript_state, parser_name);
+            return fail_with_message("Expected element type after 'OF'", in, &state, parser_name);
         }
-        
-        // Parse closing ]
-        combinator_t* subscript_close = token(match("]"));
-        ParseResult subscript_close_res = parse(in, subscript_close);
-        free_combinator(subscript_close);
-        
-        if (!subscript_close_res.is_success) {
-            discard_failure(subscript_close_res);
-            free_ast(size_res.value.ast);
-            free_ast(element_ast);
-            free_ast(indices_ast);
-            return fail_with_message("Expected ']' after type subscript", in, &subscript_state, parser_name);
-        }
-        free_ast(subscript_close_res.value.ast);
-        
-        // Discard the size - treat String[n] as String for now
-        // Full shortstring support would require changes throughout the type system
-        free_ast(size_res.value.ast);
-        // element_ast remains as just the identifier (String)
-    } else {
-        discard_failure(subscript_open_res);
-        restore_input_state(in, &subscript_state);
+        element_ast = el_res.value.ast;
     }
 
     // Build AST
@@ -1138,18 +1112,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     free_ast(end_res.value.ast);
     free_combinator(end_keyword);
 
-    InputState directive_state; save_input_state(in, &directive_state);
-    combinator_t* skip_semicolon_delim = token(match(";"));
-    combinator_t* skip_to_semicolon = until(skip_semicolon_delim, PASCAL_T_NONE);
-    ParseResult directive_res = parse(in, skip_to_semicolon);
-    if (directive_res.is_success) {
-        if (directive_res.value.ast != ast_nil)
-            free_ast(directive_res.value.ast);
-    } else {
-        restore_input_state(in, &directive_state);
-        discard_failure(directive_res);
-    }
-    free_combinator(skip_to_semicolon);
+    // Do not consume beyond 'end' here; higher-level parsers will handle any following tokens
 
     ast_t* record_ast = new_ast();
     record_ast->typ = pargs->tag;
@@ -1404,7 +1367,76 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
         set_ast_position(return_ast, in);
     }
 
-    // 4. Assemble the final AST node
+    // 4. Optionally consume calling convention/directive keywords (e.g., stdcall, cdecl)
+    // that can appear after procedure/function type declarations in Delphi/FPC.
+    // We ignore their semantics here and only consume the tokens to avoid syntax errors.
+    {
+        combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("stdcall")),
+            token(keyword_ci("cdecl")),
+            token(keyword_ci("register")),
+            token(keyword_ci("safecall")),
+            token(keyword_ci("pascal")),
+            token(keyword_ci("export")),
+            token(keyword_ci("external")),
+            token(keyword_ci("inline")),
+            token(keyword_ci("overload")),
+            NULL
+        );
+        combinator_t* external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        );
+        combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+            external_name_clause,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        ));
+        // Some dialects require a semicolon between return type and directives in type declarations
+        // Example: function(...): Integer; stdcall;  -- consume the first ';' and the directive list here,
+        // leaving the final ';' for the enclosing type declaration to consume.
+        // Only consume the ';' if a directive keyword follows immediately after.
+        InputState s0; save_input_state(in, &s0);
+        ParseResult sc = parse(in, token(match(";")));
+        if (sc.is_success) {
+            // Check if a directive follows; if not, roll back and keep ';' for outer parser
+            InputState s1; save_input_state(in, &s1);
+            ParseResult pk = parse(in, directive_keyword);
+            if (!pk.is_success) {
+                // No directive, restore to before ';'
+                restore_input_state(in, &s0);
+                discard_failure(pk);
+            } else {
+                // We have a directive: keep ';', consume directives and optional args
+                if (sc.value.ast) free_ast(sc.value.ast);
+                if (pk.value.ast) free_ast(pk.value.ast);
+                while (1) {
+                    ParseResult arg = parse(in, directive_argument);
+                    if (arg.is_success) {
+                        if (arg.value.ast) free_ast(arg.value.ast);
+                    } else {
+                        discard_failure(arg);
+                    }
+                    // Allow multiple directive keywords
+                    InputState dn; save_input_state(in, &dn);
+                    ParseResult nk = parse(in, directive_keyword);
+                    if (nk.is_success) {
+                        if (nk.value.ast) free_ast(nk.value.ast);
+                        continue;
+                    }
+                    restore_input_state(in, &dn);
+                    break;
+                }
+            }
+        } else {
+            discard_failure(sc);
+        }
+        free_combinator(directive_keyword);
+    }
+
+    // 5. Assemble the final AST node
     ast_t* type_ast = new_ast();
     type_ast->typ = pargs->tag;
     type_ast->child = params_ast;
@@ -1581,4 +1613,3 @@ combinator_t* pascal_identifier_with_subscript(tag_t tag) {
     comb->fn = pascal_identifier_with_subscript_fn;
     return comb;
 }
-

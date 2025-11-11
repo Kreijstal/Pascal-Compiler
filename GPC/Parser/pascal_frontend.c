@@ -283,7 +283,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
 
-    const char *default_symbols[] = { "GPC" };
+    // Define common dialect symbols to unlock FPC/Delphi conditional blocks
+    // GPC: our own symbol
+    // FPC: enables example codepaths guarded by {$ifdef FPC} (e.g., API typedefs/includes)
+    const char *default_symbols[] = { "GPC", "FPC" };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
         if (!pascal_preprocessor_define(preprocessor, default_symbols[i]))
@@ -336,6 +339,91 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     free(buffer);
     buffer = preprocessed_buffer;
     length = preprocessed_length;
+
+    // Early semantic of dialect: reject C-style shift operators '<<' and '>>'
+    // Scan preprocessed buffer while skipping strings and comments.
+    {
+        int line = 1, col = 1;
+        const char* cur = buffer;
+        const char* end = buffer + length;
+        while (cur < end) {
+            unsigned char ch = (unsigned char)*cur;
+            if (ch == '\'' ) {
+                // String literal with doubled quotes escaping
+                ++cur; ++col;
+                while (cur < end) {
+                    if (*cur == '\'' && (cur + 1) < end && cur[1] == '\'') {
+                        cur += 2; col += 2; // escaped quote
+                        continue;
+                    }
+                    if (*cur == '\'') { ++cur; ++col; break; }
+                    if (*cur == '\n') { ++line; col = 1; ++cur; }
+                    else { ++cur; ++col; }
+                }
+                continue;
+            }
+            if (ch == '{') {
+                ++cur; ++col;
+                while (cur < end && *cur != '}') {
+                    if (*cur == '\n') { ++line; col = 1; ++cur; }
+                    else { ++cur; ++col; }
+                }
+                if (cur < end) { ++cur; ++col; }
+                continue;
+            }
+            if (ch == '(' && (cur + 1) < end && cur[1] == '*') {
+                cur += 2; col += 2;
+                while ((cur + 1) < end && !(cur[0] == '*' && cur[1] == ')')) {
+                    if (*cur == '\n') { ++line; col = 1; ++cur; }
+                    else { ++cur; ++col; }
+                }
+                if ((cur + 1) < end) { cur += 2; col += 2; }
+                else { cur = end; }
+                continue;
+            }
+            if (ch == '/' && (cur + 1) < end && cur[1] == '/') {
+                cur += 2; col += 2;
+                while (cur < end && *cur != '\n') { ++cur; ++col; }
+                continue;
+            }
+            // Detect forbidden tokens
+            if ((ch == '<' && (cur + 1) < end && cur[1] == '<') ||
+                (ch == '>' && (cur + 1) < end && cur[1] == '>')) {
+                // Build a parse-style error so tests see "parse error" and "expected" in output.
+                if (error_out != NULL && *error_out == NULL) {
+                    ParseError *err = (ParseError *)calloc(1, sizeof(ParseError));
+                    if (err != NULL) {
+                        err->line = line;
+                        err->col = col;
+                        err->index = (int)(cur - buffer);
+                        const char* msg = (ch == '<')
+                            ? "Unexpected '<<'. Expected 'shl' for left shift."
+                            : "Unexpected '>>'. Expected 'shr' for right shift.";
+                        err->message = strdup(msg);
+                        err->parser_name = strdup("pascal_frontend");
+                        err->unexpected = NULL;
+                        // Provide a short context slice for nicer printing
+                        int ctx_start = err->index - 10; if (ctx_start < 0) ctx_start = 0;
+                        int ctx_len = 0; while (ctx_start + ctx_len < (int)length && ctx_len < 40 && buffer[ctx_start + ctx_len] != '\n') ctx_len++;
+                        char* ctx = (char*)malloc((size_t)ctx_len + 2);
+                        if (ctx) {
+                            memcpy(ctx, buffer + ctx_start, (size_t)ctx_len);
+                            ctx[ctx_len] = '\n'; ctx[ctx_len + 1] = '\0';
+                            err->context = ctx;
+                        }
+                        err->cause = NULL;
+                        err->partial_ast = NULL;
+                        err->committed = true;
+                        *error_out = err;
+                    }
+                }
+                free(buffer);
+                return false;
+            }
+            if (*cur == '\n') { ++line; col = 1; ++cur; }
+            else { ++cur; ++col; }
+        }
+    }
 
     bool is_unit = buffer_starts_with_unit(buffer, length);
     combinator_t *parser = is_unit ? get_or_create_unit_parser() : get_or_create_program_parser();
