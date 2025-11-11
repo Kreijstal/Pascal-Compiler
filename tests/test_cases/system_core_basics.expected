@@ -1,0 +1,16 @@
+AbsInt=42
+AbsReal=3.50
+Sqrt=1.50
+Sin=0.00
+Cos=1.00
+ArcTan=0.785
+RoundPos=3
+RoundNeg=-2
+TruncNeg=-2
+IntNeg=-2
+FracNeg=-0.25
+DecValue=2
+IncValue=6
+HasA=0
+HasC=1
+PostExcludeC=0

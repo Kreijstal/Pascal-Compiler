@@ -6,6 +6,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
+#include <math.h>
 
 #include "runtime_internal.h"
 
@@ -1660,4 +1661,66 @@ void *gpc_memcpy_wrapper(void *dest, const void *src, size_t n)
 int64_t gpc_assigned(const void *ptr)
 {
     return (ptr != NULL) ? 1 : 0;
+}
+
+int32_t gpc_abs_int(int32_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
+int64_t gpc_abs_longint(int64_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
+double gpc_abs_real(double value)
+{
+    return fabs(value);
+}
+
+double gpc_sqrt(double value)
+{
+    return sqrt(value);
+}
+
+double gpc_sin(double value)
+{
+    return sin(value);
+}
+
+double gpc_cos(double value)
+{
+    return cos(value);
+}
+
+double gpc_arctan(double value)
+{
+    return atan(value);
+}
+
+long long gpc_round(double value)
+{
+    double rounded;
+    if (value >= 0.0)
+        rounded = floor(value + 0.5);
+    else
+        rounded = ceil(value - 0.5);
+    return (long long)rounded;
+}
+
+long long gpc_trunc(double value)
+{
+    if (value >= 0.0)
+        return (long long)floor(value);
+    return (long long)ceil(value);
+}
+
+long long gpc_int(double value)
+{
+    return gpc_trunc(value);
+}
+
+double gpc_frac(double value)
+{
+    return value - (double)gpc_trunc(value);
 }

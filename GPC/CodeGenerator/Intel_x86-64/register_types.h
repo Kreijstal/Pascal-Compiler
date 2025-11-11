@@ -40,6 +40,18 @@ static inline const char *current_arg_reg32(int num)
     return regs[num];
 }
 
+static inline const char *current_arg_reg_xmm(int num)
+{
+    static const char *const windows_regs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3" };
+    static const char *const sysv_regs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3",
+                                             "%xmm4", "%xmm5", "%xmm6", "%xmm7" };
+    const char *const *regs = (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    int limit = (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS) ? 4 : 8;
+    if (num < 0 || num >= limit)
+        return NULL;
+    return regs[num];
+}
+
 static inline const char *current_non_local_reg64(void)
 {
     return g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS ? "%r11" : "%rcx";

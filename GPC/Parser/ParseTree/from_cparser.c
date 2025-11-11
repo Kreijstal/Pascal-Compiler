@@ -3430,26 +3430,50 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
     if (field_width_node == NULL)
         return NULL;
 
-    ast_t *base_node = field_width_node->child;
-    if (base_node == NULL)
-        return NULL;
+    ast_t *cursor = field_width_node;
+    struct Expression *formats[2] = { NULL, NULL };
+    int format_count = 0;
 
-    struct Expression *base_expr = convert_expression(base_node);
-    if (base_expr == NULL)
-        return NULL;
+    while (cursor != NULL && cursor->typ == PASCAL_T_FIELD_WIDTH) {
+        ast_t *base_node = cursor->child;
+        ast_t *format_node = (base_node != NULL) ? base_node->next : NULL;
 
-    ast_t *width_node = base_node->next;
-    if (width_node != NULL && width_node != ast_nil) {
-        struct Expression *width_expr = convert_expression(width_node);
-        base_expr->field_width = width_expr;
+        if (format_node != NULL && format_node != ast_nil) {
+            struct Expression *format_expr = convert_expression(format_node);
+            if (format_expr != NULL) {
+                if (format_count < 2) {
+                    formats[format_count++] = format_expr;
+                } else {
+                    destroy_expr(formats[0]);
+                    formats[0] = formats[1];
+                    formats[1] = format_expr;
+                    format_count = 2;
+                }
+            }
+        }
+
+        cursor = base_node;
     }
 
-    ast_t *precision_node = NULL;
-    if (width_node != NULL)
-        precision_node = width_node->next;
-    if (precision_node != NULL && precision_node != ast_nil) {
-        struct Expression *precision_expr = convert_expression(precision_node);
-        base_expr->field_precision = precision_expr;
+    struct Expression *base_expr = convert_expression(cursor);
+    if (base_expr == NULL) {
+        for (int i = 0; i < format_count; ++i) {
+            if (formats[i] != NULL)
+                destroy_expr(formats[i]);
+        }
+        return NULL;
+    }
+
+    if (format_count >= 1) {
+        struct Expression *width_expr = formats[format_count - 1];
+        if (base_expr->field_width == NULL)
+            base_expr->field_width = width_expr;
+        else if (width_expr != NULL)
+            destroy_expr(width_expr);
+    }
+
+    if (format_count >= 2) {
+        base_expr->field_precision = formats[format_count - 2];
     }
 
     return base_expr;

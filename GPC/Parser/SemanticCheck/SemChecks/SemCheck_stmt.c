@@ -28,6 +28,37 @@
 
 static int semcheck_loop_depth = 0;
 
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    return hashnode_get_type_alias(node);
+}
+
+static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_gpc_type != NULL)
+    {
+        struct TypeAlias *alias = expr->resolved_gpc_type->type_alias;
+        if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+            return 1;
+    }
+
+    if (expr->type == EXPR_VAR_ID && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(node);
+            if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
@@ -558,6 +589,59 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     }
 
     return return_val;
+}
+
+static int semcheck_builtin_dec(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_inc(symtab, stmt, max_scope_lev);
+}
+
+static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stmt,
+    int max_scope_lev, const char *display_name)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, %s expects exactly two arguments.\n",
+            stmt->line_num, display_name);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *set_expr = (struct Expression *)args->cur;
+    int set_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
+    if (set_type != SET_TYPE || !semcheck_expr_is_char_set(symtab, set_expr))
+    {
+        fprintf(stderr, "Error on line %d, %s target must be a set of char.\n",
+            stmt->line_num, display_name);
+        ++error_count;
+    }
+
+    struct Expression *value_expr = (struct Expression *)args->next->cur;
+    int value_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != CHAR_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, %s element must be an ordinal value.\n",
+            stmt->line_num, display_name);
+        ++error_count;
+    }
+
+    return error_count;
+}
+
+static int semcheck_builtin_include(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_include_like(symtab, stmt, max_scope_lev, "Include");
+}
+
+static int semcheck_builtin_exclude(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_include_like(symtab, stmt, max_scope_lev, "Exclude");
 }
 
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -1295,6 +1379,24 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Inc",
         semcheck_builtin_inc, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Dec",
+        semcheck_builtin_dec, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Include",
+        semcheck_builtin_include, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Exclude",
+        semcheck_builtin_exclude, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

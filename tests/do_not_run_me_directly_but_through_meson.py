@@ -593,6 +593,8 @@ class TestCompiler(unittest.TestCase):
             ])
             command.extend(list(extra_objects))
             command.extend(list(extra_link_args))
+            if not IS_WINDOWS_ABI:
+                command.append("-lm")
             subprocess.run(
                 command,
                 check=True,

@@ -1843,6 +1843,33 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(inc_name);
     }
 
+    char *dec_name = strdup("Dec");
+    if (dec_name != NULL) {
+        GpcType *dec_type = create_procedure_type(NULL, NULL);
+        assert(dec_type != NULL && "Failed to create Dec procedure type");
+        AddBuiltinProc_Typed(symtab, dec_name, dec_type);
+        destroy_gpc_type(dec_type);
+        free(dec_name);
+    }
+
+    char *include_name = strdup("Include");
+    if (include_name != NULL) {
+        GpcType *include_type = create_procedure_type(NULL, NULL);
+        assert(include_type != NULL && "Failed to create Include procedure type");
+        AddBuiltinProc_Typed(symtab, include_name, include_type);
+        destroy_gpc_type(include_type);
+        free(include_name);
+    }
+
+    char *exclude_name = strdup("Exclude");
+    if (exclude_name != NULL) {
+        GpcType *exclude_type = create_procedure_type(NULL, NULL);
+        assert(exclude_type != NULL && "Failed to create Exclude procedure type");
+        AddBuiltinProc_Typed(symtab, exclude_name, exclude_type);
+        destroy_gpc_type(exclude_type);
+        free(exclude_name);
+    }
+
     char *new_name = strdup("New");
     if (new_name != NULL) {
         GpcType *new_type = create_procedure_type(NULL, NULL);

@@ -118,7 +118,18 @@ static inline const char *select_register_name(const Register_t *reg, int type_t
 
 static inline int expr_uses_qword(const struct Expression *expr)
 {
-    return expr != NULL && codegen_type_uses_qword(expr->resolved_type);
+    return expr_uses_qword_gpctype(expr);
+}
+
+static int expr_effective_storage_type(const struct Expression *expr)
+{
+    if (expr != NULL && expr->resolved_gpc_type != NULL)
+    {
+        int legacy_tag = gpc_type_get_legacy_tag(expr->resolved_gpc_type);
+        if (legacy_tag != UNKNOWN_TYPE)
+            return legacy_tag;
+    }
+    return (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
 }
 
 static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *reg,
@@ -159,36 +170,111 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
     return add_inst(inst_list, buffer);
 }
 
+static long long expr_integer_constant_value(const struct Expression *expr, const char *operand)
+{
+    if (expr != NULL)
+    {
+        switch (expr->type)
+        {
+            case EXPR_INUM:
+                return expr->expr_data.i_num;
+            case EXPR_CHAR_CODE:
+                return (long long)expr->expr_data.char_code;
+            case EXPR_BOOL:
+                return expr->expr_data.bool_value ? 1 : 0;
+            case EXPR_NIL:
+                return 0;
+            default:
+                break;
+        }
+    }
+
+    if (operand != NULL && operand[0] == '$')
+        return strtoll(operand + 1, NULL, 10);
+
+    return 0;
+}
+
 static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
-    const char *operand, const char *xmm_reg, ListNode_t *inst_list)
+    struct Expression *operand_expr, const char *operand, const char *xmm_reg,
+    ListNode_t *inst_list)
 {
     if (ctx == NULL || operand == NULL || xmm_reg == NULL)
         return inst_list;
 
-    char buffer[128];
+    int operand_is_real = operand_expr != NULL &&
+        expr_has_type_tag(operand_expr, REAL_TYPE);
+    int operand_is_longint = operand_expr != NULL &&
+        expr_has_type_tag(operand_expr, LONGINT_TYPE);
+    int operand_is_integer_like =
+        (operand_expr != NULL &&
+         (expr_has_type_tag(operand_expr, LONGINT_TYPE) ||
+          expr_has_type_tag(operand_expr, INT_TYPE) ||
+          expr_has_type_tag(operand_expr, BOOL) ||
+          expr_has_type_tag(operand_expr, CHAR_TYPE)));
+
+    char buffer[192];
+
+    if (operand_is_real)
+    {
+        if (operand[0] == '$')
+        {
+            char label[32];
+            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+
+            const char *readonly_section = codegen_readonly_section_directive();
+            char rodata_buffer[192];
+            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
+                readonly_section, label, operand + 1);
+            inst_list = add_inst(inst_list, rodata_buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %s\n", label, xmm_reg);
+            return add_inst(inst_list, buffer);
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", operand, xmm_reg);
+        return add_inst(inst_list, buffer);
+    }
+
+    if (!operand_is_integer_like && operand_expr == NULL)
+    {
+        /* Fallback: assume operand already holds IEEE bits (e.g., from string literal) */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", operand, xmm_reg);
+        return add_inst(inst_list, buffer);
+    }
 
     if (operand[0] == '$')
     {
+        long long int_value = expr_integer_constant_value(operand_expr, operand);
+        double real_value = (double)int_value;
+        union
+        {
+            double d;
+            long long i;
+        } converter;
+        converter.d = real_value;
+
         char label[32];
         snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
-
         const char *readonly_section = codegen_readonly_section_directive();
         char rodata_buffer[192];
-        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-            readonly_section, label, operand + 1);
+        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %lld\n\t.text\n",
+            readonly_section, label, (long long)converter.i);
         inst_list = add_inst(inst_list, rodata_buffer);
 
         snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %s\n", label, xmm_reg);
         return add_inst(inst_list, buffer);
     }
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", operand, xmm_reg);
+    const char *convert_instr = operand_is_longint ? "cvtsi2sdq" : "cvtsi2sdl";
+    snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", convert_instr, operand, xmm_reg);
     return add_inst(inst_list, buffer);
 }
 
 static ListNode_t *gencode_real_binary_op(CodeGenContext *ctx,
-    const char *left_operand, const char *right_operand, const char *dest,
-    ListNode_t *inst_list, const char *sse_mnemonic)
+    struct Expression *left_expr, const char *left_operand,
+    struct Expression *right_expr, const char *right_operand,
+    const char *dest, ListNode_t *inst_list, const char *sse_mnemonic)
 {
     if (ctx == NULL || left_operand == NULL || right_operand == NULL ||
         dest == NULL || sse_mnemonic == NULL)
@@ -196,8 +282,8 @@ static ListNode_t *gencode_real_binary_op(CodeGenContext *ctx,
         return inst_list;
     }
 
-    inst_list = load_real_operand_into_xmm(ctx, left_operand, "%xmm0", inst_list);
-    inst_list = load_real_operand_into_xmm(ctx, right_operand, "%xmm1", inst_list);
+    inst_list = load_real_operand_into_xmm(ctx, left_expr, left_operand, "%xmm0", inst_list);
+    inst_list = load_real_operand_into_xmm(ctx, right_expr, right_operand, "%xmm1", inst_list);
 
     char buffer[80];
     snprintf(buffer, sizeof(buffer), "\t%s\t%%xmm1, %%xmm0\n", sse_mnemonic);
@@ -213,14 +299,11 @@ static ListNode_t *gencode_real_negate(const char *value_operand,
         return inst_list;
 
     char buffer[96];
-
-    if (strcmp(value_operand, dest) != 0)
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_operand, dest);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    snprintf(buffer, sizeof(buffer), "\txorq\t$0x8000000000000000, %s\n", dest);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_operand);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = add_inst(inst_list, "\tpxor\t%xmm1, %xmm1\n");
+    inst_list = add_inst(inst_list, "\tsubsd\t%xmm0, %xmm1\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm1, %s\n", dest);
     return add_inst(inst_list, buffer);
 }
 
@@ -1003,7 +1086,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
         codegen_release_function_call_mangled_id(expr);
-        if (expr_uses_qword_gpctype(expr))
+        if (expr_has_type_tag(expr, REAL_TYPE))
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+        else if (expr_uses_qword_gpctype(expr))
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
         else
             snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
@@ -1205,20 +1290,68 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
     }
 
-    int use_qword = codegen_type_uses_qword(expr->resolved_type);
+    int desired_qword = codegen_type_uses_qword(expr->resolved_type);
+    int storage_tag = expr_effective_storage_type(expr);
+    int storage_qword = codegen_type_uses_qword(storage_tag);
+    int is_immediate = (buf_leaf[0] == '$');
 
 #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s\n", buf_leaf,
-        use_qword ? target_reg->bit_64 : target_reg->bit_32);
+    CODEGEN_DEBUG("DEBUG: Loading value %s into register %s (desired_qword=%d, storage_qword=%d)\n",
+        buf_leaf, desired_qword ? target_reg->bit_64 : target_reg->bit_32,
+        desired_qword, storage_qword);
 #endif
 
-    if (use_qword)
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
-    else if (expr->resolved_type == CHAR_TYPE && buf_leaf[0] != '$')
-        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", buf_leaf, target_reg->bit_32);
-    else
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+    if (desired_qword && !storage_qword)
+    {
+        if (is_immediate)
+        {
+            long long imm_value = 0;
+            if (expr != NULL)
+            {
+                switch (expr->type)
+                {
+                    case EXPR_INUM:
+                        imm_value = expr->expr_data.i_num;
+                        break;
+                    case EXPR_BOOL:
+                        imm_value = expr->expr_data.bool_value ? 1 : 0;
+                        break;
+                    case EXPR_CHAR_CODE:
+                        imm_value = (unsigned int)expr->expr_data.char_code;
+                        break;
+                    default:
+                        imm_value = strtoll(buf_leaf + 1, NULL, 10);
+                        break;
+                }
+            }
+            else
+            {
+                imm_value = strtoll(buf_leaf + 1, NULL, 10);
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                imm_value, target_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                buf_leaf, target_reg->bit_64);
+        }
+        return add_inst(inst_list, buffer);
+    }
 
+    if (desired_qword)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+        return add_inst(inst_list, buffer);
+    }
+
+    if (storage_tag == CHAR_TYPE && !is_immediate)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", buf_leaf, target_reg->bit_32);
+        return add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);
     return add_inst(inst_list, buffer);
 }
 
@@ -1549,7 +1682,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 break;
             }
-            if (expr->resolved_type == REAL_TYPE)
+            if (expr->resolved_type == REAL_TYPE || type == SLASH)
             {
                 const char *sse_op = NULL;
                 switch (type)
@@ -1565,7 +1698,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         break;
                 }
                 if (sse_op != NULL)
-                    inst_list = gencode_real_binary_op(ctx, left, right, left, inst_list, sse_op);
+                    inst_list = gencode_real_binary_op(ctx,
+                        expr->expr_data.mulop_data.left_term, left,
+                        expr->expr_data.mulop_data.right_factor, right,
+                        left, inst_list, sse_op);
                 break;
             }
             {
@@ -1630,7 +1766,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 break;
             }
-            if (expr->resolved_type == REAL_TYPE)
+            if (expr->resolved_type == REAL_TYPE || type == SLASH)
             {
                 const char *sse_op = NULL;
                 switch (type)
@@ -1649,7 +1785,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         break;
                 }
                 if (sse_op != NULL)
-                    inst_list = gencode_real_binary_op(ctx, left, right, left, inst_list, sse_op);
+                    inst_list = gencode_real_binary_op(ctx,
+                        expr->expr_data.mulop_data.left_term, left,
+                        expr->expr_data.mulop_data.right_factor, right,
+                        left, inst_list, sse_op);
                 break;
             }
             {
@@ -1696,12 +1835,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             /* NOTE: Division and modulus is a more special case */
             else if(type == SLASH || type == DIV)
             {
-                #ifdef DEBUG_CODEGEN
-                CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
-                #endif
-                // left is the dividend, right is the divisor
-                snprintf(buffer, sizeof(buffer), "\tpushq\t%%rdx\n");
-                inst_list = add_inst(inst_list, buffer);
+#ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: gencode_op: left = %s, right = %s\n", left, right);
+#endif
+            // left is the dividend, right is the divisor
+            snprintf(buffer, sizeof(buffer), "\tpushq\t%%rdx\n");
+            inst_list = add_inst(inst_list, buffer);
 
 
                 if (use_qword_op)

@@ -68,6 +68,44 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+/* Allocate the next available integer argument register (general purpose). */
+static const char *alloc_integer_arg_reg(int use_64bit, int *next_index)
+{
+    if (next_index == NULL)
+        return NULL;
+
+    const char *reg = use_64bit ?
+        get_arg_reg64_num(*next_index) :
+        get_arg_reg32_num(*next_index);
+    if (reg == NULL)
+    {
+        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
+        exit(1);
+    }
+
+    ++(*next_index);
+    return reg;
+}
+
+/* Allocate the next available SSE argument register for REAL parameters. */
+static const char *alloc_sse_arg_reg(int *next_index)
+{
+    if (next_index == NULL)
+        return NULL;
+
+    const char *reg = current_arg_reg_xmm(*next_index);
+    if (reg == NULL)
+    {
+        fprintf(stderr,
+            "ERROR: Max SSE argument register limit exceeded (index=%d)\n",
+            *next_index);
+        exit(1);
+    }
+
+    ++(*next_index);
+    return reg;
+}
+
 /* Helper function to determine variable storage size (for stack allocation)
  * Returns size in bytes, or -1 on error */
 static inline int get_var_storage_size(HashNode_t *node)
@@ -2138,11 +2176,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     const char *arg_reg;
     char buffer[50];
     StackNode_t *arg_stack;
+    int next_gpr_index = 0;
+    int next_sse_index = 0;
 
     assert(ctx != NULL);
 
     if (arg_start_index < 0)
         arg_start_index = 0;
+
+    next_gpr_index = arg_start_index;
 
     while(args != NULL)
     {
@@ -2210,12 +2252,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             return inst_list;
                         }
 
-                        arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
-                        if (arg_reg == NULL)
-                        {
-                            fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
-                            exit(1);
-                        }
+                        arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
 
                         Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
                         if (size_reg == NULL)
@@ -2272,23 +2309,27 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int use_64bit = is_var_param || is_array_type ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE || type == PROCEDURE);
-                    arg_reg = use_64bit ?
-                        get_arg_reg64_num(arg_start_index + arg_num) :
-                        get_arg_reg32_num(arg_start_index + arg_num);
-
-                    if(arg_reg == NULL)
-                    {
-                        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
-                        exit(1);
-                    }
+                    int use_sse_reg = (!is_var_param && !is_array_type &&
+                        type == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
                         arg_stack->is_reference = 1;
-                    if (use_64bit)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    if (use_sse_reg)
+                    {
+                        const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                            xmm_reg, arg_stack->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                     else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
-                    inst_list = add_inst(inst_list, buffer);
+                    {
+                        arg_reg = alloc_integer_arg_reg(use_64bit, &next_gpr_index);
+                        if (use_64bit)
+                            snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                        else
+                            snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                     arg_ids = arg_ids->next;
                     ++arg_num;
                 }
@@ -2297,12 +2338,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 arg_ids = arg_decl->tree_data.arr_decl_data.ids;
                 while(arg_ids != NULL)
                 {
-                    arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
-                    if(arg_reg == NULL)
-                    {
-                        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
-                        exit(1);
-                    }
+                    arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                     arg_stack = add_q_z((char *)arg_ids->cur);
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;

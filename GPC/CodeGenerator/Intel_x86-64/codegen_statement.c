@@ -1245,6 +1245,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         return inst_list;
     }
 
+    int dest_is_char_set = expr_is_char_set_ctx(dest_expr, ctx);
+
     if (!codegen_expr_is_addressable(src_expr))
     {
         if (src_expr->type == EXPR_FUNCTION_CALL && expr_has_type_tag(src_expr, RECORD_TYPE))
@@ -1295,11 +1297,13 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         }
 
         /* Handle character set literals - they generate a temporary buffer address */
-        if (src_expr->type == EXPR_SET && expr_is_char_set_ctx(src_expr, ctx))
+        if (src_expr->type == EXPR_SET &&
+            (expr_is_char_set_ctx(src_expr, ctx) || dest_is_char_set))
         {
             /* Generate the set literal, which returns an address register */
             Register_t *src_reg = NULL;
-            inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
+            int force_char_literal = dest_is_char_set && !expr_is_char_set_ctx(src_expr, ctx);
+            inst_list = codegen_set_literal(src_expr, inst_list, ctx, &src_reg, force_char_literal);
             if (codegen_had_error(ctx) || src_reg == NULL)
             {
                 if (src_reg != NULL)
@@ -2458,7 +2462,8 @@ cleanup:
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx, int is_increment)
 {
     if (stmt == NULL || ctx == NULL)
         return inst_list;
@@ -2491,6 +2496,21 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
     if (target_is_long)
         inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32, increment_reg->bit_64);
 
+    char buffer_main[128];
+    if (!is_increment)
+    {
+        if (target_is_long)
+        {
+            snprintf(buffer_main, sizeof(buffer_main), "\tnegq\t%s\n", increment_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer_main);
+        }
+        else
+        {
+            snprintf(buffer_main, sizeof(buffer_main), "\tnegl\t%s\n", increment_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer_main);
+        }
+    }
+
     if (target_expr != NULL && target_expr->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(target_expr->expr_data.id);
@@ -2515,7 +2535,8 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
         }
         else
         {
-            codegen_report_error(ctx, "ERROR: Unable to locate variable %s for Inc.", target_expr->expr_data.id);
+            codegen_report_error(ctx, "ERROR: Unable to locate variable %s for %s.",
+                target_expr->expr_data.id, is_increment ? "Inc" : "Dec");
         }
     }
     else if (target_expr != NULL && target_expr->type == EXPR_ARRAY_ACCESS)
@@ -2555,6 +2576,123 @@ static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_
 
     free_reg(get_reg_stack(), increment_reg);
     return inst_list;
+}
+
+static ListNode_t *codegen_builtin_inc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    return codegen_builtin_incdec(stmt, inst_list, ctx, 1);
+}
+
+static ListNode_t *codegen_builtin_dec(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    return codegen_builtin_incdec(stmt, inst_list, ctx, 0);
+}
+
+static ListNode_t *codegen_builtin_include_exclude(struct Statement *stmt,
+    ListNode_t *inst_list, CodeGenContext *ctx, int is_exclude)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL)
+        return inst_list;
+
+    struct Expression *set_expr = (struct Expression *)args_expr->cur;
+    struct Expression *value_expr = (struct Expression *)args_expr->next->cur;
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(set_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    Register_t *value_reg = NULL;
+    inst_list = codegen_expr_with_result(value_expr, inst_list, ctx, &value_reg);
+    if (codegen_had_error(ctx) || value_reg == NULL)
+    {
+        if (addr_reg != NULL)
+            free_reg(get_reg_stack(), addr_reg);
+        if (value_reg != NULL)
+            free_reg(get_reg_stack(), value_reg);
+        return inst_list;
+    }
+
+    Register_t *bit_reg = get_free_reg(get_reg_stack(), &inst_list);
+    Register_t *dword_reg = get_free_reg(get_reg_stack(), &inst_list);
+    Register_t *current_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (bit_reg == NULL || dword_reg == NULL || current_reg == NULL)
+    {
+        if (bit_reg != NULL)
+            free_reg(get_reg_stack(), bit_reg);
+        if (dword_reg != NULL)
+            free_reg(get_reg_stack(), dword_reg);
+        if (current_reg != NULL)
+            free_reg(get_reg_stack(), current_reg);
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tandl\t$255, %s\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, bit_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tandl\t$31, %s\n", bit_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, dword_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tshrl\t$5, %s\n", dword_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tshll\t$2, %s\n", dword_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s,1), %s\n",
+        addr_reg->bit_64, dword_reg->bit_64, current_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%ecx\n", bit_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", bit_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", bit_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (is_exclude)
+    {
+        snprintf(buffer, sizeof(buffer), "\tnotl\t%s\n", bit_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tandl\t%s, %s\n", bit_reg->bit_32, current_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\torl\t%s, %s\n", bit_reg->bit_32, current_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s,%s,1)\n",
+        current_reg->bit_32, addr_reg->bit_64, dword_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), current_reg);
+    free_reg(get_reg_stack(), dword_reg);
+    free_reg(get_reg_stack(), bit_reg);
+    free_reg(get_reg_stack(), value_reg);
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+}
+
+static ListNode_t *codegen_builtin_include(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    return codegen_builtin_include_exclude(stmt, inst_list, ctx, 0);
+}
+
+static ListNode_t *codegen_builtin_exclude(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    return codegen_builtin_include_exclude(stmt, inst_list, ctx, 1);
 }
 
 static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
@@ -2721,38 +2859,41 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         const char *precision_dest64 = current_arg_reg64(2);
         const char *value_dest64 = current_arg_reg64(expr_is_real ? 3 : 2);
 
-        Register_t *width_reg = NULL;
-        Register_t *precision_reg = NULL;
-        int has_width_reg = 0;
-        int has_precision_reg = 0;
+        StackNode_t *width_spill = NULL;
+        StackNode_t *precision_spill = NULL;
+        const int width_specified = (expr != NULL && expr->field_width != NULL);
+        const int precision_specified = (expr_is_real && expr != NULL && expr->field_precision != NULL);
 
-        if (expr != NULL && expr->field_width != NULL)
+        if (width_specified)
         {
             expr_node_t *width_tree = build_expr_tree(expr->field_width);
-            width_reg = get_free_reg(get_reg_stack(), &inst_list);
+            Register_t *width_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(width_tree, inst_list, ctx, width_reg);
             free_expr_tree(width_tree);
-            has_width_reg = 1;
+            width_spill = add_l_t("write_width");
+            if (width_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                         width_reg->bit_64, width_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            free_reg(get_reg_stack(), width_reg);
         }
 
-        if (expr_is_real)
-        {
-            if (expr != NULL && expr->field_precision != NULL)
-            {
-                expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
-                precision_reg = get_free_reg(get_reg_stack(), &inst_list);
-                inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
-                free_expr_tree(precision_tree);
-                has_precision_reg = 1;
-            }
-        }
-        else if (expr != NULL && expr->field_precision != NULL)
+        if (precision_specified)
         {
             expr_node_t *precision_tree = build_expr_tree(expr->field_precision);
-            precision_reg = get_free_reg(get_reg_stack(), &inst_list);
+            Register_t *precision_reg = get_free_reg(get_reg_stack(), &inst_list);
             inst_list = gencode_expr_tree(precision_tree, inst_list, ctx, precision_reg);
             free_expr_tree(precision_tree);
-            has_precision_reg = 1;
+            precision_spill = add_l_t("write_precision");
+            if (precision_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                         precision_reg->bit_64, precision_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            free_reg(get_reg_stack(), precision_reg);
         }
 
         /* For char arrays being treated as strings, we need to load the address */
@@ -2790,18 +2931,36 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
          */
         
         /* Move precision first (if real and has precision) */
-        if (expr_is_real && has_precision_reg)
+        /* Move precision first (if specified for reals) */
+        if (expr_is_real && precision_specified)
         {
-            inst_list = codegen_sign_extend32_to64(inst_list, precision_reg->bit_32, precision_dest64);
-            free_reg(get_reg_stack(), precision_reg);
-            has_precision_reg = 0;  /* Mark as handled */
+            if (precision_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                         precision_spill->offset, precision_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
         }
         
         /* Move width next */
-        if (has_width_reg)
+        if (width_specified)
         {
-            inst_list = codegen_sign_extend32_to64(inst_list, width_reg->bit_32, width_dest64);
-            free_reg(get_reg_stack(), width_reg);
+            if (width_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                         width_spill->offset, width_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", width_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
         }
         else
         {
@@ -2828,14 +2987,10 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         free_reg(get_reg_stack(), value_reg);
 
         /* Set precision to -1 if not real or not provided */
-        if (expr_is_real && !has_precision_reg)
+        if (expr_is_real && !precision_specified)
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t$-1, %s\n", precision_dest64);
             inst_list = add_inst(inst_list, buffer);
-        }
-        else if (!expr_is_real && has_precision_reg)
-        {
-            free_reg(get_reg_stack(), precision_reg);
         }
 
         const char *call_target = "gpc_write_integer";
@@ -3286,6 +3441,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Dec"))
+    {
+        inst_list = codegen_builtin_dec(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "New"))
     {
         inst_list = codegen_builtin_new(stmt, inst_list, ctx);
@@ -3298,6 +3462,24 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Dispose"))
     {
         inst_list = codegen_builtin_dispose(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Include"))
+    {
+        inst_list = codegen_builtin_include(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Exclude"))
+    {
+        inst_list = codegen_builtin_exclude(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

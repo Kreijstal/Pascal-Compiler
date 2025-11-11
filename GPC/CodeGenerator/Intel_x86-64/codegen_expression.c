@@ -47,6 +47,8 @@ static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_
     int offset, int element_size);
 static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+static int formal_decl_is_open_array(Tree_t *decl);
+static long long codegen_static_array_length(const struct Expression *expr);
 
 /* Helper to check if a formal parameter declaration expects a string type. */
 static int formal_decl_expects_string(Tree_t *decl)
@@ -69,6 +71,80 @@ static int formal_decl_expects_string(Tree_t *decl)
     }
 
     return 0;
+}
+
+static int codegen_param_expected_type(Tree_t *decl)
+{
+    if (decl == NULL)
+        return UNKNOWN_TYPE;
+
+    if (decl->type == TREE_VAR_DECL)
+        return decl->tree_data.var_decl_data.type;
+    if (decl->type == TREE_ARR_DECL)
+        return decl->tree_data.arr_decl_data.type;
+
+    return UNKNOWN_TYPE;
+}
+
+static int codegen_expected_type_for_builtin(const char *name)
+{
+    if (name == NULL)
+        return UNKNOWN_TYPE;
+
+    if (pascal_identifier_equals(name, "Trunc") ||
+        pascal_identifier_equals(name, "Int") ||
+        pascal_identifier_equals(name, "Round") ||
+        pascal_identifier_equals(name, "Frac") ||
+        pascal_identifier_equals(name, "Sqrt") ||
+        pascal_identifier_equals(name, "Sin") ||
+        pascal_identifier_equals(name, "Cos") ||
+        pascal_identifier_equals(name, "ArcTan") ||
+        pascal_identifier_equals(name, "DegToRad") ||
+        pascal_identifier_equals(name, "RadToDeg") ||
+        pascal_identifier_equals(name, "DegToGrad") ||
+        pascal_identifier_equals(name, "GradToDeg") ||
+        pascal_identifier_equals(name, "GradToRad") ||
+        pascal_identifier_equals(name, "RadToGrad") ||
+        pascal_identifier_equals(name, "CycleToRad") ||
+        pascal_identifier_equals(name, "RadToCycle"))
+    {
+        return REAL_TYPE;
+    }
+
+    return UNKNOWN_TYPE;
+}
+
+static ListNode_t *codegen_expr_convert_int_like_to_real(ListNode_t *inst_list,
+    Register_t *value_reg, int source_type)
+{
+    if (inst_list == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (source_type == LONGINT_TYPE)
+        snprintf(buffer, sizeof(buffer), "\tcvtsi2sdq\t%s, %%xmm0\n", value_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tcvtsi2sdl\t%s, %%xmm0\n", value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", value_reg->bit_64);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_expr_maybe_convert_int_like_to_real(int target_type,
+    struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list)
+{
+    if (inst_list == NULL || source_expr == NULL || value_reg == NULL)
+        return inst_list;
+
+    int source_type = expr_get_type_tag(source_expr);
+    if (target_type == REAL_TYPE &&
+        (source_type == INT_TYPE || source_type == LONGINT_TYPE))
+    {
+        inst_list = codegen_expr_convert_int_like_to_real(inst_list, value_reg, source_type);
+    }
+
+    return inst_list;
 }
 
 static unsigned long codegen_expr_next_temp_suffix(void)
@@ -96,6 +172,28 @@ static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size)
     snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp",
         codegen_expr_next_temp_suffix());
     return add_l_x(label, aligned);
+}
+
+static int formal_decl_is_open_array(Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_ARR_DECL)
+        return 0;
+
+    struct Array *arr = &decl->tree_data.arr_decl_data;
+    return (arr->e_range < arr->s_range);
+}
+
+static long long codegen_static_array_length(const struct Expression *expr)
+{
+    if (expr == NULL || !expr->is_array_expr || expr->array_is_dynamic)
+        return -1;
+
+    long long lower = expr->array_lower_bound;
+    long long upper = expr->array_upper_bound;
+    if (upper < lower)
+        return -1;
+
+    return (upper - lower) + 1;
 }
 
 static const char *codegen_register_name8(const Register_t *reg)
@@ -380,6 +478,10 @@ int expr_get_type_tag(const struct Expression *expr)
 {
     if (expr == NULL)
         return UNKNOWN_TYPE;
+
+    if (expr->type == EXPR_MULOP &&
+        expr->expr_data.mulop_data.mulop_type == SLASH)
+        return REAL_TYPE;
     
     /* Prefer GpcType if available */
     if (expr->resolved_gpc_type != NULL)
@@ -1559,14 +1661,14 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     return inst_list;
 }
 
-static ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, Register_t **out_reg)
+ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg, int force_char_set)
 {
     if (expr == NULL)
         return inst_list;
 
     /* Check if this is a character set literal */
-    int is_char_set = expr_is_char_set_ctx(expr, ctx);
+    int is_char_set = force_char_set || expr_is_char_set_ctx(expr, ctx);
     
     if (is_char_set)
     {
@@ -1805,7 +1907,7 @@ static ListNode_t *codegen_set_expr(struct Expression *expr, ListNode_t *inst_li
     }
 
     if (expr->type == EXPR_SET)
-        return codegen_set_literal(expr, inst_list, ctx, out_reg);
+        return codegen_set_literal(expr, inst_list, ctx, out_reg, 0);
 
     return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
 }
@@ -2630,11 +2732,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
     }
 
+    enum {
+        ARG_CLASS_INT = 0,
+        ARG_CLASS_SSE = 1
+    };
+
     typedef struct ArgInfo
     {
         Register_t *reg;
         StackNode_t *spill;
         struct Expression *expr;
+        int expected_type;
+        int is_pointer_like;
+        int assigned_class;
+        int assigned_index;
     } ArgInfo;
 
     int total_args = 0;
@@ -2697,12 +2808,97 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
         int is_var_param = (formal_arg_decl != NULL && formal_arg_decl->tree_data.var_decl_data.is_var_param);
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
+        int formal_is_open_array = formal_decl_is_open_array(formal_arg_decl);
         
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
 
-        /* Arrays and var parameters are passed by reference */
-        if(is_var_param || is_array_param || is_array_arg)
+        int expected_type = codegen_param_expected_type(formal_arg_decl);
+        if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
+            expected_type = codegen_expected_type_for_builtin(procedure_name);
+        int is_pointer_like = (is_var_param || is_array_param || is_array_arg);
+
+        if (arg_infos != NULL)
+        {
+            arg_infos[arg_num].expected_type = expected_type;
+            arg_infos[arg_num].is_pointer_like = is_pointer_like;
+            arg_infos[arg_num].assigned_class = ARG_CLASS_INT;
+            arg_infos[arg_num].assigned_index = -1;
+        }
+
+        if (formal_is_open_array && is_array_arg)
+        {
+            long long element_count = codegen_static_array_length(arg_expr);
+            if (element_count < 0)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to determine length for open array argument.");
+                return inst_list;
+            }
+
+            StackNode_t *desc_slot = codegen_alloc_temp_bytes("openarr_desc",
+                2 * CODEGEN_POINTER_SIZE_BYTES);
+            if (desc_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to allocate descriptor storage for open array argument.");
+                return inst_list;
+            }
+
+            if (!codegen_expr_is_addressable(arg_expr))
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unsupported expression type for open array argument.");
+                return inst_list;
+            }
+
+            Register_t *data_addr_reg = NULL;
+            inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &data_addr_reg);
+            if (codegen_had_error(ctx) || data_addr_reg == NULL)
+                return inst_list;
+
+            Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (desc_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), data_addr_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for open array descriptor.");
+                return inst_list;
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                desc_slot->offset, desc_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                data_addr_reg->bit_64, desc_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), data_addr_reg);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, 8(%s)\n",
+                element_count, desc_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            StackNode_t *arg_spill = add_l_t("arg_eval");
+            if (arg_spill != NULL && arg_infos != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    desc_addr_reg->bit_64, arg_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), desc_addr_reg);
+                
+                arg_infos[arg_num].reg = NULL;
+                arg_infos[arg_num].spill = arg_spill;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+            else if (arg_infos != NULL)
+            {
+                arg_infos[arg_num].reg = desc_addr_reg;
+                arg_infos[arg_num].spill = NULL;
+                arg_infos[arg_num].expr = arg_expr;
+            }
+        }
+        else if(is_var_param || is_array_param || is_array_arg)
         {
             Register_t *addr_reg = NULL;
             if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
@@ -2858,6 +3054,10 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
+            if (expected_type == REAL_TYPE)
+                inst_list = codegen_expr_maybe_convert_int_like_to_real(expected_type,
+                    arg_expr, top_reg, inst_list);
+
             /* Promote char arguments to strings when the formal parameter expects string. */
             if (formal_decl_expects_string(formal_arg_decl) && expr_has_type_tag(arg_expr, CHAR_TYPE))
             {
@@ -2916,10 +3116,44 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         ++arg_num;
     }
 
+    int next_gpr = arg_start_index;
+    int next_sse = 0;
+    if (arg_infos != NULL)
+    {
+        for (int i = 0; i < arg_num; ++i)
+        {
+            int use_sse = (arg_infos[i].expected_type == REAL_TYPE &&
+                !arg_infos[i].is_pointer_like);
+            if (use_sse)
+            {
+                arg_infos[i].assigned_class = ARG_CLASS_SSE;
+                arg_infos[i].assigned_index = next_sse++;
+            }
+            else
+            {
+                arg_infos[i].assigned_class = ARG_CLASS_INT;
+                arg_infos[i].assigned_index = next_gpr++;
+            }
+        }
+    }
+
     for (int i = arg_num - 1; i >= 0; --i)
     {
         int reg_index = arg_start_index + i;
-        arg_reg_char = get_arg_reg64_num(reg_index);
+        if (arg_infos != NULL && arg_infos[i].assigned_index >= 0)
+        {
+            reg_index = arg_infos[i].assigned_index;
+        }
+
+        int expected_type = (arg_infos != NULL) ? arg_infos[i].expected_type : UNKNOWN_TYPE;
+        int actual_type = (arg_infos != NULL && arg_infos[i].expr != NULL)
+            ? expr_get_type_tag(arg_infos[i].expr) : UNKNOWN_TYPE;
+        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE);
+
+        if (arg_infos != NULL && arg_infos[i].assigned_class == ARG_CLASS_SSE)
+            arg_reg_char = current_arg_reg_xmm(reg_index);
+        else
+            arg_reg_char = get_arg_reg64_num(reg_index);
         if (arg_reg_char == NULL)
         {
             fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
@@ -2949,14 +3183,28 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         struct Expression *source_expr = arg_infos != NULL ? arg_infos[i].expr : NULL;
         if (stored_reg != NULL)
         {
+            if (needs_int_to_long && arg_infos != NULL &&
+                arg_infos[i].assigned_class == ARG_CLASS_INT)
+            {
+                inst_list = codegen_sign_extend32_to64(inst_list,
+                    stored_reg->bit_32, stored_reg->bit_64);
+            }
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
             inst_list = add_inst(inst_list, buffer);
             free_reg(get_reg_stack(), stored_reg);
         }
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                arg_infos[i].spill->offset, arg_reg_char);
+            if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovslq\t-%d(%%rbp), %s\n",
+                    arg_infos[i].spill->offset, arg_reg_char);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    arg_infos[i].spill->offset, arg_reg_char);
+            }
             inst_list = add_inst(inst_list, buffer);
         }
         else
