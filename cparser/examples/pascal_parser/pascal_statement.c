@@ -120,6 +120,32 @@ static bool peek_assignment_operator(input_t* in) {
     return false;
 }
 
+static bool next_non_layout_is_comma(input_t* in) {
+    if (in == NULL || in->buffer == NULL)
+        return false;
+    int length = in->length > 0 ? in->length : (int)strlen(in->buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    return (pos < length && in->buffer[pos] == ',');
+}
+
+static ParseResult with_context_comma_guard_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    if (next_non_layout_is_comma(in)) {
+        return make_failure_v2(in, parser_name,
+            strdup("Expected expression in WITH context list"), NULL);
+    }
+    return make_success(ast_nil);
+}
+
+static combinator_t* with_context_comma_guard(void) {
+    combinator_t* comb = new_combinator();
+    comb->type = COMB_EXPECT;
+    comb->fn = with_context_comma_guard_fn;
+    comb->args = NULL;
+    comb->name = strdup("with_context_comma_guard");
+    return comb;
+}
+
 static ast_t* wrap_with_contexts(ast_t* contexts) {
     if (contexts == NULL || contexts == ast_nil) {
         return ast_nil;
@@ -695,15 +721,24 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // With statement: with expression[, expression...] do statement
-    combinator_t* with_contexts = map(
-        sep_by1(lazy(expr_parser), token(match(","))),
-        wrap_with_contexts
+    combinator_t* with_additional_context = seq(new_combinator(), PASCAL_T_NONE,
+        token(match(",")),
+        commit(lazy(expr_parser)),
+        NULL
     );
+    combinator_t* with_context_sequence = seq(new_combinator(), PASCAL_T_NONE,
+        lazy(expr_parser),
+        many(with_additional_context),
+        NULL
+    );
+    combinator_t* with_contexts = map(with_context_sequence, wrap_with_contexts);
 
     combinator_t* with_stmt = seq(new_combinator(), PASCAL_T_WITH_STMT,
         token(keyword_ci("with")),               // with keyword (case-insensitive)
         commit(seq(new_combinator(), PASCAL_T_NONE,
+            commit(with_context_comma_guard()),
             with_contexts,                        // one or more context expressions
+            commit(with_context_comma_guard()),
             token(keyword_ci("do")),                 // do keyword (case-insensitive)
             lazy(stmt_parser),                     // body statement
             NULL
@@ -800,7 +835,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     // but restricted to avoid conflicts with statement parsing
     combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
         integer(PASCAL_T_INTEGER),
-        char_literal(PASCAL_T_CHAR), 
+        char_literal(PASCAL_T_CHAR),
+        control_char_literal(PASCAL_T_CHAR),
         cident(PASCAL_T_IDENTIFIER),
         between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
         NULL);

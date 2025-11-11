@@ -2029,7 +2029,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             // Try to parse the full type spec; if that fails, consume up to '=' as a fallback
             multi(new_combinator(), PASCAL_T_NONE,
                 type_spec,
-                map(until(token(match("=")), PASCAL_T_NONE), discard_ast)
+                map(until(token(match("=")), PASCAL_T_NONE), discard_ast),
+                NULL
             ),
             NULL
         )),
@@ -2491,14 +2492,12 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     ));
 
     // Complete program: optional header; optional uses clause; declarations/sections interspersed; optional exports; optional main block.
-    combinator_t* skip_to_period_prog = map(until(token(match(".")), PASCAL_T_NONE), discard_ast);
     seq(*p, PASCAL_T_PROGRAM_DECL,
         optional(program_header),                    // optional "program" header
         optional(uses_section),                      // optional uses clause
         many(declaration_or_section),                // const/type/var sections and procedures/functions in any order
         exports_section_prog,                        // optional exports section (for libraries)
         optional(main_block),                        // optional main program block
-        optional(skip_to_period_prog),               // be permissive: skip any trailing content up to '.'
         token(match(".")),                           // final period
         NULL
     );

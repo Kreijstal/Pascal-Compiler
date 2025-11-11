@@ -338,6 +338,49 @@ combinator_t* char_literal(tag_t tag) {
     return comb;
 }
 
+static ParseResult control_char_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    if (read1(in) != '^') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '^' for control character"), NULL);
+    }
+
+    char c = read1(in);
+    if (c == EOF || c == '\n' || c == '\r') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected character after '^'"), NULL);
+    }
+
+    unsigned char raw = (unsigned char)c;
+    char value = (char)(raw & 0x1F);
+
+    char text[2];
+    text[0] = value;
+    text[1] = '\0';
+
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    return make_success(ast);
+}
+
+combinator_t* control_char_literal(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY;
+    comb->fn = control_char_fn;
+    comb->args = args;
+    return comb;
+}
+
 // Custom parser for character code literals (e.g., #13, #$0D)
 static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -941,6 +984,7 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
     // Parse first item: try char literal first, then string, then char code
     combinator_t* first_item = token(multi(new_combinator(), PASCAL_T_NONE,
         char_literal(PASCAL_T_CHAR),
+        control_char_literal(PASCAL_T_CHAR),
         pascal_string(PASCAL_T_STRING),
         char_code_literal(PASCAL_T_CHAR_CODE),
         NULL
@@ -966,6 +1010,7 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
         combinator_t* next_item = token(multi(new_combinator(), PASCAL_T_NONE,
             pascal_string(PASCAL_T_STRING),
             char_code_literal(PASCAL_T_CHAR_CODE),
+            control_char_literal(PASCAL_T_CHAR),
             NULL
         ));
         

@@ -963,16 +963,14 @@ void test_pascal_relational_operators(void) {
     }
 }
 
-}
-
 // Test boolean operators
 void test_pascal_boolean_operators(void) {
     const char* expressions[] = {
         "true and false", "true or false", "not true", "true xor false"
-
+    };
     pascal_tag_t expected_tags[] = {
         PASCAL_T_AND, PASCAL_T_OR, PASCAL_T_NOT, PASCAL_T_XOR
-
+    };
     
     for (int i = 0; i < 4; i++) {
         combinator_t* p = new_combinator();
@@ -997,18 +995,8 @@ void test_pascal_bitwise_operators(void) {
     const char* expressions[] = { "8 shl 2", "8 shr 1", "8 rol 3", "8 ror 2" };
     pascal_tag_t expected_tags[] = { PASCAL_T_SHL, PASCAL_T_SHR, PASCAL_T_ROL, PASCAL_T_ROR };
 
-
-
-
-
-
-
-
-
-
-
-
-
+    for (int i = 0; i < 4; i++) {
+        combinator_t* p = new_combinator();
         init_pascal_expression_parser(&p, NULL);
 
         input_t* input = new_input();
@@ -1020,7 +1008,8 @@ void test_pascal_bitwise_operators(void) {
         TEST_ASSERT(res.is_success);
         TEST_ASSERT(res.value.ast->typ == expected_tags[i]);
 
-        free_ast(res.value.ast);        free(input->buffer);
+        free_ast(res.value.ast);
+        free(input->buffer);
         free_input(input);
     }
 }
@@ -1210,6 +1199,7 @@ void test_pascal_char_set(void) {
 }
 
 // Regression: routine-local repeated const sections with typed record/array consts
+void test_program_routine_local_typed_consts(void) {
     combinator_t* p = get_program_parser();
     const char* src =
         "program P;\n"
@@ -1226,10 +1216,12 @@ void test_pascal_char_set(void) {
     ParseResult res = parse(input, p);
     TEST_ASSERT(res.is_success);
     if (res.is_success) free_ast(res.value.ast); else free_error(res.value.error);
-    free(input->buffer); free_input(input);
+    free(input->buffer);
+    free_input(input);
 }
 
 // Regression: case statement with begin..end branch inside routine
+void test_program_case_with_begin_end_branch(void) {
     combinator_t* p = get_program_parser();
     const char* src =
         "program P;\n"
@@ -1245,7 +1237,8 @@ void test_pascal_char_set(void) {
     ParseResult res = parse(input, p);
     TEST_ASSERT(res.is_success);
     if (res.is_success) free_ast(res.value.ast); else free_error(res.value.error);
-    free(input->buffer); free_input(input);
+    free(input->buffer);
+    free_input(input);
 }
 
 // Regression: routine directive between header and body should parse
@@ -4970,10 +4963,13 @@ TEST_LIST = {
     { "test_external_library_debug", test_external_library_debug },
     { "test_external_minimal_debug", test_external_minimal_debug },
     { "test_external_no_args_debug", test_external_no_args_debug },
+    { "test_program_routine_local_typed_consts", test_program_routine_local_typed_consts },
+    { "test_program_case_with_begin_end_branch", test_program_case_with_begin_end_branch },
     { "test_program_routine_directive_before_body", test_program_routine_directive_before_body },
     { "test_type_subroutine_with_stdcall", test_type_subroutine_with_stdcall },
     { "test_var_absolute_clause", test_var_absolute_clause },
     { "test_library_header_and_exports", test_library_header_and_exports },
     { NULL, NULL }
+};
 
 

@@ -900,6 +900,7 @@ static combinator_t* create_variant_branch_parser(combinator_t** record_item_ref
     combinator_t* label_atom = multi(new_combinator(), PASCAL_T_CASE_LABEL,
         token(integer(PASCAL_T_INTEGER)),
         token(char_literal(PASCAL_T_CHAR)),
+        token(control_char_literal(PASCAL_T_CHAR)),
         token(char_code_literal(PASCAL_T_CHAR_CODE)),
         token(pascal_string(PASCAL_T_STRING)),
         token(pascal_identifier(PASCAL_T_IDENTIFIER)),
