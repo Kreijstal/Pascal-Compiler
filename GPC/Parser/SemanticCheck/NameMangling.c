@@ -46,6 +46,8 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_ENUM;
         case FILE_TYPE:
             return HASHVAR_FILE;
+        case ARRAY_OF_CONST_TYPE:
+            return HASHVAR_ARRAY;
         default:
             return HASHVAR_UNTYPED;
     }

@@ -2,6 +2,43 @@ unit Math;
 
 interface
 
+const
+    Pi = 3.14159265358979323846;
+
+function Sqrt(Value: Real): Real;
+function Sin(Value: Real): Real;
+function Cos(Value: Real): Real;
+function Tan(Value: Real): Real;
+function Cot(Value: Real): Real;
+function Sec(Value: Real): Real;
+function Csc(Value: Real): Real;
+function ArcSin(Value: Real): Real;
+function ArcCos(Value: Real): Real;
+function ArcTan(Value: Real): Real;
+function ArcTan2(Y, X: Real): Real;
+function ArcCot(Value: Real): Real;
+function Sinh(Value: Real): Real;
+function Cosh(Value: Real): Real;
+function Tanh(Value: Real): Real;
+function Coth(Value: Real): Real;
+function Sech(Value: Real): Real;
+function Csch(Value: Real): Real;
+function ArcSinh(Value: Real): Real;
+function ArcCosh(Value: Real): Real;
+function ArcTanh(Value: Real): Real;
+function ArcCoth(Value: Real): Real;
+function ArcSech(Value: Real): Real;
+function ArcCsch(Value: Real): Real;
+function Exp(Value: Real): Real;
+function Ln(Value: Real): Real;
+function LogN(Base, Value: Real): Real;
+function Hypot(X, Y: Real): Real;
+function Power(Base, Exponent: Real): Real;
+function Round(Value: Real): Longint;
+function Trunc(Value: Real): Longint;
+function Int(Value: Real): Longint;
+function Frac(Value: Real): Real;
+
 function Max(a, b: integer): integer;
 function Max(a, b: longint): longint;
 function Min(a, b: integer): integer;
@@ -31,7 +68,216 @@ procedure SinCos(Angle: Real; var SinValue, CosValue: Real);
 implementation
 
 const
-    PI_VALUE = 3.14159265358979323846;
+    PI_VALUE = Pi;
+
+function gpc_sqrt(Value: Real): Real; external;
+function gpc_sin(Value: Real): Real; external;
+function gpc_cos(Value: Real): Real; external;
+function gpc_tan(Value: Real): Real; external;
+function gpc_cot(Value: Real): Real; external;
+function gpc_sec(Value: Real): Real; external;
+function gpc_csc(Value: Real): Real; external;
+function gpc_sinh(Value: Real): Real; external;
+function gpc_cosh(Value: Real): Real; external;
+function gpc_tanh(Value: Real): Real; external;
+function gpc_coth(Value: Real): Real; external;
+function gpc_sech(Value: Real): Real; external;
+function gpc_csch(Value: Real): Real; external;
+function gpc_arcsin(Value: Real): Real; external;
+function gpc_arccos(Value: Real): Real; external;
+function gpc_arctan(Value: Real): Real; external;
+function gpc_arctan2(Y, X: Real): Real; external;
+function gpc_arccot(Value: Real): Real; external;
+function gpc_arcsinh(Value: Real): Real; external;
+function gpc_arccosh(Value: Real): Real; external;
+function gpc_arctanh(Value: Real): Real; external;
+function gpc_arccoth(Value: Real): Real; external;
+function gpc_arcsech(Value: Real): Real; external;
+function gpc_arccsch(Value: Real): Real; external;
+function gpc_exp(Value: Real): Real; external;
+function gpc_ln(Value: Real): Real; external;
+function gpc_logn(Base, Value: Real): Real; external;
+function gpc_hypot(X, Y: Real): Real; external;
+function gpc_power(Base, Exponent: Real): Real; external;
+function gpc_round(Value: Real): int64; external;
+function gpc_trunc(Value: Real): int64; external;
+function gpc_int(Value: Real): int64; external;
+function gpc_frac(Value: Real): Real; external;
+function gpc_ceil(Value: Real): int64; external;
+function gpc_floor(Value: Real): int64; external;
+function gpc_deg_to_rad(Value: Real): Real; external;
+function gpc_rad_to_deg(Value: Real): Real; external;
+function gpc_deg_to_grad(Value: Real): Real; external;
+function gpc_grad_to_deg(Value: Real): Real; external;
+function gpc_grad_to_rad(Value: Real): Real; external;
+function gpc_rad_to_grad(Value: Real): Real; external;
+function gpc_cycle_to_rad(Value: Real): Real; external;
+function gpc_rad_to_cycle(Value: Real): Real; external;
+
+function Sqrt(Value: Real): Real;
+begin
+    Sqrt := gpc_sqrt(Value);
+end;
+
+function Sin(Value: Real): Real;
+begin
+    Sin := gpc_sin(Value);
+end;
+
+function Cos(Value: Real): Real;
+begin
+    Cos := gpc_cos(Value);
+end;
+
+function Tan(Value: Real): Real;
+begin
+    Tan := gpc_tan(Value);
+end;
+
+function Cot(Value: Real): Real;
+begin
+    Cot := gpc_cot(Value);
+end;
+
+function Sec(Value: Real): Real;
+begin
+    Sec := gpc_sec(Value);
+end;
+
+function Csc(Value: Real): Real;
+begin
+    Csc := gpc_csc(Value);
+end;
+
+function ArcSin(Value: Real): Real;
+begin
+    ArcSin := gpc_arcsin(Value);
+end;
+
+function ArcCos(Value: Real): Real;
+begin
+    ArcCos := gpc_arccos(Value);
+end;
+
+function ArcTan(Value: Real): Real;
+begin
+    ArcTan := gpc_arctan(Value);
+end;
+
+function ArcTan2(Y, X: Real): Real;
+begin
+    ArcTan2 := gpc_arctan2(Y, X);
+end;
+
+function ArcCot(Value: Real): Real;
+begin
+    ArcCot := gpc_arccot(Value);
+end;
+
+function Sinh(Value: Real): Real;
+begin
+    Sinh := gpc_sinh(Value);
+end;
+
+function Cosh(Value: Real): Real;
+begin
+    Cosh := gpc_cosh(Value);
+end;
+
+function Tanh(Value: Real): Real;
+begin
+    Tanh := gpc_tanh(Value);
+end;
+
+function Coth(Value: Real): Real;
+begin
+    Coth := gpc_coth(Value);
+end;
+
+function Sech(Value: Real): Real;
+begin
+    Sech := gpc_sech(Value);
+end;
+
+function Csch(Value: Real): Real;
+begin
+    Csch := gpc_csch(Value);
+end;
+
+function ArcSinh(Value: Real): Real;
+begin
+    ArcSinh := gpc_arcsinh(Value);
+end;
+
+function ArcCosh(Value: Real): Real;
+begin
+    ArcCosh := gpc_arccosh(Value);
+end;
+
+function ArcTanh(Value: Real): Real;
+begin
+    ArcTanh := gpc_arctanh(Value);
+end;
+
+function ArcCoth(Value: Real): Real;
+begin
+    ArcCoth := gpc_arccoth(Value);
+end;
+
+function ArcSech(Value: Real): Real;
+begin
+    ArcSech := gpc_arcsech(Value);
+end;
+
+function ArcCsch(Value: Real): Real;
+begin
+    ArcCsch := gpc_arccsch(Value);
+end;
+
+function Exp(Value: Real): Real;
+begin
+    Exp := gpc_exp(Value);
+end;
+
+function Ln(Value: Real): Real;
+begin
+    Ln := gpc_ln(Value);
+end;
+
+function LogN(Base, Value: Real): Real;
+begin
+    LogN := gpc_logn(Base, Value);
+end;
+
+function Hypot(X, Y: Real): Real;
+begin
+    Hypot := gpc_hypot(X, Y);
+end;
+
+function Power(Base, Exponent: Real): Real;
+begin
+    Power := gpc_power(Base, Exponent);
+end;
+
+function Round(Value: Real): Longint;
+begin
+    Round := Longint(gpc_round(Value));
+end;
+
+function Trunc(Value: Real): Longint;
+begin
+    Trunc := Longint(gpc_trunc(Value));
+end;
+
+function Int(Value: Real): Longint;
+begin
+    Int := Longint(gpc_int(Value));
+end;
+
+function Frac(Value: Real): Real;
+begin
+    Frac := gpc_frac(Value);
+end;
 
 function Max(a, b: integer): integer;
 begin
@@ -183,71 +429,59 @@ begin
 end;
 
 function Ceil(Value: Real): Longint;
-var
-    truncated: Longint;
 begin
-    truncated := Trunc(Value);
-    if Value > truncated then
-        Ceil := truncated + 1
-    else
-        Ceil := truncated;
+    Ceil := Longint(gpc_ceil(Value));
 end;
 
 function Floor(Value: Real): Longint;
-var
-    truncated: Longint;
 begin
-    truncated := Trunc(Value);
-    if (Value < 0) and (Value <> truncated) then
-        Floor := truncated - 1
-    else
-        Floor := truncated;
+    Floor := Longint(gpc_floor(Value));
 end;
 
 function DegToRad(Degrees: Real): Real;
 begin
-    DegToRad := Degrees * PI_VALUE / 180.0;
+    DegToRad := gpc_deg_to_rad(Degrees);
 end;
 
 function RadToDeg(Radians: Real): Real;
 begin
-    RadToDeg := Radians * 180.0 / PI_VALUE;
+    RadToDeg := gpc_rad_to_deg(Radians);
 end;
 
 function DegToGrad(Degrees: Real): Real;
 begin
-    DegToGrad := Degrees * 400.0 / 360.0;
+    DegToGrad := gpc_deg_to_grad(Degrees);
 end;
 
 function GradToDeg(Grads: Real): Real;
 begin
-    GradToDeg := Grads * 360.0 / 400.0;
+    GradToDeg := gpc_grad_to_deg(Grads);
 end;
 
 function GradToRad(Grads: Real): Real;
 begin
-    GradToRad := DegToRad(GradToDeg(Grads));
+    GradToRad := gpc_grad_to_rad(Grads);
 end;
 
 function RadToGrad(Radians: Real): Real;
 begin
-    RadToGrad := DegToGrad(RadToDeg(Radians));
+    RadToGrad := gpc_rad_to_grad(Radians);
 end;
 
 function CycleToRad(Cycles: Real): Real;
 begin
-    CycleToRad := Cycles * 2.0 * PI_VALUE;
+    CycleToRad := gpc_cycle_to_rad(Cycles);
 end;
 
 function RadToCycle(Radians: Real): Real;
 begin
-    RadToCycle := Radians / (2.0 * PI_VALUE);
+    RadToCycle := gpc_rad_to_cycle(Radians);
 end;
 
 procedure SinCos(Angle: Real; var SinValue, CosValue: Real);
 begin
-    SinValue := sin(Angle);
-    CosValue := cos(Angle);
+    SinValue := Sin(Angle);
+    CosValue := Cos(Angle);
 end;
 
 end.

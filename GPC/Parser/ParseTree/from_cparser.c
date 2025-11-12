@@ -148,6 +148,7 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
 
 typedef struct {
     int is_array;
+    int is_array_of_const;
     int start;
     int end;
     int element_type;
@@ -885,12 +886,19 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             if (element_node != NULL) {
                 if (element_node->typ == PASCAL_T_IDENTIFIER) {
                     char *dup = dup_symbol(element_node);
-                    int mapped = map_type_name(dup, &type_info->element_type_id);
-                    type_info->element_type = mapped;
-                    if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
-                        type_info->element_type_id = dup;
-                    else if (mapped != UNKNOWN_TYPE)
+                    if (dup != NULL && strcasecmp(dup, "const") == 0) {
+                        type_info->is_array_of_const = 1;
+                        type_info->element_type = ARRAY_OF_CONST_TYPE;
+                        type_info->is_open_array = 1;
                         free(dup);
+                    } else {
+                        int mapped = map_type_name(dup, &type_info->element_type_id);
+                        type_info->element_type = mapped;
+                        if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
+                            type_info->element_type_id = dup;
+                        else if (mapped != UNKNOWN_TYPE)
+                            free(dup);
+                    }
                 } else if (element_node->typ == PASCAL_T_TYPE_SPEC) {
                     char *nested_id = NULL;
                     struct RecordType *nested_record = NULL;
@@ -904,6 +912,15 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     if (nested_record != NULL)
                         destroy_record_type(nested_record);
                     destroy_type_info_contents(&nested_info);
+                }
+                if (type_info->element_type_id != NULL &&
+                    strcasecmp(type_info->element_type_id, "const") == 0)
+                {
+                    free(type_info->element_type_id);
+                    type_info->element_type_id = NULL;
+                    type_info->is_array_of_const = 1;
+                    type_info->element_type = ARRAY_OF_CONST_TYPE;
+                    type_info->is_open_array = 1;
                 }
             }
         }

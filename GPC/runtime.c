@@ -9,6 +9,7 @@
 #include <math.h>
 
 #include "runtime_internal.h"
+#include "format_arg.h"
 
 static const double GPC_PI = 3.14159265358979323846264338327950288;
 static uint64_t gpc_rand_state = 0x9e3779b97f4a7c15ULL;
@@ -1799,6 +1800,343 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
     }
 
     return result;
+}
+
+typedef struct
+{
+    char *data;
+    size_t length;
+    size_t capacity;
+} gpc_format_builder;
+
+static void gpc_format_builder_init(gpc_format_builder *builder)
+{
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+}
+
+static void gpc_format_builder_free(gpc_format_builder *builder)
+{
+    if (builder->data != NULL)
+        free(builder->data);
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+}
+
+static int gpc_format_builder_reserve(gpc_format_builder *builder, size_t extra)
+{
+    size_t needed = builder->length + extra + 1;
+    if (needed <= builder->capacity)
+        return 1;
+    size_t new_capacity = (builder->capacity == 0) ? 64 : builder->capacity;
+    while (new_capacity < needed)
+        new_capacity *= 2;
+    char *new_data = (char *)realloc(builder->data, new_capacity);
+    if (new_data == NULL)
+        return 0;
+    builder->data = new_data;
+    builder->capacity = new_capacity;
+    return 1;
+}
+
+static int gpc_format_builder_append_buf(gpc_format_builder *builder, const char *buf, size_t len)
+{
+    if (len == 0)
+        return 1;
+    if (!gpc_format_builder_reserve(builder, len))
+        return 0;
+    memcpy(builder->data + builder->length, buf, len);
+    builder->length += len;
+    builder->data[builder->length] = '\0';
+    return 1;
+}
+
+static int gpc_format_builder_append_char(gpc_format_builder *builder, char ch)
+{
+    return gpc_format_builder_append_buf(builder, &ch, 1);
+}
+
+static int gpc_format_builder_append_padding(gpc_format_builder *builder, size_t count)
+{
+    if (count == 0)
+        return 1;
+    if (!gpc_format_builder_reserve(builder, count))
+        return 0;
+    memset(builder->data + builder->length, ' ', count);
+    builder->length += count;
+    builder->data[builder->length] = '\0';
+    return 1;
+}
+
+static int gpc_format_builder_append_formatted(gpc_format_builder *builder,
+    const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0)
+        return 0;
+    if (!gpc_format_builder_reserve(builder, (size_t)needed))
+        return 0;
+    va_start(args, fmt);
+    vsnprintf(builder->data + builder->length, builder->capacity - builder->length, fmt, args);
+    va_end(args);
+    builder->length += (size_t)needed;
+    return 1;
+}
+
+static int gpc_format_builder_append_string_with_width(gpc_format_builder *builder,
+    const char *value, size_t value_len, int width, int left_align)
+{
+    size_t padding = 0;
+    if (width > 0 && (size_t)width > value_len)
+        padding = (size_t)width - value_len;
+    if (!left_align && padding > 0)
+    {
+        if (!gpc_format_builder_append_padding(builder, padding))
+            return 0;
+    }
+    if (!gpc_format_builder_append_buf(builder, value, value_len))
+        return 0;
+    if (left_align && padding > 0)
+    {
+        if (!gpc_format_builder_append_padding(builder, padding))
+            return 0;
+    }
+    return 1;
+}
+
+char *gpc_format(const char *fmt, const gpc_tvarrec *args, size_t arg_count)
+{
+    if (fmt == NULL)
+        fmt = "";
+
+    gpc_format_builder builder;
+    gpc_format_builder_init(&builder);
+
+    size_t arg_index = 0;
+    while (*fmt != '\0')
+    {
+        if (*fmt != '%')
+        {
+            if (!gpc_format_builder_append_char(&builder, *fmt++))
+            {
+                gpc_format_builder_free(&builder);
+                return gpc_alloc_empty_string();
+            }
+            continue;
+        }
+
+        ++fmt;
+        if (*fmt == '%')
+        {
+            if (!gpc_format_builder_append_char(&builder, '%'))
+            {
+                gpc_format_builder_free(&builder);
+                return gpc_alloc_empty_string();
+            }
+            ++fmt;
+            continue;
+        }
+
+        int left_align = 0;
+        if (*fmt == '-')
+        {
+            left_align = 1;
+            ++fmt;
+        }
+
+        int width = -1;
+        if (isdigit((unsigned char)*fmt))
+        {
+            width = 0;
+            while (isdigit((unsigned char)*fmt))
+            {
+                width = width * 10 + (*fmt - '0');
+                ++fmt;
+            }
+        }
+
+        int precision = -1;
+        if (*fmt == '.')
+        {
+            ++fmt;
+            precision = 0;
+            while (isdigit((unsigned char)*fmt))
+            {
+                precision = precision * 10 + (*fmt - '0');
+                ++fmt;
+            }
+        }
+
+        char spec = *fmt ? *fmt++ : '\0';
+        if (spec == '\0')
+            break;
+
+        if (arg_index >= arg_count || args == NULL)
+        {
+            gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+            continue;
+        }
+
+        const gpc_tvarrec *arg = &args[arg_index++];
+        switch (spec)
+        {
+            case 'd':
+            case 'i':
+            case 'u':
+            case 'x':
+            case 'X':
+            case 'p':
+            case 'P':
+            {
+                long long value = arg->data.v_int;
+                if (arg->kind == GPC_TVAR_KIND_BOOL || arg->kind == GPC_TVAR_KIND_CHAR)
+                    value = arg->data.v_int;
+                else if (arg->kind == GPC_TVAR_KIND_POINTER || arg->kind == GPC_TVAR_KIND_STRING)
+                    value = (long long)(intptr_t)arg->data.v_ptr;
+                else if (arg->kind != GPC_TVAR_KIND_INT)
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+
+                char fmtbuf[32];
+                size_t pos = 0;
+                fmtbuf[pos++] = '%';
+                if (left_align)
+                    fmtbuf[pos++] = '-';
+                if (width >= 0)
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
+                if (precision >= 0 && spec != 'p' && spec != 'P')
+                {
+                    fmtbuf[pos++] = '.';
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", precision);
+                }
+                fmtbuf[pos++] = spec;
+                fmtbuf[pos] = '\0';
+
+                if (!gpc_format_builder_append_formatted(&builder, fmtbuf, value))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            case 'f':
+            case 'F':
+            case 'g':
+            case 'G':
+            case 'e':
+            case 'E':
+            case 'n':
+            case 'N':
+            {
+                double real_value = 0.0;
+                if (arg->kind == GPC_TVAR_KIND_REAL)
+                    real_value = arg->data.v_real;
+                else if (arg->kind == GPC_TVAR_KIND_INT || arg->kind == GPC_TVAR_KIND_BOOL ||
+                         arg->kind == GPC_TVAR_KIND_CHAR)
+                    real_value = (double)arg->data.v_int;
+                else
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+
+                char fmtbuf[32];
+                size_t pos = 0;
+                fmtbuf[pos++] = '%';
+                if (left_align)
+                    fmtbuf[pos++] = '-';
+                if (width >= 0)
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
+                if (precision >= 0)
+                {
+                    fmtbuf[pos++] = '.';
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", precision);
+                }
+                fmtbuf[pos++] = spec;
+                fmtbuf[pos] = '\0';
+
+                if (!gpc_format_builder_append_formatted(&builder, fmtbuf, real_value))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            case 's':
+            case 'S':
+            {
+                const char *str_ptr = (const char *)arg->data.v_ptr;
+                if (arg->kind == GPC_TVAR_KIND_CHAR)
+                {
+                    char ch = (char)(arg->data.v_int & 0xFF);
+                    char temp[2] = { ch, '\0' };
+                    str_ptr = temp;
+                    size_t len = 1;
+                    if (!gpc_format_builder_append_string_with_width(&builder, temp, len, width, left_align))
+                    {
+                        gpc_format_builder_free(&builder);
+                        return gpc_alloc_empty_string();
+                    }
+                    break;
+                }
+                if (arg->kind != GPC_TVAR_KIND_STRING && arg->kind != GPC_TVAR_KIND_POINTER)
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+                if (str_ptr == NULL)
+                    str_ptr = "";
+                size_t len = gpc_string_known_length(str_ptr);
+                if (precision >= 0 && (size_t)precision < len)
+                    len = (size_t)precision;
+                if (!gpc_format_builder_append_string_with_width(&builder, str_ptr, len, width, left_align))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            case 'c':
+            case 'C':
+            {
+                char ch = 0;
+                if (arg->kind == GPC_TVAR_KIND_CHAR || arg->kind == GPC_TVAR_KIND_INT ||
+                    arg->kind == GPC_TVAR_KIND_BOOL)
+                    ch = (char)(arg->data.v_int & 0xFF);
+                else
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+                if (!gpc_format_builder_append_string_with_width(&builder, &ch, 1, width, left_align))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            default:
+                gpc_format_builder_append_char(&builder, spec);
+                break;
+        }
+    }
+
+    if (!gpc_format_builder_reserve(&builder, 0))
+    {
+        gpc_format_builder_free(&builder);
+        return gpc_alloc_empty_string();
+    }
+
+    char *result = gpc_string_duplicate(builder.data != NULL ? builder.data : "");
+    gpc_format_builder_free(&builder);
+    return result != NULL ? result : gpc_alloc_empty_string();
 }
 
 /* Wrapper for memcpy to be called from assembly code */

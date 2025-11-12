@@ -8,6 +8,7 @@ uses
 type
     TDateTime = longint;
     AnsiString = string;
+    PChar = ^Char;
     NativeUInt = cuint64;
     Uint64 = cuint64;
 
@@ -29,9 +30,11 @@ function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
-function Format(const Fmt: string; const Args: array of Integer): string;
+function Format(const Fmt: string; const Args: array of const): string;
 
 implementation
+
+function gpc_format(fmt: AnsiString; args: Pointer; count: NativeUInt): AnsiString; external;
 
 procedure Sleep(milliseconds: integer);
 begin
@@ -341,49 +344,15 @@ begin
     FormatDateTime := resultPtr;
 end;
 
-function Format(const Fmt: string; const Args: array of Integer): string;
+function Format(const Fmt: string; const Args: array of const): string;
 var
-    i, argIndex, argCount: Integer;
-    spec: Char;
-    resultStr: string;
+    ArgPointer: Pointer;
 begin
-    resultStr := '';
-    argIndex := 0;
-    argCount := Length(Args);
-    i := 1;
-    while i <= Length(Fmt) do
-    begin
-        if (Fmt[i] = '%') then
-        begin
-            Inc(i);
-            if i > Length(Fmt) then
-            begin
-                resultStr := resultStr + '%';
-                break;
-            end;
-            spec := Fmt[i];
-            case spec of
-                '%':
-                    resultStr := resultStr + '%';
-                'd', 'D':
-                    begin
-                        if argIndex < argCount then
-                        begin
-                            resultStr := resultStr + IntToStr(Args[argIndex]);
-                            Inc(argIndex);
-                        end
-                        else
-                            resultStr := resultStr + '%d';
-                    end;
-                else
-                    resultStr := resultStr + '%' + spec;
-            end;
-        end
-        else
-            resultStr := resultStr + Fmt[i];
-        Inc(i);
-    end;
-    Format := resultStr;
+    if Length(Args) > 0 then
+        ArgPointer := @Args[Low(Args)]
+    else
+        ArgPointer := nil;
+    Format := gpc_format(Fmt, ArgPointer, Length(Args));
 end;
 
 end.

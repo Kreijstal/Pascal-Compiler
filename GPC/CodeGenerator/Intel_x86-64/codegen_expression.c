@@ -22,6 +22,7 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../identifier_utils.h"
+#include "../../format_arg.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
@@ -46,6 +47,8 @@ static const char *codegen_register_name16(const Register_t *reg);
 static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_t *value_reg,
     int offset, int element_size);
 static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
+static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
 static int formal_decl_is_open_array(Tree_t *decl);
 static long long codegen_static_array_length(const struct Expression *expr);
@@ -347,6 +350,9 @@ static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL || out_reg == NULL)
         return inst_list;
 
+    if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
+        return codegen_materialize_array_of_const(expr, inst_list, ctx, out_reg);
+
     int element_size = expr_get_array_element_size(expr, ctx);
     if (element_size <= 0)
         element_size = DOUBLEWORD;
@@ -420,6 +426,121 @@ static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
 
     snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", desc_slot->offset, addr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
+    *out_reg = addr_reg;
+    return inst_list;
+}
+
+static int codegen_format_arg_kind_for_expr(struct Expression *expr)
+{
+    int type_tag = expr_get_type_tag(expr);
+    switch (type_tag)
+    {
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            return GPC_TVAR_KIND_INT;
+        case BOOL:
+            return GPC_TVAR_KIND_BOOL;
+        case CHAR_TYPE:
+            return GPC_TVAR_KIND_CHAR;
+        case REAL_TYPE:
+            return GPC_TVAR_KIND_REAL;
+        case STRING_TYPE:
+            return GPC_TVAR_KIND_STRING;
+        case POINTER_TYPE:
+            return GPC_TVAR_KIND_POINTER;
+        default:
+            return -1;
+    }
+}
+
+static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL || out_reg == NULL)
+        return inst_list;
+
+    const int element_size = (int)sizeof(gpc_tvarrec);
+    int element_count = expr->expr_data.array_literal_data.element_count;
+    int data_size = codegen_expr_align_to(element_count * element_size, DOUBLEWORD);
+    StackNode_t *data_slot = codegen_alloc_temp_bytes("arr_const_data", data_size);
+    if (data_slot == NULL)
+        return inst_list;
+
+    ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+    int index = 0;
+    char buffer[128];
+
+    while (cur != NULL)
+    {
+        struct Expression *element_expr = (struct Expression *)cur->cur;
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(element_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
+            return inst_list;
+        }
+
+        int kind = codegen_format_arg_kind_for_expr(element_expr);
+        if (kind < 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unsupported argument type in array of const literal.");
+            free_reg(get_reg_stack(), value_reg);
+            return inst_list;
+        }
+
+        int element_offset = data_slot->offset - index * element_size;
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, -%d(%%rbp)\n",
+            kind, element_offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n",
+            element_offset - 4);
+        inst_list = add_inst(inst_list, buffer);
+
+        int data_offset = element_offset - 8;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            value_reg->bit_64, data_offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), value_reg);
+        cur = cur->next;
+        ++index;
+    }
+
+    const int pointer_bytes = CODEGEN_POINTER_SIZE_BYTES;
+    StackNode_t *desc_slot = codegen_alloc_temp_bytes("arr_const_desc",
+        codegen_expr_align_to(2 * pointer_bytes, pointer_bytes));
+    if (desc_slot == NULL)
+        return inst_list;
+
+    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (addr_reg == NULL)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to allocate register for array of const descriptor.");
+        return inst_list;
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+        data_slot->offset, addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        addr_reg->bit_64, desc_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %s\n",
+        element_count, addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        addr_reg->bit_64, desc_slot->offset - pointer_bytes);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+        desc_slot->offset, addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
     *out_reg = addr_reg;
     return inst_list;
 }

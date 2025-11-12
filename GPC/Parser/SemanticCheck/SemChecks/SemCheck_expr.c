@@ -34,6 +34,7 @@
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/GpcType.h"
 #include "../../../identifier_utils.h"
+#include "../../../format_arg.h"
 
 int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
@@ -526,6 +527,26 @@ static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *s
     if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL)
         return 0;
 
+    if (expected_type == ARRAY_OF_CONST_TYPE)
+    {
+        ListNode_t *cur_elem = expr->expr_data.array_literal_data.elements;
+        while (cur_elem != NULL)
+        {
+            struct Expression *element_expr = (struct Expression *)cur_elem->cur;
+            int element_type = UNKNOWN_TYPE;
+            semcheck_expr_main(&element_type, symtab, element_expr, max_scope_lev, NO_MUTATE);
+            cur_elem = cur_elem->next;
+        }
+        expr->array_element_type = ARRAY_OF_CONST_TYPE;
+        expr->array_element_size = (int)sizeof(gpc_tvarrec);
+        expr->array_lower_bound = 0;
+        expr->array_upper_bound = expr->expr_data.array_literal_data.element_count - 1;
+        expr->is_array_expr = 1;
+        expr->array_is_dynamic = 1;
+        expr->expr_data.array_literal_data.elements_semchecked = 1;
+        return 0;
+    }
+
     int error_count = 0;
     ListNode_t *cur = expr->expr_data.array_literal_data.elements;
     int index = 0;
@@ -608,6 +629,32 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
 
     int expected_type = formal_decl->tree_data.arr_decl_data.type;
     const char *expected_type_id = formal_decl->tree_data.arr_decl_data.type_id;
+
+    if (expected_type == ARRAY_OF_CONST_TYPE)
+    {
+        ListNode_t *cur_elem = arg_expr->expr_data.array_literal_data.elements;
+        while (cur_elem != NULL)
+        {
+            struct Expression *element_expr = (struct Expression *)cur_elem->cur;
+            int element_type = UNKNOWN_TYPE;
+            semcheck_expr_main(&element_type, symtab, element_expr,
+                max_scope_lev, NO_MUTATE);
+            cur_elem = cur_elem->next;
+        }
+        if (arg_expr->array_element_type_id != NULL)
+        {
+            free(arg_expr->array_element_type_id);
+            arg_expr->array_element_type_id = NULL;
+        }
+        arg_expr->array_element_type = ARRAY_OF_CONST_TYPE;
+        arg_expr->array_element_size = (int)sizeof(gpc_tvarrec);
+        arg_expr->array_lower_bound = 0;
+        arg_expr->array_upper_bound = arg_expr->expr_data.array_literal_data.element_count - 1;
+        arg_expr->is_array_expr = 1;
+        arg_expr->array_is_dynamic = 1;
+        arg_expr->expr_data.array_literal_data.elements_semchecked = 1;
+        return 0;
+    }
 
     if (arg_expr->array_element_type_id != NULL)
     {
