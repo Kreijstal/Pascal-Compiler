@@ -9,6 +9,7 @@
 #include <math.h>
 
 #include "runtime_internal.h"
+#include <sys/stat.h>
 #include "format_arg.h"
 
 static const double GPC_PI = 3.14159265358979323846264338327950288;
@@ -230,6 +231,10 @@ void gpc_sleep_ms(int milliseconds) {
         /* Retry until sleep completes */
     }
 #endif
+}
+
+void gpc_sleep_ms_i(int milliseconds) {
+    gpc_sleep_ms(milliseconds);
 }
 
 /* High-resolution performance counter wrappers */
@@ -2137,6 +2142,104 @@ char *gpc_format(const char *fmt, const gpc_tvarrec *args, size_t arg_count)
     char *result = gpc_string_duplicate(builder.data != NULL ? builder.data : "");
     gpc_format_builder_free(&builder);
     return result != NULL ? result : gpc_alloc_empty_string();
+}
+
+char *gpc_float_to_string(double value, int precision)
+{
+    if (precision < 0)
+        precision = 6;
+
+    long double normalized = value;
+    if (isfinite(value))
+    {
+        long double scale = 1.0L;
+        for (int i = 0; i < precision; ++i)
+            scale *= 10.0L;
+        if (scale != 0.0L)
+            normalized = roundl((long double)value * scale) / scale;
+    }
+
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df", precision);
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), fmt, (double)normalized);
+    if (len < 0)
+        return gpc_alloc_empty_string();
+    return gpc_string_duplicate(buffer);
+}
+
+int gpc_string_to_int(const char *text, int *out_value)
+{
+    if (text == NULL)
+    {
+        if (out_value != NULL) *out_value = 0;
+        return 0;
+    }
+    char *endptr;
+    errno = 0;
+    long long val = strtoll(text, &endptr, 10);
+    if (endptr == text || *endptr != '\0' || errno == ERANGE)
+    {
+        if (out_value != NULL) *out_value = 0;
+        return 0;
+    }
+    if (out_value != NULL)
+        *out_value = (int)val;
+    return 1;
+}
+
+int gpc_string_to_real(const char *text, double *out_value)
+{
+    if (text == NULL)
+    {
+        if (out_value != NULL) *out_value = 0.0;
+        return 0;
+    }
+    char *endptr;
+    errno = 0;
+    double val = strtod(text, &endptr);
+    if (endptr == text || *endptr != '\0' || errno == ERANGE)
+    {
+        if (out_value != NULL) *out_value = 0.0;
+        return 0;
+    }
+    if (out_value != NULL)
+        *out_value = val;
+    return 1;
+}
+
+int gpc_file_exists(const char *path)
+{
+    if (path == NULL)
+        return 0;
+#if defined(_WIN32)
+    struct _stat st;
+    if (_stat(path, &st) != 0)
+        return 0;
+    return (_S_IFREG & st.st_mode) && (_S_IFMT & st.st_mode);
+#else
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return 0;
+    return S_ISREG(st.st_mode);
+#endif
+}
+
+int gpc_directory_exists(const char *path)
+{
+    if (path == NULL)
+        return 0;
+#if defined(_WIN32)
+    struct _stat st;
+    if (_stat(path, &st) != 0)
+        return 0;
+    return (_S_IFDIR & st.st_mode);
+#else
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return 0;
+    return S_ISDIR(st.st_mode);
+#endif
 }
 
 /* Wrapper for memcpy to be called from assembly code */

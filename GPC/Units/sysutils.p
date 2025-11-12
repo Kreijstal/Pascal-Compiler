@@ -12,12 +12,15 @@ type
     NativeUInt = cuint64;
     Uint64 = cuint64;
 
+const
+    PathDelim = '/';
+    AltPathDelim = '\';
+
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
 function MillisecondsBetween(startTick, endTick: longint): longint;
 function Now: TDateTime;
 function IntToStr(value: longint): AnsiString;
-function StrToInt(const S: AnsiString): longint;
 function UpperCase(const S: AnsiString): AnsiString;
 function LowerCase(const S: AnsiString): AnsiString;
 function Trim(const S: AnsiString): AnsiString;
@@ -31,28 +34,46 @@ function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function Format(const Fmt: string; const Args: array of const): string;
+function FloatToStr(Value: Real): AnsiString;
+function StrToFloat(const S: AnsiString): Real;
+function TryStrToFloat(const S: AnsiString; out Value: Real): Boolean;
+function TryStrToInt(const S: AnsiString; out Value: Longint): Boolean;
+function ExtractFilePath(const FileName: AnsiString): AnsiString;
+function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
+function FileExists(const FileName: AnsiString): Boolean;
+function DirectoryExists(const DirName: AnsiString): Boolean;
 
 implementation
 
 function gpc_format(fmt: AnsiString; args: Pointer; count: NativeUInt): AnsiString; external;
+function gpc_float_to_string(value: double; precision: integer): AnsiString; external;
+function gpc_string_to_int(text: PChar; out value: Integer): Integer; external;
+function gpc_string_to_real(text: PChar; out value: Double): Integer; external;
+function gpc_file_exists(path: PChar): Integer; external;
+function gpc_directory_exists(path: PChar): Integer; external;
+procedure gpc_sleep_ms(milliseconds: integer); external;
+function gpc_get_tick_count64: NativeUInt; external;
+function gpc_now: NativeUInt; external;
+function gpc_format_datetime(format: PChar; datetime_ms: NativeUInt): AnsiString; external;
+function gpc_string_compare(lhs: PChar; rhs: PChar): Integer; external;
+function gpc_string_pos(SubStr: PChar; S: PChar): Integer; external;
+
+function ToPChar(const S: AnsiString): PChar;
+begin
+    if S = '' then
+        Result := nil
+    else
+        Result := @S[1];
+end;
 
 procedure Sleep(milliseconds: integer);
 begin
-    asm
-        movl %edi, %edi
-        call gpc_sleep_ms
-    end
+    gpc_sleep_ms(milliseconds);
 end;
 
 function GetTickCount64: longint;
-var
-    tick: longint;
 begin
-    asm
-        call gpc_get_tick_count64
-        movq %rax, -8(%rbp)
-    end;
-    GetTickCount64 := tick;
+    GetTickCount64 := gpc_get_tick_count64();
 end;
 
 function MillisecondsBetween(startTick, endTick: longint): longint;
@@ -64,14 +85,8 @@ begin
 end;
 
 function Now: TDateTime;
-var
-    ticks: TDateTime;
 begin
-    asm
-        call gpc_now
-        movq %rax, -8(%rbp)
-    end;
-    Now := ticks;
+    Now := gpc_now();
 end;
 
 function DigitToString(Value: longint): AnsiString;
@@ -121,49 +136,6 @@ begin
     end;
 
     IntToStr := prefix + digits;
-end;
-
-function StrToInt(const S: AnsiString): longint;
-var
-    i: integer;
-    result: longint;
-    sign: integer;
-    digit: integer;
-begin
-    result := 0;
-    sign := 1;
-    i := 1;
-    
-    if Length(S) = 0 then
-    begin
-        StrToInt := 0;
-        exit;
-    end;
-    
-    if S[1] = '-' then
-    begin
-        sign := -1;
-        i := 2;
-    end
-    else if S[1] = '+' then
-        i := 2;
-    
-    while i <= Length(S) do
-    begin
-        if (S[i] >= '0') and (S[i] <= '9') then
-        begin
-            digit := Ord(S[i]) - Ord('0');
-            result := result * 10 + digit;
-        end
-        else
-        begin
-            StrToInt := 0;
-            exit;
-        end;
-        i := i + 1;
-    end;
-    
-    StrToInt := result * sign;
 end;
 
 function UpperCase(const S: AnsiString): AnsiString;
@@ -335,13 +307,10 @@ end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 var
-    resultPtr: AnsiString;
+    dt_value: NativeUInt;
 begin
-    asm
-        call gpc_format_datetime
-        movq %rax, -8(%rbp)
-    end;
-    FormatDateTime := resultPtr;
+    dt_value := DateTime;
+    FormatDateTime := gpc_format_datetime(ToPChar(FormatStr), dt_value);
 end;
 
 function Format(const Fmt: string; const Args: array of const): string;
@@ -353,6 +322,89 @@ begin
     else
         ArgPointer := nil;
     Format := gpc_format(Fmt, ArgPointer, Length(Args));
+end;
+
+function FloatToStr(Value: Real): AnsiString;
+begin
+    FloatToStr := gpc_float_to_string(Value, 6);
+end;
+
+function TryStrToInt(const S: AnsiString; out Value: Longint): Boolean;
+begin
+    Result := gpc_string_to_int(ToPChar(S), Value) <> 0;
+end;
+
+function TryStrToFloat(const S: AnsiString; out Value: Real): Boolean;
+begin
+    Result := gpc_string_to_real(ToPChar(S), Value) <> 0;
+end;
+
+function StrToInt(const S: AnsiString): longint;
+begin
+    if not TryStrToInt(S, Result) then
+        Result := 0;
+end;
+
+function StrToFloat(const S: AnsiString): real;
+begin
+    if not TryStrToFloat(S, Result) then
+        Result := 0.0;
+end;
+
+function AnsiCompareStr(const S1, S2: AnsiString): Integer;
+begin
+    Result := gpc_string_compare(ToPChar(S1), ToPChar(S2));
+end;
+
+function AnsiPos(const SubStr, S: AnsiString): Integer;
+begin
+    Result := gpc_string_pos(ToPChar(SubStr), ToPChar(S));
+end;
+
+function ExtractFilePath(const FileName: AnsiString): AnsiString;
+var
+    idx: Integer;
+    delimPos: Integer;
+begin
+    idx := Length(FileName);
+    delimPos := 0;
+    while idx > 0 do
+    begin
+        if Copy(FileName, idx, 1) = PathDelim then
+        begin
+            delimPos := idx;
+            Break;
+        end;
+        if Copy(FileName, idx, 1) = AltPathDelim then
+        begin
+            delimPos := idx;
+            Break;
+        end;
+        Dec(idx);
+    end;
+
+    if delimPos > 0 then
+        ExtractFilePath := Copy(FileName, 1, delimPos)
+    else
+        ExtractFilePath := '';
+end;
+
+function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
+begin
+  if (Dir = '') or (Copy(Dir, Length(Dir), 1) = PathDelim) or (Copy(Dir, Length(Dir), 1) = AltPathDelim) then
+    IncludeTrailingPathDelimiter := Dir
+  else
+    IncludeTrailingPathDelimiter := Dir + PathDelim;
+end;
+
+function FileExists(const FileName: AnsiString): Boolean;
+begin
+  Result := gpc_file_exists(ToPChar(FileName)) <> 0;
+end;
+
+function DirectoryExists(const DirName: AnsiString): Boolean;
+begin
+  Result := gpc_directory_exists(ToPChar(DirName)) <> 0;
 end;
 
 end.
