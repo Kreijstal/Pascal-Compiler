@@ -231,6 +231,42 @@ void gpc_sleep_ms(int milliseconds) {
 #endif
 }
 
+/* High-resolution performance counter wrappers */
+uint64_t gpc_query_performance_counter(void) {
+#ifdef _WIN32
+    LARGE_INTEGER val;
+    if (QueryPerformanceCounter(&val)) {
+        return (uint64_t)val.QuadPart;
+    }
+    return 0ULL;
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0ULL;
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#endif
+}
+
+uint64_t gpc_query_performance_frequency(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq;
+    if (QueryPerformanceFrequency(&freq)) {
+        return (uint64_t)freq.QuadPart;
+    }
+    return 0ULL;
+#else
+    /* CLOCK_MONOTONIC is in nanoseconds on POSIX fallback */
+    return 1000000000ULL;
+#endif
+}
+
+int gpc_is_debugger_present(void) {
+#ifdef _WIN32
+    return IsDebuggerPresent() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
 static int gpc_normalize_crt_color(int color)
 {
     int normalized = color % 16;

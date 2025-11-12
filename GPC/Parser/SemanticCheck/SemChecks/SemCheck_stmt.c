@@ -1919,6 +1919,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
         else
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL &&
+            resolved_proc->hash_type == HASHTYPE_PROCEDURE && resolved_proc->id != NULL)
+        {
+            /* Ensure direct calls have a concrete target name even without external alias */
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->id);
+        }
+        /* External name override for procedures handled during codegen to avoid side-effects here */
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
         
         /* Populate call info to avoid use-after-free when HashNode is freed */

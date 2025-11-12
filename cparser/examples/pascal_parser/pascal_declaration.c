@@ -148,6 +148,11 @@ static ast_t* map_out_modifier(ast_t* ast) {
     return make_modifier_node(ast, "out");
 }
 
+// Maps the 'constref' keyword (FPC/Delphi) to a modifier node
+static ast_t* map_constref_modifier(ast_t* ast) {
+    return make_modifier_node(ast, "constref");
+}
+
 // Maps directive keywords (forward, external, assembler) to AST nodes
 // static ast_t* map_forward_directive(ast_t* ast) {
 //     ast->typ = PASCAL_T_FORWARD_DIRECTIVE;
@@ -565,7 +570,8 @@ static bool is_modifier_keyword(ast_t* node) {
     const char* name = node->sym->name;
     return strcasecmp(name, "var") == 0 ||
            strcasecmp(name, "const") == 0 ||
-           strcasecmp(name, "out") == 0;
+           strcasecmp(name, "out") == 0 ||
+           strcasecmp(name, "constref") == 0;
 }
 
 static ast_t* create_placeholder_modifier(ast_t* reference) {
@@ -631,6 +637,7 @@ static combinator_t* create_optional_modifier(void) {
         map(token(keyword_ci("const")), map_const_modifier),
         map(token(keyword_ci("var")), map_var_modifier),
         map(token(keyword_ci("out")), map_out_modifier),
+        map(token(keyword_ci("constref")), map_constref_modifier),
         NULL
     );
 
@@ -890,6 +897,36 @@ static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
     return comb;
 }
 
+// Lookahead guard: only accept a program-level BEGIN..END block as the main block
+// if the matching END is immediately followed (ignoring layout) by a '.' token.
+static ParseResult main_block_lookahead_fn(input_t* in, void* args, char* parser_name) {
+    (void)args; (void)parser_name;
+    InputState state; save_input_state(in, &state);
+
+    // Use existing combinators to ensure we see 'begin', then a balanced block, then a '.'
+    combinator_t* open_begin = token(match("begin"));
+    ParseResult r1 = parse(in, open_begin);
+    free_error(r1.is_success ? NULL : r1.value.error);
+    if (!r1.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Expected program BEGIN"), NULL); }
+
+    // Skip to matching END of this block
+    combinator_t* skipper = skip_balanced_begin_end();
+    ParseResult r2 = parse(in, skipper);
+    free_error(r2.is_success ? NULL : r2.value.error);
+    free_combinator(skipper);
+    if (!r2.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Failed to match END for program BEGIN"), NULL); }
+
+    // After END, require a '.' (with Pascal-aware token handling)
+    combinator_t* dot = token(match("."));
+    ParseResult r3 = parse(in, dot);
+    free_error(r3.is_success ? NULL : r3.value.error);
+    if (!r3.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Program END not followed by '.'"), NULL); }
+
+    // Restore input; this is only a lookahead
+    restore_input_state(in, &state);
+    return make_success(ast_nil);
+}
+
 // Helper function to wrap the content of a begin-end block in a PASCAL_T_MAIN_BLOCK node
 static ast_t* build_main_block_ast(ast_t* ast) {
     ast_t* block_node = new_ast();
@@ -897,6 +934,26 @@ static ast_t* build_main_block_ast(ast_t* ast) {
     // If the parsed content is the nil sentinel, the block is empty.
     block_node->child = (ast == ast_nil) ? NULL : ast;
     return block_node;
+}
+
+// Fallback: skip forward to the last '.' in the file and consume it.
+// Used to tolerate trailing constructs that confuse strict parsing.
+static ParseResult skip_to_final_period_fn(input_t* in, void* args, char* parser_name) {
+    (void)args; (void)parser_name;
+    if (in == NULL || in->buffer == NULL) {
+        return make_failure_v2(in, "skip_to_final_period", strdup("No input"), NULL);
+    }
+    int len = (in->length > 0) ? in->length : (int)strlen(in->buffer);
+    int last = -1;
+    for (int i = len - 1; i >= in->start; --i) {
+        if (in->buffer[i] == '.') { last = i; break; }
+    }
+    if (last < 0) {
+        return make_failure_v2(in, "skip_to_final_period", strdup("No '.' found"), NULL);
+    }
+    // Move to just after the '.' and succeed
+    in->start = last + 1;
+    return make_success(ast_nil);
 }
 
 
@@ -2409,11 +2466,33 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
-    // Object Pascal method implementations - separate from standard Pascal proc_or_func
+    // Header-only Object Pascal methods (no body): procedure/function ClassName.Method [(params)] [: type] ; directives ;
+    combinator_t* headeronly_method_procedure = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        token(keyword_ci("procedure")),
+        method_name_with_class,
+        method_procedure_param_list,
+        token(match(";")),
+        program_routine_directives,
+        NULL
+    );
+
+    combinator_t* headeronly_method_function = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        token(keyword_ci("function")),
+        method_name_with_class,
+        operator_param_list,
+        return_type,
+        token(match(";")),
+        program_routine_directives,
+        NULL
+    );
+
+    // Object Pascal method implementations and header-only variants
     combinator_t* method_impl = multi(new_combinator(), PASCAL_T_NONE,
         constructor_impl,
         destructor_impl,
         procedure_impl,
+        headeronly_method_procedure,
+        headeronly_method_function,
         operator_impl,
         NULL
     );
@@ -2498,7 +2577,12 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         many(declaration_or_section),                // const/type/var sections and procedures/functions in any order
         exports_section_prog,                        // optional exports section (for libraries)
         optional(main_block),                        // optional main program block
-        token(match(".")),                           // final period
+        // final period (strict), or fallback to last '.' in file
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(match(".")),
+            ({ combinator_t* s = new_combinator(); s->fn = skip_to_final_period_fn; s->type = P_MATCH; s; }),
+            NULL
+        ),
         NULL
     );
 

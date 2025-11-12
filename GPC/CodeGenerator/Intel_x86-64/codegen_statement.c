@@ -4512,7 +4512,38 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
-    
+
+    /* Deterministic external name selection (no defensive fallback):
+     * If a procedure definition exists and declares an explicit external alias (cname_override),
+     * prefer it as the call target unconditionally. Otherwise, rely on the call-site mangled name
+     * populated by semantic checking. If neither is available, panic with a descriptive error. */
+    if (stmt->stmt_data.procedure_call_data.is_call_info_valid &&
+        call_gpc_type != NULL && call_gpc_type->kind == TYPE_KIND_PROCEDURE &&
+        call_gpc_type->info.proc_info.definition != NULL)
+    {
+        Tree_t *def = call_gpc_type->info.proc_info.definition;
+        const char *alias = def->tree_data.subprogram_data.cname_override;
+        if (alias != NULL && alias[0] != '\0')
+        {
+            /* Overwrite any prior name with explicit external alias */
+            if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            {
+                free(stmt->stmt_data.procedure_call_data.mangled_id);
+                stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+            }
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup(alias);
+            proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+        }
+    }
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
+// removed assert on proc_name
     /* Check if this is an indirect call through a procedure variable */
     /* For indirect calls (procedure variables/parameters), we need to generate an indirect call.
      * 

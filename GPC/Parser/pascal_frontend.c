@@ -284,9 +284,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
 
-    // Define common dialect symbols to unlock FPC/Delphi conditional blocks
-    // GPC: our own symbol
-    // FPC: enables example codepaths guarded by {$ifdef FPC} (e.g., API typedefs/includes)
+    // Define our own dialect symbol and FPC for Lazarus-compatible headers
     const char *default_symbols[] = { "GPC", "FPC" };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {

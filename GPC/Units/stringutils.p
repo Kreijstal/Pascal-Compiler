@@ -124,28 +124,35 @@ end;
 
 function StrReplace(const s, Source, Dest: string): TString;
 var
-    search, remainder: TString;
-    idx, lenSource: Integer;
+    i, p, srcLen, sLen: Integer;
+    resultStr: TString;
 begin
     if Source = '' then
     begin
         StrReplace := s;
         exit;
     end;
-    remainder := s;
-    search := '';
-    lenSource := Length(Source);
-    idx := Pos(Source, remainder);
-    while idx > 0 do
+    resultStr := '';
+    i := 1;
+    sLen := Length(s);
+    srcLen := Length(Source);
+    while i <= sLen do
     begin
-        search := search + Copy(remainder, 1, idx - 1) + Dest;
-        if idx + lenSource <= Length(remainder) then
-            remainder := Copy(remainder, idx + lenSource, Length(remainder) - (idx + lenSource) + 1)
-        else
-            remainder := '';
-        idx := Pos(Source, remainder);
+        p := Pos(Source, Copy(s, i, sLen - i + 1));
+        if p = 0 then
+        begin
+            resultStr := resultStr + Copy(s, i, sLen - i + 1);
+            break;
+        end;
+        { Append text before the match }
+        if p > 1 then
+            resultStr := resultStr + Copy(s, i, p - 1);
+        { Append replacement }
+        resultStr := resultStr + Dest;
+        { Advance past the matched source }
+        i := i + p - 1 + srcLen;
     end;
-    StrReplace := search + remainder;
+    StrReplace := resultStr;
 end;
 
 function CharInDefaultTrue(ch: Char): Boolean;
