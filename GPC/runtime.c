@@ -2309,21 +2309,28 @@ char *gpc_float_to_string(double value, int precision)
 {
     if (precision < 0)
         precision = 6;
+    if (precision > 18)
+        precision = 18;
 
-    long double normalized = value;
-    if (isfinite(value))
+    double normalized = value;
+    if (isfinite(value) && precision > 0)
     {
-        long double scale = 1.0L;
+        double scale = 1.0;
         for (int i = 0; i < precision; ++i)
-            scale *= 10.0L;
-        if (scale != 0.0L)
-            normalized = roundl((long double)value * scale) / scale;
+            scale *= 10.0;
+        if (scale != 0.0 && isfinite(scale))
+            normalized = round(value * scale) / scale;
     }
+
+    if (isnan(normalized))
+        return gpc_string_duplicate("-nan(ind)");
+    if (isinf(normalized))
+        return gpc_string_duplicate(value > 0 ? "inf" : "-inf");
 
     char fmt[16];
     snprintf(fmt, sizeof(fmt), "%%.%df", precision);
     char buffer[64];
-    int len = snprintf(buffer, sizeof(buffer), fmt, (double)normalized);
+    int len = snprintf(buffer, sizeof(buffer), fmt, normalized);
     if (len < 0)
         return gpc_alloc_empty_string();
     return gpc_string_duplicate(buffer);
