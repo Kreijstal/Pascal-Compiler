@@ -1934,7 +1934,31 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     else
     {
-        if (return_var->size >= 8)
+        /* Determine if return type is Real (floating-point) */
+        int is_real_return = 0;
+        if (func_node != NULL && func_node->type != NULL &&
+            func_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            GpcType *return_type = gpc_type_get_return_type(func_node->type);
+            if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                int tag = gpc_type_get_primitive_tag(return_type);
+                if (tag == REAL_TYPE)
+                    is_real_return = 1;
+            }
+        }
+        else if (func_node != NULL && func_node->type != NULL &&
+                 func_node->type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int tag = gpc_type_get_primitive_tag(func_node->type);
+            if (tag == REAL_TYPE)
+                is_real_return = 1;
+        }
+        
+        /* Use movsd for Real types (return in xmm0), movq/movl for others (return in rax/eax) */
+        if (is_real_return)
+            snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (return_var->size >= 8)
             snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
         else
             snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
