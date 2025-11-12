@@ -2582,6 +2582,7 @@ static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *in
 
     inst_list = codegen_maybe_convert_int_like_to_real(REAL_TYPE, angle_expr,
         angle_reg, inst_list, NULL);
+    /* angle_reg contains the angle bits to be passed to gpc_sincos_bits via GP register. */
 
     StackNode_t *angle_spill = add_l_t("sincos_angle");
     if (angle_spill == NULL)

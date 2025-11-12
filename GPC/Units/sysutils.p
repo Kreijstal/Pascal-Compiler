@@ -67,6 +67,22 @@ function gpc_extract_file_ext(path: PChar): AnsiString; external;
 function gpc_change_file_ext(path: PChar; extension: PChar): AnsiString; external;
 function gpc_exclude_trailing_path_delim(path: PChar): AnsiString; external;
 
+{$ifdef MSWINDOWS}
+{$ifdef CPU64}
+function gpc_float_to_string_win64(value: Real; precision: Integer): AnsiString;
+var
+    result_ptr: AnsiString;
+begin
+    asm
+        movl %ecx, %edx
+        call gpc_float_to_string
+        movq %rax, -8(%rbp)
+    end;
+    gpc_float_to_string_win64 := result_ptr;
+end;
+{$endif}
+{$endif}
+
 function ToPChar(const S: AnsiString): PChar;
 begin
     if S = '' then
@@ -335,7 +351,15 @@ end;
 
 function FloatToStr(Value: Real): AnsiString;
 begin
+{$ifdef MSWINDOWS}
+{$ifdef CPU64}
+    FloatToStr := gpc_float_to_string_win64(Value, 6);
+{$else}
     FloatToStr := gpc_float_to_string(Value, 6);
+{$endif}
+{$else}
+    FloatToStr := gpc_float_to_string(Value, 6);
+{$endif}
 end;
 
 function TryStrToInt(const S: AnsiString; out Value: Longint): Boolean;

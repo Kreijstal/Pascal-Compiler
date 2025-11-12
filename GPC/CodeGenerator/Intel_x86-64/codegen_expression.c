@@ -3316,32 +3316,66 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         {
             int use_sse = (arg_infos[i].expected_type == REAL_TYPE &&
                 !arg_infos[i].is_pointer_like);
-            if (use_sse)
+            if (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS)
             {
-                arg_infos[i].assigned_class = ARG_CLASS_SSE;
-                if (next_sse < max_sse_regs)
+                /* Windows x64: SSE and INT have separate register files, but
+                 * argument positions do not consume the other class. The first
+                 * integer arg uses RCX, the first real arg uses XMM0, etc. */
+                if (use_sse)
                 {
-                    arg_infos[i].assigned_index = next_sse++;
+                    arg_infos[i].assigned_class = ARG_CLASS_SSE;
+                    if (next_sse < max_sse_regs)
+                        arg_infos[i].assigned_index = next_sse++;
+                    else
+                    {
+                        arg_infos[i].assigned_index = -1;
+                        arg_infos[i].pass_via_stack = 1;
+                        arg_infos[i].stack_slot = stack_slot_count++;
+                    }
                 }
                 else
                 {
-                    arg_infos[i].assigned_index = -1;
-                    arg_infos[i].pass_via_stack = 1;
-                    arg_infos[i].stack_slot = stack_slot_count++;
+                    arg_infos[i].assigned_class = ARG_CLASS_INT;
+                    if (next_gpr < max_int_regs)
+                        arg_infos[i].assigned_index = next_gpr++;
+                    else
+                    {
+                        arg_infos[i].assigned_index = -1;
+                        arg_infos[i].pass_via_stack = 1;
+                        arg_infos[i].stack_slot = stack_slot_count++;
+                    }
                 }
             }
             else
             {
-                arg_infos[i].assigned_class = ARG_CLASS_INT;
-                if (next_gpr < max_int_regs)
+                /* SysV: separate register files for SSE and INT */
+                if (use_sse)
                 {
-                    arg_infos[i].assigned_index = next_gpr++;
+                    arg_infos[i].assigned_class = ARG_CLASS_SSE;
+                    if (next_sse < max_sse_regs)
+                    {
+                        arg_infos[i].assigned_index = next_sse++;
+                    }
+                    else
+                    {
+                        arg_infos[i].assigned_index = -1;
+                        arg_infos[i].pass_via_stack = 1;
+                        arg_infos[i].stack_slot = stack_slot_count++;
+                    }
                 }
                 else
                 {
-                    arg_infos[i].assigned_index = -1;
-                    arg_infos[i].pass_via_stack = 1;
-                    arg_infos[i].stack_slot = stack_slot_count++;
+                    arg_infos[i].assigned_class = ARG_CLASS_INT;
+                    if (next_gpr < max_int_regs)
+                    {
+                        arg_infos[i].assigned_index = next_gpr++;
+                    }
+                    else
+                    {
+                        arg_infos[i].assigned_index = -1;
+                        arg_infos[i].pass_via_stack = 1;
+                        arg_infos[i].stack_slot = stack_slot_count++;
+                    }
                 }
             }
         }
