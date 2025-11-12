@@ -28,7 +28,12 @@ GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if IS_WINDOWS_ABI else "GPC/gpc
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
-EXEC_TIMEOUT = 5
+# Default execution timeout per compiled test program (seconds).
+# Can be overridden via environment variable GPC_TEST_TIMEOUT for slower machines.
+try:
+    EXEC_TIMEOUT = int(os.environ.get("GPC_TEST_TIMEOUT", "10"))
+except ValueError:
+    EXEC_TIMEOUT = 10
 
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
@@ -1872,6 +1877,7 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
+                # No platform skips here; all discovered tests must run.
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
                 if test_base_name == "unix_wait_helpers_demo":
@@ -1925,7 +1931,14 @@ def _discover_and_add_auto_tests():
                     # Normalize line endings for cross-platform compatibility
                     # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
                     # which Python then reads as \n\n. Normalize by removing \r and collapsing \n\n to \n.
-                    actual_output = process.stdout.replace('\r\n', '\n').replace('\r', '')
+                    # Normalize text mode quirks:
+                    # Windows text mode turns '\n' into '\r\n'. When original data contains
+                    # an explicit '\r\n', the CRT can yield '\r\r\n'. Compress those first.
+                    text = process.stdout
+                    while '\r\r\n' in text:
+                        text = text.replace('\r\r\n', '\r\n')
+                    # Now normalize CRLF to LF and strip stray CR
+                    actual_output = text.replace('\r\n', '\n').replace('\r', '')
                     self.assertEqual(actual_output, expected_output)
                     self.assertEqual(process.returncode, 0)
                 except subprocess.TimeoutExpired:

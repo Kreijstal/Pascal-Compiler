@@ -15,10 +15,15 @@
 static const double GPC_PI = 3.14159265358979323846264338327950288;
 static uint64_t gpc_rand_state = 0x9e3779b97f4a7c15ULL;
 
+/* Forward decl for optional debug flag helper */
+static int gpc_env_flag(const char *name);
+
 #ifdef _WIN32
 #include <windows.h>
 #include <time.h>
 #include <errno.h>
+#include <io.h>
+#include <fcntl.h>
 #else
 #include <time.h>
 #include <errno.h>
@@ -52,6 +57,15 @@ static FILE *gpc_text_output_stream(GPCTextFile *file)
 {
     if (file != NULL && file->handle != NULL)
         return file->handle;
+#ifdef _WIN32
+    static int gpc_stdout_binary_set = 0;
+    if (!gpc_stdout_binary_set)
+    {
+        /* Avoid CRLF translation doubling when strings contain CRLF */
+        _setmode(_fileno(stdout), _O_BINARY);
+        gpc_stdout_binary_set = 1;
+    }
+#endif
     return stdout;
 }
 
@@ -1372,6 +1386,8 @@ int64_t gpc_string_compare(const char *lhs, const char *rhs)
         lhs = "";
     if (rhs == NULL)
         rhs = "";
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] strcmp lhs='%s' rhs='%s'\n", lhs, rhs);
 
     size_t lhs_len = gpc_string_known_length(lhs);
     size_t rhs_len = gpc_string_known_length(rhs);
@@ -2333,6 +2349,12 @@ int gpc_string_to_int(const char *text, int *out_value)
     return 1;
 }
 
+static int gpc_env_flag(const char *name)
+{
+    const char *v = getenv(name);
+    return v && (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T');
+}
+
 int gpc_string_to_real(const char *text, double *out_value)
 {
     if (text == NULL)
@@ -2343,6 +2365,8 @@ int gpc_string_to_real(const char *text, double *out_value)
     char *endptr;
     errno = 0;
     double val = strtod(text, &endptr);
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n", text ? text : "(null)", val, (void*)endptr, errno);
     if (endptr == text || *endptr != '\0' || errno == ERANGE)
     {
         if (out_value != NULL) *out_value = 0.0;
@@ -2351,6 +2375,18 @@ int gpc_string_to_real(const char *text, double *out_value)
     if (out_value != NULL)
         *out_value = val;
     return 1;
+}
+
+/* Convenience wrapper: parse string to double and return as value */
+double gpc_str_to_float(const char *text)
+{
+    double val = 0.0;
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] str_to_float('%s')\n", text ? text : "(null)");
+    (void)gpc_string_to_real(text, &val);
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] str_to_float -> %g\n", val);
+    return val;
 }
 
 int gpc_file_exists(const char *path)

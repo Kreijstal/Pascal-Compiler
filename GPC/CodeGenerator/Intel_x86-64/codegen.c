@@ -1764,6 +1764,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 case LONGINT_TYPE:
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
+                case POINTER_TYPE:
                     return_size = 8;
                     break;
                 case BOOL:
@@ -1774,15 +1775,25 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     break;
             }
         }
+        else if (return_type != NULL && return_type->kind == TYPE_KIND_POINTER)
+        {
+            /* Pointer return (e.g., PChar) */
+            return_size = 8;
+        }
     }
     else if (func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
         int tag = gpc_type_get_primitive_tag(func_node->type);
-        if (tag == LONGINT_TYPE || tag == REAL_TYPE || tag == STRING_TYPE)
+        if (tag == LONGINT_TYPE || tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
             return_size = 8;
         else if (tag == BOOL)
             return_size = DOUBLEWORD;
+    }
+    else if (func_node != NULL && func_node->type != NULL &&
+             func_node->type->kind == TYPE_KIND_POINTER)
+    {
+        return_size = 8;
     }
 
     if (returns_dynamic_array)
@@ -2132,7 +2143,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
         inst_list = codegen_stmt(anon->body, inst_list, ctx, symtab);
     }
     
-    /* For functions, move return value to %rax */
+    /* For functions, move return value to correct return register */
     if (anon->is_function && return_var != NULL)
     {
         char buffer[64];
@@ -2140,7 +2151,10 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
                          anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE);
         if (uses_qword)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
+            if (anon->return_type == REAL_TYPE)
+                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
         }
         else
         {
