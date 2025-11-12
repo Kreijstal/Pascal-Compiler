@@ -390,6 +390,8 @@ void gpc_write_integer(GPCTextFile *file, int width, int64_t value)
 
     if (width > 1024 || width < -1024)
         width = 0;
+    if (width == -1)
+        width = 0;
 
     if (width > 0)
         fprintf(dest, "%*lld", width, (long long)value);
@@ -413,6 +415,8 @@ void gpc_write_string(GPCTextFile *file, int width, const char *value)
         width = 0;
 
     size_t len = gpc_string_known_length(value);
+    if (len == 0 && width <= 0)
+        return;
     if (width > 0)
     {
         size_t pad = (width > (int)len) ? (size_t)width - len : 0;
@@ -423,12 +427,20 @@ void gpc_write_string(GPCTextFile *file, int width, const char *value)
     }
     else if (width < 0)
     {
-        if (len > 0)
-            fwrite(value, 1, len, dest);
-        size_t target = (size_t)(-width);
-        size_t pad = (target > len) ? target - len : 0;
-        for (size_t i = 0; i < pad; ++i)
-            fputc(' ', dest);
+        if (width == -1)
+        {
+            if (len > 0)
+                fwrite(value, 1, len, dest);
+        }
+        else
+        {
+            size_t target = (size_t)(-width);
+            if (len > 0)
+                fwrite(value, 1, len, dest);
+            size_t pad = (target > len) ? target - len : 0;
+            for (size_t i = 0; i < pad; ++i)
+                fputc(' ', dest);
+        }
     }
     else if (len > 0)
     {
@@ -453,6 +465,8 @@ void gpc_write_char_array(GPCTextFile *file, int width, const char *value, size_
     
     /* Use precision specifier to limit output */
     if (width > 1024 || width < -1024)
+        width = 0;
+    if (width == -1)
         width = 0;
     if (width > 0)
         fprintf(dest, "%*.*s", width, (int)actual_len, value);
@@ -666,6 +680,18 @@ char *gpc_string_duplicate(const char *value)
         memcpy(copy, value, len);
     copy[len] = '\0';
     gpc_string_register_allocation(copy, len);
+    return copy;
+}
+
+static char *gpc_string_duplicate_length(const char *value, size_t length)
+{
+    char *copy = (char *)malloc(length + 1);
+    if (copy == NULL)
+        return gpc_alloc_empty_string();
+    if (length > 0 && value != NULL)
+        memcpy(copy, value, length);
+    copy[length] = '\0';
+    gpc_string_register_allocation(copy, length);
     return copy;
 }
 
@@ -1387,6 +1413,125 @@ int64_t gpc_string_pos(const char *substr, const char *value)
     }
 
     return 0;
+}
+
+static int gpc_is_path_delim_char(char ch)
+{
+    return ch == '/' || ch == '\\';
+}
+
+static const char *gpc_find_last_path_delim(const char *path)
+{
+    if (path == NULL)
+        return NULL;
+    const char *last = NULL;
+    for (const char *ptr = path; *ptr != '\0'; ++ptr)
+    {
+        if (gpc_is_path_delim_char(*ptr))
+            last = ptr;
+    }
+    return last;
+}
+
+char *gpc_extract_file_path(const char *filename)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    const char *last = gpc_find_last_path_delim(filename);
+    if (last == NULL)
+        return gpc_alloc_empty_string();
+    size_t length = (size_t)(last - filename) + 1;
+    return gpc_string_duplicate_length(filename, length);
+}
+
+char *gpc_extract_file_name(const char *filename)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    const char *last = gpc_find_last_path_delim(filename);
+    if (last == NULL)
+        return gpc_string_duplicate(filename);
+    return gpc_string_duplicate(last + 1);
+}
+
+char *gpc_extract_file_ext(const char *filename)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    size_t len = strlen(filename);
+    const char *start = filename;
+    const char *limit = gpc_find_last_path_delim(filename);
+    if (limit != NULL)
+        start = limit + 1;
+    const char *ptr = filename + len;
+    while (ptr > start)
+    {
+        --ptr;
+        if (gpc_is_path_delim_char(*ptr))
+            break;
+        if (*ptr == '.')
+            return gpc_string_duplicate(ptr);
+    }
+    return gpc_alloc_empty_string();
+}
+
+char *gpc_change_file_ext(const char *filename, const char *extension)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    size_t len = strlen(filename);
+    const char *start = filename;
+    const char *limit = gpc_find_last_path_delim(filename);
+    if (limit != NULL)
+        start = limit + 1;
+    const char *ptr = filename + len;
+    const char *dot = NULL;
+    while (ptr > start)
+    {
+        --ptr;
+        if (gpc_is_path_delim_char(*ptr))
+            break;
+        if (*ptr == '.')
+        {
+            dot = ptr;
+            break;
+        }
+    }
+    size_t base_len = dot ? (size_t)(dot - filename) : len;
+    size_t ext_len = (extension != NULL) ? strlen(extension) : 0;
+    char *result = (char *)malloc(base_len + ext_len + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+    if (base_len > 0)
+        memcpy(result, filename, base_len);
+    if (ext_len > 0 && extension != NULL)
+        memcpy(result + base_len, extension, ext_len);
+    result[base_len + ext_len] = '\0';
+    gpc_string_register_allocation(result, base_len + ext_len);
+    return result;
+}
+
+char *gpc_exclude_trailing_path_delim(const char *path)
+{
+    if (path == NULL)
+        return gpc_alloc_empty_string();
+    size_t len = strlen(path);
+    if (len == 0)
+        return gpc_alloc_empty_string();
+    size_t end = len;
+    while (end > 0 && gpc_is_path_delim_char(path[end - 1]))
+    {
+        if (end == 1)
+            break;
+        if (end == 3 && path[1] == ':' && gpc_is_path_delim_char(path[2]))
+            break;
+        --end;
+    }
+    if (end == len)
+        return gpc_string_duplicate(path);
+    if (end == 0)
+        end = 1;
+    return gpc_string_duplicate_length(path, end);
 }
 
 static long long gpc_val_error_position(const char *text, const char *error_ptr)

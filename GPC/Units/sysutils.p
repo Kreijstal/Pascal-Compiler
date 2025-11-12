@@ -39,7 +39,11 @@ function StrToFloat(const S: AnsiString): Real;
 function TryStrToFloat(const S: AnsiString; out Value: Real): Boolean;
 function TryStrToInt(const S: AnsiString; out Value: Longint): Boolean;
 function ExtractFilePath(const FileName: AnsiString): AnsiString;
+function ExtractFileName(const FileName: AnsiString): AnsiString;
+function ExtractFileExt(const FileName: AnsiString): AnsiString;
+function ChangeFileExt(const FileName, Extension: AnsiString): AnsiString;
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
+function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function FileExists(const FileName: AnsiString): Boolean;
 function DirectoryExists(const DirName: AnsiString): Boolean;
 
@@ -57,6 +61,11 @@ function gpc_now: NativeUInt; external;
 function gpc_format_datetime(format: PChar; datetime_ms: NativeUInt): AnsiString; external;
 function gpc_string_compare(lhs: PChar; rhs: PChar): Integer; external;
 function gpc_string_pos(SubStr: PChar; S: PChar): Integer; external;
+function gpc_extract_file_path(path: PChar): AnsiString; external;
+function gpc_extract_file_name(path: PChar): AnsiString; external;
+function gpc_extract_file_ext(path: PChar): AnsiString; external;
+function gpc_change_file_ext(path: PChar; extension: PChar): AnsiString; external;
+function gpc_exclude_trailing_path_delim(path: PChar): AnsiString; external;
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -362,31 +371,23 @@ begin
 end;
 
 function ExtractFilePath(const FileName: AnsiString): AnsiString;
-var
-    idx: Integer;
-    delimPos: Integer;
 begin
-    idx := Length(FileName);
-    delimPos := 0;
-    while idx > 0 do
-    begin
-        if Copy(FileName, idx, 1) = PathDelim then
-        begin
-            delimPos := idx;
-            Break;
-        end;
-        if Copy(FileName, idx, 1) = AltPathDelim then
-        begin
-            delimPos := idx;
-            Break;
-        end;
-        Dec(idx);
-    end;
+    ExtractFilePath := gpc_extract_file_path(ToPChar(FileName));
+end;
 
-    if delimPos > 0 then
-        ExtractFilePath := Copy(FileName, 1, delimPos)
-    else
-        ExtractFilePath := '';
+function ExtractFileName(const FileName: AnsiString): AnsiString;
+begin
+    ExtractFileName := gpc_extract_file_name(ToPChar(FileName));
+end;
+
+function ExtractFileExt(const FileName: AnsiString): AnsiString;
+begin
+    ExtractFileExt := gpc_extract_file_ext(ToPChar(FileName));
+end;
+
+function ChangeFileExt(const FileName, Extension: AnsiString): AnsiString;
+begin
+    ChangeFileExt := gpc_change_file_ext(ToPChar(FileName), ToPChar(Extension));
 end;
 
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
@@ -395,6 +396,11 @@ begin
     IncludeTrailingPathDelimiter := Dir
   else
     IncludeTrailingPathDelimiter := Dir + PathDelim;
+end;
+
+function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
+begin
+    ExcludeTrailingPathDelimiter := gpc_exclude_trailing_path_delim(ToPChar(Dir));
 end;
 
 function FileExists(const FileName: AnsiString): Boolean;

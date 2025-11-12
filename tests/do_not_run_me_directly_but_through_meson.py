@@ -1925,10 +1925,7 @@ def _discover_and_add_auto_tests():
                     # Normalize line endings for cross-platform compatibility
                     # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
                     # which Python then reads as \n\n. Normalize by removing \r and collapsing \n\n to \n.
-                    actual_output = process.stdout.replace('\r', '')
-                    # For Windows cross-compilation, \r\n sequences become \n\n, so collapse them
-                    while '\n\n' in actual_output:
-                        actual_output = actual_output.replace('\n\n', '\n')
+                    actual_output = process.stdout.replace('\r\n', '\n').replace('\r', '')
                     self.assertEqual(actual_output, expected_output)
                     self.assertEqual(process.returncode, 0)
                 except subprocess.TimeoutExpired:
