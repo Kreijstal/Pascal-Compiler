@@ -1295,10 +1295,10 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
                 src_expr->expr_data.function_call_data.mangled_id);
             inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_cleanup_call_stack(inst_list, ctx);
             codegen_release_function_call_mangled_id(src_expr);
 
             free_reg(get_reg_stack(), dest_reg);
-            free_arg_regs();
             return inst_list;
         }
 
@@ -3634,7 +3634,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
 
     char *proc_name;
     ListNode_t *args_expr;
-    char buffer[50];
+    /* Long mangled procedure names require a generous buffer for emitted instructions. */
+    char buffer[CODEGEN_MAX_INST_BUF];
 
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
@@ -3842,7 +3843,7 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         call_target = "";
     snprintf(buffer, 50, "\tcall\t%s\n", call_target);
     inst_list = add_inst(inst_list, buffer);
-    free_arg_regs();
+    inst_list = codegen_cleanup_call_stack(inst_list, ctx);
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -4463,7 +4464,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
     char *proc_name;
     ListNode_t *args_expr;
-    char buffer[50];
+    /* Procedure calls can reference very long mangled identifiers, so keep plenty of space. */
+    char buffer[CODEGEN_MAX_INST_BUF];
 
     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
@@ -4594,7 +4596,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         
         /* 7. Cleanup */
         free_reg(get_reg_stack(), addr_reg);
-        free_arg_regs();
+        inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s (indirect call)\n", __func__);
@@ -4732,9 +4734,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
 
         inst_list = codegen_vect_reg(inst_list, 0);
-        snprintf(buffer, 50, "\tcall\t%s\n", proc_name);
+        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
-        free_arg_regs();
+        inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

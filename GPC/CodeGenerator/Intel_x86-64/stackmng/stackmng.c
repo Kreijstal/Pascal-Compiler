@@ -160,6 +160,41 @@ StackNode_t *add_l_t(char *label)
     return new_node;
 }
 
+StackNode_t *add_l_t_bytes(char *label, int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    StackNode_t *new_node;
+
+    if (size <= 0)
+        size = DOUBLEWORD;
+    int aligned_size = align_up(size, DOUBLEWORD);
+
+    cur_scope->t_offset = align_up(cur_scope->t_offset, DOUBLEWORD);
+    cur_scope->t_offset += aligned_size;
+
+    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+
+    new_node = init_stack_node(offset, label, aligned_size);
+    new_node->element_size = size;
+
+    if (cur_scope->t == NULL)
+        cur_scope->t = CreateListNode(new_node, LIST_UNSPECIFIED);
+    else
+        cur_scope->t = PushListNodeBack(cur_scope->t,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added %s to t_offset %d (bytes=%d)\n",
+            label, offset, aligned_size);
+    #endif
+
+    return new_node;
+}
+
 /* Adds storage to x */
 StackNode_t *add_l_x(char *label, int size)
 {
@@ -820,6 +855,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
+    StackNode_t *alias_match = NULL;
 
     assert(cur_scope != NULL);
     assert(label != NULL);
@@ -830,13 +866,16 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
         cur_node = (StackNode_t *)cur_li->cur;
         if(pascal_identifier_equals(cur_node->label, label))
         {
-            return cur_node;
+            if (!cur_node->is_alias)
+                return cur_node;
+            if (alias_match == NULL)
+                alias_match = cur_node;
         }
 
         cur_li = cur_li->next;
     }
 
-    return NULL;
+    return alias_match;
 }
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
@@ -933,6 +972,7 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->is_dynamic = 0;
     new_node->is_static = 0;
     new_node->is_reference = 0;
+    new_node->is_alias = 0;
     new_node->static_label = NULL;
 
     return new_node;

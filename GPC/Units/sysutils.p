@@ -29,6 +29,7 @@ function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
+function Format(const Fmt: string; const Args: array of Integer): string;
 
 implementation
 
@@ -338,6 +339,51 @@ begin
         movq %rax, -8(%rbp)
     end;
     FormatDateTime := resultPtr;
+end;
+
+function Format(const Fmt: string; const Args: array of Integer): string;
+var
+    i, argIndex, argCount: Integer;
+    spec: Char;
+    resultStr: string;
+begin
+    resultStr := '';
+    argIndex := 0;
+    argCount := Length(Args);
+    i := 1;
+    while i <= Length(Fmt) do
+    begin
+        if (Fmt[i] = '%') then
+        begin
+            Inc(i);
+            if i > Length(Fmt) then
+            begin
+                resultStr := resultStr + '%';
+                break;
+            end;
+            spec := Fmt[i];
+            case spec of
+                '%':
+                    resultStr := resultStr + '%';
+                'd', 'D':
+                    begin
+                        if argIndex < argCount then
+                        begin
+                            resultStr := resultStr + IntToStr(Args[argIndex]);
+                            Inc(argIndex);
+                        end
+                        else
+                            resultStr := resultStr + '%d';
+                    end;
+                else
+                    resultStr := resultStr + '%' + spec;
+            end;
+        end
+        else
+            resultStr := resultStr + Fmt[i];
+        Inc(i);
+    end;
+    Format := resultStr;
 end;
 
 end.

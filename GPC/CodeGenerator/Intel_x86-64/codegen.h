@@ -108,6 +108,7 @@ extern int g_stack_home_space_bytes;
 #else
 #define CODEGEN_DEBUG(...) ((void)0)
 #endif
+#define CODEGEN_MAX_INST_BUF 512
 #define MAX_ARGS 3
 #define REQUIRED_OFFSET 16
 
@@ -170,6 +171,7 @@ typedef struct {
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
     int static_link_reg_level;
+    int pending_stack_arg_bytes;
 } CodeGenContext;
 
 /* Generates a label */

@@ -946,8 +946,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
-    char buffer[50];
-    char buf_leaf[30];
+    /* Buffer must be large enough for very long mangled identifiers (dozens of suffixes). */
+    char buffer[CODEGEN_MAX_INST_BUF];
+    char buf_leaf[64];
     struct Expression *expr;
 
     expr = node->expr;
@@ -1090,6 +1091,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
         inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         codegen_release_function_call_mangled_id(expr);
         if (expr_has_type_tag(expr, REAL_TYPE))
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);

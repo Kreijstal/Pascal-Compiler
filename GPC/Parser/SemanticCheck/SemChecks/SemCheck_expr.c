@@ -4917,6 +4917,11 @@ int semcheck_funccall(int *type_return,
                         goto funccall_cleanup;
                     }
                     semcheck_expr_main(&call_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                    if (formal_decl != NULL && formal_decl->type == TREE_ARR_DECL &&
+                        call_expr != NULL && call_expr->type == EXPR_ARRAY_LITERAL)
+                    {
+                        call_type = formal_type;
+                    }
 
                     if(formal_type == call_type)
                         current_score += 0;
@@ -4998,6 +5003,12 @@ int semcheck_funccall(int *type_return,
                 }
                 else if (proc_def->tree_data.subprogram_data.cname_flag &&
                          proc_def->tree_data.subprogram_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id =
+                        strdup(proc_def->tree_data.subprogram_data.mangled_id);
+                }
+                else if (proc_def->tree_data.subprogram_data.mangled_id != NULL)
                 {
                     free(expr->expr_data.function_call_data.mangled_id);
                     expr->expr_data.function_call_data.mangled_id =
@@ -5120,8 +5131,6 @@ int semcheck_funccall(int *type_return,
             ++cur_arg;
             assert(args_given->type == LIST_EXPR);
             assert(true_args->type == LIST_TREE);
-            return_val += semcheck_expr_main(&arg_type,
-                symtab, (struct Expression *)args_given->cur, max_scope_lev, NO_MUTATE);
 
             arg_decl = (Tree_t *)true_args->cur;
             if (arg_decl->type != TREE_VAR_DECL && arg_decl->type != TREE_ARR_DECL)
@@ -5133,6 +5142,21 @@ int semcheck_funccall(int *type_return,
                 args_given = args_given->next;
                 continue;
             }
+            struct Expression *current_arg_expr = (struct Expression *)args_given->cur;
+            if (arg_decl->type == TREE_ARR_DECL)
+            {
+                if (semcheck_prepare_array_literal_argument(arg_decl, current_arg_expr,
+                        symtab, max_scope_lev, expr->line_num) != 0)
+                {
+                    ++return_val;
+                    true_args = true_args->next;
+                    args_given = args_given->next;
+                    continue;
+                }
+            }
+
+            return_val += semcheck_expr_main(&arg_type,
+                symtab, current_arg_expr, max_scope_lev, NO_MUTATE);
             if (arg_decl->type == TREE_VAR_DECL)
                 true_arg_ids = arg_decl->tree_data.var_decl_data.ids;
             else
@@ -5141,6 +5165,11 @@ int semcheck_funccall(int *type_return,
             while(true_arg_ids != NULL && args_given != NULL)
             {
                 int expected_type = resolve_param_type(arg_decl, symtab);
+                if (arg_decl->type == TREE_ARR_DECL && current_arg_expr != NULL &&
+                    current_arg_expr->type == EXPR_ARRAY_LITERAL)
+                {
+                    arg_type = expected_type;
+                }
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
                     /* Allow integer/longint conversion */

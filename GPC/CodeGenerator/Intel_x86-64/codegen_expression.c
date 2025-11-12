@@ -209,7 +209,7 @@ static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size)
     char label[32];
     snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp",
         codegen_expr_next_temp_suffix());
-    return add_l_x(label, aligned);
+    return add_l_t_bytes(label, aligned);
 }
 
 static int formal_decl_is_open_array(Tree_t *decl)
@@ -2738,7 +2738,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     #endif
     int arg_num;
     Register_t *top_reg;
-    char buffer[50];
+    char buffer[128];
     const char *arg_reg_char;
     expr_node_t *expr_tree;
 
@@ -2784,6 +2784,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         int is_pointer_like;
         int assigned_class;
         int assigned_index;
+        int pass_via_stack;
+        int stack_slot;
+        int stack_offset;
     } ArgInfo;
 
     int total_args = 0;
@@ -2791,6 +2794,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         ++total_args;
 
     ArgInfo *arg_infos = NULL;
+    const int max_int_regs = gpc_max_int_arg_regs();
+    const int max_sse_regs = gpc_max_sse_arg_regs();
+    int stack_slot_count = 0;
     if (total_args > 0)
     {
         arg_infos = (ArgInfo *)calloc((size_t)total_args, sizeof(ArgInfo));
@@ -2800,6 +2806,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             exit(1);
         }
     }
+
+    if (ctx != NULL)
+        ctx->pending_stack_arg_bytes = 0;
 
     if (arg_start_index < 0)
         arg_start_index = 0;
@@ -3189,54 +3198,93 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             if (use_sse)
             {
                 arg_infos[i].assigned_class = ARG_CLASS_SSE;
-                arg_infos[i].assigned_index = next_sse++;
+                if (next_sse < max_sse_regs)
+                {
+                    arg_infos[i].assigned_index = next_sse++;
+                }
+                else
+                {
+                    arg_infos[i].assigned_index = -1;
+                    arg_infos[i].pass_via_stack = 1;
+                    arg_infos[i].stack_slot = stack_slot_count++;
+                }
             }
             else
             {
                 arg_infos[i].assigned_class = ARG_CLASS_INT;
-                arg_infos[i].assigned_index = next_gpr++;
+                if (next_gpr < max_int_regs)
+                {
+                    arg_infos[i].assigned_index = next_gpr++;
+                }
+                else
+                {
+                    arg_infos[i].assigned_index = -1;
+                    arg_infos[i].pass_via_stack = 1;
+                    arg_infos[i].stack_slot = stack_slot_count++;
+                }
+            }
+        }
+    }
+
+    if (stack_slot_count > 0)
+    {
+        int stack_bytes = stack_slot_count * CODEGEN_POINTER_SIZE_BYTES;
+        int padding = codegen_expr_align_to(stack_bytes, REQUIRED_OFFSET) - stack_bytes;
+        int total_stack_area = stack_bytes + padding;
+        if (total_stack_area > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", total_stack_area);
+            inst_list = add_inst(inst_list, buffer);
+            if (ctx != NULL)
+                ctx->pending_stack_arg_bytes += total_stack_area;
+            for (int i = 0; i < arg_num; ++i)
+            {
+                if (arg_infos[i].pass_via_stack)
+                    arg_infos[i].stack_offset = padding + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
             }
         }
     }
 
     for (int i = arg_num - 1; i >= 0; --i)
     {
-        int reg_index = arg_start_index + i;
-        if (arg_infos != NULL && arg_infos[i].assigned_index >= 0)
-        {
-            reg_index = arg_infos[i].assigned_index;
-        }
-
         int expected_type = (arg_infos != NULL) ? arg_infos[i].expected_type : UNKNOWN_TYPE;
         int actual_type = (arg_infos != NULL && arg_infos[i].expr != NULL)
             ? expr_get_type_tag(arg_infos[i].expr) : UNKNOWN_TYPE;
         int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE);
+        int pass_on_stack = (arg_infos != NULL && arg_infos[i].pass_via_stack);
 
-        if (arg_infos != NULL && arg_infos[i].assigned_class == ARG_CLASS_SSE)
-            arg_reg_char = current_arg_reg_xmm(reg_index);
-        else
-            arg_reg_char = get_arg_reg64_num(reg_index);
-        if (arg_reg_char == NULL)
-        {
-            fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
-            exit(1);
-        }
+        int reg_index = arg_start_index + i;
+        if (!pass_on_stack && arg_infos != NULL && arg_infos[i].assigned_index >= 0)
+            reg_index = arg_infos[i].assigned_index;
 
-        if (arg_infos != NULL)
+        if (!pass_on_stack)
         {
-            for (int j = 0; j < i; ++j)
+            if (arg_infos != NULL && arg_infos[i].assigned_class == ARG_CLASS_SSE)
+                arg_reg_char = current_arg_reg_xmm(reg_index);
+            else
+                arg_reg_char = get_arg_reg64_num(reg_index);
+            if (arg_reg_char == NULL)
             {
-                const char *check_reg = arg_reg_char;
-                if (arg_infos[j].reg != NULL &&
-                    strcmp(arg_infos[j].reg->bit_64, check_reg) == 0)
+                fprintf(stderr, "ERROR: Could not get arg register: %d\n", i);
+                exit(1);
+            }
+
+            if (arg_infos != NULL)
+            {
+                for (int j = 0; j < i; ++j)
                 {
-                    StackNode_t *spill = add_l_t("arg_spill");
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                        arg_infos[j].reg->bit_64, spill->offset);
-                    inst_list = add_inst(inst_list, buffer);
-                    free_reg(get_reg_stack(), arg_infos[j].reg);
-                    arg_infos[j].reg = NULL;
-                    arg_infos[j].spill = spill;
+                    const char *check_reg = arg_reg_char;
+                    if (arg_infos[j].reg != NULL &&
+                        strcmp(arg_infos[j].reg->bit_64, check_reg) == 0)
+                    {
+                        StackNode_t *spill = add_l_t("arg_spill");
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            arg_infos[j].reg->bit_64, spill->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), arg_infos[j].reg);
+                        arg_infos[j].reg = NULL;
+                        arg_infos[j].spill = spill;
+                    }
                 }
             }
         }
@@ -3251,23 +3299,55 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 inst_list = codegen_sign_extend32_to64(inst_list,
                     stored_reg->bit_32, stored_reg->bit_64);
             }
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
-            inst_list = add_inst(inst_list, buffer);
+            if (pass_on_stack)
+            {
+                char stack_dest[64];
+                snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, stack_dest);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", stored_reg->bit_64, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+            }
             free_reg(get_reg_stack(), stored_reg);
         }
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
+            Register_t *temp_reg = NULL;
             if (needs_int_to_long && arg_infos[i].assigned_class == ARG_CLASS_INT)
             {
+                temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (temp_reg == NULL)
+                    return inst_list;
                 snprintf(buffer, sizeof(buffer), "\tmovslq\t-%d(%%rbp), %s\n",
-                    arg_infos[i].spill->offset, arg_reg_char);
+                    arg_infos[i].spill->offset, temp_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
             }
             else
             {
+                temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (temp_reg == NULL)
+                    return inst_list;
                 snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    arg_infos[i].spill->offset, arg_reg_char);
+                    arg_infos[i].spill->offset, temp_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
             }
-            inst_list = add_inst(inst_list, buffer);
+
+            if (pass_on_stack)
+            {
+                char stack_dest[64];
+                snprintf(stack_dest, sizeof(stack_dest), "%d(%%rsp)", arg_infos[i].stack_offset);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", temp_reg->bit_64, stack_dest);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", temp_reg->bit_64, arg_reg_char);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            free_reg(get_reg_stack(), temp_reg);
         }
         else
         {
@@ -3286,6 +3366,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    return inst_list;
+}
+
+ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (ctx != NULL && ctx->pending_stack_arg_bytes > 0)
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\n\taddq\t$%d, %%rsp\n", ctx->pending_stack_arg_bytes);
+        inst_list = add_inst(inst_list, buffer);
+        ctx->pending_stack_arg_bytes = 0;
+    }
+    free_arg_regs();
     return inst_list;
 }
 
