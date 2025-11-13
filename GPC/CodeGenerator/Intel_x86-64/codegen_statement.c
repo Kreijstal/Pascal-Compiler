@@ -102,6 +102,11 @@ static int lookup_record_field_type(struct RecordType *record_type, const char *
         if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field == NULL || record_field_is_hidden(field))
+            {
+                field_node = field_node->next;
+                continue;
+            }
             if (field->name != NULL && strcmp(field->name, field_name) == 0)
                 return field->type;
         }
@@ -296,7 +301,8 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
         if (field_node->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)field_node->cur;
-            if (field->name != NULL && strcmp(field->name, field_name) == 0)
+            if (!record_field_is_hidden(field) && field->name != NULL &&
+                strcmp(field->name, field_name) == 0)
                 return field;
         }
         field_node = field_node->next;
@@ -600,6 +606,20 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     if (expr == NULL || ctx == NULL || out_reg == NULL)
         return inst_list;
 
+    if (expr->type == EXPR_IS)
+        return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
+
+    if (expr->type == EXPR_AS && expr->expr_data.as_data.expr != NULL)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            return inst_list;
+        inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+        *out_reg = addr_reg;
+        return inst_list;
+    }
+
     expr_node_t *expr_tree = build_expr_tree(expr);
     Register_t *reg = get_free_reg(get_reg_stack(), &inst_list);
     if (reg == NULL)
@@ -788,6 +808,22 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
 
         *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_AS)
+    {
+        if (expr->expr_data.as_data.expr != NULL)
+        {
+            Register_t *operand_addr = NULL;
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &operand_addr);
+            if (operand_addr != NULL)
+            {
+                inst_list = codegen_emit_class_cast_check_from_address((struct Expression *)expr,
+                    inst_list, ctx, operand_addr);
+                *out_reg = operand_addr;
+                goto cleanup;
+            }
+        }
         goto cleanup;
     }
 

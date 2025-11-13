@@ -1,0 +1,4 @@
+Base value=5
+Base not descendant
+Base now treated as descendant
+DescOnly sees extra=7

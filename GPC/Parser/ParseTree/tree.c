@@ -14,9 +14,13 @@
 #include <assert.h>
 
 static void print_record_field(struct RecordField *field, FILE *f, int num_indent);
+static void print_class_property(struct ClassProperty *property, FILE *f, int num_indent);
 static void destroy_record_field(struct RecordField *field);
 static void print_variant_part(struct VariantPart *variant, FILE *f, int num_indent);
 static void print_variant_branch(struct VariantBranch *branch, FILE *f, int num_indent);
+static void destroy_class_property(struct ClassProperty *property);
+static struct ClassProperty *clone_class_property(const struct ClassProperty *property);
+static ListNode_t *clone_property_list(const ListNode_t *properties);
 static void destroy_variant_part(struct VariantPart *variant);
 static void destroy_variant_branch(struct VariantBranch *branch);
 static ListNode_t *clone_member_list(const ListNode_t *members);
@@ -58,6 +62,9 @@ void list_print(ListNode_t *list, FILE *f, int num_indent)
                 break;
             case LIST_RECORD_FIELD:
                 print_record_field((struct RecordField *)cur->cur, f, num_indent);
+                break;
+            case LIST_CLASS_PROPERTY:
+                print_class_property((struct ClassProperty *)cur->cur, f, num_indent);
                 break;
             case LIST_SET_ELEMENT: {
                 struct SetElement *element = (struct SetElement *)cur->cur;
@@ -122,6 +129,72 @@ static void print_record_field(struct RecordField *field, FILE *f, int num_inden
         fprintf(f, "[NESTED_RECORD]:\n");
         list_print(field->nested_record->fields, f, num_indent + 2);
     }
+}
+
+static void print_class_property(struct ClassProperty *property, FILE *f, int num_indent)
+{
+    if (property == NULL)
+        return;
+
+    print_indent(f, num_indent);
+    fprintf(f, "[PROPERTY:%s", property->name != NULL ? property->name : "<unnamed>");
+    if (property->type_id != NULL)
+        fprintf(f, " type=%s", property->type_id);
+    else
+        fprintf(f, " type=%d", property->type);
+    if (property->read_accessor != NULL)
+        fprintf(f, " read=%s", property->read_accessor);
+    if (property->write_accessor != NULL)
+    fprintf(f, " write=%s", property->write_accessor);
+    fprintf(f, "]\n");
+}
+
+static void destroy_class_property(struct ClassProperty *property)
+{
+    if (property == NULL)
+        return;
+    free(property->name);
+    free(property->type_id);
+    free(property->read_accessor);
+    free(property->write_accessor);
+    free(property);
+}
+
+static struct ClassProperty *clone_class_property(const struct ClassProperty *property)
+{
+    if (property == NULL)
+        return NULL;
+
+    struct ClassProperty *clone = (struct ClassProperty *)calloc(1, sizeof(struct ClassProperty));
+    assert(clone != NULL);
+    clone->name = property->name != NULL ? strdup(property->name) : NULL;
+    clone->type = property->type;
+    clone->type_id = property->type_id != NULL ? strdup(property->type_id) : NULL;
+    clone->read_accessor = property->read_accessor != NULL ? strdup(property->read_accessor) : NULL;
+    clone->write_accessor = property->write_accessor != NULL ? strdup(property->write_accessor) : NULL;
+    return clone;
+}
+
+static ListNode_t *clone_property_list(const ListNode_t *properties)
+{
+    if (properties == NULL)
+        return NULL;
+
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
+    const ListNode_t *cur = properties;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_CLASS_PROPERTY)
+        {
+            struct ClassProperty *property_clone = clone_class_property((struct ClassProperty *)cur->cur);
+            ListNode_t *node = CreateListNode(property_clone, LIST_CLASS_PROPERTY);
+            *tail = node;
+            tail = &node->next;
+        }
+        cur = cur->next;
+    }
+    return head;
 }
 
 static void print_variant_branch(struct VariantBranch *branch, FILE *f, int num_indent)
@@ -408,6 +481,12 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
                     print_indent(f, num_indent + 1);
                     fprintf(f, "[FIELDS]:\n");
                     list_print(tree->tree_data.type_decl_data.info.record->fields, f, num_indent + 2);
+                    if (tree->tree_data.type_decl_data.info.record->properties != NULL)
+                    {
+                        print_indent(f, num_indent + 1);
+                        fprintf(f, "[PROPERTIES]:\n");
+                        list_print(tree->tree_data.type_decl_data.info.record->properties, f, num_indent + 2);
+                    }
                 }
             }
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
@@ -812,6 +891,36 @@ void expr_print(struct Expression *expr, FILE *f, int num_indent)
           print_indent(f, num_indent);
           fprintf(f, "[EXPR]:\n");
           expr_print(expr->expr_data.typecast_data.expr, f, num_indent+1);
+          --num_indent;
+          break;
+        case EXPR_IS:
+          fprintf(f, "[IS]\n");
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[TARGET_TYPE:%d]\n", expr->expr_data.is_data.target_type);
+          if (expr->expr_data.is_data.target_type_id != NULL)
+          {
+              print_indent(f, num_indent);
+              fprintf(f, "[TARGET_TYPE_ID:%s]\n", expr->expr_data.is_data.target_type_id);
+          }
+          print_indent(f, num_indent);
+          fprintf(f, "[EXPR]:\n");
+          expr_print(expr->expr_data.is_data.expr, f, num_indent + 1);
+          --num_indent;
+          break;
+        case EXPR_AS:
+          fprintf(f, "[AS]\n");
+          ++num_indent;
+          print_indent(f, num_indent);
+          fprintf(f, "[TARGET_TYPE:%d]\n", expr->expr_data.as_data.target_type);
+          if (expr->expr_data.as_data.target_type_id != NULL)
+          {
+              print_indent(f, num_indent);
+              fprintf(f, "[TARGET_TYPE_ID:%s]\n", expr->expr_data.as_data.target_type_id);
+          }
+          print_indent(f, num_indent);
+          fprintf(f, "[EXPR]:\n");
+          expr_print(expr->expr_data.as_data.expr, f, num_indent + 1);
           --num_indent;
           break;
 
@@ -1263,6 +1372,30 @@ void destroy_expr(struct Expression *expr)
               expr->expr_data.typecast_data.expr = NULL;
           }
           break;
+        case EXPR_IS:
+          if (expr->expr_data.is_data.expr != NULL)
+          {
+              destroy_expr(expr->expr_data.is_data.expr);
+              expr->expr_data.is_data.expr = NULL;
+          }
+          if (expr->expr_data.is_data.target_type_id != NULL)
+          {
+              free(expr->expr_data.is_data.target_type_id);
+              expr->expr_data.is_data.target_type_id = NULL;
+          }
+          break;
+        case EXPR_AS:
+          if (expr->expr_data.as_data.expr != NULL)
+          {
+              destroy_expr(expr->expr_data.as_data.expr);
+              expr->expr_data.as_data.expr = NULL;
+          }
+          if (expr->expr_data.as_data.target_type_id != NULL)
+          {
+              free(expr->expr_data.as_data.target_type_id);
+              expr->expr_data.as_data.target_type_id = NULL;
+          }
+          break;
 
         case EXPR_ADDR_OF_PROC:
           /* Nothing to free - procedure_symbol is a reference, not owned */
@@ -1315,7 +1448,20 @@ void destroy_record_type(struct RecordType *record_type)
         return;
 
     destroy_list(record_type->fields);
+    if (record_type->properties != NULL)
+    {
+        ListNode_t *cur = record_type->properties;
+        while (cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)cur->cur;
+            destroy_class_property(property);
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+    }
     free(record_type->parent_class_name);
+    free(record_type->type_id);
     
     /* Free methods list */
     if (record_type->methods != NULL) {
@@ -1344,10 +1490,14 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     struct RecordType *clone = (struct RecordType *)malloc(sizeof(struct RecordType));
     assert(clone != NULL);
     clone->fields = NULL;
+    clone->properties = NULL;
     clone->parent_class_name = record_type->parent_class_name ? strdup(record_type->parent_class_name) : NULL;
     clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
+    clone->is_class = record_type->is_class;
+    clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
 
     clone->fields = clone_member_list(record_type->fields);
+    clone->properties = clone_property_list(record_type->properties);
 
     return clone;
 }
@@ -1370,6 +1520,7 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
     clone->array_is_open = field->array_is_open;
+    clone->is_hidden = field->is_hidden;
     return clone;
 }
 
@@ -2330,6 +2481,34 @@ struct Expression *mk_typecast(int line_num, int target_type, char *target_type_
     new_expr->expr_data.typecast_data.target_type_id = target_type_id;
     new_expr->expr_data.typecast_data.expr = expr;
 
+    return new_expr;
+}
+
+struct Expression *mk_is(int line_num, struct Expression *expr,
+    int target_type, char *target_type_id)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_IS);
+    new_expr->expr_data.is_data.expr = expr;
+    new_expr->expr_data.is_data.target_type = target_type;
+    new_expr->expr_data.is_data.target_type_id = target_type_id;
+    new_expr->expr_data.is_data.target_record_type = NULL;
+    return new_expr;
+}
+
+struct Expression *mk_as(int line_num, struct Expression *expr,
+    int target_type, char *target_type_id)
+{
+    struct Expression *new_expr = (struct Expression *)malloc(sizeof(struct Expression));
+    assert(new_expr != NULL);
+
+    init_expression(new_expr, line_num, EXPR_AS);
+    new_expr->expr_data.as_data.expr = expr;
+    new_expr->expr_data.as_data.target_type = target_type;
+    new_expr->expr_data.as_data.target_type_id = target_type_id;
+    new_expr->expr_data.as_data.target_record_type = NULL;
     return new_expr;
 }
 

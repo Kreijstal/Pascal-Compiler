@@ -94,6 +94,50 @@ static inline int64_t gpc_double_to_bits(double value)
     return bits;
 }
 
+static const char *gpc_rtti_type_name(const gpc_class_typeinfo *info)
+{
+    if (info != NULL && info->class_name != NULL)
+        return info->class_name;
+    return "<unknown>";
+}
+
+int gpc_rtti_is(const gpc_class_typeinfo *value_type,
+    const gpc_class_typeinfo *target_type)
+{
+    if (value_type == NULL || target_type == NULL)
+        return 0;
+
+    const gpc_class_typeinfo *current = value_type;
+    while (current != NULL)
+    {
+        if (current == target_type)
+            return 1;
+        current = current->parent;
+    }
+    return 0;
+}
+
+void gpc_rtti_check_cast(const gpc_class_typeinfo *value_type,
+    const gpc_class_typeinfo *target_type)
+{
+    if (value_type == NULL)
+    {
+        fprintf(stderr, "Runtime error: invalid class reference in \"as\" operator.\n");
+        abort();
+    }
+    if (target_type == NULL)
+    {
+        fprintf(stderr, "Runtime error: missing target class metadata in \"as\" operator.\n");
+        abort();
+    }
+    if (gpc_rtti_is(value_type, target_type))
+        return;
+
+    fprintf(stderr, "Runtime error: cannot cast class %s to %s.\n",
+        gpc_rtti_type_name(value_type), gpc_rtti_type_name(target_type));
+    abort();
+}
+
 int gpc_printf(const char *format, ...) {
     va_list args;
     va_start(args, format);

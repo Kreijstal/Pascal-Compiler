@@ -52,7 +52,75 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
 static int formal_decl_is_open_array(Tree_t *decl);
 static long long codegen_static_array_length(const struct Expression *expr);
+static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *ctx, const char *usage);
 
+static const char *codegen_class_typeinfo_label(struct RecordType *record,
+    const char *fallback_id)
+{
+    if (record != NULL && record->type_id != NULL)
+        return record->type_id;
+    return fallback_id;
+}
+
+static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (out_reg != NULL)
+        *out_reg = NULL;
+
+    if (expr == NULL || ctx == NULL)
+        return inst_list;
+
+    if (!codegen_expr_is_addressable(expr))
+    {
+        codegen_report_error(ctx,
+            "ERROR: RTTI operations currently require addressable class expressions.");
+        return inst_list;
+    }
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    Register_t *typeinfo_reg = codegen_try_get_reg(&inst_list, ctx, "class RTTI");
+    if (typeinfo_reg == NULL)
+    {
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), addr_reg);
+
+    if (out_reg != NULL)
+        *out_reg = typeinfo_reg;
+    else
+        free_reg(get_reg_stack(), typeinfo_reg);
+    return inst_list;
+}
+
+static void codegen_move_rtti_args(ListNode_t **inst_list,
+    const Register_t *value_reg, const char *target_label)
+{
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", value_reg->bit_64);
+        *inst_list = add_inst(*inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rdx\n", target_label);
+        *inst_list = add_inst(*inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
+        *inst_list = add_inst(*inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rsi\n", target_label);
+        *inst_list = add_inst(*inst_list, buffer);
+    }
+}
 /* Helper to check if a formal parameter declaration expects a string type. */
 static int formal_decl_expects_string(Tree_t *decl)
 {
@@ -235,6 +303,108 @@ static long long codegen_static_array_length(const struct Expression *expr)
         return -1;
 
     return (upper - lower) + 1;
+}
+
+ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (out_reg != NULL)
+        *out_reg = NULL;
+
+    if (expr == NULL)
+        return inst_list;
+
+    const char *target_label = codegen_class_typeinfo_label(
+        expr->expr_data.is_data.target_record_type,
+        expr->expr_data.is_data.target_type_id);
+    if (target_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to resolve class type for \"is\" operator.");
+        return inst_list;
+    }
+
+    Register_t *value_reg = NULL;
+    inst_list = codegen_load_class_typeinfo(expr->expr_data.is_data.expr, inst_list, ctx, &value_reg);
+    if (value_reg == NULL)
+        return inst_list;
+
+    codegen_move_rtti_args(&inst_list, value_reg, target_label);
+    free_reg(get_reg_stack(), value_reg);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_rtti_is\n");
+    free_arg_regs();
+
+    if (out_reg != NULL)
+    {
+        Register_t *result_reg = codegen_try_get_reg(&inst_list, ctx, "is result");
+        if (result_reg == NULL)
+            return inst_list;
+
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", result_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = result_reg;
+    }
+
+    return inst_list;
+}
+
+ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *addr_reg)
+{
+    if (expr == NULL || addr_reg == NULL)
+        return inst_list;
+
+    const char *target_label = codegen_class_typeinfo_label(
+        expr->expr_data.as_data.target_record_type,
+        expr->expr_data.as_data.target_type_id);
+    if (target_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to resolve class type for \"as\" operator.");
+        return inst_list;
+    }
+
+    Register_t *typeinfo_reg = codegen_try_get_reg(&inst_list, ctx, "class RTTI");
+    if (typeinfo_reg == NULL)
+        return inst_list;
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* Preserve the address across the runtime call (caller-saved registers may be clobbered). */
+    inst_list = add_inst(inst_list, "\tsubq\t$16, %rsp\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%%rsp)\n", addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    codegen_move_rtti_args(&inst_list, typeinfo_reg, target_label);
+    free_reg(get_reg_stack(), typeinfo_reg);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tgpc_rtti_check_cast\n");
+    free_arg_regs();
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%%rsp), %s\n", addr_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = add_inst(inst_list, "\taddq\t$16, %rsp\n");
+    return inst_list;
+}
+
+ListNode_t *codegen_emit_class_cast_check(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->expr_data.as_data.expr == NULL)
+        return inst_list;
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+    if (addr_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
 }
 
 static const char *codegen_register_name8(const Register_t *reg)
@@ -882,6 +1052,10 @@ int codegen_expr_is_addressable(const struct Expression *expr)
         case EXPR_RECORD_ACCESS:
         case EXPR_POINTER_DEREF:
             return 1;
+        case EXPR_AS:
+            if (expr->expr_data.as_data.expr != NULL)
+                return codegen_expr_is_addressable(expr->expr_data.as_data.expr);
+            return 0;
         default:
             return 0;
     }
@@ -1475,6 +1649,30 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
 static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
+    if (expr != NULL)
+    {
+        if (expr->type == EXPR_IS)
+            return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
+        if (expr->type == EXPR_AS)
+        {
+            Register_t *addr_reg = NULL;
+            if (expr->expr_data.as_data.expr == NULL)
+                return inst_list;
+
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+            if (addr_reg == NULL)
+                return inst_list;
+
+            inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+
+            if (out_reg != NULL)
+                *out_reg = addr_reg;
+            else
+                free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+    }
+
     codegen_begin_expression(ctx);
     expr_node_t *expr_tree = build_expr_tree(expr);
     Register_t *target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
@@ -2287,6 +2485,29 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: Processing typecast expression\n");
             if (expr->expr_data.typecast_data.expr != NULL)
                 inst_list = codegen_expr(expr->expr_data.typecast_data.expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_IS:
+            CODEGEN_DEBUG("DEBUG: Processing RTTI is expression\n");
+            inst_list = codegen_emit_is_expr(expr, inst_list, ctx, NULL);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
+        case EXPR_AS:
+            CODEGEN_DEBUG("DEBUG: Processing RTTI as expression\n");
+            if (expr->expr_data.as_data.expr != NULL)
+            {
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+                if (addr_reg != NULL)
+                {
+                    inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+                    free_reg(get_reg_stack(), addr_reg);
+                }
+            }
             #ifdef DEBUG_CODEGEN
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif

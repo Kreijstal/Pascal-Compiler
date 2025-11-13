@@ -65,10 +65,36 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static inline int node_is_class_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    if (!node_is_record_type(node))
+        return 0;
+    struct RecordType *record = get_record_type_from_node(node);
+    return record_type_is_class(record);
+}
+
 /* Helper function to get TypeAlias from HashNode */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     return hashnode_get_type_alias(node);
+}
+
+static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *symtab)
+{
+    if (node == NULL)
+        return NULL;
+    if (node_is_record_type(node) && node->id != NULL)
+        return node->id;
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (alias != NULL && alias->target_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *target = NULL;
+        if (FindIdent(&target, symtab, alias->target_type_id) != -1 && target != NULL)
+            return codegen_resolve_record_type_name(target, symtab);
+    }
+    return NULL;
 }
 
 /* Allocate the next available integer argument register (general purpose). */
@@ -918,9 +944,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     if (type_decls == NULL)
         return;
     
-    /* VMTs are generated as read-only data structures */
+    /* RTTI metadata and VMTs are generated as read-only data structures */
     fprintf(ctx->output_file, "\n");
-    fprintf(ctx->output_file, "# Virtual Method Tables (VMT)\n");
+    fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     
     /* Iterate through all type declarations */
@@ -932,23 +958,41 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
                 struct RecordType *record_info = type_tree->tree_data.type_decl_data.info.record;
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
-                
-                /* Generate VMT if this class has virtual methods */
-                if (record_info != NULL && record_info->methods != NULL && type_name != NULL) {
-                    fprintf(ctx->output_file, "\n# VMT for class %s\n", type_name);
+                const char *class_label = (record_info != NULL && record_info->type_id != NULL) ?
+                    record_info->type_id : type_name;
+
+                if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
+                    fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl %s_VMT\n", type_name);
-                    fprintf(ctx->output_file, "%s_VMT:\n", type_name);
-                    
-                    /* Generate VMT entries for each method */
-                    ListNode_t *method_node = record_info->methods;
-                    while (method_node != NULL) {
-                        struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
-                        if (method != NULL && method->mangled_name != NULL) {
-                            /* Each VMT entry is a pointer to the method */
-                            fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
+                    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
+                    fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
+                    if (record_info->parent_class_name != NULL)
+                        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
+                    else
+                        fprintf(ctx->output_file, "\t.quad\t0\n");
+
+                    char name_label[256];
+                    snprintf(name_label, sizeof(name_label), "__gpc_typeinfo_name_%s", class_label);
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
+                    if (record_info->methods != NULL)
+                        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
+                    else
+                        fprintf(ctx->output_file, "\t.quad\t0\n");
+                    fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, class_label);
+
+                    if (record_info->methods != NULL) {
+                        fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
+                        fprintf(ctx->output_file, "\t.align 8\n");
+                        fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
+                        fprintf(ctx->output_file, "%s_VMT:\n", class_label);
+                        ListNode_t *method_node = record_info->methods;
+                        while (method_node != NULL) {
+                            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                            if (method != NULL && method->mangled_name != NULL) {
+                                fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
+                            }
+                            method_node = method_node->next;
                         }
-                        method_node = method_node->next;
                     }
                 }
             }
@@ -2473,6 +2517,32 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     return inst_list;
 }
 
+static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
+    CodeGenContext *ctx, StackNode_t *var_node, const char *type_name)
+{
+    (void)ctx;
+    if (var_node == NULL || type_name == NULL || type_name[0] == '\0' || var_node->is_reference)
+        return inst_list;
+
+    char typeinfo_label[512];
+    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_TYPEINFO", type_name);
+
+    char buffer[1024];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rax\n", typeinfo_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (var_node->is_static)
+    {
+        const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s(%%rip)\n", label);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", var_node->offset);
+    }
+    return add_inst(inst_list, buffer);
+}
+
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(ctx != NULL);
@@ -2535,6 +2605,22 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+            if (type_node != NULL && node_is_class_type(type_node))
+            {
+                struct RecordType *record_desc = get_record_type_from_node(type_node);
+                const char *class_type_name = (record_desc != NULL && record_desc->type_id != NULL) ?
+                    record_desc->type_id : codegen_resolve_record_type_name(type_node, symtab);
+                ListNode_t *ids = decl->tree_data.var_decl_data.ids;
+                while (ids != NULL)
+                {
+                    char *var_name = (char *)ids->cur;
+                    StackNode_t *var_node = find_label(var_name);
+                    inst_list = codegen_store_class_typeinfo(inst_list, ctx, var_node,
+                        class_type_name);
+                    ids = ids->next;
+                }
+            }
+
             if (init_stmt != NULL)
                 inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
         }

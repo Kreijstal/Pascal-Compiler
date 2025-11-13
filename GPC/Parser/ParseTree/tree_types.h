@@ -62,6 +62,16 @@ struct RecordField
     int array_element_type;
     char *array_element_type_id;
     int array_is_open;
+    int is_hidden;
+};
+
+struct ClassProperty
+{
+    char *name;
+    int type;
+    char *type_id;
+    char *read_accessor;
+    char *write_accessor;
 };
 
 /* Method information for classes */
@@ -77,9 +87,22 @@ struct MethodInfo
 struct RecordType
 {
     ListNode_t *fields;
+    ListNode_t *properties;
     char *parent_class_name;  /* For class inheritance */
     ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
+    int is_class;             /* 1 if this record represents a class */
+    char *type_id;            /* Canonical type name if available */
 };
+
+static inline int record_type_is_class(const struct RecordType *record)
+{
+    return (record != NULL) ? record->is_class : 0;
+}
+
+static inline int record_field_is_hidden(const struct RecordField *field)
+{
+    return (field != NULL) ? field->is_hidden : 0;
+}
 
 struct VariantBranch
 {
@@ -258,6 +281,8 @@ enum ExprType {
     EXPR_POINTER_DEREF,
     EXPR_ADDR,
     EXPR_TYPECAST,
+    EXPR_IS,
+    EXPR_AS,
     EXPR_ADDR_OF_PROC,
     EXPR_ANONYMOUS_FUNCTION,
     EXPR_ANONYMOUS_PROCEDURE
@@ -384,6 +409,24 @@ struct Expression
             char *target_type_id;
             struct Expression *expr;
         } typecast_data;
+
+        /* RTTI is operator */
+        struct IsExpr
+        {
+            struct Expression *expr;
+            int target_type;
+            char *target_type_id;
+            struct RecordType *target_record_type;
+        } is_data;
+
+        /* as operator (checked class cast) */
+        struct AsExpr
+        {
+            struct Expression *expr;
+            int target_type;
+            char *target_type_id;
+            struct RecordType *target_record_type;
+        } as_data;
 
         /* Address of procedure */
         struct AddrOfProc

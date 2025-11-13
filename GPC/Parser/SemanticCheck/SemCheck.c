@@ -97,7 +97,6 @@ int semcheck_id_not_main(char *id)
         fprintf(stderr, "ERROR: main is special keyword, it cannot be a program, or subprogram\n");
         return 1;
     }
-
     return 0;
 }
 
@@ -881,6 +880,96 @@ static int statement_contains_asm_block(struct Statement *stmt)
     return 0;
 }
 
+static int record_has_property(struct RecordType *record_info, const char *property_name)
+{
+    if (record_info == NULL || property_name == NULL)
+        return 0;
+
+    ListNode_t *node = record_info->properties;
+    while (node != NULL)
+    {
+        if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)node->cur;
+            if (property->name != NULL &&
+                pascal_identifier_equals(property->name, property_name))
+                return 1;
+        }
+        node = node->next;
+    }
+    return 0;
+}
+
+static struct ClassProperty *clone_class_property(const struct ClassProperty *property)
+{
+    if (property == NULL)
+        return NULL;
+
+    struct ClassProperty *clone = (struct ClassProperty *)calloc(1, sizeof(struct ClassProperty));
+    if (clone == NULL)
+        return NULL;
+
+    clone->name = property->name != NULL ? strdup(property->name) : NULL;
+    clone->type = property->type;
+    clone->type_id = property->type_id != NULL ? strdup(property->type_id) : NULL;
+    clone->read_accessor = property->read_accessor != NULL ? strdup(property->read_accessor) : NULL;
+    clone->write_accessor = property->write_accessor != NULL ? strdup(property->write_accessor) : NULL;
+
+    if ((property->name != NULL && clone->name == NULL) ||
+        (property->type_id != NULL && clone->type_id == NULL) ||
+        (property->read_accessor != NULL && clone->read_accessor == NULL) ||
+        (property->write_accessor != NULL && clone->write_accessor == NULL))
+    {
+        free(clone->name);
+        free(clone->type_id);
+        free(clone->read_accessor);
+        free(clone->write_accessor);
+        free(clone);
+        return NULL;
+    }
+
+    return clone;
+}
+
+static ListNode_t *clone_property_list_unique(struct RecordType *record_info,
+    const ListNode_t *properties)
+{
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
+
+    while (properties != NULL)
+    {
+        if (properties->type == LIST_CLASS_PROPERTY && properties->cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)properties->cur;
+            if (!record_has_property(record_info, property->name))
+            {
+                struct ClassProperty *clone = clone_class_property(property);
+                if (clone != NULL)
+                {
+                    ListNode_t *node = CreateListNode(clone, LIST_CLASS_PROPERTY);
+                    if (node != NULL)
+                    {
+                        *tail = node;
+                        tail = &node->next;
+                    }
+                    else
+                    {
+                        free(clone->name);
+                        free(clone->type_id);
+                        free(clone->read_accessor);
+                        free(clone->write_accessor);
+                        free(clone);
+                    }
+                }
+            }
+        }
+        properties = properties->next;
+    }
+
+    return head;
+}
+
 /* Helper function to check for circular inheritance */
 static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, const char *parent_name, int max_depth)
 {
@@ -906,6 +995,56 @@ static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, 
     
     /* Recursively check parent's parent */
     return check_circular_inheritance(symtab, class_name, parent_record->parent_class_name, max_depth - 1);
+}
+
+static int add_class_padding_field(struct RecordType *record_info, long long padding_bytes)
+{
+    if (record_info == NULL || padding_bytes <= 0)
+        return 0;
+
+    struct RecordField *padding = (struct RecordField *)calloc(1, sizeof(struct RecordField));
+    if (padding == NULL)
+        return 1;
+
+    padding->name = NULL;
+    padding->type = CHAR_TYPE;
+    padding->is_array = 1;
+    padding->array_start = 0;
+    padding->array_end = (int)padding_bytes - 1;
+    padding->array_element_type = CHAR_TYPE;
+    padding->array_is_open = 0;
+    padding->is_hidden = 1;
+
+    ListNode_t *node = CreateListNode(padding, LIST_RECORD_FIELD);
+    record_info->fields = PushListNodeBack(record_info->fields, node);
+    return 0;
+}
+
+static int compute_class_record_size(SymTab_t *symtab, struct RecordType *record_info,
+    long long *size_out, int line_num)
+{
+    if (record_info == NULL || size_out == NULL)
+        return 1;
+
+    return semcheck_compute_record_size(symtab, record_info, size_out,
+        line_num >= 0 ? line_num : 0);
+}
+
+static int ensure_class_storage_capacity(SymTab_t *symtab, struct RecordType *record_info,
+    long long required_size, int line_num)
+{
+    if (record_info == NULL)
+        return 0;
+
+    long long current_size = 0;
+    if (compute_class_record_size(symtab, record_info, &current_size, line_num) != 0)
+        return 1;
+
+    if (current_size >= required_size)
+        return 0;
+
+    long long padding_bytes = required_size - current_size;
+    return add_class_padding_field(record_info, padding_bytes);
 }
 
 /* Helper function to merge parent class fields into derived class */
@@ -984,6 +1123,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->array_element_type_id = original_field->array_element_type_id ? 
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
+            cloned_field->is_hidden = original_field->is_hidden;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
@@ -1034,6 +1174,21 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             last_cloned->next = record_info->fields;
             record_info->fields = cloned_parent_fields;
         }
+    }
+
+    if (parent_record != NULL && parent_record->properties != NULL)
+    {
+        ListNode_t *cloned_properties = clone_property_list_unique(record_info,
+            parent_record->properties);
+        if (cloned_properties != NULL)
+            record_info->properties = ConcatList(cloned_properties, record_info->properties);
+    }
+
+    if (parent_record != NULL)
+    {
+        long long derived_size = 0;
+        if (compute_class_record_size(symtab, record_info, &derived_size, line_num) == 0)
+            ensure_class_storage_capacity(symtab, parent_record, derived_size, line_num);
     }
     
     return 0;

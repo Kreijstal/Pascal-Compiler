@@ -74,6 +74,11 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
 static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev);
+static int semcheck_try_property_assignment(SymTab_t *symtab,
+    struct Statement *stmt, int max_scope_lev);
+static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
+    struct Statement *stmt, struct Expression *lhs, HashNode_t *setter_node,
+    int max_scope_lev);
 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
@@ -1494,6 +1499,16 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         }
     }
 
+    int property_result = semcheck_try_property_assignment(symtab, stmt, max_scope_lev);
+    if (property_result >= 0)
+    {
+        if (lhs_owned && lhs_gpctype != NULL)
+            destroy_gpc_type(lhs_gpctype);
+        if (rhs_owned && rhs_gpctype != NULL)
+            destroy_gpc_type(rhs_gpctype);
+        return return_val + property_result;
+    }
+
     /* Clean up owned GpcTypes */
     if (lhs_owned && lhs_gpctype != NULL)
         destroy_gpc_type(lhs_gpctype);
@@ -1501,6 +1516,138 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         destroy_gpc_type(rhs_gpctype);
 
     return return_val;
+}
+
+static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
+    struct Statement *stmt, struct Expression *lhs, HashNode_t *setter_node,
+    int max_scope_lev)
+{
+    struct Expression *object_expr = lhs->expr_data.record_access_data.record_expr;
+    if (object_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, property assignment requires an object instance.\n\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    lhs->expr_data.record_access_data.record_expr = NULL;
+    struct Expression *value_expr = stmt->stmt_data.var_assign_data.expr;
+    stmt->stmt_data.var_assign_data.expr = NULL;
+
+    destroy_expr(lhs);
+    stmt->stmt_data.var_assign_data.var = NULL;
+
+    ListNode_t *self_arg = CreateListNode(object_expr, LIST_EXPR);
+    if (self_arg == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to allocate setter argument list.\n\n",
+            stmt->line_num);
+        destroy_expr(object_expr);
+        destroy_expr(value_expr);
+        return 1;
+    }
+
+    ListNode_t *value_arg = CreateListNode(value_expr, LIST_EXPR);
+    if (value_arg == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to allocate setter argument list.\n\n",
+            stmt->line_num);
+        destroy_expr(object_expr);
+        destroy_expr(value_expr);
+        free(self_arg);
+        return 1;
+    }
+    self_arg->next = value_arg;
+
+    char *id_copy = setter_node->id != NULL ? strdup(setter_node->id) : NULL;
+    char *mangled_copy = NULL;
+    if (setter_node->mangled_id != NULL)
+        mangled_copy = strdup(setter_node->mangled_id);
+
+    if ((setter_node->id != NULL && id_copy == NULL) ||
+        (setter_node->mangled_id != NULL && mangled_copy == NULL))
+    {
+        fprintf(stderr, "Error on line %d, unable to prepare property setter call.\n\n",
+            stmt->line_num);
+        free(id_copy);
+        free(mangled_copy);
+        value_arg->next = NULL;
+        destroy_expr(object_expr);
+        destroy_expr(value_expr);
+        free(value_arg);
+        free(self_arg);
+        return 1;
+    }
+
+    stmt->type = STMT_PROCEDURE_CALL;
+    stmt->stmt_data.procedure_call_data.id = id_copy;
+    stmt->stmt_data.procedure_call_data.mangled_id = mangled_copy;
+    stmt->stmt_data.procedure_call_data.expr_args = self_arg;
+    stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+    stmt->stmt_data.procedure_call_data.call_hash_type = 0;
+    stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
+    stmt->stmt_data.procedure_call_data.is_call_info_valid = 0;
+
+    return semcheck_proccall(symtab, stmt, max_scope_lev);
+}
+
+static int semcheck_try_property_assignment(SymTab_t *symtab,
+    struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL || stmt->type != STMT_VAR_ASSIGN)
+        return -1;
+
+    struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+    if (lhs == NULL || lhs->type != EXPR_RECORD_ACCESS)
+        return -1;
+
+    const char *property_name = lhs->expr_data.record_access_data.field_id;
+    if (property_name == NULL)
+        return -1;
+
+    struct Expression *object_expr = lhs->expr_data.record_access_data.record_expr;
+    if (object_expr == NULL)
+        return -1;
+
+    struct RecordType *object_record = semcheck_with_resolve_record_type(symtab,
+        object_expr, object_expr->resolved_type, stmt->line_num);
+    if (object_record == NULL)
+        object_record = object_expr->record_type;
+
+    if (object_record == NULL || !record_type_is_class(object_record))
+        return -1;
+
+    struct RecordType *property_owner = NULL;
+    struct ClassProperty *property = semcheck_find_class_property(symtab,
+        object_record, property_name, &property_owner);
+    if (property == NULL || property->write_accessor == NULL)
+        return -1;
+
+    struct RecordField *write_field = semcheck_find_class_field(symtab,
+        object_record, property->write_accessor, NULL);
+    if (write_field != NULL)
+        return -1;
+
+    HashNode_t *setter_node = semcheck_find_class_method(symtab,
+        property_owner, property->write_accessor, NULL);
+    if (setter_node == NULL)
+    {
+        fprintf(stderr, "Error on line %d, setter %s for property %s not found.\n\n",
+            stmt->line_num,
+            property->write_accessor != NULL ? property->write_accessor : "<unknown>",
+            property->name != NULL ? property->name : property_name);
+        return 1;
+    }
+
+    if (setter_node->hash_type != HASHTYPE_PROCEDURE)
+    {
+        fprintf(stderr, "Error on line %d, property setter %s must be a procedure.\n\n",
+            stmt->line_num, property->write_accessor);
+        return 1;
+    }
+
+    return semcheck_convert_property_assignment_to_setter(symtab, stmt, lhs,
+        setter_node, max_scope_lev);
 }
 
 /** PROCEDURE_CALL **/

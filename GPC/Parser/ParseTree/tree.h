@@ -295,6 +295,12 @@ struct Expression *mk_set(int line_num, unsigned int bitmask, ListNode_t *elemen
 struct Expression *mk_typecast(int line_num, int target_type, char *target_type_id,
     struct Expression *expr);
 
+struct Expression *mk_is(int line_num, struct Expression *expr,
+    int target_type, char *target_type_id);
+
+struct Expression *mk_as(int line_num, struct Expression *expr,
+    int target_type, char *target_type_id);
+
 struct Expression *mk_anonymous_function(int line_num, char *generated_name, 
     ListNode_t *parameters, int return_type, char *return_type_id, struct Statement *body);
 
