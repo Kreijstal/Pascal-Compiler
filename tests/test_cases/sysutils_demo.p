@@ -7,6 +7,7 @@ var
     afterSleep: longint;
     diff: longint;
     sleptOk: longint;
+    sample: AnsiString;
 
 begin
     startTick := GetTickCount64();
@@ -19,4 +20,12 @@ begin
     else
         sleptOk := 1;
     writeln(sleptOk);
+    sample := '  Pascal  ';
+    writeln('Trim=', Trim(sample));
+    writeln('TrimLeft=', TrimLeft(sample));
+    writeln('TrimRight=', TrimRight(sample));
+    writeln('AnsiUpper=', AnsiUpperCase('Pascal'));
+    writeln('AnsiLower=', AnsiLowerCase('Pascal'));
+    writeln('CompareText=', CompareText('AbC', 'abc'));
+    writeln('SameText=', SameText('One', 'oNe'));
 end.

@@ -76,6 +76,9 @@ int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, GpcType *type);
 /* Adds a built-in function with a GpcType */
 int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, GpcType *type);
 
+/* Adds a built-in real constant */
+int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value);
+
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */

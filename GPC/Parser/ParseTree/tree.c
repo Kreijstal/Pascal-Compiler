@@ -1539,6 +1539,8 @@ Tree_t *mk_typedecl(int line_num, char *id, int start, int end)
     new_tree->tree_data.type_decl_data.gpc_type = NULL;
     new_tree->tree_data.type_decl_data.info.range.start = start;
     new_tree->tree_data.type_decl_data.info.range.end = end;
+    new_tree->tree_data.type_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.type_decl_data.unit_is_public = 0;
 
     return new_tree;
 }
@@ -1556,6 +1558,8 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
     new_tree->tree_data.type_decl_data.kind = TYPE_DECL_RECORD;
     new_tree->tree_data.type_decl_data.gpc_type = NULL;
     new_tree->tree_data.type_decl_data.info.record = record_type;
+    new_tree->tree_data.type_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.type_decl_data.unit_is_public = 0;
 
     return new_tree;
 }
@@ -1642,6 +1646,8 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
     new_tree->tree_data.var_decl_data.inline_record_type = inline_record_type;
+    new_tree->tree_data.var_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.var_decl_data.unit_is_public = 0;
 
     return new_tree;
 }
@@ -1679,6 +1685,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->file_type = UNKNOWN_TYPE;
     alias->gpc_type = NULL;  /* Initialize shared GpcType for enums/sets */
     alias->file_type_id = NULL;
+    new_tree->tree_data.type_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.type_decl_data.unit_is_public = 0;
 
     if (alias->is_array)
     {
@@ -1723,6 +1731,8 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.static_storage_emitted = 0;
     new_tree->tree_data.arr_decl_data.static_label = NULL;
     new_tree->tree_data.arr_decl_data.init_guard_label = NULL;
+    new_tree->tree_data.arr_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.arr_decl_data.unit_is_public = 0;
 
     return new_tree;
 }
@@ -1737,6 +1747,8 @@ Tree_t *mk_constdecl(int line_num, char *id, char *type_id, struct Expression *v
     new_tree->tree_data.const_decl_data.id = id;
     new_tree->tree_data.const_decl_data.type_id = type_id;
     new_tree->tree_data.const_decl_data.value = value;
+    new_tree->tree_data.const_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.const_decl_data.unit_is_public = 0;
 
     return new_tree;
 }

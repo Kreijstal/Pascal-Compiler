@@ -1,0 +1,4 @@
+MaxInt=3
+MinInt=-4
+MaxLong=10000000000
+MinLong=-10000000000

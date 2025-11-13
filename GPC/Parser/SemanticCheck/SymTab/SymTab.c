@@ -424,6 +424,32 @@ int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, GpcType *type)
     return AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_FUNCTION, type);
 }
 
+int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    GpcType *type = create_primitive_type(REAL_TYPE);
+    if (type == NULL)
+        return 1;
+
+    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_real_value = value;
+        }
+    }
+    else
+    {
+        destroy_gpc_type(type);
+    }
+    return result;
+}
+
 /* Pops the current scope */
 void PopScope(SymTab_t *symtab)
 {

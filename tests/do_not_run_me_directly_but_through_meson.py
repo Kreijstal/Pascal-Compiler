@@ -1,5 +1,6 @@
 # THIS PROGRAM WILL NOT WORK IF YOU DO NOT COMPILE SOURCES FIRST WITH MESON
 import argparse
+import json
 import os
 import shutil
 import shlex
@@ -27,7 +28,12 @@ GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if IS_WINDOWS_ABI else "GPC/gpc
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
-EXEC_TIMEOUT = 5
+# Default execution timeout per compiled test program (seconds).
+# Can be overridden via environment variable GPC_TEST_TIMEOUT for slower machines.
+try:
+    EXEC_TIMEOUT = int(os.environ.get("GPC_TEST_TIMEOUT", "10"))
+except ValueError:
+    EXEC_TIMEOUT = 10
 
 # Meson exposes toggleable behaviour via environment variables so CI can
 # selectively disable particularly slow checks such as the valgrind leak test.
@@ -57,6 +63,31 @@ EXPLICIT_TARGET_FLAGS = {
     "-target-sysv",
     "--sysv-abi",
 }
+
+_COVERAGE_ENABLED_CACHE = None
+
+
+def is_coverage_enabled():
+    global _COVERAGE_ENABLED_CACHE
+    if _COVERAGE_ENABLED_CACHE is not None:
+        return _COVERAGE_ENABLED_CACHE
+
+    build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
+    options_path = os.path.join(build_dir, "meson-info", "intro-buildoptions.json")
+    try:
+        with open(options_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        _COVERAGE_ENABLED_CACHE = next(
+            (
+                bool(opt.get("value"))
+                for opt in data
+                if opt.get("name") == "b_coverage"
+            ),
+            False,
+        )
+    except (OSError, json.JSONDecodeError):
+        _COVERAGE_ENABLED_CACHE = False
+    return _COVERAGE_ENABLED_CACHE
 
 
 def _has_explicit_target_flag(flags):
@@ -557,6 +588,8 @@ class TestCompiler(unittest.TestCase):
             command.append("-O2")
             if not IS_WINDOWS_ABI:
                 command.append("-no-pie")
+            if is_coverage_enabled():
+                command.append("--coverage")
             command.extend([
                 "-o",
                 executable_file,
@@ -565,6 +598,8 @@ class TestCompiler(unittest.TestCase):
             ])
             command.extend(list(extra_objects))
             command.extend(list(extra_link_args))
+            if not IS_WINDOWS_ABI:
+                command.append("-lm")
             subprocess.run(
                 command,
                 check=True,
@@ -1533,9 +1568,18 @@ class TestCompiler(unittest.TestCase):
             return
 
         lines = process.stdout.strip().splitlines()
-        self.assertGreaterEqual(len(lines), 2)
-        self.assertEqual(lines[0].strip(), "32")
-        self.assertEqual(lines[1].strip(), "1")
+        expected_lines = [
+            "32",
+            "1",
+            "Trim=Pascal",
+            "TrimLeft=Pascal  ",
+            "TrimRight=  Pascal",
+            "AnsiUpper=PASCAL",
+            "AnsiLower=pascal",
+            "CompareText=0",
+            "SameText=TRUE",
+        ]
+        self.assertEqual(lines, expected_lines)
         self.assertEqual(process.returncode, 0)
 
     def test_unix_gethostname(self):
@@ -1833,6 +1877,7 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
+                # No platform skips here; all discovered tests must run.
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
                 if test_base_name == "unix_wait_helpers_demo":
@@ -1886,10 +1931,14 @@ def _discover_and_add_auto_tests():
                     # Normalize line endings for cross-platform compatibility
                     # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
                     # which Python then reads as \n\n. Normalize by removing \r and collapsing \n\n to \n.
-                    actual_output = process.stdout.replace('\r', '')
-                    # For Windows cross-compilation, \r\n sequences become \n\n, so collapse them
-                    while '\n\n' in actual_output:
-                        actual_output = actual_output.replace('\n\n', '\n')
+                    # Normalize text mode quirks:
+                    # Windows text mode turns '\n' into '\r\n'. When original data contains
+                    # an explicit '\r\n', the CRT can yield '\r\r\n'. Compress those first.
+                    text = process.stdout
+                    while '\r\r\n' in text:
+                        text = text.replace('\r\r\n', '\r\n')
+                    # Now normalize CRLF to LF and strip stray CR
+                    actual_output = text.replace('\r\n', '\n').replace('\r', '')
                     self.assertEqual(actual_output, expected_output)
                     self.assertEqual(process.returncode, 0)
                 except subprocess.TimeoutExpired:

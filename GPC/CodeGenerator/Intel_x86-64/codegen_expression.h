@@ -9,6 +9,7 @@
 
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, struct GpcType *proc_type, const char *procedure_name, int arg_start_index);
+ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *);
 
 ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
@@ -71,6 +72,8 @@ int expr_is_char_set(const struct Expression *expr);
 /* Check if an expression represents a character set with context for symbol lookup.
  * Returns 1 if it's a character set, 0 otherwise. */
 int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx);
+ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg, int force_char_set);
 
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);

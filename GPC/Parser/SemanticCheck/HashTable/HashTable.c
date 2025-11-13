@@ -366,6 +366,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->const_string_value = NULL;
     hash_node->is_var_parameter = 0;
     hash_node->requires_static_link = 0;
+    hash_node->defined_in_unit = 0;
+    hash_node->unit_is_public = 0;
     
     /* Set identifier */
     hash_node->id = strdup(id);

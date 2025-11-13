@@ -68,6 +68,8 @@ typedef struct Tree
             char *id;
             enum TypeDeclKind kind;
             struct GpcType *gpc_type;
+            int defined_in_unit;
+            int unit_is_public;
             union
             {
                 struct
@@ -116,6 +118,8 @@ typedef struct Tree
             int inferred_type;
             struct Statement *initializer;
             struct RecordType *inline_record_type;  /* For inline record declarations */
+            int defined_in_unit;
+            int unit_is_public;
         } var_decl_data;
 
         /* An array declaration */
@@ -135,6 +139,8 @@ typedef struct Tree
             int static_storage_emitted;
             char *static_label;
             char *init_guard_label;
+            int defined_in_unit;
+            int unit_is_public;
         } arr_decl_data;
 
         /* A constant declaration */
@@ -143,6 +149,8 @@ typedef struct Tree
             char *id;
             char *type_id;
             struct Expression *value;
+            int defined_in_unit;
+            int unit_is_public;
         } const_decl_data;
 
         /* A single statement (Can be made up of multiple statements) */

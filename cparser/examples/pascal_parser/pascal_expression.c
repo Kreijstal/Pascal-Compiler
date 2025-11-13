@@ -338,6 +338,49 @@ combinator_t* char_literal(tag_t tag) {
     return comb;
 }
 
+static ParseResult control_char_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    if (read1(in) != '^') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '^' for control character"), NULL);
+    }
+
+    char c = read1(in);
+    if (c == EOF || c == '\n' || c == '\r') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected character after '^'"), NULL);
+    }
+
+    unsigned char raw = (unsigned char)c;
+    char value = (char)(raw & 0x1F);
+
+    char text[2];
+    text[0] = value;
+    text[1] = '\0';
+
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    return make_success(ast);
+}
+
+combinator_t* control_char_literal(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY;
+    comb->fn = control_char_fn;
+    comb->args = args;
+    return comb;
+}
+
 // Custom parser for character code literals (e.g., #13, #$0D)
 static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -941,6 +984,7 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
     // Parse first item: try char literal first, then string, then char code
     combinator_t* first_item = token(multi(new_combinator(), PASCAL_T_NONE,
         char_literal(PASCAL_T_CHAR),
+        control_char_literal(PASCAL_T_CHAR),
         pascal_string(PASCAL_T_STRING),
         char_code_literal(PASCAL_T_CHAR_CODE),
         NULL
@@ -966,6 +1010,7 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
         combinator_t* next_item = token(multi(new_combinator(), PASCAL_T_NONE,
             pascal_string(PASCAL_T_STRING),
             char_code_literal(PASCAL_T_CHAR_CODE),
+            control_char_literal(PASCAL_T_CHAR),
             NULL
         ));
         
@@ -1040,6 +1085,37 @@ static void post_process_set_operations(ast_t* ast) {
 }
 
 // --- Parser Definition ---
+// Reject C-style shift operators explicitly so malformed inputs surface as parse errors
+static ParseResult reject_shift_ops_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state; save_input_state(in, &state);
+    // Fast-path check without consuming
+    int eff_len = (in->length > 0) ? in->length : (int)strlen(in->buffer);
+    if (in->start + 1 < eff_len) {
+        char a = in->buffer[in->start];
+        char b = in->buffer[in->start + 1];
+        if ((a == '<' && b == '<') || (a == '>' && b == '>')) {
+            // Consume the two characters to anchor error position, then error out
+            read1(in); read1(in);
+            char* msg = NULL;
+            if (a == '<') {
+                msg = strdup("Unexpected '<<' (use 'shl').");
+            } else {
+                msg = strdup("Unexpected '>>' (use 'shr').");
+            }
+            ParseResult err = make_failure_v2(in, parser_name, msg, NULL);
+            // Mark as committed to prevent other operator alternatives from backtracking past this
+            if (!err.is_success && err.value.error) {
+                err.value.error->committed = true;
+            }
+            return err;
+        }
+    }
+    // Not a shift token here; do not consume and just fail so other alts can try
+    restore_input_state(in, &state);
+    return make_failure_v2(in, parser_name, strdup("No shift token here."), NULL);
+}
+
 void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
@@ -1150,10 +1226,29 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_insert(*p, 2, PASCAL_T_AND, EXPR_INFIX, ASSOC_LEFT, token(match("and")));
 
     // Precedence 3: All relational operators - multi-char operators added last (tried first)
-    // Single character operators
+    // First, explicitly reject C-style shift operators so they surface as parse errors
+    combinator_t* reject_shift_ops = new_combinator();
+    reject_shift_ops->type = P_MATCH; // type is unused by custom fn; keep stable
+    reject_shift_ops->fn = reject_shift_ops_fn;
+    reject_shift_ops->args = NULL;
+    reject_shift_ops->name = strdup("reject_shift_ops");
+    // Will be added as a highest-priority alternative after creating prec-3 node
+    // Single character operators, guarded to avoid accidentally parsing malformed '<<' or '>>'
+    combinator_t* single_lt = seq(new_combinator(), PASCAL_T_NONE,
+        match("<"),
+        pnot(match("<")),
+        NULL
+    );
+    combinator_t* single_gt = seq(new_combinator(), PASCAL_T_NONE,
+        match(">"),
+        pnot(match(">")),
+        NULL
+    );
     expr_insert(*p, 3, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
-    expr_altern(*p, 3, PASCAL_T_LT, token(match("<")));
-    expr_altern(*p, 3, PASCAL_T_GT, token(match(">")));
+    // Try rejecting '<<'/'>>' before any relational operator gets a chance
+    expr_altern(*p, 3, PASCAL_T_NONE, token(reject_shift_ops));
+    expr_altern(*p, 3, PASCAL_T_LT, token(single_lt));
+    expr_altern(*p, 3, PASCAL_T_GT, token(single_gt));
     expr_altern(*p, 3, PASCAL_T_IN, token(keyword_ci("in")));
     expr_altern(*p, 3, PASCAL_T_IS, token(keyword_ci("is")));
     expr_altern(*p, 3, PASCAL_T_AS, token(keyword_ci("as")));
@@ -1171,7 +1266,9 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     expr_altern(*p, 5, PASCAL_T_SET_SYM_DIFF, token(match("><")));
 
     // Precedence 6: Multiplication, Division, Modulo, and Bitwise shifts
+    // Also reject C-style shift tokens at this precedence level (in case precedence routing differs)
     expr_insert(*p, 6, PASCAL_T_MUL, EXPR_INFIX, ASSOC_LEFT, token(match("*")));
+    expr_altern(*p, 6, PASCAL_T_NONE, token(reject_shift_ops));
     expr_altern(*p, 6, PASCAL_T_DIV, token(match("/")));
     expr_altern(*p, 6, PASCAL_T_INTDIV, token(keyword_ci("div")));
     expr_altern(*p, 6, PASCAL_T_MOD, token(keyword_ci("mod")));
