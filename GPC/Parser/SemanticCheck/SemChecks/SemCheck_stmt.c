@@ -787,9 +787,10 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *target_expr = (struct Expression *)args->cur;
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    if (target_type != INT_TYPE && target_type != LONGINT_TYPE)
+    int target_is_pointer = (target_type == POINTER_TYPE);
+    if (target_type != INT_TYPE && target_type != LONGINT_TYPE && !target_is_pointer)
     {
-        fprintf(stderr, "Error on line %d, Inc target must be an integer variable.\n", stmt->line_num);
+        fprintf(stderr, "Error on line %d, Inc target must be an integer or pointer variable.\n", stmt->line_num);
         ++return_val;
     }
 

@@ -39,6 +39,27 @@
 #include "NameMangling.h"
 #include <stdarg.h>
 
+static int map_var_type_to_type_tag(enum VarType var_type)
+{
+    switch (var_type)
+    {
+        case HASHVAR_INTEGER:
+            return INT_TYPE;
+        case HASHVAR_LONGINT:
+            return LONGINT_TYPE;
+        case HASHVAR_REAL:
+            return REAL_TYPE;
+        case HASHVAR_BOOLEAN:
+            return BOOL;
+        case HASHVAR_CHAR:
+            return CHAR_TYPE;
+        case HASHVAR_PCHAR:
+            return STRING_TYPE;
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
+
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);
 
@@ -2260,7 +2281,55 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             }
                             goto next_identifier;
                         }
+
+                        int declared_type_tag = tree->tree_data.var_decl_data.type;
+                        int needs_inline_pointer = (declared_type_tag == POINTER_TYPE &&
+                            (type_node->type == NULL || type_node->type->kind != TYPE_KIND_POINTER));
+
+                        if (needs_inline_pointer)
+                        {
+                            GpcType *points_to = NULL;
+                            if (type_node->type != NULL)
+                            {
+                                gpc_type_retain(type_node->type);
+                                points_to = type_node->type;
+                            }
+                            else
+                            {
+                                struct RecordType *target_record = get_record_type_from_node(type_node);
+                                if (target_record != NULL)
+                                {
+                                    points_to = create_record_type(target_record);
+                                }
+                                else
+                                {
+                                    enum VarType target_var_type = get_var_type_from_node(type_node);
+                                    int primitive_tag = map_var_type_to_type_tag(target_var_type);
+                                    if (primitive_tag != UNKNOWN_TYPE)
+                                        points_to = create_primitive_type(primitive_tag);
+                                }
+                            }
+
+                            GpcType *pointer_type = create_pointer_type(points_to);
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
+                            if (func_return == 0)
+                            {
+                                HashNode_t *var_node = NULL;
+                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                {
+                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    mark_hashnode_unit_info(var_node,
+                                        tree->tree_data.var_decl_data.defined_in_unit,
+                                        tree->tree_data.var_decl_data.unit_is_public);
+                                }
+                            }
+                            goto next_identifier;
+                        }
+
                         var_type = get_var_type_from_node(type_node);
+                        int resolved_tag = map_var_type_to_type_tag(var_type);
+                        if (resolved_tag != UNKNOWN_TYPE)
+                            tree->tree_data.var_decl_data.type = resolved_tag;
                         struct TypeAlias *alias = get_type_alias_from_node(type_node);
                         if (alias != NULL && alias->is_array)
                         {

@@ -4462,18 +4462,25 @@ int semcheck_varid(int *type_return,
             semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
         else
             semcheck_clear_array_info(expr);
+        expr->resolved_gpc_type = hash_return->type;
+
         if (*type_return == POINTER_TYPE)
         {
             int subtype = UNKNOWN_TYPE;
             const char *type_id = NULL;
             struct TypeAlias *alias = get_type_alias_from_node(hash_return);
-            if (alias != NULL)
+            if (alias != NULL && alias->is_pointer)
             {
                 subtype = alias->pointer_type;
                 type_id = alias->pointer_type_id;
             }
             
-            /* If subtype is unknown but we have a type_id, resolve it */
+            if (subtype == UNKNOWN_TYPE && hash_return->type != NULL &&
+                gpc_type_is_pointer(hash_return->type))
+            {
+                subtype = gpc_type_get_pointer_subtype_tag(hash_return->type);
+            }
+            
             if (subtype == UNKNOWN_TYPE && type_id != NULL)
             {
                 HashNode_t *target_node = NULL;
@@ -4491,12 +4498,18 @@ int semcheck_varid(int *type_return,
                 if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) != -1 && target_node != NULL)
                     expr->record_type = get_record_type_from_node(target_node);
             }
+            else if (hash_return->type != NULL && gpc_type_is_pointer(hash_return->type))
+            {
+                GpcType *points_to = hash_return->type->info.points_to;
+                if (points_to != NULL && gpc_type_is_record(points_to))
+                    expr->record_type = gpc_type_get_record(points_to);
+            }
         }
         if (*type_return == RECORD_TYPE)
         {
             expr->record_type = get_record_type_from_node(hash_return);
         }
-        else
+        else if (*type_return != POINTER_TYPE)
             expr->record_type = NULL;
     }
 

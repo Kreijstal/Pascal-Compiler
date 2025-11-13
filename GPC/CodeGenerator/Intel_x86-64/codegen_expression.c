@@ -644,7 +644,11 @@ int expr_get_type_tag(const struct Expression *expr)
     
     /* Prefer GpcType if available */
     if (expr->resolved_gpc_type != NULL)
-        return gpc_type_get_legacy_tag(expr->resolved_gpc_type);
+    {
+        int tag = gpc_type_get_legacy_tag(expr->resolved_gpc_type);
+        if (tag != UNKNOWN_TYPE)
+            return tag;
+    }
     
     /* Fall back to legacy field */
     return expr->resolved_type;
@@ -1383,6 +1387,21 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
 {
     if (pointer_expr == NULL || size_out == NULL)
         return 1;
+
+    GpcType *pointer_type = expr_get_gpc_type(pointer_expr);
+    if (pointer_type != NULL && gpc_type_is_pointer(pointer_type))
+    {
+        GpcType *points_to = pointer_type->info.points_to;
+        if (points_to != NULL)
+        {
+            long long pointee_size = gpc_type_sizeof(points_to);
+            if (pointee_size > 0)
+            {
+                *size_out = pointee_size;
+                return 0;
+            }
+        }
+    }
 
     int subtype = pointer_expr->pointer_subtype;
     const char *type_id = pointer_expr->pointer_subtype_id;

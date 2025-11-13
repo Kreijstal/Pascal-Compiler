@@ -2810,14 +2810,35 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int target_is_long = (target_expr != NULL && expr_get_type_tag(target_expr) == LONGINT_TYPE);
-    if (target_is_long)
+    int target_type_tag = (target_expr != NULL) ? expr_get_type_tag(target_expr) : UNKNOWN_TYPE;
+    int target_is_long = (target_type_tag == LONGINT_TYPE);
+    int target_is_pointer = (target_type_tag == POINTER_TYPE);
+    int target_uses_qword = target_is_long || target_is_pointer;
+
+    if (target_uses_qword)
         inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32, increment_reg->bit_64);
+
+    long long pointer_step = 1;
+    if (target_is_pointer)
+    {
+        if (codegen_sizeof_pointer_target(ctx, target_expr, &pointer_step) != 0 || pointer_step <= 0)
+            pointer_step = 1;
+    }
+
+    if (target_is_pointer && pointer_step != 1)
+    {
+        char buffer_scale[128];
+        if (target_uses_qword)
+            snprintf(buffer_scale, sizeof(buffer_scale), "\timulq\t$%lld, %s\n", pointer_step, increment_reg->bit_64);
+        else
+            snprintf(buffer_scale, sizeof(buffer_scale), "\timull\t$%lld, %s\n", pointer_step, increment_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer_scale);
+    }
 
     char buffer_main[128];
     if (!is_increment)
     {
-        if (target_is_long)
+        if (target_uses_qword)
         {
             snprintf(buffer_main, sizeof(buffer_main), "\tnegq\t%s\n", increment_reg->bit_64);
             inst_list = add_inst(inst_list, buffer_main);
@@ -2835,7 +2856,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         char buffer[128];
         if (var_node != NULL)
         {
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%%rbp)\n", increment_reg->bit_64, var_node->offset);
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%%rbp)\n", increment_reg->bit_32, var_node->offset);
@@ -2845,7 +2866,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         {
             int offset = 0;
             inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%s)\n", increment_reg->bit_64, offset, current_non_local_reg64());
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%s)\n", increment_reg->bit_32, offset, current_non_local_reg64());
@@ -2864,7 +2885,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
@@ -2879,7 +2900,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
