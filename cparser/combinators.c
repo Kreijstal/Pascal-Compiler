@@ -61,6 +61,10 @@ static error_position_t error_best_position(ParseError* err) {
     return best;
 }
 
+static bool is_committed_failure(const ParseResult *res) {
+    return res != NULL && !res->is_success && res->value.error != NULL && res->value.error->committed;
+}
+
 // --- _fn Implementations ---
 
 static ParseResult optional_fn(input_t * in, void * args, char* parser_name) {
@@ -69,6 +73,9 @@ static ParseResult optional_fn(input_t * in, void * args, char* parser_name) {
     save_input_state(in, &state);
     ParseResult res = parse(in, oargs->p);
     if (res.is_success) {
+        return res;
+    }
+    if (is_committed_failure(&res)) {
         return res;
     }
     // If it fails, we restore the input and return success with a nil AST.
@@ -179,6 +186,9 @@ static ParseResult sep_by_common(input_t *in, sep_by_args *sargs, bool require_f
     ParseResult first = parse(in, sargs->p);
     if (!first.is_success) {
         if (!require_first) {
+            if (is_committed_failure(&first)) {
+                return first;
+            }
             free_error(first.value.error);
             return make_success(ast_nil);
         }
@@ -208,6 +218,9 @@ static ParseResult sep_end_by_fn(input_t * in, void * args, char* parser_name) {
 
     ParseResult res = parse(in, sargs->p);
     if (!res.is_success) {
+        if (is_committed_failure(&res)) {
+            return res;
+        }
         free_error(res.value.error);
         return make_success(ast_nil);
     }

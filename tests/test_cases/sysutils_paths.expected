@@ -1,0 +1,12 @@
+Name1=test.p
+Name2=test
+Ext1=.p
+Ext2=
+Change1=dir/sub/test.txt
+Change2=dir/sub/test.txt
+Change3=dir/sub/test
+Exclude1=dir/sub
+Exclude2=/
+Exclude3=C:\
+Include=dir/sub/
+Path=dir/sub/

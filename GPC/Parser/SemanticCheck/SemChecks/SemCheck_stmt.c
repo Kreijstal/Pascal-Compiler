@@ -28,6 +28,37 @@
 
 static int semcheck_loop_depth = 0;
 
+static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
+{
+    return hashnode_get_type_alias(node);
+}
+
+static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_gpc_type != NULL)
+    {
+        struct TypeAlias *alias = expr->resolved_gpc_type->type_alias;
+        if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+            return 1;
+    }
+
+    if (expr->type == EXPR_VAR_ID && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(node);
+            if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
 int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
@@ -190,38 +221,60 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     struct Expression *array_expr = (struct Expression *)args->cur;
     struct Expression *length_expr = (struct Expression *)args->next->cur;
 
-    if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+    int target_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
+
+    int target_is_string = (target_type == STRING_TYPE);
+
+    if (target_is_string)
     {
-        fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
-        ++return_val;
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
+        stmt->stmt_data.procedure_call_data.mangled_id = strdup("__gpc_setlength_string");
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+        {
+            fprintf(stderr, "Error: failed to allocate mangled name for SetLength.\n");
+            ++return_val;
+        }
     }
     else
     {
-        HashNode_t *array_node = NULL;
-        if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1 || array_node == NULL)
+        if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
         {
-            fprintf(stderr, "Error on line %d, undeclared identifier \"%s\" in SetLength.\n", stmt->line_num, array_expr->expr_data.id);
+            fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
             ++return_val;
         }
         else
         {
-            set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
-            
-            /* Check if it's a dynamic array using GpcType first, then legacy field */
-            int is_dynamic = 0;
-            if (array_node->type != NULL)
+            HashNode_t *array_node = NULL;
+            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1 || array_node == NULL)
             {
-                is_dynamic = gpc_type_is_dynamic_array(array_node->type);
+                fprintf(stderr, "Error on line %d, undeclared identifier \"%s\" in SetLength.\n", stmt->line_num, array_expr->expr_data.id);
+                ++return_val;
             }
             else
             {
-                is_dynamic = hashnode_is_dynamic_array(array_node);
-            }
-            
-            if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
-            {
-                fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
-                ++return_val;
+                set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
+                
+                /* Check if it's a dynamic array using GpcType first, then legacy field */
+                int is_dynamic = 0;
+                if (array_node->type != NULL)
+                {
+                    is_dynamic = gpc_type_is_dynamic_array(array_node->type);
+                }
+                else
+                {
+                    is_dynamic = hashnode_is_dynamic_array(array_node);
+                }
+                
+                if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
+                {
+                    fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
+                    ++return_val;
+                }
             }
         }
     }
@@ -282,6 +335,390 @@ static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int m
     }
 
     return return_val;
+}
+
+static int semcheck_builtin_fillchar(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, FillChar expects exactly three arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *dest_expr = (struct Expression *)args->cur;
+    struct Expression *count_expr = (struct Expression *)args->next->cur;
+    struct Expression *value_expr = (struct Expression *)args->next->next->cur;
+
+    int dest_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&dest_type, symtab, dest_expr, max_scope_lev, MUTATE);
+
+    int count_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&count_type, symtab, count_expr, INT_MAX, NO_MUTATE);
+    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, FillChar count must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    int value_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != CHAR_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, FillChar value must be an integer or char.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, GetMem expects exactly two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *ptr_expr = (struct Expression *)args->cur;
+    struct Expression *size_expr = (struct Expression *)args->next->cur;
+
+    int ptr_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&ptr_type, symtab, ptr_expr, max_scope_lev, MUTATE);
+    if (ptr_type != POINTER_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, GetMem target must be a pointer variable.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    int size_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&size_type, symtab, size_expr, INT_MAX, NO_MUTATE);
+    if (size_type != INT_TYPE && size_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, GetMem size must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_freemem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, FreeMem expects exactly one argument.\n", stmt->line_num);
+        return 1;
+    }
+
+    int ptr_type = UNKNOWN_TYPE;
+    int return_val = semcheck_expr_main(&ptr_type, symtab, (struct Expression *)args->cur, INT_MAX, NO_MUTATE);
+    if (ptr_type != POINTER_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, FreeMem expects a pointer argument.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, ReallocMem expects exactly two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *ptr_expr = (struct Expression *)args->cur;
+    struct Expression *size_expr = (struct Expression *)args->next->cur;
+
+    int ptr_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&ptr_type, symtab, ptr_expr, max_scope_lev, MUTATE);
+    if (ptr_type != POINTER_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, ReallocMem target must be a pointer variable.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    int size_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&size_type, symtab, size_expr, INT_MAX, NO_MUTATE);
+    if (size_type != INT_TYPE && size_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, ReallocMem size must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Str expects exactly two arguments.\n", stmt->line_num);
+        return 1;
+    }
+
+    int return_val = 0;
+    struct Expression *value_expr = (struct Expression *)args->cur;
+    struct Expression *target_expr = (struct Expression *)args->next->cur;
+
+    int value_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
+    if (value_type != INT_TYPE && value_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Str value must be an integer.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    int target_type = UNKNOWN_TYPE;
+    return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Str output must be a string variable.\n", stmt->line_num);
+        ++return_val;
+    }
+
+    return return_val;
+}
+
+static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL ||
+        args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Insert expects exactly three arguments.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *source_expr = (struct Expression *)args->cur;
+    struct Expression *target_expr = (struct Expression *)args->next->cur;
+    struct Expression *index_expr = (struct Expression *)args->next->next->cur;
+
+    int source_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
+    if (source_type != STRING_TYPE && source_type != CHAR_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Insert source must be a string or char.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    int target_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Insert target must be a string variable.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    int index_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Insert index must be an integer.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    return error_count;
+}
+
+static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL ||
+        args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Delete expects exactly three arguments.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *target_expr = (struct Expression *)args->cur;
+    struct Expression *index_expr = (struct Expression *)args->next->cur;
+    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
+
+    int target_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
+    if (target_type != STRING_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Delete target must be a string variable.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    int index_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Delete index must be an integer.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    int count_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, Delete count must be an integer.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    return error_count;
+}
+
+static int semcheck_builtin_sincos(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL ||
+        args->next->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, SinCos expects exactly three arguments.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *angle_expr = (struct Expression *)args->cur;
+    struct Expression *sin_expr = (struct Expression *)args->next->cur;
+    struct Expression *cos_expr = (struct Expression *)args->next->next->cur;
+
+    int angle_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&angle_type, symtab, angle_expr, INT_MAX, NO_MUTATE);
+    if (angle_type != REAL_TYPE && angle_type != INT_TYPE && angle_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, SinCos angle must be numeric.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    int sin_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&sin_type, symtab, sin_expr, max_scope_lev, MUTATE);
+    if (sin_type != REAL_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, SinCos sine target must be a real variable.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    int cos_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&cos_type, symtab, cos_expr, max_scope_lev, MUTATE);
+    if (cos_type != REAL_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, SinCos cosine target must be a real variable.\n",
+            stmt->line_num);
+        ++error_count;
+    }
+
+    return error_count;
+}
+
+static int semcheck_builtin_randomize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    (void)symtab;
+    (void)max_scope_lev;
+
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args != NULL)
+    {
+        fprintf(stderr, "Error on line %d, Randomize expects no arguments.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.mangled_id);
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+    }
+
+    stmt->stmt_data.procedure_call_data.mangled_id = strdup("gpc_randomize");
+    if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for Randomize.\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int semcheck_builtin_setrandseed(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, SetRandSeed expects exactly one argument.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    int arg_type = UNKNOWN_TYPE;
+    if (semcheck_expr_main(&arg_type, symtab, (struct Expression *)args->cur,
+            max_scope_lev, NO_MUTATE) != 0)
+        return 1;
+
+    if (arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, SetRandSeed argument must be integer.\n",
+            stmt->line_num);
+        return 1;
+    }
+
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.mangled_id);
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+    }
+    stmt->stmt_data.procedure_call_data.mangled_id = strdup("gpc_set_randseed");
+    if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for SetRandSeed.\n");
+        return 1;
+    }
+    return 0;
 }
 
 static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -369,6 +806,59 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     }
 
     return return_val;
+}
+
+static int semcheck_builtin_dec(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_inc(symtab, stmt, max_scope_lev);
+}
+
+static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stmt,
+    int max_scope_lev, const char *display_name)
+{
+    if (stmt == NULL)
+        return 0;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, %s expects exactly two arguments.\n",
+            stmt->line_num, display_name);
+        return 1;
+    }
+
+    int error_count = 0;
+    struct Expression *set_expr = (struct Expression *)args->cur;
+    int set_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
+    if (set_type != SET_TYPE || !semcheck_expr_is_char_set(symtab, set_expr))
+    {
+        fprintf(stderr, "Error on line %d, %s target must be a set of char.\n",
+            stmt->line_num, display_name);
+        ++error_count;
+    }
+
+    struct Expression *value_expr = (struct Expression *)args->next->cur;
+    int value_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != CHAR_TYPE)
+    {
+        fprintf(stderr, "Error on line %d, %s element must be an ordinal value.\n",
+            stmt->line_num, display_name);
+        ++error_count;
+    }
+
+    return error_count;
+}
+
+static int semcheck_builtin_include(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_include_like(symtab, stmt, max_scope_lev, "Include");
+}
+
+static int semcheck_builtin_exclude(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    return semcheck_builtin_include_like(symtab, stmt, max_scope_lev, "Exclude");
 }
 
 static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -1068,14 +1558,92 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         return return_val;
 
     handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "FillChar",
+        semcheck_builtin_fillchar, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "GetMem",
+        semcheck_builtin_getmem, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "FreeMem",
+        semcheck_builtin_freemem, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "ReallocMem",
+        semcheck_builtin_reallocmem, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Val",
         semcheck_builtin_val, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
     handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Str",
+        semcheck_builtin_strproc, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Insert",
+        semcheck_builtin_insert, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Delete",
+        semcheck_builtin_delete, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SinCos",
+        semcheck_builtin_sincos, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Inc",
         semcheck_builtin_inc, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Dec",
+        semcheck_builtin_dec, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Include",
+        semcheck_builtin_include, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Exclude",
+        semcheck_builtin_exclude, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "Randomize",
+        semcheck_builtin_randomize, max_scope_lev, &handled_builtin);
+    if (handled_builtin)
+        return return_val;
+
+    handled_builtin = 0;
+    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetRandSeed",
+        semcheck_builtin_setrandseed, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
@@ -1351,6 +1919,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
         else
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL &&
+            resolved_proc->hash_type == HASHTYPE_PROCEDURE && resolved_proc->id != NULL)
+        {
+            /* Ensure direct calls have a concrete target name even without external alias */
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->id);
+        }
+        /* External name override for procedures handled during codegen to avoid side-effects here */
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
         
         /* Populate call info to avoid use-after-free when HashNode is freed */

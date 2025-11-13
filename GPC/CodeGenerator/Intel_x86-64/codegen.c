@@ -27,9 +27,12 @@
 #include "../../Parser/ParseTree/GpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+#define CODEGEN_POINTER_SIZE_BYTES 8
+
 /* Helper functions for transitioning from legacy type fields to GpcType */
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
+static void add_result_alias_for_return_var(StackNode_t *return_var);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -66,6 +69,41 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     return hashnode_get_type_alias(node);
+}
+
+/* Allocate the next available integer argument register (general purpose). */
+static const char *alloc_integer_arg_reg(int use_64bit, int *next_index)
+{
+    if (next_index == NULL)
+        return NULL;
+
+    const char *reg = use_64bit ?
+        get_arg_reg64_num(*next_index) :
+        get_arg_reg32_num(*next_index);
+    if (reg == NULL)
+        return NULL;
+
+    ++(*next_index);
+    return reg;
+}
+
+/* Allocate the next available SSE argument register for REAL parameters. */
+static const char *alloc_sse_arg_reg(int *next_index)
+{
+    if (next_index == NULL)
+        return NULL;
+
+    const char *reg = current_arg_reg_xmm(*next_index);
+    if (reg == NULL)
+    {
+        fprintf(stderr,
+            "ERROR: Max SSE argument register limit exceeded (index=%d)\n",
+            *next_index);
+        exit(1);
+    }
+
+    ++(*next_index);
+    return reg;
 }
 
 /* Helper function to determine variable storage size (for stack allocation)
@@ -796,6 +834,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     g_current_codegen_abi = ctx->target_abi;
     g_stack_home_space_bytes = (ctx->target_abi == GPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+    ctx->pending_stack_arg_bytes = 0;
 
     ctx->symtab = symtab;
 
@@ -1725,6 +1764,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 case LONGINT_TYPE:
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
+                case POINTER_TYPE:
                     return_size = 8;
                     break;
                 case BOOL:
@@ -1735,21 +1775,34 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     break;
             }
         }
+        else if (return_type != NULL && return_type->kind == TYPE_KIND_POINTER)
+        {
+            /* Pointer return (e.g., PChar) */
+            return_size = 8;
+        }
     }
     else if (func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
         int tag = gpc_type_get_primitive_tag(func_node->type);
-        if (tag == LONGINT_TYPE || tag == REAL_TYPE || tag == STRING_TYPE)
+        if (tag == LONGINT_TYPE || tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
             return_size = 8;
         else if (tag == BOOL)
             return_size = DOUBLEWORD;
+    }
+    else if (func_node != NULL && func_node->type != NULL &&
+             func_node->type->kind == TYPE_KIND_POINTER)
+    {
+        return_size = 8;
     }
 
     if (returns_dynamic_array)
         return_var = add_dynamic_array(func->id, dynamic_array_element_size, dynamic_array_lower_bound);
     else
         return_var = add_l_x(func->id, return_size);
+
+    /* Allow Delphi-style Result alias in regular functions too. */
+    add_result_alias_for_return_var(return_var);
 
     if (has_record_return)
         return_dest_slot = add_l_x("__record_return_dest__", (int)sizeof(void *));
@@ -1881,7 +1934,31 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     else
     {
-        if (return_var->size >= 8)
+        /* Determine if return type is Real (floating-point) */
+        int is_real_return = 0;
+        if (func_node != NULL && func_node->type != NULL &&
+            func_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            GpcType *return_type = gpc_type_get_return_type(func_node->type);
+            if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                int tag = gpc_type_get_primitive_tag(return_type);
+                if (tag == REAL_TYPE)
+                    is_real_return = 1;
+            }
+        }
+        else if (func_node != NULL && func_node->type != NULL &&
+                 func_node->type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int tag = gpc_type_get_primitive_tag(func_node->type);
+            if (tag == REAL_TYPE)
+                is_real_return = 1;
+        }
+        
+        /* Use movsd for Real types (return in xmm0), movq/movl for others (return in rax/eax) */
+        if (is_real_return)
+            snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (return_var->size >= 8)
             snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_64);
         else
             snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
@@ -1924,6 +2001,7 @@ static void add_result_alias_for_return_var(StackNode_t *return_var)
         return;
     
     result_alias->element_size = return_var->element_size;
+    result_alias->is_alias = 1;
     
     /* Add it to the x list in the current stack scope using the list API */
     StackScope_t *cur_scope = get_cur_scope();
@@ -2089,7 +2167,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
         inst_list = codegen_stmt(anon->body, inst_list, ctx, symtab);
     }
     
-    /* For functions, move return value to %rax */
+    /* For functions, move return value to correct return register */
     if (anon->is_function && return_var != NULL)
     {
         char buffer[64];
@@ -2097,7 +2175,10 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
                          anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE);
         if (uses_qword)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
+            if (anon->return_type == REAL_TYPE)
+                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
         }
         else
         {
@@ -2138,11 +2219,16 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     const char *arg_reg;
     char buffer[50];
     StackNode_t *arg_stack;
+    int next_gpr_index = 0;
+    int next_sse_index = 0;
+    int stack_arg_offset = 16;
 
     assert(ctx != NULL);
 
     if (arg_start_index < 0)
         arg_start_index = 0;
+
+    next_gpr_index = arg_start_index;
 
     while(args != NULL)
     {
@@ -2173,19 +2259,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(arg_ids != NULL)
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
-                    HashNode_t *arg_symbol = NULL;
-                    if (symtab != NULL)
-                        FindIdent(&arg_symbol, symtab, (char *)arg_ids->cur);
-
                     int symbol_is_var_param = tree_is_var_param;
-                    if (arg_symbol != NULL && arg_symbol->is_var_parameter)
-                        symbol_is_var_param = 1;
                     struct RecordType *record_type_info = NULL;
                     if (!symbol_is_var_param)
                     {
-                        if (arg_symbol != NULL)
-                            record_type_info = get_record_type_from_node(arg_symbol);
-                        else if (resolved_type_node != NULL)
+                        if (resolved_type_node != NULL)
                             record_type_info = get_record_type_from_node(resolved_type_node);
                     }
 
@@ -2218,11 +2296,24 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             return inst_list;
                         }
 
-                        arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
-                        if (arg_reg == NULL)
+                        arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
+                        Register_t *stack_value_reg = NULL;
+                        const char *record_src_reg = arg_reg;
+                        if (record_src_reg == NULL)
                         {
-                            fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
-                            exit(1);
+                            stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (stack_value_reg == NULL)
+                            {
+                                codegen_report_error(ctx,
+                                    "ERROR: Unable to allocate register for record parameter %s.",
+                                    (char *)arg_ids->cur);
+                                return inst_list;
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                                stack_arg_offset, stack_value_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                            record_src_reg = stack_value_reg->bit_64;
                         }
 
                         Register_t *size_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -2238,7 +2329,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
                         if (codegen_target_is_windows())
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", arg_reg);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", record_src_reg);
                             inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", record_slot->offset);
                             inst_list = add_inst(inst_list, buffer);
@@ -2247,7 +2338,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
                         else
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", arg_reg);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", record_src_reg);
                             inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", record_slot->offset);
                             inst_list = add_inst(inst_list, buffer);
@@ -2259,6 +2350,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
                         free_arg_regs();
                         free_reg(get_reg_stack(), size_reg);
+                        if (stack_value_reg != NULL)
+                            free_reg(get_reg_stack(), stack_value_reg);
 
                         arg_ids = arg_ids->next;
                         ++arg_num;
@@ -2270,14 +2363,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_var_param = symbol_is_var_param;
                     int is_array_type = 0;
                     
-                    /* Check if this parameter is an array type */
-                    if (arg_symbol != NULL && arg_symbol->type != NULL &&
-                        gpc_type_is_array(arg_symbol->type))
-                    {
-                        is_array_type = 1;
-                    }
-                    /* Also check if the resolved type is an array */
-                    else if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
+                    /* Determine if parameter is an array type via resolved type only */
+                    if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
                              gpc_type_is_array(resolved_type_node->type))
                     {
                         is_array_type = 1;
@@ -2286,22 +2373,56 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int use_64bit = is_var_param || is_array_type ||
                         (type == STRING_TYPE || type == POINTER_TYPE ||
                          type == REAL_TYPE || type == LONGINT_TYPE || type == PROCEDURE);
-                    arg_reg = use_64bit ?
-                        get_arg_reg64_num(arg_start_index + arg_num) :
-                        get_arg_reg32_num(arg_start_index + arg_num);
-                    if(arg_reg == NULL)
-                    {
-                        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
-                        exit(1);
-                    }
+                    int use_sse_reg = (!is_var_param && !is_array_type &&
+                        type == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
                         arg_stack->is_reference = 1;
-                    if (use_64bit)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    if (use_sse_reg)
+                    {
+                        const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
+                        snprintf(buffer, sizeof(buffer), "\tmovsd\t%s, -%d(%%rbp)\n",
+                            xmm_reg, arg_stack->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                     else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
-                    inst_list = add_inst(inst_list, buffer);
+                    {
+                        arg_reg = alloc_integer_arg_reg(use_64bit, &next_gpr_index);
+                        Register_t *stack_value_reg = NULL;
+                        const char *value_source = arg_reg;
+                        if (value_source == NULL)
+                        {
+                            stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (stack_value_reg == NULL)
+                            {
+                                codegen_report_error(ctx,
+                                    "ERROR: Unable to allocate register for argument %s.",
+                                    (char *)arg_ids->cur);
+                                return inst_list;
+                            }
+                            if (use_64bit)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                                    stack_arg_offset, stack_value_reg->bit_64);
+                            }
+                            else
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovl\t%d(%%rbp), %s\n",
+                                    stack_arg_offset, stack_value_reg->bit_32);
+                            }
+                            inst_list = add_inst(inst_list, buffer);
+                            stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                            value_source = use_64bit ? stack_value_reg->bit_64 : stack_value_reg->bit_32;
+                        }
+
+                        if (use_64bit)
+                            snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", value_source, arg_stack->offset);
+                        else
+                            snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", value_source, arg_stack->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        if (stack_value_reg != NULL)
+                            free_reg(get_reg_stack(), stack_value_reg);
+                    }
                     arg_ids = arg_ids->next;
                     ++arg_num;
                 }
@@ -2310,17 +2431,32 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 arg_ids = arg_decl->tree_data.arr_decl_data.ids;
                 while(arg_ids != NULL)
                 {
-                    arg_reg = get_arg_reg64_num(arg_start_index + arg_num);
-                    if(arg_reg == NULL)
-                    {
-                        fprintf(stderr, "ERROR: Max argument limit: %d\n", NUM_ARG_REG);
-                        exit(1);
-                    }
+                    arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                     arg_stack = add_q_z((char *)arg_ids->cur);
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;
-                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", arg_reg, arg_stack->offset);
+                    Register_t *stack_value_reg = NULL;
+                    const char *value_source = arg_reg;
+                    if (value_source == NULL)
+                    {
+                        stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (stack_value_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for array argument %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                            stack_arg_offset, stack_value_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                        value_source = stack_value_reg->bit_64;
+                    }
+                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", value_source, arg_stack->offset);
                     inst_list = add_inst(inst_list, buffer);
+                    if (stack_value_reg != NULL)
+                        free_reg(get_reg_stack(), stack_value_reg);
                     arg_ids = arg_ids->next;
                     ++arg_num;
                 }

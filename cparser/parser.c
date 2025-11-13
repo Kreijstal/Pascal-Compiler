@@ -1154,6 +1154,10 @@ static ParseResult expr_fn(input_t * in, void * args, char* parser_name) {
                    found_op = true;
                    break;
                }
+               // If an operator alternative signals a committed error, propagate it
+               if (op_res.value.error && op_res.value.error->committed) {
+                   return op_res;
+               }
                free_error(op_res.value.error);
                op = op->next;
            }

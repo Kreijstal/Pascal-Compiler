@@ -542,36 +542,101 @@ static void mark_unit_subprograms(ListNode_t *sub_list)
     }
 }
 
+static void mark_unit_type_decls(ListNode_t *type_list, int is_public)
+{
+    ListNode_t *node = type_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_TYPE_DECL)
+            {
+                decl->tree_data.type_decl_data.defined_in_unit = 1;
+                decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+        }
+        node = node->next;
+    }
+}
+
+static void mark_unit_const_decls(ListNode_t *const_list, int is_public)
+{
+    ListNode_t *node = const_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_CONST_DECL)
+            {
+                decl->tree_data.const_decl_data.defined_in_unit = 1;
+                decl->tree_data.const_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+        }
+        node = node->next;
+    }
+}
+
+static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
+{
+    ListNode_t *node = var_list;
+    while (node != NULL)
+    {
+        if (node->type == LIST_TREE && node->cur != NULL)
+        {
+            Tree_t *decl = (Tree_t *)node->cur;
+            if (decl->type == TREE_VAR_DECL)
+            {
+                decl->tree_data.var_decl_data.defined_in_unit = 1;
+                decl->tree_data.var_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+            else if (decl->type == TREE_ARR_DECL)
+            {
+                decl->tree_data.arr_decl_data.defined_in_unit = 1;
+                decl->tree_data.arr_decl_data.unit_is_public = is_public ? 1 : 0;
+            }
+        }
+        node = node->next;
+    }
+}
+
 static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 {
     if (program == NULL || unit_tree == NULL)
         return;
 
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1);
     program->tree_data.program_data.type_declaration =
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
     program->tree_data.program_data.const_declaration =
         ConcatList(program->tree_data.program_data.const_declaration,
                    unit_tree->tree_data.unit_data.interface_const_decls);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
                    unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
+    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
     program->tree_data.program_data.type_declaration =
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
     program->tree_data.program_data.const_declaration =
         ConcatList(program->tree_data.program_data.const_declaration,
                    unit_tree->tree_data.unit_data.implementation_const_decls);
     unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
     program->tree_data.program_data.var_declaration =
         ConcatList(program->tree_data.program_data.var_declaration,
                    unit_tree->tree_data.unit_data.implementation_var_decls);
@@ -614,6 +679,7 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     char *path = build_unit_path(normalized);
     if (path == NULL)
         return;
+    fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;

@@ -1,0 +1,9 @@
+DynLen=4
+StrLen=5
+Pos=8
+StrVal=12345
+ValOut=77 Code=0
+AssignedNil=FALSE
+AssignedPtr=TRUE
+FillChar=Z,Z
+AssignedAfterFree=FALSE

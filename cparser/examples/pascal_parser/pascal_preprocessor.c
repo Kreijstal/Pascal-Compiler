@@ -395,12 +395,35 @@ static bool handle_directive(PascalPreprocessor *pp,
             char *include_buffer = NULL;
             size_t include_length = 0;
             if (!read_file_contents(resolved_path, &include_buffer, &include_length, error_message)) {
-                free(keyword);
-                free(content);
-                free(path_token);
-                free(resolved_path);
-                free(include_buffer);
-                return false;
+                // Fallback: if directive used bare identifier without extension, try appending .inc
+                bool retried = false;
+                if (strchr(path_token, '.') == NULL) {
+                    size_t base_len = strlen(path_token);
+                    char *with_inc = malloc(base_len + 5);
+                    if (with_inc) {
+                        memcpy(with_inc, path_token, base_len);
+                        memcpy(with_inc + base_len, ".inc", 5);
+                        char *resolved2 = NULL;
+                        if (resolve_include_path(filename, with_inc, &resolved2)) {
+                            // Clear previous error message (if any) and retry
+                            if (error_message && *error_message) {
+                                free(*error_message);
+                                *error_message = NULL;
+                            }
+                            retried = read_file_contents(resolved2, &include_buffer, &include_length, error_message);
+                            free(resolved2);
+                        }
+                        free(with_inc);
+                    }
+                }
+                if (!retried) {
+                    free(keyword);
+                    free(content);
+                    free(path_token);
+                    free(resolved_path);
+                    free(include_buffer);
+                    return false;
+                }
             }
 
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);

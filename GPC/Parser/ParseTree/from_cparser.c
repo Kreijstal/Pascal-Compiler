@@ -148,6 +148,7 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
 
 typedef struct {
     int is_array;
+    int is_array_of_const;
     int start;
     int end;
     int element_type;
@@ -885,12 +886,19 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             if (element_node != NULL) {
                 if (element_node->typ == PASCAL_T_IDENTIFIER) {
                     char *dup = dup_symbol(element_node);
-                    int mapped = map_type_name(dup, &type_info->element_type_id);
-                    type_info->element_type = mapped;
-                    if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
-                        type_info->element_type_id = dup;
-                    else if (mapped != UNKNOWN_TYPE)
+                    if (dup != NULL && strcasecmp(dup, "const") == 0) {
+                        type_info->is_array_of_const = 1;
+                        type_info->element_type = ARRAY_OF_CONST_TYPE;
+                        type_info->is_open_array = 1;
                         free(dup);
+                    } else {
+                        int mapped = map_type_name(dup, &type_info->element_type_id);
+                        type_info->element_type = mapped;
+                        if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
+                            type_info->element_type_id = dup;
+                        else if (mapped != UNKNOWN_TYPE)
+                            free(dup);
+                    }
                 } else if (element_node->typ == PASCAL_T_TYPE_SPEC) {
                     char *nested_id = NULL;
                     struct RecordType *nested_record = NULL;
@@ -904,6 +912,15 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     if (nested_record != NULL)
                         destroy_record_type(nested_record);
                     destroy_type_info_contents(&nested_info);
+                }
+                if (type_info->element_type_id != NULL &&
+                    strcasecmp(type_info->element_type_id, "const") == 0)
+                {
+                    free(type_info->element_type_id);
+                    type_info->element_type_id = NULL;
+                    type_info->is_array_of_const = 1;
+                    type_info->element_type = ARRAY_OF_CONST_TYPE;
+                    type_info->is_open_array = 1;
                 }
             }
         }
@@ -3430,26 +3447,50 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
     if (field_width_node == NULL)
         return NULL;
 
-    ast_t *base_node = field_width_node->child;
-    if (base_node == NULL)
-        return NULL;
+    ast_t *cursor = field_width_node;
+    struct Expression *formats[2] = { NULL, NULL };
+    int format_count = 0;
 
-    struct Expression *base_expr = convert_expression(base_node);
-    if (base_expr == NULL)
-        return NULL;
+    while (cursor != NULL && cursor->typ == PASCAL_T_FIELD_WIDTH) {
+        ast_t *base_node = cursor->child;
+        ast_t *format_node = (base_node != NULL) ? base_node->next : NULL;
 
-    ast_t *width_node = base_node->next;
-    if (width_node != NULL && width_node != ast_nil) {
-        struct Expression *width_expr = convert_expression(width_node);
-        base_expr->field_width = width_expr;
+        if (format_node != NULL && format_node != ast_nil) {
+            struct Expression *format_expr = convert_expression(format_node);
+            if (format_expr != NULL) {
+                if (format_count < 2) {
+                    formats[format_count++] = format_expr;
+                } else {
+                    destroy_expr(formats[0]);
+                    formats[0] = formats[1];
+                    formats[1] = format_expr;
+                    format_count = 2;
+                }
+            }
+        }
+
+        cursor = base_node;
     }
 
-    ast_t *precision_node = NULL;
-    if (width_node != NULL)
-        precision_node = width_node->next;
-    if (precision_node != NULL && precision_node != ast_nil) {
-        struct Expression *precision_expr = convert_expression(precision_node);
-        base_expr->field_precision = precision_expr;
+    struct Expression *base_expr = convert_expression(cursor);
+    if (base_expr == NULL) {
+        for (int i = 0; i < format_count; ++i) {
+            if (formats[i] != NULL)
+                destroy_expr(formats[i]);
+        }
+        return NULL;
+    }
+
+    if (format_count >= 1) {
+        struct Expression *width_expr = formats[format_count - 1];
+        if (base_expr->field_width == NULL)
+            base_expr->field_width = width_expr;
+        else if (width_expr != NULL)
+            destroy_expr(width_expr);
+    }
+
+    if (format_count >= 2) {
+        base_expr->field_precision = formats[format_count - 2];
     }
 
     return base_expr;

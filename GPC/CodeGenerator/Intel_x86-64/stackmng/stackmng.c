@@ -160,6 +160,41 @@ StackNode_t *add_l_t(char *label)
     return new_node;
 }
 
+StackNode_t *add_l_t_bytes(char *label, int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    StackNode_t *new_node;
+
+    if (size <= 0)
+        size = DOUBLEWORD;
+    int aligned_size = align_up(size, DOUBLEWORD);
+
+    cur_scope->t_offset = align_up(cur_scope->t_offset, DOUBLEWORD);
+    cur_scope->t_offset += aligned_size;
+
+    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+
+    new_node = init_stack_node(offset, label, aligned_size);
+    new_node->element_size = size;
+
+    if (cur_scope->t == NULL)
+        cur_scope->t = CreateListNode(new_node, LIST_UNSPECIFIED);
+    else
+        cur_scope->t = PushListNodeBack(cur_scope->t,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added %s to t_offset %d (bytes=%d)\n",
+            label, offset, aligned_size);
+    #endif
+
+    return new_node;
+}
+
 /* Adds storage to x */
 StackNode_t *add_l_x(char *label, int size)
 {
@@ -461,49 +496,39 @@ void free_stackmng()
 
 RegStack_t *init_reg_stack()
 {
-    /* See codegen.h for information on available general purpose registers */
-    ListNode_t *registers;
-
+    /*
+     * Initialize register pool for expression evaluation.
+     * 
+     * Strategy: Reserve the MOST COMMONLY USED argument registers to minimize
+     * conflicts with function calls, but keep enough registers available for
+     * complex expressions.
+     * 
+     * Windows x64: First 4 args in %rcx, %rdx, %r8, %r9
+     *   - Reserve: %rcx, %rdx (most common - used for 1-2 arg functions)
+     *   - Available: %rax, %rsi, %rdi, %r8, %r9, %r10, %r11 (7 registers)
+     * 
+     * Linux x64 (SysV): First 6 args in %rdi, %rsi, %rdx, %rcx, %r8, %r9
+     *   - Reserve: %rdi, %rsi, %rdx (most common - used for 1-3 arg functions)
+     *   - Available: %rax, %rcx, %r8, %r9, %r10, %r11 (6 registers)
+     * 
+     * This approach:
+     * 1. Prevents conflicts for the most common case (1-3 argument functions)
+     * 2. Keeps enough registers for complex expressions
+     * 3. The conflict handling code in codegen_statement.c handles cases
+     *    where we need r8/r9 for 3-4 argument functions
+     */
+    ListNode_t *registers = NULL;
     RegStack_t *reg_stack;
     reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
     assert(reg_stack != NULL);
 
-    /* Caller-saved general purpose registers available for expression evaluation */
+    /* %rax - return register, always safe to use for expressions */
     Register_t *rax = (Register_t *)malloc(sizeof(Register_t));
     assert(rax != NULL);
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
 
-    Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
-    assert(rcx != NULL);
-    rcx->bit_64 = strdup("%rcx");
-    rcx->bit_32 = strdup("%ecx");
-
-    Register_t *rdx = (Register_t *)malloc(sizeof(Register_t));
-    assert(rdx != NULL);
-    rdx->bit_64 = strdup("%rdx");
-    rdx->bit_32 = strdup("%edx");
-
-    Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
-    assert(rsi != NULL);
-    rsi->bit_64 = strdup("%rsi");
-    rsi->bit_32 = strdup("%esi");
-
-    Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
-    assert(rdi != NULL);
-    rdi->bit_64 = strdup("%rdi");
-    rdi->bit_32 = strdup("%edi");
-
-    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r8 != NULL);
-    r8->bit_64 = strdup("%r8");
-    r8->bit_32 = strdup("%r8d");
-
-    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
-    assert(r9 != NULL);
-    r9->bit_64 = strdup("%r9");
-    r9->bit_32 = strdup("%r9d");
-
+    /* %r10, %r11 - caller-saved, never used for arguments */
     Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
     assert(r10 != NULL);
     r10->bit_64 = strdup("%r10");
@@ -514,21 +539,51 @@ RegStack_t *init_reg_stack()
     r11->bit_64 = strdup("%r11");
     r11->bit_32 = strdup("%r11d");
 
+    /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
+    Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r8 != NULL);
+    r8->bit_64 = strdup("%r8");
+    r8->bit_32 = strdup("%r8d");
+
+    Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
+    assert(r9 != NULL);
+    r9->bit_64 = strdup("%r9");
+    r9->bit_32 = strdup("%r9d");
+
+    /* Build base register list */
     registers = CreateListNode(rax, LIST_UNSPECIFIED);
-    registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rdx, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r10, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r11, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r8, LIST_UNSPECIFIED));
+    registers = PushListNodeBack(registers, CreateListNode(r9, LIST_UNSPECIFIED));
 
-    /*
-    registers = CreateListNode(rdi, LIST_UNSPECIFIED);
-    registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
-    registers = PushListNodeBack(registers, CreateListNode(rbx, LIST_UNSPECIFIED));
-    */
+    /* Add platform-specific registers */
+    if (g_current_codegen_abi == GPC_TARGET_ABI_WINDOWS)
+    {
+        /* Windows: %rsi and %rdi are not argument registers */
+        Register_t *rsi = (Register_t *)malloc(sizeof(Register_t));
+        assert(rsi != NULL);
+        rsi->bit_64 = strdup("%rsi");
+        rsi->bit_32 = strdup("%esi");
+
+        Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
+        assert(rdi != NULL);
+        rdi->bit_64 = strdup("%rdi");
+        rdi->bit_32 = strdup("%edi");
+
+        registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
+        registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
+    }
+    else
+    {
+        /* Linux/SysV: %rcx is argument register 4, less commonly used than rdi/rsi/rdx */
+        Register_t *rcx = (Register_t *)malloc(sizeof(Register_t));
+        assert(rcx != NULL);
+        rcx->bit_64 = strdup("%rcx");
+        rcx->bit_32 = strdup("%ecx");
+
+        registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
+    }
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
@@ -800,6 +855,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
+    StackNode_t *alias_match = NULL;
 
     assert(cur_scope != NULL);
     assert(label != NULL);
@@ -810,13 +866,16 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
         cur_node = (StackNode_t *)cur_li->cur;
         if(pascal_identifier_equals(cur_node->label, label))
         {
-            return cur_node;
+            if (!cur_node->is_alias)
+                return cur_node;
+            if (alias_match == NULL)
+                alias_match = cur_node;
         }
 
         cur_li = cur_li->next;
     }
 
-    return NULL;
+    return alias_match;
 }
 
 StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
@@ -913,6 +972,7 @@ StackNode_t *init_stack_node(int offset, char *label, int size)
     new_node->is_dynamic = 0;
     new_node->is_static = 0;
     new_node->is_reference = 0;
+    new_node->is_alias = 0;
     new_node->static_label = NULL;
 
     return new_node;

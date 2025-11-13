@@ -29,7 +29,8 @@ typedef enum {
     TYPE_KIND_POINTER,
     TYPE_KIND_ARRAY,
     TYPE_KIND_RECORD,
-    TYPE_KIND_PROCEDURE
+    TYPE_KIND_PROCEDURE,
+    TYPE_KIND_ARRAY_OF_CONST
 } GpcTypeKind;
 
 // --- Detailed Information for Complex Types ---
@@ -55,6 +56,10 @@ typedef struct {
     // Can be extended with more dimension info if needed.
 } ArrayTypeInfo;
 
+typedef struct {
+    int element_size;
+} ArrayOfConstTypeInfo;
+
 // The main, unified type structure.
 struct GpcType {
     GpcTypeKind kind;
@@ -73,6 +78,7 @@ struct GpcType {
         ArrayTypeInfo array_info;
         ProcedureTypeInfo proc_info;
         struct RecordType *record_info; // For TYPE_KIND_RECORD
+        ArrayOfConstTypeInfo array_of_const_info;
     } info;
 };
 
@@ -83,6 +89,7 @@ GpcType* create_primitive_type(int primitive_tag);
 GpcType* create_pointer_type(GpcType *points_to);
 GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type);
 GpcType* create_array_type(GpcType *element_type, int start_index, int end_index);
+GpcType* create_array_of_const_type(void);
 GpcType* create_record_type(struct RecordType *record_info);
 
 /* Create GpcType from TypeAlias structure
@@ -116,6 +123,7 @@ long long gpc_type_sizeof(GpcType *type);
 
 /* Check if a type is an array type. */
 int gpc_type_is_array(GpcType *type);
+int gpc_type_is_array_of_const(GpcType *type);
 
 /* Check if a type is a record type. */
 int gpc_type_is_record(GpcType *type);
@@ -154,6 +162,9 @@ int gpc_type_is_dynamic_array(GpcType *type);
 /* Get element size in bytes for an array type.
  * Returns the element size, or -1 if not an array or size cannot be determined. */
 long long gpc_type_get_array_element_size(GpcType *type);
+
+/* Get element size for an array-of-const helper structure (TVarRec). */
+long long gpc_type_get_array_of_const_element_size(GpcType *type);
 
 /* Create a GpcType from a VarType enum value.
  * This is a helper for migrating from the legacy type system.

@@ -20,6 +20,7 @@
 #else
 #define strcasecmp _stricmp
 #endif
+#include <math.h>
 #include "SemCheck.h"
 #include "../../flags.h"
 #include "../../identifier_utils.h"
@@ -146,6 +147,14 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
         default:
             return HASHVAR_UNTYPED;
     }
+}
+
+static inline void mark_hashnode_unit_info(HashNode_t *node, int defined_in_unit, int is_public)
+{
+    if (node == NULL || !defined_in_unit)
+        return;
+    node->defined_in_unit = 1;
+    node->unit_is_public = is_public ? 1 : 0;
 }
 
 static Tree_t *g_semcheck_current_subprogram = NULL;
@@ -1457,6 +1466,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 tree->tree_data.type_decl_data.id);
             return_val += func_return;
         }
+        else
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, tree->tree_data.type_decl_data.id) != -1 && type_node != NULL)
+            {
+                mark_hashnode_unit_info(type_node,
+                    tree->tree_data.type_decl_data.defined_in_unit,
+                    tree->tree_data.type_decl_data.unit_is_public);
+            }
+        }
 
         cur = cur->next;
     }
@@ -1500,6 +1519,16 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
                 }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
+                }
             }
         }
         else if (is_real_const)
@@ -1519,6 +1548,16 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                     fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
+                }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
                 }
             }
         }
@@ -1556,6 +1595,16 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                     fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
                             tree->line_num, tree->tree_data.const_decl_data.id);
                     ++return_val;
+                }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
                 }
             }
         }
@@ -1634,6 +1683,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(string_type);
         free(string_name);
     }
+    char *unicode_name = strdup("UnicodeString");
+    if (unicode_name != NULL) {
+        GpcType *unicode_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(unicode_type != NULL && "Failed to create UnicodeString type");
+        AddBuiltinType_Typed(symtab, unicode_name, unicode_type);
+        destroy_gpc_type(unicode_type);
+        free(unicode_name);
+    }
     char *boolean_name = strdup("boolean");
     if (boolean_name != NULL) {
         GpcType *boolean_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
@@ -1674,6 +1731,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(pointer_type);
         free(pointer_name);
     }
+
+    AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 
     /* Builtin procedures - procedures have no return type */
     char *setlength_name = strdup("SetLength");
@@ -1729,6 +1788,38 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(move_type);
         free(move_name);
     }
+    char *fillchar_name = strdup("FillChar");
+    if (fillchar_name != NULL) {
+        GpcType *fillchar_type = create_procedure_type(NULL, NULL);
+        assert(fillchar_type != NULL && "Failed to create FillChar procedure type");
+        AddBuiltinProc_Typed(symtab, fillchar_name, fillchar_type);
+        destroy_gpc_type(fillchar_type);
+        free(fillchar_name);
+    }
+    char *getmem_name = strdup("GetMem");
+    if (getmem_name != NULL) {
+        GpcType *getmem_type = create_procedure_type(NULL, NULL);
+        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
+        AddBuiltinProc_Typed(symtab, getmem_name, getmem_type);
+        destroy_gpc_type(getmem_type);
+        free(getmem_name);
+    }
+    char *freemem_name = strdup("FreeMem");
+    if (freemem_name != NULL) {
+        GpcType *freemem_type = create_procedure_type(NULL, NULL);
+        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
+        AddBuiltinProc_Typed(symtab, freemem_name, freemem_type);
+        destroy_gpc_type(freemem_type);
+        free(freemem_name);
+    }
+    char *reallocmem_name = strdup("ReallocMem");
+    if (reallocmem_name != NULL) {
+        GpcType *reallocmem_type = create_procedure_type(NULL, NULL);
+        assert(reallocmem_type != NULL && "Failed to create ReallocMem procedure type");
+        AddBuiltinProc_Typed(symtab, reallocmem_name, reallocmem_type);
+        destroy_gpc_type(reallocmem_type);
+        free(reallocmem_name);
+    }
     char *val_name = strdup("Val");
     if (val_name != NULL) {
         GpcType *val_type = create_procedure_type(NULL, NULL);
@@ -1736,6 +1827,39 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, val_name, val_type);
         destroy_gpc_type(val_type);
         free(val_name);
+    }
+    char *str_name = strdup("Str");
+    if (str_name != NULL) {
+        GpcType *str_type = create_procedure_type(NULL, NULL);
+        assert(str_type != NULL && "Failed to create Str procedure type");
+        AddBuiltinProc_Typed(symtab, str_name, str_type);
+        destroy_gpc_type(str_type);
+        free(str_name);
+    }
+    char *insert_name = strdup("Insert");
+    if (insert_name != NULL) {
+        GpcType *insert_type = create_procedure_type(NULL, NULL);
+        assert(insert_type != NULL && "Failed to create Insert procedure type");
+        AddBuiltinProc_Typed(symtab, insert_name, insert_type);
+        destroy_gpc_type(insert_type);
+        free(insert_name);
+    }
+    char *delete_name = strdup("Delete");
+    if (delete_name != NULL) {
+        GpcType *delete_type = create_procedure_type(NULL, NULL);
+        assert(delete_type != NULL && "Failed to create Delete procedure type");
+        AddBuiltinProc_Typed(symtab, delete_name, delete_type);
+        destroy_gpc_type(delete_type);
+        free(delete_name);
+    }
+
+    char *sincos_name = strdup("SinCos");
+    if (sincos_name != NULL) {
+        GpcType *sincos_type = create_procedure_type(NULL, NULL);
+        assert(sincos_type != NULL && "Failed to create SinCos procedure type");
+        AddBuiltinProc_Typed(symtab, sincos_name, sincos_type);
+        destroy_gpc_type(sincos_type);
+        free(sincos_name);
     }
 
     char *inc_name = strdup("Inc");
@@ -1745,6 +1869,51 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinProc_Typed(symtab, inc_name, inc_type);
         destroy_gpc_type(inc_type);
         free(inc_name);
+    }
+
+    char *dec_name = strdup("Dec");
+    if (dec_name != NULL) {
+        GpcType *dec_type = create_procedure_type(NULL, NULL);
+        assert(dec_type != NULL && "Failed to create Dec procedure type");
+        AddBuiltinProc_Typed(symtab, dec_name, dec_type);
+        destroy_gpc_type(dec_type);
+        free(dec_name);
+    }
+
+    char *include_name = strdup("Include");
+    if (include_name != NULL) {
+        GpcType *include_type = create_procedure_type(NULL, NULL);
+        assert(include_type != NULL && "Failed to create Include procedure type");
+        AddBuiltinProc_Typed(symtab, include_name, include_type);
+        destroy_gpc_type(include_type);
+        free(include_name);
+    }
+
+    char *exclude_name = strdup("Exclude");
+    if (exclude_name != NULL) {
+        GpcType *exclude_type = create_procedure_type(NULL, NULL);
+        assert(exclude_type != NULL && "Failed to create Exclude procedure type");
+        AddBuiltinProc_Typed(symtab, exclude_name, exclude_type);
+        destroy_gpc_type(exclude_type);
+        free(exclude_name);
+    }
+
+    char *randomize_name = strdup("Randomize");
+    if (randomize_name != NULL) {
+        GpcType *randomize_type = create_procedure_type(NULL, NULL);
+        assert(randomize_type != NULL && "Failed to create Randomize procedure type");
+        AddBuiltinProc_Typed(symtab, randomize_name, randomize_type);
+        destroy_gpc_type(randomize_type);
+        free(randomize_name);
+    }
+
+    char *setrandseed_name = strdup("SetRandSeed");
+    if (setrandseed_name != NULL) {
+        GpcType *setrandseed_type = create_procedure_type(NULL, NULL);
+        assert(setrandseed_type != NULL && "Failed to create SetRandSeed procedure type");
+        AddBuiltinProc_Typed(symtab, setrandseed_name, setrandseed_type);
+        destroy_gpc_type(setrandseed_type);
+        free(setrandseed_name);
     }
 
     char *new_name = strdup("New");
@@ -1830,7 +1999,93 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(ord_type);
         free(ord_name);
     }
-    
+
+    char *odd_name = strdup("Odd");
+    if (odd_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
+        assert(return_type != NULL && "Failed to create return type for Odd");
+        GpcType *odd_type = create_procedure_type(NULL, return_type);
+        assert(odd_type != NULL && "Failed to create Odd function type");
+        AddBuiltinFunction_Typed(symtab, odd_name, odd_type);
+        destroy_gpc_type(odd_type);
+        free(odd_name);
+    }
+    char *upcase_name = strdup("UpCase");
+    if (upcase_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_CHAR);
+        assert(return_type != NULL && "Failed to create return type for UpCase");
+        GpcType *upcase_type = create_procedure_type(NULL, return_type);
+        assert(upcase_type != NULL && "Failed to create UpCase function type");
+        AddBuiltinFunction_Typed(symtab, upcase_name, upcase_type);
+        destroy_gpc_type(upcase_type);
+        free(upcase_name);
+    }
+
+    char *randseed_name = strdup("RandSeed");
+    if (randseed_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for RandSeed");
+        GpcType *randseed_type = create_procedure_type(NULL, return_type);
+        assert(randseed_type != NULL && "Failed to create RandSeed function type");
+        AddBuiltinFunction_Typed(symtab, randseed_name, randseed_type);
+        destroy_gpc_type(randseed_type);
+        free(randseed_name);
+    }
+
+    char *sqr_name = strdup("Sqr");
+    if (sqr_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for Sqr");
+        GpcType *sqr_type = create_procedure_type(NULL, return_type);
+        assert(sqr_type != NULL && "Failed to create Sqr function type");
+        AddBuiltinFunction_Typed(symtab, sqr_name, sqr_type);
+        destroy_gpc_type(sqr_type);
+        free(sqr_name);
+    }
+
+    char *ln_name = strdup("Ln");
+    if (ln_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(return_type != NULL && "Failed to create return type for Ln");
+        GpcType *ln_type = create_procedure_type(NULL, return_type);
+        assert(ln_type != NULL && "Failed to create Ln function type");
+        AddBuiltinFunction_Typed(symtab, ln_name, ln_type);
+        destroy_gpc_type(ln_type);
+        free(ln_name);
+    }
+
+    char *exp_name = strdup("Exp");
+    if (exp_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(return_type != NULL && "Failed to create return type for Exp");
+        GpcType *exp_type = create_procedure_type(NULL, return_type);
+        assert(exp_type != NULL && "Failed to create Exp function type");
+        AddBuiltinFunction_Typed(symtab, exp_name, exp_type);
+        destroy_gpc_type(exp_type);
+        free(exp_name);
+    }
+
+    char *random_name = strdup("Random");
+    if (random_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_REAL);
+        assert(return_type != NULL && "Failed to create return type for Random");
+        GpcType *random_type = create_procedure_type(NULL, return_type);
+        assert(random_type != NULL && "Failed to create Random function type");
+        AddBuiltinFunction_Typed(symtab, random_name, random_type);
+        destroy_gpc_type(random_type);
+        free(random_name);
+    }
+    char *randomrange_name = strdup("RandomRange");
+    if (randomrange_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(return_type != NULL && "Failed to create return type for RandomRange");
+        GpcType *randomrange_type = create_procedure_type(NULL, return_type);
+        assert(randomrange_type != NULL && "Failed to create RandomRange function type");
+        AddBuiltinFunction_Typed(symtab, randomrange_name, randomrange_type);
+        destroy_gpc_type(randomrange_type);
+        free(randomrange_name);
+    }
+
     char *high_name = strdup("High");
     if (high_name != NULL) {
         GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
@@ -1998,6 +2253,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                                 {
                                     var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    mark_hashnode_unit_info(var_node,
+                                        tree->tree_data.var_decl_data.defined_in_unit,
+                                        tree->tree_data.var_decl_data.unit_is_public);
                                 }
                             }
                             goto next_identifier;
@@ -2050,6 +2308,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             gpc_type_set_type_alias(array_type, alias);
                             
                             func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
+                            if (func_return == 0)
+                            {
+                                HashNode_t *var_node = NULL;
+                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                {
+                                    mark_hashnode_unit_info(var_node,
+                                        tree->tree_data.var_decl_data.defined_in_unit,
+                                        tree->tree_data.var_decl_data.unit_is_public);
+                                }
+                            }
 
                             goto next_identifier;
                         }
@@ -2125,6 +2393,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                             {
                                 var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                mark_hashnode_unit_info(var_node,
+                                    tree->tree_data.var_decl_data.defined_in_unit,
+                                    tree->tree_data.var_decl_data.unit_is_public);
                             }
                         }
                         goto next_identifier;
@@ -2196,6 +2467,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
                     {
                         var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        mark_hashnode_unit_info(var_node,
+                            tree->tree_data.var_decl_data.defined_in_unit,
+                            tree->tree_data.var_decl_data.unit_is_public);
                     }
                 }
             }
@@ -2366,6 +2640,26 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 semantic_error(tree->line_num, 0, "redeclaration of name %s",
                     (char *)ids->cur);
                 return_val += func_return;
+            }
+            else
+            {
+                HashNode_t *decl_node = NULL;
+                if (FindIdent(&decl_node, symtab, (char *)ids->cur) != -1 && decl_node != NULL)
+                {
+                    if (tree->type == TREE_VAR_DECL)
+                    {
+                        decl_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                        mark_hashnode_unit_info(decl_node,
+                            tree->tree_data.var_decl_data.defined_in_unit,
+                            tree->tree_data.var_decl_data.unit_is_public);
+                    }
+                    else
+                    {
+                        mark_hashnode_unit_info(decl_node,
+                            tree->tree_data.arr_decl_data.defined_in_unit,
+                            tree->tree_data.arr_decl_data.unit_is_public);
+                    }
+                }
             }
 
 next_identifier:

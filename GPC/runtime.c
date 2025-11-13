@@ -6,13 +6,24 @@
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
+#include <math.h>
 
 #include "runtime_internal.h"
+#include <sys/stat.h>
+#include "format_arg.h"
+
+static const double GPC_PI = 3.14159265358979323846264338327950288;
+static uint64_t gpc_rand_state = 0x9e3779b97f4a7c15ULL;
+
+/* Forward decl for optional debug flag helper */
+static int gpc_env_flag(const char *name);
 
 #ifdef _WIN32
 #include <windows.h>
 #include <time.h>
 #include <errno.h>
+#include <io.h>
+#include <fcntl.h>
 #else
 #include <time.h>
 #include <errno.h>
@@ -46,6 +57,15 @@ static FILE *gpc_text_output_stream(GPCTextFile *file)
 {
     if (file != NULL && file->handle != NULL)
         return file->handle;
+#ifdef _WIN32
+    static int gpc_stdout_binary_set = 0;
+    if (!gpc_stdout_binary_set)
+    {
+        /* Avoid CRLF translation doubling when strings contain CRLF */
+        _setmode(_fileno(stdout), _O_BINARY);
+        gpc_stdout_binary_set = 1;
+    }
+#endif
     return stdout;
 }
 
@@ -227,6 +247,46 @@ void gpc_sleep_ms(int milliseconds) {
 #endif
 }
 
+void gpc_sleep_ms_i(int milliseconds) {
+    gpc_sleep_ms(milliseconds);
+}
+
+/* High-resolution performance counter wrappers */
+uint64_t gpc_query_performance_counter(void) {
+#ifdef _WIN32
+    LARGE_INTEGER val;
+    if (QueryPerformanceCounter(&val)) {
+        return (uint64_t)val.QuadPart;
+    }
+    return 0ULL;
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0ULL;
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#endif
+}
+
+uint64_t gpc_query_performance_frequency(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq;
+    if (QueryPerformanceFrequency(&freq)) {
+        return (uint64_t)freq.QuadPart;
+    }
+    return 0ULL;
+#else
+    /* CLOCK_MONOTONIC is in nanoseconds on POSIX fallback */
+    return 1000000000ULL;
+#endif
+}
+
+int gpc_is_debugger_present(void) {
+#ifdef _WIN32
+    return IsDebuggerPresent() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
 static int gpc_normalize_crt_color(int color)
 {
     int normalized = color % 16;
@@ -344,6 +404,8 @@ void gpc_write_integer(GPCTextFile *file, int width, int64_t value)
 
     if (width > 1024 || width < -1024)
         width = 0;
+    if (width == -1)
+        width = 0;
 
     if (width > 0)
         fprintf(dest, "%*lld", width, (long long)value);
@@ -352,6 +414,8 @@ void gpc_write_integer(GPCTextFile *file, int width, int64_t value)
     else
         fprintf(dest, "%lld", (long long)value);
 }
+
+static size_t gpc_string_known_length(const char *value);
 
 void gpc_write_string(GPCTextFile *file, int width, const char *value)
 {
@@ -363,12 +427,39 @@ void gpc_write_string(GPCTextFile *file, int width, const char *value)
         value = "";
     if (width > 1024 || width < -1024)
         width = 0;
+
+    size_t len = gpc_string_known_length(value);
+    if (len == 0 && width <= 0)
+        return;
     if (width > 0)
-        fprintf(dest, "%*s", width, value);
+    {
+        size_t pad = (width > (int)len) ? (size_t)width - len : 0;
+        for (size_t i = 0; i < pad; ++i)
+            fputc(' ', dest);
+        if (len > 0)
+            fwrite(value, 1, len, dest);
+    }
     else if (width < 0)
-        fprintf(dest, "%-*s", -width, value);
-    else
-        fprintf(dest, "%s", value);
+    {
+        if (width == -1)
+        {
+            if (len > 0)
+                fwrite(value, 1, len, dest);
+        }
+        else
+        {
+            size_t target = (size_t)(-width);
+            if (len > 0)
+                fwrite(value, 1, len, dest);
+            size_t pad = (target > len) ? target - len : 0;
+            for (size_t i = 0; i < pad; ++i)
+                fputc(' ', dest);
+        }
+    }
+    else if (len > 0)
+    {
+        fwrite(value, 1, len, dest);
+    }
 }
 
 /* Write a char array with specified maximum length (for Pascal char arrays) */
@@ -388,6 +479,8 @@ void gpc_write_char_array(GPCTextFile *file, int width, const char *value, size_
     
     /* Use precision specifier to limit output */
     if (width > 1024 || width < -1024)
+        width = 0;
+    if (width == -1)
         width = 0;
     if (width > 0)
         fprintf(dest, "%*.*s", width, (int)actual_len, value);
@@ -511,12 +604,13 @@ void gpc_dispose(void **target)
 typedef struct GpcStringNode
 {
     char *ptr;
+    size_t length;
     struct GpcStringNode *next;
 } GpcStringNode;
 
 static GpcStringNode *gpc_string_allocations = NULL;
 
-static void gpc_string_register_allocation(char *ptr)
+static void gpc_string_register_allocation(char *ptr, size_t length)
 {
     if (ptr == NULL)
         return;
@@ -526,6 +620,7 @@ static void gpc_string_register_allocation(char *ptr)
         return;
 
     node->ptr = ptr;
+    node->length = length;
     node->next = gpc_string_allocations;
     gpc_string_allocations = node;
 }
@@ -551,13 +646,36 @@ static int gpc_string_release_allocation(char *ptr)
     return 0;
 }
 
+static GpcStringNode *gpc_string_find_allocation(const char *ptr)
+{
+    GpcStringNode *node = gpc_string_allocations;
+    while (node != NULL)
+    {
+        if (node->ptr == ptr)
+            return node;
+        node = node->next;
+    }
+    return NULL;
+}
+
+static size_t gpc_string_known_length(const char *value)
+{
+    if (value == NULL)
+        return 0;
+
+    GpcStringNode *node = gpc_string_find_allocation(value);
+    if (node != NULL)
+        return node->length;
+    return strlen(value);
+}
+
 char *gpc_alloc_empty_string(void)
 {
     char *empty = (char *)malloc(1);
     if (empty != NULL)
     {
         empty[0] = '\0';
-        gpc_string_register_allocation(empty);
+        gpc_string_register_allocation(empty, 0);
     }
     return empty;
 }
@@ -567,7 +685,7 @@ char *gpc_string_duplicate(const char *value)
     if (value == NULL)
         return gpc_alloc_empty_string();
 
-    size_t len = strlen(value);
+    size_t len = gpc_string_known_length(value);
     char *copy = (char *)malloc(len + 1);
     if (copy == NULL)
         return gpc_alloc_empty_string();
@@ -575,7 +693,19 @@ char *gpc_string_duplicate(const char *value)
     if (len > 0)
         memcpy(copy, value, len);
     copy[len] = '\0';
-    gpc_string_register_allocation(copy);
+    gpc_string_register_allocation(copy, len);
+    return copy;
+}
+
+static char *gpc_string_duplicate_length(const char *value, size_t length)
+{
+    char *copy = (char *)malloc(length + 1);
+    if (copy == NULL)
+        return gpc_alloc_empty_string();
+    if (length > 0 && value != NULL)
+        memcpy(copy, value, length);
+    copy[length] = '\0';
+    gpc_string_register_allocation(copy, length);
     return copy;
 }
 
@@ -645,6 +775,122 @@ void gpc_string_assign(char **target, const char *value)
 
     char *copy = gpc_string_duplicate(value);
     *target = copy;
+}
+
+void gpc_string_setlength(char **target, int64_t new_length)
+{
+    if (target == NULL)
+        return;
+
+    if (new_length < 0)
+        new_length = 0;
+
+    size_t requested = (size_t)new_length;
+    char *current = *target;
+    size_t current_len = gpc_string_known_length(current);
+    if (current_len > requested)
+        current_len = requested;
+
+    char *resized = (char *)malloc(requested + 1);
+    if (resized == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to resize string to %lld bytes.\n",
+            (long long)new_length);
+        exit(EXIT_FAILURE);
+    }
+
+    if (current_len > 0)
+        memcpy(resized, current, current_len);
+    if (requested > current_len)
+        memset(resized + current_len, 0, requested - current_len);
+    resized[requested] = '\0';
+
+    gpc_string_register_allocation(resized, requested);
+    if (current != NULL && gpc_string_release_allocation(current))
+        free(current);
+    *target = resized;
+}
+
+void gpc_string_delete(char **target, int64_t index, int64_t count)
+{
+    if (target == NULL || index <= 0 || count <= 0)
+        return;
+
+    char *source = *target;
+    size_t length = gpc_string_known_length(source);
+    if (length == 0)
+        return;
+
+    if (index > (int64_t)length)
+        return;
+
+    size_t start = (size_t)(index - 1);
+    size_t remove = (size_t)count;
+    if (remove > length - start)
+        remove = length - start;
+
+    size_t new_length = length - remove;
+    char *result = (char *)malloc(new_length + 1);
+    if (result == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to delete substring (%lld bytes).\n",
+            (long long)remove);
+        exit(EXIT_FAILURE);
+    }
+
+    if (start > 0)
+        memcpy(result, source, start);
+    size_t tail = length - start - remove;
+    if (tail > 0)
+        memcpy(result + start, source + start + remove, tail);
+    result[new_length] = '\0';
+
+    gpc_string_register_allocation(result, new_length);
+    if (source != NULL && gpc_string_release_allocation(source))
+        free(source);
+    *target = result;
+}
+
+void gpc_string_insert(const char *value, char **target, int64_t index)
+{
+    if (target == NULL || value == NULL)
+        return;
+
+    size_t insert_len = gpc_string_known_length(value);
+    if (insert_len == 0)
+        return;
+
+    char *dest = *target;
+    size_t dest_len = gpc_string_known_length(dest);
+
+    if (index <= 0)
+        index = 1;
+    if (index > (int64_t)dest_len + 1)
+        index = (int64_t)dest_len + 1;
+
+    size_t pos = (size_t)(index - 1);
+    size_t new_len = dest_len + insert_len;
+
+    char *result = (char *)malloc(new_len + 1);
+    if (result == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to insert substring (%zu bytes).\n",
+            insert_len);
+        exit(EXIT_FAILURE);
+    }
+
+    if (pos > 0 && dest != NULL)
+        memcpy(result, dest, pos);
+    if (insert_len > 0)
+        memcpy(result + pos, value, insert_len);
+    if (dest != NULL && pos < dest_len)
+        memcpy(result + pos + insert_len, dest + pos, dest_len - pos);
+    result[new_len] = '\0';
+
+    gpc_string_register_allocation(result, new_len);
+    if (dest != NULL && gpc_string_release_allocation(dest))
+        free(dest);
+    *target = result;
 }
 
 void *gpc_dynarray_clone_descriptor(const void *descriptor, size_t descriptor_size)
@@ -723,7 +969,7 @@ void gpc_string_to_char_array(char *dest, const char *src, size_t dest_size)
     if (dest == NULL || src == NULL || dest_size == 0)
         return;
     
-    size_t src_len = strlen(src);
+    size_t src_len = gpc_string_known_length(src);
     size_t copy_len = (src_len < dest_size) ? src_len : dest_size;
     
     memcpy(dest, src, copy_len);
@@ -1005,6 +1251,77 @@ void gpc_move(void *dest, const void *src, size_t count)
     memmove(dest, src, count);
 }
 
+void gpc_fillchar(void *dest, size_t count, int value)
+{
+    if (dest == NULL || count == 0)
+        return;
+
+    unsigned char byte_value = (unsigned char)(value & 0xFF);
+    memset(dest, byte_value, count);
+}
+
+void gpc_getmem(void **target, size_t size)
+{
+    if (target == NULL)
+        return;
+
+    if (size == 0)
+    {
+        if (*target != NULL)
+        {
+            free(*target);
+            *target = NULL;
+        }
+        return;
+    }
+
+    void *memory = malloc(size);
+    if (memory == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to allocate %zu bytes via GetMem.\n", size);
+        exit(EXIT_FAILURE);
+    }
+
+    *target = memory;
+}
+
+void gpc_freemem(void *ptr)
+{
+    if (ptr != NULL)
+        free(ptr);
+}
+
+void gpc_reallocmem(void **target, size_t new_size)
+{
+    if (target == NULL)
+        return;
+
+    if (new_size == 0)
+    {
+        if (*target != NULL)
+        {
+            free(*target);
+            *target = NULL;
+        }
+        return;
+    }
+
+    void *original = *target;
+    void *resized = NULL;
+    if (original == NULL)
+        resized = malloc(new_size);
+    else
+        resized = realloc(original, new_size);
+
+    if (resized == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to (re)allocate %zu bytes via ReallocMem.\n", new_size);
+        exit(EXIT_FAILURE);
+    }
+
+    *target = resized;
+}
+
 char *gpc_string_concat(const char *lhs, const char *rhs)
 {
     if (lhs == NULL)
@@ -1012,8 +1329,8 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     if (rhs == NULL)
         rhs = "";
 
-    size_t lhs_len = strlen(lhs);
-    size_t rhs_len = strlen(rhs);
+    size_t lhs_len = gpc_string_known_length(lhs);
+    size_t rhs_len = gpc_string_known_length(rhs);
     size_t total = lhs_len + rhs_len;
 
     char *result = (char *)malloc(total + 1);
@@ -1025,17 +1342,13 @@ char *gpc_string_concat(const char *lhs, const char *rhs)
     if (rhs_len > 0)
         memcpy(result + lhs_len, rhs, rhs_len);
     result[total] = '\0';
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, total);
     return result;
 }
 
 int64_t gpc_string_length(const char *value)
 {
-    if (value == NULL)
-        return 0;
-
-    size_t len = strlen(value);
-    return (int64_t)len;
+    return (int64_t)gpc_string_known_length(value);
 }
 
 char *gpc_string_copy(const char *value, int64_t index, int64_t count)
@@ -1063,7 +1376,7 @@ char *gpc_string_copy(const char *value, int64_t index, int64_t count)
     if (to_copy > 0)
         memcpy(result, value + start, to_copy);
     result[to_copy] = '\0';
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, to_copy);
     return result;
 }
 
@@ -1073,9 +1386,168 @@ int64_t gpc_string_compare(const char *lhs, const char *rhs)
         lhs = "";
     if (rhs == NULL)
         rhs = "";
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] strcmp lhs='%s' rhs='%s'\n", lhs, rhs);
 
-    int cmp = strcmp(lhs, rhs);
-    return (int64_t)cmp;
+    size_t lhs_len = gpc_string_known_length(lhs);
+    size_t rhs_len = gpc_string_known_length(rhs);
+    size_t min_len = (lhs_len < rhs_len) ? lhs_len : rhs_len;
+
+    if (min_len > 0)
+    {
+        int cmp = memcmp(lhs, rhs, min_len);
+        if (cmp != 0)
+            return (int64_t)cmp;
+    }
+
+    if (lhs_len < rhs_len)
+        return -1;
+    if (lhs_len > rhs_len)
+        return 1;
+    return 0;
+}
+
+int64_t gpc_string_pos(const char *substr, const char *value)
+{
+    if (value == NULL)
+        value = "";
+    if (substr == NULL)
+        substr = "";
+
+    size_t hay_len = gpc_string_known_length(value);
+    size_t needle_len = gpc_string_known_length(substr);
+
+    if (needle_len == 0)
+        return 1;
+    if (needle_len > hay_len)
+        return 0;
+
+    for (size_t i = 0; i + needle_len <= hay_len; ++i)
+    {
+        if (memcmp(value + i, substr, needle_len) == 0)
+            return (int64_t)(i + 1);
+    }
+
+    return 0;
+}
+
+static int gpc_is_path_delim_char(char ch)
+{
+    return ch == '/' || ch == '\\';
+}
+
+static const char *gpc_find_last_path_delim(const char *path)
+{
+    if (path == NULL)
+        return NULL;
+    const char *last = NULL;
+    for (const char *ptr = path; *ptr != '\0'; ++ptr)
+    {
+        if (gpc_is_path_delim_char(*ptr))
+            last = ptr;
+    }
+    return last;
+}
+
+char *gpc_extract_file_path(const char *filename)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    const char *last = gpc_find_last_path_delim(filename);
+    if (last == NULL)
+        return gpc_alloc_empty_string();
+    size_t length = (size_t)(last - filename) + 1;
+    return gpc_string_duplicate_length(filename, length);
+}
+
+char *gpc_extract_file_name(const char *filename)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    const char *last = gpc_find_last_path_delim(filename);
+    if (last == NULL)
+        return gpc_string_duplicate(filename);
+    return gpc_string_duplicate(last + 1);
+}
+
+char *gpc_extract_file_ext(const char *filename)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    size_t len = strlen(filename);
+    const char *start = filename;
+    const char *limit = gpc_find_last_path_delim(filename);
+    if (limit != NULL)
+        start = limit + 1;
+    const char *ptr = filename + len;
+    while (ptr > start)
+    {
+        --ptr;
+        if (gpc_is_path_delim_char(*ptr))
+            break;
+        if (*ptr == '.')
+            return gpc_string_duplicate(ptr);
+    }
+    return gpc_alloc_empty_string();
+}
+
+char *gpc_change_file_ext(const char *filename, const char *extension)
+{
+    if (filename == NULL)
+        return gpc_alloc_empty_string();
+    size_t len = strlen(filename);
+    const char *start = filename;
+    const char *limit = gpc_find_last_path_delim(filename);
+    if (limit != NULL)
+        start = limit + 1;
+    const char *ptr = filename + len;
+    const char *dot = NULL;
+    while (ptr > start)
+    {
+        --ptr;
+        if (gpc_is_path_delim_char(*ptr))
+            break;
+        if (*ptr == '.')
+        {
+            dot = ptr;
+            break;
+        }
+    }
+    size_t base_len = dot ? (size_t)(dot - filename) : len;
+    size_t ext_len = (extension != NULL) ? strlen(extension) : 0;
+    char *result = (char *)malloc(base_len + ext_len + 1);
+    if (result == NULL)
+        return gpc_alloc_empty_string();
+    if (base_len > 0)
+        memcpy(result, filename, base_len);
+    if (ext_len > 0 && extension != NULL)
+        memcpy(result + base_len, extension, ext_len);
+    result[base_len + ext_len] = '\0';
+    gpc_string_register_allocation(result, base_len + ext_len);
+    return result;
+}
+
+char *gpc_exclude_trailing_path_delim(const char *path)
+{
+    if (path == NULL)
+        return gpc_alloc_empty_string();
+    size_t len = strlen(path);
+    if (len == 0)
+        return gpc_alloc_empty_string();
+    size_t end = len;
+    while (end > 0 && gpc_is_path_delim_char(path[end - 1]))
+    {
+        if (end == 1)
+            break;
+        if (end == 3 && path[1] == ':' && gpc_is_path_delim_char(path[2]))
+            break;
+        --end;
+    }
+    if (end == len)
+        return gpc_string_duplicate(path);
+    if (end == 0)
+        end = 1;
+    return gpc_string_duplicate_length(path, end);
 }
 
 static long long gpc_val_error_position(const char *text, const char *error_ptr)
@@ -1195,8 +1667,36 @@ char *gpc_char_to_string(int64_t value)
 
     result[0] = (char)value;
     result[1] = '\0';
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, 1);
     return result;
+}
+
+int64_t gpc_upcase_char(int64_t value)
+{
+    unsigned char ch = (unsigned char)(value & 0xFF);
+    if (ch >= 'a' && ch <= 'z')
+        ch = (unsigned char)(ch - ('a' - 'A'));
+    return (int64_t)ch;
+}
+
+int64_t gpc_is_odd(int64_t value)
+{
+    return (value & 1) ? 1 : 0;
+}
+
+int32_t gpc_sqr_int32(int32_t value)
+{
+    return value * value;
+}
+
+int64_t gpc_sqr_int64(int64_t value)
+{
+    return value * value;
+}
+
+double gpc_sqr_real(double value)
+{
+    return value * value;
 }
 
 int64_t gpc_ord_string(const char *value)
@@ -1224,8 +1724,23 @@ char *gpc_int_to_str(int64_t value)
         return gpc_alloc_empty_string();
 
     memcpy(result, buffer, (size_t)written + 1);
-    gpc_string_register_allocation(result);
+    gpc_string_register_allocation(result, (size_t)written);
     return result;
+}
+
+void gpc_str_int64(int64_t value, char **target)
+{
+    if (target == NULL)
+        return;
+
+    char *result = gpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    char *existing = *target;
+    if (existing != NULL && gpc_string_release_allocation(existing))
+        free(existing);
+    *target = result;
 }
 
 int64_t gpc_now(void)
@@ -1453,8 +1968,786 @@ char *gpc_format_datetime(const char *format, int64_t datetime_ms)
     return result;
 }
 
+typedef struct
+{
+    char *data;
+    size_t length;
+    size_t capacity;
+} gpc_format_builder;
+
+static void gpc_format_builder_init(gpc_format_builder *builder)
+{
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+}
+
+static void gpc_format_builder_free(gpc_format_builder *builder)
+{
+    if (builder->data != NULL)
+        free(builder->data);
+    builder->data = NULL;
+    builder->length = 0;
+    builder->capacity = 0;
+}
+
+static int gpc_format_builder_reserve(gpc_format_builder *builder, size_t extra)
+{
+    size_t needed = builder->length + extra + 1;
+    if (needed <= builder->capacity)
+        return 1;
+    size_t new_capacity = (builder->capacity == 0) ? 64 : builder->capacity;
+    while (new_capacity < needed)
+        new_capacity *= 2;
+    char *new_data = (char *)realloc(builder->data, new_capacity);
+    if (new_data == NULL)
+        return 0;
+    builder->data = new_data;
+    builder->capacity = new_capacity;
+    return 1;
+}
+
+static int gpc_format_builder_append_buf(gpc_format_builder *builder, const char *buf, size_t len)
+{
+    if (len == 0)
+        return 1;
+    if (!gpc_format_builder_reserve(builder, len))
+        return 0;
+    memcpy(builder->data + builder->length, buf, len);
+    builder->length += len;
+    builder->data[builder->length] = '\0';
+    return 1;
+}
+
+static int gpc_format_builder_append_char(gpc_format_builder *builder, char ch)
+{
+    return gpc_format_builder_append_buf(builder, &ch, 1);
+}
+
+static int gpc_format_builder_append_padding(gpc_format_builder *builder, size_t count)
+{
+    if (count == 0)
+        return 1;
+    if (!gpc_format_builder_reserve(builder, count))
+        return 0;
+    memset(builder->data + builder->length, ' ', count);
+    builder->length += count;
+    builder->data[builder->length] = '\0';
+    return 1;
+}
+
+static int gpc_format_builder_append_formatted(gpc_format_builder *builder,
+    const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    int needed = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+    if (needed < 0)
+        return 0;
+    if (!gpc_format_builder_reserve(builder, (size_t)needed))
+        return 0;
+    va_start(args, fmt);
+    vsnprintf(builder->data + builder->length, builder->capacity - builder->length, fmt, args);
+    va_end(args);
+    builder->length += (size_t)needed;
+    return 1;
+}
+
+static int gpc_format_builder_append_string_with_width(gpc_format_builder *builder,
+    const char *value, size_t value_len, int width, int left_align)
+{
+    size_t padding = 0;
+    if (width > 0 && (size_t)width > value_len)
+        padding = (size_t)width - value_len;
+    if (!left_align && padding > 0)
+    {
+        if (!gpc_format_builder_append_padding(builder, padding))
+            return 0;
+    }
+    if (!gpc_format_builder_append_buf(builder, value, value_len))
+        return 0;
+    if (left_align && padding > 0)
+    {
+        if (!gpc_format_builder_append_padding(builder, padding))
+            return 0;
+    }
+    return 1;
+}
+
+char *gpc_format(const char *fmt, const gpc_tvarrec *args, size_t arg_count)
+{
+    if (fmt == NULL)
+        fmt = "";
+
+    gpc_format_builder builder;
+    gpc_format_builder_init(&builder);
+
+    size_t arg_index = 0;
+    while (*fmt != '\0')
+    {
+        if (*fmt != '%')
+        {
+            if (!gpc_format_builder_append_char(&builder, *fmt++))
+            {
+                gpc_format_builder_free(&builder);
+                return gpc_alloc_empty_string();
+            }
+            continue;
+        }
+
+        ++fmt;
+        if (*fmt == '%')
+        {
+            if (!gpc_format_builder_append_char(&builder, '%'))
+            {
+                gpc_format_builder_free(&builder);
+                return gpc_alloc_empty_string();
+            }
+            ++fmt;
+            continue;
+        }
+
+        int left_align = 0;
+        if (*fmt == '-')
+        {
+            left_align = 1;
+            ++fmt;
+        }
+
+        int width = -1;
+        if (isdigit((unsigned char)*fmt))
+        {
+            width = 0;
+            while (isdigit((unsigned char)*fmt))
+            {
+                width = width * 10 + (*fmt - '0');
+                ++fmt;
+            }
+        }
+
+        int precision = -1;
+        if (*fmt == '.')
+        {
+            ++fmt;
+            precision = 0;
+            while (isdigit((unsigned char)*fmt))
+            {
+                precision = precision * 10 + (*fmt - '0');
+                ++fmt;
+            }
+        }
+
+        char spec = *fmt ? *fmt++ : '\0';
+        if (spec == '\0')
+            break;
+
+        if (arg_index >= arg_count || args == NULL)
+        {
+            gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+            continue;
+        }
+
+        const gpc_tvarrec *arg = &args[arg_index++];
+        switch (spec)
+        {
+            case 'd':
+            case 'i':
+            case 'u':
+            case 'x':
+            case 'X':
+            case 'p':
+            case 'P':
+            {
+                long long value = arg->data.v_int;
+                if (arg->kind == GPC_TVAR_KIND_BOOL || arg->kind == GPC_TVAR_KIND_CHAR)
+                    value = arg->data.v_int;
+                else if (arg->kind == GPC_TVAR_KIND_POINTER || arg->kind == GPC_TVAR_KIND_STRING)
+                    value = (long long)(intptr_t)arg->data.v_ptr;
+                else if (arg->kind != GPC_TVAR_KIND_INT)
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+
+                char fmtbuf[32];
+                size_t pos = 0;
+                fmtbuf[pos++] = '%';
+                if (left_align)
+                    fmtbuf[pos++] = '-';
+                if (width >= 0)
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
+                if (precision >= 0 && spec != 'p' && spec != 'P')
+                {
+                    fmtbuf[pos++] = '.';
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", precision);
+                }
+                fmtbuf[pos++] = spec;
+                fmtbuf[pos] = '\0';
+
+                if (!gpc_format_builder_append_formatted(&builder, fmtbuf, value))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            case 'f':
+            case 'F':
+            case 'g':
+            case 'G':
+            case 'e':
+            case 'E':
+            case 'n':
+            case 'N':
+            {
+                double real_value = 0.0;
+                if (arg->kind == GPC_TVAR_KIND_REAL)
+                    real_value = arg->data.v_real;
+                else if (arg->kind == GPC_TVAR_KIND_INT || arg->kind == GPC_TVAR_KIND_BOOL ||
+                         arg->kind == GPC_TVAR_KIND_CHAR)
+                    real_value = (double)arg->data.v_int;
+                else
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+
+                char fmtbuf[32];
+                size_t pos = 0;
+                fmtbuf[pos++] = '%';
+                if (left_align)
+                    fmtbuf[pos++] = '-';
+                if (width >= 0)
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", width);
+                if (precision >= 0)
+                {
+                    fmtbuf[pos++] = '.';
+                    pos += (size_t)snprintf(fmtbuf + pos, sizeof(fmtbuf) - pos, "%d", precision);
+                }
+                fmtbuf[pos++] = spec;
+                fmtbuf[pos] = '\0';
+
+                if (!gpc_format_builder_append_formatted(&builder, fmtbuf, real_value))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            case 's':
+            case 'S':
+            {
+                const char *str_ptr = (const char *)arg->data.v_ptr;
+                if (arg->kind == GPC_TVAR_KIND_CHAR)
+                {
+                    char ch = (char)(arg->data.v_int & 0xFF);
+                    char temp[2] = { ch, '\0' };
+                    str_ptr = temp;
+                    size_t len = 1;
+                    if (!gpc_format_builder_append_string_with_width(&builder, temp, len, width, left_align))
+                    {
+                        gpc_format_builder_free(&builder);
+                        return gpc_alloc_empty_string();
+                    }
+                    break;
+                }
+                if (arg->kind != GPC_TVAR_KIND_STRING && arg->kind != GPC_TVAR_KIND_POINTER)
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+                if (str_ptr == NULL)
+                    str_ptr = "";
+                size_t len = gpc_string_known_length(str_ptr);
+                if (precision >= 0 && (size_t)precision < len)
+                    len = (size_t)precision;
+                if (!gpc_format_builder_append_string_with_width(&builder, str_ptr, len, width, left_align))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            case 'c':
+            case 'C':
+            {
+                char ch = 0;
+                if (arg->kind == GPC_TVAR_KIND_CHAR || arg->kind == GPC_TVAR_KIND_INT ||
+                    arg->kind == GPC_TVAR_KIND_BOOL)
+                    ch = (char)(arg->data.v_int & 0xFF);
+                else
+                {
+                    gpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
+                    break;
+                }
+                if (!gpc_format_builder_append_string_with_width(&builder, &ch, 1, width, left_align))
+                {
+                    gpc_format_builder_free(&builder);
+                    return gpc_alloc_empty_string();
+                }
+                break;
+            }
+            default:
+                gpc_format_builder_append_char(&builder, spec);
+                break;
+        }
+    }
+
+    if (!gpc_format_builder_reserve(&builder, 0))
+    {
+        gpc_format_builder_free(&builder);
+        return gpc_alloc_empty_string();
+    }
+
+    char *result = gpc_string_duplicate(builder.data != NULL ? builder.data : "");
+    gpc_format_builder_free(&builder);
+    return result != NULL ? result : gpc_alloc_empty_string();
+}
+
+char *gpc_float_to_string(double value, int precision)
+{
+    if (precision < 0)
+        precision = 6;
+    if (precision > 18)
+        precision = 18;
+
+    double normalized = value;
+    if (isfinite(value) && precision > 0)
+    {
+        double scale = 1.0;
+        for (int i = 0; i < precision; ++i)
+            scale *= 10.0;
+        if (scale != 0.0 && isfinite(scale))
+            normalized = round(value * scale) / scale;
+    }
+
+    if (isnan(normalized))
+        return gpc_string_duplicate("-nan(ind)");
+    if (isinf(normalized))
+        return gpc_string_duplicate(value > 0 ? "inf" : "-inf");
+
+    char fmt[16];
+    snprintf(fmt, sizeof(fmt), "%%.%df", precision);
+    char buffer[64];
+    int len = snprintf(buffer, sizeof(buffer), fmt, normalized);
+    if (len < 0)
+        return gpc_alloc_empty_string();
+    return gpc_string_duplicate(buffer);
+}
+
+int gpc_string_to_int(const char *text, int *out_value)
+{
+    if (text == NULL)
+    {
+        if (out_value != NULL) *out_value = 0;
+        return 0;
+    }
+    char *endptr;
+    errno = 0;
+    long long val = strtoll(text, &endptr, 10);
+    if (endptr == text || *endptr != '\0' || errno == ERANGE)
+    {
+        if (out_value != NULL) *out_value = 0;
+        return 0;
+    }
+    if (out_value != NULL)
+        *out_value = (int)val;
+    return 1;
+}
+
+static int gpc_env_flag(const char *name)
+{
+    const char *v = getenv(name);
+    return v && (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T');
+}
+
+int gpc_string_to_real(const char *text, double *out_value)
+{
+    if (text == NULL)
+    {
+        if (out_value != NULL) *out_value = 0.0;
+        return 0;
+    }
+    char *endptr;
+    errno = 0;
+    double val = strtod(text, &endptr);
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] string_to_real('%s') -> val=%g end=%p (err=%d)\n", text ? text : "(null)", val, (void*)endptr, errno);
+    if (endptr == text || *endptr != '\0' || errno == ERANGE)
+    {
+        if (out_value != NULL) *out_value = 0.0;
+        return 0;
+    }
+    if (out_value != NULL)
+        *out_value = val;
+    return 1;
+}
+
+/* Convenience wrapper: parse string to double and return as value */
+double gpc_str_to_float(const char *text)
+{
+    double val = 0.0;
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] str_to_float('%s')\n", text ? text : "(null)");
+    (void)gpc_string_to_real(text, &val);
+    if (gpc_env_flag("GPC_DEBUG_STRTOFLOAT"))
+        fprintf(stderr, "[gpc] str_to_float -> %g\n", val);
+    return val;
+}
+
+int gpc_file_exists(const char *path)
+{
+    if (path == NULL)
+        return 0;
+#if defined(_WIN32)
+    struct _stat st;
+    if (_stat(path, &st) != 0)
+        return 0;
+    return (_S_IFREG & st.st_mode) && (_S_IFMT & st.st_mode);
+#else
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return 0;
+    return S_ISREG(st.st_mode);
+#endif
+}
+
+int gpc_directory_exists(const char *path)
+{
+    if (path == NULL)
+        return 0;
+#if defined(_WIN32)
+    struct _stat st;
+    if (_stat(path, &st) != 0)
+        return 0;
+    return (_S_IFDIR & st.st_mode);
+#else
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return 0;
+    return S_ISDIR(st.st_mode);
+#endif
+}
+
 /* Wrapper for memcpy to be called from assembly code */
 void *gpc_memcpy_wrapper(void *dest, const void *src, size_t n)
 {
     return memcpy(dest, src, n);
+}
+
+int64_t gpc_assigned(const void *ptr)
+{
+    return (ptr != NULL) ? 1 : 0;
+}
+
+int32_t gpc_abs_int(int32_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
+int64_t gpc_abs_longint(int64_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
+double gpc_abs_real(double value)
+{
+    return fabs(value);
+}
+
+double gpc_sqrt(double value)
+{
+    return sqrt(value);
+}
+
+double gpc_sin(double value)
+{
+    return sin(value);
+}
+
+double gpc_csc(double value)
+{
+    return 1.0 / sin(value);
+}
+
+double gpc_cos(double value)
+{
+    return cos(value);
+}
+
+double gpc_sec(double value)
+{
+    return 1.0 / cos(value);
+}
+
+double gpc_tan(double value)
+{
+    return tan(value);
+}
+
+double gpc_cot(double value)
+{
+    return cos(value) / sin(value);
+}
+
+double gpc_sinh(double value)
+{
+    return sinh(value);
+}
+
+double gpc_csch(double value)
+{
+    return 1.0 / sinh(value);
+}
+
+double gpc_cosh(double value)
+{
+    return cosh(value);
+}
+
+double gpc_sech(double value)
+{
+    return 1.0 / cosh(value);
+}
+
+double gpc_tanh(double value)
+{
+    return tanh(value);
+}
+
+double gpc_coth(double value)
+{
+    double s = sinh(value);
+    return s != 0.0 ? cosh(value) / s : (value >= 0.0 ? INFINITY : -INFINITY);
+}
+
+double gpc_arctan(double value)
+{
+    return atan(value);
+}
+
+double gpc_arccot(double value)
+{
+    return (GPC_PI / 2.0) - atan(value);
+}
+
+double gpc_arctan2(double y, double x)
+{
+    return atan2(y, x);
+}
+
+double gpc_arcsin(double value)
+{
+    return asin(value);
+}
+
+double gpc_arccos(double value)
+{
+    return acos(value);
+}
+
+double gpc_arcsinh(double value)
+{
+    return asinh(value);
+}
+
+double gpc_arctanh(double value)
+{
+    return atanh(value);
+}
+
+double gpc_arccosh(double value)
+{
+    return acosh(value);
+}
+
+double gpc_arcsech(double value)
+{
+    if (value <= 0.0)
+        return INFINITY;
+    return acosh(1.0 / value);
+}
+
+double gpc_arccsch(double value)
+{
+    if (value == 0.0)
+        return (value >= 0.0) ? INFINITY : -INFINITY;
+    return asinh(1.0 / value);
+}
+
+double gpc_arccoth(double value)
+{
+    if (value == 0.0)
+        return (value >= 0.0) ? INFINITY : -INFINITY;
+    return atanh(1.0 / value);
+}
+
+double gpc_deg_to_rad(double value)
+{
+    return value * (GPC_PI / 180.0);
+}
+
+double gpc_rad_to_deg(double value)
+{
+    return value * (180.0 / GPC_PI);
+}
+
+double gpc_deg_to_grad(double value)
+{
+    return value * (400.0 / 360.0);
+}
+
+double gpc_grad_to_deg(double value)
+{
+    return value * (360.0 / 400.0);
+}
+
+double gpc_grad_to_rad(double value)
+{
+    return (value / 200.0) * GPC_PI;
+}
+
+double gpc_rad_to_grad(double value)
+{
+    return value * (200.0 / GPC_PI);
+}
+
+double gpc_cycle_to_rad(double value)
+{
+    return value * (2.0 * GPC_PI);
+}
+
+double gpc_rad_to_cycle(double value)
+{
+    return value / (2.0 * GPC_PI);
+}
+
+double gpc_ln(double value)
+{
+    return log(value);
+}
+
+double gpc_logn(double base, double value)
+{
+    return log(value) / log(base);
+}
+
+double gpc_exp(double value)
+{
+    return exp(value);
+}
+
+double gpc_power(double base, double exponent)
+{
+    return pow(base, exponent);
+}
+
+double gpc_hypot(double x, double y)
+{
+    return hypot(x, y);
+}
+
+long long gpc_round(double value)
+{
+    double rounded;
+    if (value >= 0.0)
+        rounded = floor(value + 0.5);
+    else
+        rounded = ceil(value - 0.5);
+    return (long long)rounded;
+}
+
+long long gpc_trunc(double value)
+{
+    if (value >= 0.0)
+        return (long long)floor(value);
+    return (long long)ceil(value);
+}
+
+long long gpc_int(double value)
+{
+    return gpc_trunc(value);
+}
+
+double gpc_frac(double value)
+{
+    return value - (double)gpc_trunc(value);
+}
+
+long long gpc_ceil(double value)
+{
+    return (long long)ceil(value);
+}
+
+long long gpc_floor(double value)
+{
+    return (long long)floor(value);
+}
+static uint64_t gpc_rand_next(void)
+{
+    gpc_rand_state = gpc_rand_state * 2862933555777941757ULL + 3037000493ULL;
+    return gpc_rand_state;
+}
+
+void gpc_randomize(void)
+{
+    uint64_t seed = ((uint64_t)time(NULL) << 32) ^ (uint64_t)clock();
+    if (seed == 0)
+        seed = 0x9e3779b97f4a7c15ULL;
+    gpc_rand_state = seed;
+}
+
+double gpc_random_real(void)
+{
+    uint64_t value = gpc_rand_next();
+    return (double)(value >> 11) * (1.0 / 9007199254740992.0);
+}
+
+double gpc_random_real_upper(double upper)
+{
+    if (upper <= 0.0)
+        return 0.0;
+    return gpc_random_real() * upper;
+}
+
+int64_t gpc_random_int(int64_t upper)
+{
+    if (upper <= 0)
+        return 0;
+    uint64_t value = gpc_rand_next();
+    uint64_t range = (uint64_t)upper;
+    return (int64_t)(value % range);
+}
+
+int64_t gpc_random_range(int64_t low, int64_t high)
+{
+    if (high <= low)
+        return low;
+    uint64_t diff = (uint64_t)(high - low);
+    uint64_t value = gpc_rand_next();
+    uint64_t offset = value % diff;
+    return low + (int64_t)offset;
+}
+
+int64_t gpc_get_randseed(void)
+{
+    return (int64_t)gpc_rand_state;
+}
+
+void gpc_set_randseed(int64_t seed)
+{
+    if ((uint64_t)seed == 0)
+        gpc_rand_state = 0x9e3779b97f4a7c15ULL;
+    else
+        gpc_rand_state = (uint64_t)seed;
+}
+
+void gpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
+{
+    double angle = gpc_bits_to_double(angle_bits);
+    if (sin_out != NULL)
+        *sin_out = sin(angle);
+    if (cos_out != NULL)
+        *cos_out = cos(angle);
 }

@@ -10,6 +10,7 @@
 #include "GpcType.h"
 #include "type_tags.h"
 #include "tree_types.h"
+#include "../../format_arg.h"
 
 /* Include symbol table headers for type resolution */
 #include "../SemanticCheck/HashTable/HashTable.h"
@@ -61,6 +62,15 @@ GpcType* create_array_type(GpcType *element_type, int start_index, int end_index
     type->info.array_info.element_type = element_type; // Takes ownership
     type->info.array_info.start_index = start_index;
     type->info.array_info.end_index = end_index;
+    type->ref_count = 1;
+    return type;
+}
+
+GpcType* create_array_of_const_type(void) {
+    GpcType *type = (GpcType *)calloc(1, sizeof(GpcType));
+    assert(type != NULL);
+    type->kind = TYPE_KIND_ARRAY_OF_CONST;
+    type->info.array_of_const_info.element_size = sizeof(gpc_tvarrec);
     type->ref_count = 1;
     return type;
 }
@@ -246,6 +256,8 @@ void destroy_gpc_type(GpcType *type) {
             break;
         case TYPE_KIND_ARRAY:
             destroy_gpc_type(type->info.array_info.element_type);
+            break;
+        case TYPE_KIND_ARRAY_OF_CONST:
             break;
         case TYPE_KIND_PRIMITIVE:
             break;
@@ -693,6 +705,9 @@ long long gpc_type_sizeof(GpcType *type)
             return element_size * count;
         }
         
+        case TYPE_KIND_ARRAY_OF_CONST:
+            return type->info.array_of_const_info.element_size;
+        
         case TYPE_KIND_RECORD:
             /* Record size would need to be computed by iterating fields
              * For now, we return -1 to indicate it needs special handling */
@@ -709,6 +724,11 @@ long long gpc_type_sizeof(GpcType *type)
 int gpc_type_is_array(GpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_ARRAY);
+}
+
+int gpc_type_is_array_of_const(GpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_ARRAY_OF_CONST);
 }
 
 int gpc_type_is_record(GpcType *type)
@@ -817,6 +837,13 @@ static int var_type_to_primitive_tag(enum VarType var_type)
     }
 }
 
+long long gpc_type_get_array_of_const_element_size(GpcType *type)
+{
+    if (!gpc_type_is_array_of_const(type))
+        return -1;
+    return type->info.array_of_const_info.element_size;
+}
+
 /* Create a GpcType from a VarType enum value.
  * This is a helper for migrating from legacy type system.
  * Note: HASHVAR_ARRAY, HASHVAR_RECORD, HASHVAR_POINTER, HASHVAR_PROCEDURE
@@ -891,6 +918,8 @@ int gpc_type_get_legacy_tag(GpcType *type)
         
         case TYPE_KIND_RECORD:
             return RECORD_TYPE;
+        case TYPE_KIND_ARRAY_OF_CONST:
+            return ARRAY_OF_CONST_TYPE;
         
         case TYPE_KIND_PROCEDURE:
             return PROCEDURE;
