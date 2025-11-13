@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #ifndef _WIN32
@@ -299,7 +300,22 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
-    /* Define MSWINDOWS when targeting Windows (but not for Cygwin which has POSIX API) */
+#if INTPTR_MAX >= INT64_MAX
+    const char *arch_symbol = "CPU64";
+#else
+    const char *arch_symbol = "CPU32";
+#endif
+    if (!pascal_preprocessor_define(preprocessor, arch_symbol))
+    {
+        char detail[128];
+        snprintf(detail, sizeof(detail), "unable to define default symbol '%s'", arch_symbol);
+        report_preprocessor_error(error_out, path, detail);
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+
+    /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which expose a POSIX API) */
 #if defined(_WIN32) && !defined(__CYGWIN__)
     if (target_windows_flag())
     {
@@ -312,7 +328,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 #else
-    /* On Cygwin and Unix, don't define MSWINDOWS */
+    /* On Cygwin/MSYS and Unix, don't define MSWINDOWS */
     (void)target_windows_flag;  /* Suppress unused warning */
 #endif
 
