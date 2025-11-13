@@ -2003,19 +2003,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("overload")),
         NULL
     );
-    combinator_t* type_external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("name")),
-        token(pascal_string(PASCAL_T_STRING)),
-        NULL
-    );
-    combinator_t* type_directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        type_external_name_clause,
-        token(pascal_string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    ));
-    // previous implementation created a 'type_routine_directive' parser but it's no longer needed here
-
     combinator_t* generic_type_decl_prog = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
         optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(cident(PASCAL_T_IDENTIFIER)),           // type name
@@ -2201,6 +2188,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         many(local_threadvar_decl),
         NULL
     );
+    local_threadvar_section->extra_to_free = local_var_expr_parser;
 
     // Allow local CONST/TYPE/VAR sections to be interspersed with nested function/procedure declarations
     combinator_t* local_declaration_or_nested_function = multi(new_combinator(), PASCAL_T_NONE,

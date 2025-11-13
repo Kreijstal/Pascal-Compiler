@@ -1400,7 +1400,9 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
         // leaving the final ';' for the enclosing type declaration to consume.
         // Only consume the ';' if a directive keyword follows immediately after.
         InputState s0; save_input_state(in, &s0);
-        ParseResult sc = parse(in, token(match(";")));
+        combinator_t* directive_semicolon = token(match(";"));
+        ParseResult sc = parse(in, directive_semicolon);
+        free_combinator(directive_semicolon);
         if (sc.is_success) {
             // Check if a directive follows; if not, roll back and keep ';' for outer parser
             InputState s1; save_input_state(in, &s1);
@@ -1408,6 +1410,9 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
             if (!pk.is_success) {
                 // No directive, restore to before ';'
                 restore_input_state(in, &s0);
+                if (sc.value.ast) {
+                    free_ast(sc.value.ast);
+                }
                 discard_failure(pk);
             } else {
                 // We have a directive: keep ';', consume directives and optional args
@@ -1428,12 +1433,14 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
                         continue;
                     }
                     restore_input_state(in, &dn);
+                    discard_failure(nk);
                     break;
                 }
             }
         } else {
             discard_failure(sc);
         }
+        free_combinator(directive_argument);
         free_combinator(directive_keyword);
     }
 

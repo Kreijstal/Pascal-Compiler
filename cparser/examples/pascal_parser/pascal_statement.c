@@ -4,7 +4,6 @@
 #include "pascal_keywords.h"
 #include "pascal_peek.h"
 #include "pascal_statement_keywords.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -933,6 +932,9 @@ void init_pascal_statement_parser(combinator_t** p) {
     stmt_dispatch->fn = statement_dispatch_fn;
     stmt_dispatch->args = dispatch_args;
 
+    if (*stmt_parser != NULL && *stmt_parser != stmt_dispatch) {
+        free_combinator(*stmt_parser);
+    }
     *stmt_parser = stmt_dispatch;
     (*p)->extra_to_free = expr_parser;
 }

@@ -1718,7 +1718,8 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 free(args);
                 break;
             }
-            case COMB_SEP_BY: {
+            case COMB_SEP_BY:
+            case COMB_SEP_BY1: {
                 sep_by_args* args = (sep_by_args*)comb->args;
                 free_combinator_recursive(args->p, visited, extras);
                 free_combinator_recursive(args->sep, visited, extras);
