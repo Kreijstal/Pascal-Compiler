@@ -357,11 +357,11 @@ end;
 
 procedure BlockRead(var f: file; var buffer; count: longint; var result: longint); overload;
 var
-    actual: longint;
+    actual64: int64;
 begin
-    actual := 0;
-    blockread_impl(f, buffer, count, @actual);
-    result := actual;
+    actual64 := 0;
+    blockread_impl(f, buffer, count, @actual64);
+    result := longint(actual64);
 end;
 
 
@@ -412,11 +412,11 @@ end;
 
 procedure BlockWrite(var f: file; var buffer; count: longint; var result: longint); overload;
 var
-    actual: longint;
+    actual64: int64;
 begin
-    actual := 0;
-    blockwrite_impl(f, buffer, count, @actual);
-    result := actual;
+    actual64 := 0;
+    blockwrite_impl(f, buffer, count, @actual64);
+    result := longint(actual64);
 end;
 
 procedure readln(var value: string);
