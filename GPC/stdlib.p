@@ -241,6 +241,75 @@ begin
     fillchar_impl(dest, count, value);
 end;
 
+procedure getmem_impl(var target; size: longint);
+begin
+    assembler;
+    asm
+        call gpc_getmem
+    end
+end;
+
+procedure reallocmem_impl(var target; size: longint);
+begin
+    assembler;
+    asm
+        call gpc_reallocmem
+    end
+end;
+
+procedure freemem_impl(var target);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lfreemem_sysv
+
+        movq (%rcx), %rax
+        movq %rax, %rcx
+        call gpc_freemem
+        jmp .Lfreemem_done
+
+.Lfreemem_sysv:
+        movq (%rdi), %rax
+        movq %rax, %rdi
+        call gpc_freemem
+
+.Lfreemem_done:
+    end
+end;
+
+procedure GetMem(var target; size: integer); overload;
+var
+    size_long: longint;
+begin
+    size_long := size;
+    getmem_impl(target, size_long);
+end;
+
+procedure GetMem(var target; size: longint); overload;
+begin
+    getmem_impl(target, size);
+end;
+
+procedure ReallocMem(var target; size: integer); overload;
+var
+    size_long: longint;
+begin
+    size_long := size;
+    reallocmem_impl(target, size_long);
+end;
+
+procedure ReallocMem(var target; size: longint); overload;
+begin
+    reallocmem_impl(target, size);
+end;
+
+procedure FreeMem(var target);
+begin
+    freemem_impl(target);
+end;
+
 procedure readln(var value: string);
 begin
     assembler;

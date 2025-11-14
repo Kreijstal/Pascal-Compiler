@@ -402,99 +402,6 @@ static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
     return NULL;
 }
 
-static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, GetMem expects exactly two arguments.\n", stmt->line_num);
-        return 1;
-    }
-
-    int return_val = 0;
-    struct Expression *ptr_expr = (struct Expression *)args->cur;
-    struct Expression *size_expr = (struct Expression *)args->next->cur;
-
-    int ptr_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&ptr_type, symtab, ptr_expr, max_scope_lev, MUTATE);
-    if (ptr_type != POINTER_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, GetMem target must be a pointer variable.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    int size_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&size_type, symtab, size_expr, INT_MAX, NO_MUTATE);
-    if (size_type != INT_TYPE && size_type != LONGINT_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, GetMem size must be an integer.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    return return_val;
-}
-
-static int semcheck_builtin_freemem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, FreeMem expects exactly one argument.\n", stmt->line_num);
-        return 1;
-    }
-
-    int ptr_type = UNKNOWN_TYPE;
-    int return_val = semcheck_expr_main(&ptr_type, symtab, (struct Expression *)args->cur, INT_MAX, NO_MUTATE);
-    if (ptr_type != POINTER_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, FreeMem expects a pointer argument.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    return return_val;
-}
-
-static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, ReallocMem expects exactly two arguments.\n", stmt->line_num);
-        return 1;
-    }
-
-    int return_val = 0;
-    struct Expression *ptr_expr = (struct Expression *)args->cur;
-    struct Expression *size_expr = (struct Expression *)args->next->cur;
-
-    int ptr_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&ptr_type, symtab, ptr_expr, max_scope_lev, MUTATE);
-    if (ptr_type != POINTER_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, ReallocMem target must be a pointer variable.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    int size_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&size_type, symtab, size_expr, INT_MAX, NO_MUTATE);
-    if (size_type != INT_TYPE && size_type != LONGINT_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, ReallocMem size must be an integer.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    return return_val;
-}
-
 static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (stmt == NULL)
@@ -1717,24 +1624,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "readln",
         semcheck_builtin_read_like, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "GetMem",
-        semcheck_builtin_getmem, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "FreeMem",
-        semcheck_builtin_freemem, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "ReallocMem",
-        semcheck_builtin_reallocmem, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

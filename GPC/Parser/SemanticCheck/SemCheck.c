@@ -1960,30 +1960,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(readln_name);
     }
 
-    char *getmem_name = strdup("GetMem");
-    if (getmem_name != NULL) {
-        GpcType *getmem_type = create_procedure_type(NULL, NULL);
-        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
-        AddBuiltinProc_Typed(symtab, getmem_name, getmem_type);
-        destroy_gpc_type(getmem_type);
-        free(getmem_name);
-    }
-    char *freemem_name = strdup("FreeMem");
-    if (freemem_name != NULL) {
-        GpcType *freemem_type = create_procedure_type(NULL, NULL);
-        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
-        AddBuiltinProc_Typed(symtab, freemem_name, freemem_type);
-        destroy_gpc_type(freemem_type);
-        free(freemem_name);
-    }
-    char *reallocmem_name = strdup("ReallocMem");
-    if (reallocmem_name != NULL) {
-        GpcType *reallocmem_type = create_procedure_type(NULL, NULL);
-        assert(reallocmem_type != NULL && "Failed to create ReallocMem procedure type");
-        AddBuiltinProc_Typed(symtab, reallocmem_name, reallocmem_type);
-        destroy_gpc_type(reallocmem_type);
-        free(reallocmem_name);
-    }
     char *val_name = strdup("Val");
     if (val_name != NULL) {
         GpcType *val_type = create_procedure_type(NULL, NULL);
