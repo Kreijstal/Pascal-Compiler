@@ -7,9 +7,11 @@
 #include <ctype.h>
 #include <stddef.h>
 #include <math.h>
+#include <errno.h>
 
 #include "runtime_internal.h"
 #include <sys/stat.h>
+#include <limits.h>
 #include "format_arg.h"
 
 static const double GPC_PI = 3.14159265358979323846264338327950288;
@@ -24,6 +26,7 @@ static int gpc_env_flag(const char *name);
 #include <errno.h>
 #include <io.h>
 #include <fcntl.h>
+#include <direct.h>
 #else
 #include <time.h>
 #include <errno.h>
@@ -33,6 +36,7 @@ static int gpc_env_flag(const char *name);
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <dlfcn.h>
 
 /* Define W_EXITCODE and W_STOPCODE if not available */
 #ifndef W_EXITCODE
@@ -45,6 +49,25 @@ static int gpc_env_flag(const char *name);
 #endif
 
 int64_t gpc_current_exception = 0;
+static __thread int gpc_ioresult = 0;
+
+int gpc_ioresult_get_and_clear(void)
+{
+    int value = gpc_ioresult;
+    gpc_ioresult = 0;
+    return value;
+}
+
+void gpc_ioresult_set(int value)
+{
+    gpc_ioresult = value;
+}
+
+int gpc_ioresult_peek(void)
+{
+    return gpc_ioresult;
+}
+
 
 typedef enum {
     GPC_FILE_KIND_TEXT = 0,
@@ -120,7 +143,10 @@ void gpc_tfile_assign(GPCTextFile **slot, const char *path)
     {
         file = (GPCTextFile *)calloc(1, sizeof(GPCTextFile));
         if (file == NULL)
+        {
+            gpc_ioresult_set(EACCES);
             return;
+        }
         *slot = file;
     }
 
@@ -149,7 +175,7 @@ void gpc_tfile_assign(GPCTextFile **slot, const char *path)
     if (file->element_type == GPC_BINARY_UNSPECIFIED)
     {
         file->element_type = GPC_BINARY_INT32;
-        file->element_size = sizeof(int32_t);
+        file->element_size = sizeof(long long);
     }
 }
 
@@ -200,9 +226,13 @@ void gpc_tfile_rewrite(GPCTextFile **slot)
     {
         file->mode = 1; /* write mode */
         file->kind = GPC_FILE_KIND_BINARY;
+        gpc_ioresult_set(0);
     }
     else
+    {
         file->mode = 0;
+        gpc_ioresult_set(errno);
+    }
 }
 
 void gpc_tfile_reset(GPCTextFile **slot)
@@ -225,9 +255,13 @@ void gpc_tfile_reset(GPCTextFile **slot)
     {
         file->mode = 2; /* read mode */
         file->kind = GPC_FILE_KIND_BINARY;
+        gpc_ioresult_set(0);
     }
     else
+    {
         file->mode = 0;
+        gpc_ioresult_set(errno);
+    }
 }
 
 void gpc_tfile_close(GPCTextFile **slot)
@@ -249,23 +283,41 @@ void gpc_tfile_close(GPCTextFile **slot)
 int gpc_tfile_read_int(GPCTextFile **slot, int32_t *ptr)
 {
     if (slot == NULL || ptr == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
     file->element_type = GPC_BINARY_INT32;
     file->element_size = sizeof(int32_t);
     size_t n = fread(ptr, sizeof(int32_t), 1, file->handle);
-    return (n == 1) ? 0 : 1;
+    if (n == 1)
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(feof(file->handle) ? 0 : ferror(file->handle));
+    return 1;
 }
 
 int gpc_tfile_read_char(GPCTextFile **slot, char *ptr)
 {
     if (slot == NULL || ptr == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
     unsigned char ch;
     file->element_type = GPC_BINARY_CHAR;
     file->element_size = sizeof(unsigned char);
@@ -273,72 +325,128 @@ int gpc_tfile_read_char(GPCTextFile **slot, char *ptr)
     if (n == 1)
     {
         *ptr = (char)ch;
+        gpc_ioresult_set(0);
         return 0;
     }
+    gpc_ioresult_set(feof(file->handle) ? 0 : ferror(file->handle));
     return 1;
 }
 
 int gpc_tfile_read_real(GPCTextFile **slot, double *ptr)
 {
     if (slot == NULL || ptr == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
     file->element_type = GPC_BINARY_DOUBLE;
     file->element_size = sizeof(double);
     size_t n = fread(ptr, sizeof(double), 1, file->handle);
-    return (n == 1) ? 0 : 1;
+    if (n == 1)
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(feof(file->handle) ? 0 : ferror(file->handle));
+    return 1;
 }
 
 int gpc_tfile_write_int(GPCTextFile **slot, int32_t value)
 {
     if (slot == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
     file->element_type = GPC_BINARY_INT32;
     file->element_size = sizeof(int32_t);
     size_t n = fwrite(&value, sizeof(int32_t), 1, file->handle);
-    return (n == 1) ? 0 : 1;
+    if (n == 1)
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(ferror(file->handle));
+    return 1;
 }
 
 int gpc_tfile_write_char(GPCTextFile **slot, char value)
 {
     if (slot == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
     unsigned char ch = (unsigned char)value;
     file->element_type = GPC_BINARY_CHAR;
     file->element_size = sizeof(unsigned char);
     size_t n = fwrite(&ch, sizeof(unsigned char), 1, file->handle);
-    return (n == 1) ? 0 : 1;
+    if (n == 1)
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(ferror(file->handle));
+    return 1;
 }
 
 int gpc_tfile_write_real(GPCTextFile **slot, double value)
 {
     if (slot == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
     file->element_type = GPC_BINARY_DOUBLE;
     file->element_size = sizeof(double);
     size_t n = fwrite(&value, sizeof(double), 1, file->handle);
-    return (n == 1) ? 0 : 1;
+    if (n == 1)
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(ferror(file->handle));
+    return 1;
 }
 
 int gpc_tfile_blockread(GPCTextFile **slot, void *buffer, size_t count, long long *actual_read)
 {
     if (slot == NULL || buffer == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
 
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
 
     size_t elem_size = file->element_size;
     if (elem_size == 0)
@@ -350,7 +458,7 @@ int gpc_tfile_blockread(GPCTextFile **slot, void *buffer, size_t count, long lon
             case GPC_BINARY_INT32:
             case GPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(int32_t);
+                elem_size = sizeof(long long);
                 break;
         }
         file->element_size = elem_size;
@@ -360,6 +468,7 @@ int gpc_tfile_blockread(GPCTextFile **slot, void *buffer, size_t count, long lon
     {
         if (actual_read != NULL)
             *actual_read = 0;
+        gpc_ioresult_set(0);
         return 0;
     }
 
@@ -368,20 +477,28 @@ int gpc_tfile_blockread(GPCTextFile **slot, void *buffer, size_t count, long lon
         *actual_read = (long long)read_elems;
 
     if (read_elems == count)
+    {
+        gpc_ioresult_set(0);
         return 0;
-    if (feof(file->handle))
-        return 1;
-    return ferror(file->handle) ? 2 : 1;
+    }
+    gpc_ioresult_set(feof(file->handle) ? 0 : 1);
+    return 1;
 }
 
 int gpc_tfile_blockwrite(GPCTextFile **slot, const void *buffer, size_t count, long long *actual_written)
 {
     if (slot == NULL || buffer == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
 
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
 
     size_t elem_size = file->element_size;
     if (elem_size == 0)
@@ -393,7 +510,7 @@ int gpc_tfile_blockwrite(GPCTextFile **slot, const void *buffer, size_t count, l
             case GPC_BINARY_INT32:
             case GPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(int32_t);
+                elem_size = sizeof(long long);
                 break;
         }
         file->element_size = elem_size;
@@ -403,6 +520,7 @@ int gpc_tfile_blockwrite(GPCTextFile **slot, const void *buffer, size_t count, l
     {
         if (actual_written != NULL)
             *actual_written = 0;
+        gpc_ioresult_set(0);
         return 0;
     }
 
@@ -411,18 +529,28 @@ int gpc_tfile_blockwrite(GPCTextFile **slot, const void *buffer, size_t count, l
         *actual_written = (long long)written;
 
     if (written == count)
+    {
+        gpc_ioresult_set(0);
         return 0;
-    return ferror(file->handle) ? 2 : 1;
+    }
+    gpc_ioresult_set(ferror(file->handle));
+    return 1;
 }
 
 
 int gpc_tfile_seek(GPCTextFile **slot, long long index)
 {
     if (slot == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
 
     size_t elem_size = file->element_size;
     if (elem_size == 0)
@@ -434,24 +562,34 @@ int gpc_tfile_seek(GPCTextFile **slot, long long index)
             case GPC_BINARY_INT32:
             case GPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(int32_t);
+                elem_size = sizeof(long long);
                 break;
         }
         file->element_size = elem_size;
     }
 
     if (fseeko(file->handle, elem_size * index, SEEK_SET) != 0)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
+    gpc_ioresult_set(0);
     return 0;
 }
 
 int gpc_tfile_filepos(GPCTextFile **slot, long long *position)
 {
     if (slot == NULL || position == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
 
     size_t elem_size = file->element_size;
     if (elem_size == 0)
@@ -463,7 +601,7 @@ int gpc_tfile_filepos(GPCTextFile **slot, long long *position)
             case GPC_BINARY_INT32:
             case GPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(int32_t);
+                elem_size = sizeof(long long);
                 break;
         }
         file->element_size = elem_size;
@@ -471,18 +609,28 @@ int gpc_tfile_filepos(GPCTextFile **slot, long long *position)
 
     off_t offset = ftello(file->handle);
     if (offset == (off_t)-1)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
     *position = (long long)(offset / (off_t)elem_size);
+    gpc_ioresult_set(0);
     return 0;
 }
 
 int gpc_tfile_truncate(GPCTextFile **slot, long long length)
 {
     if (slot == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
         return 1;
+    }
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
+    {
+        gpc_ioresult_set(EBADF);
         return 1;
+    }
 
     size_t elem_size = file->element_size;
     if (elem_size == 0)
@@ -494,7 +642,7 @@ int gpc_tfile_truncate(GPCTextFile **slot, long long length)
             case GPC_BINARY_INT32:
             case GPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(int32_t);
+                elem_size = sizeof(long long);
                 break;
         }
         file->element_size = elem_size;
@@ -502,25 +650,52 @@ int gpc_tfile_truncate(GPCTextFile **slot, long long length)
 
     off_t target = (off_t)(elem_size * length);
     if (fflush(file->handle) != 0)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
 
 #ifdef _WIN32
     int fd = _fileno(file->handle);
     if (fd == -1)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
     if (_chsize_s(fd, target) != 0)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
 #else
     int fd = fileno(file->handle);
     if (fd == -1)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
     if (ftruncate(fd, target) != 0)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
 #endif
 
     if (fseeko(file->handle, target, SEEK_SET) != 0)
+    {
+        gpc_ioresult_set(errno);
         return 1;
+    }
+    gpc_ioresult_set(0);
     return 0;
+}
+
+int gpc_tfile_truncate_current(GPCTextFile **slot)
+{
+    long long position = 0;
+    if (gpc_tfile_filepos(slot, &position) != 0)
+        return 1;
+    return gpc_tfile_truncate(slot, position);
 }
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
@@ -2886,6 +3061,210 @@ double gpc_str_to_float(const char *text)
     return val;
 }
 
+char *gpc_get_current_dir(void)
+{
+#ifdef _WIN32
+    DWORD needed = GetCurrentDirectoryA(0, NULL);
+    if (needed == 0)
+        return gpc_alloc_empty_string();
+    char *buffer = (char *)malloc((size_t)needed + 1);
+    if (buffer == NULL)
+        return gpc_alloc_empty_string();
+    if (GetCurrentDirectoryA(needed + 1, buffer) == 0)
+    {
+        free(buffer);
+        return gpc_alloc_empty_string();
+    }
+    char *result = gpc_string_duplicate(buffer);
+    free(buffer);
+    return result;
+#else
+    size_t max_len = 0;
+#ifdef PATH_MAX
+    max_len = PATH_MAX;
+#endif
+    if (max_len == 0)
+        max_len = 4096;
+    char *buffer = (char *)malloc(max_len);
+    if (buffer == NULL)
+        return gpc_alloc_empty_string();
+    if (getcwd(buffer, max_len) == NULL)
+    {
+        free(buffer);
+        return gpc_alloc_empty_string();
+    }
+    char *result = gpc_string_duplicate(buffer);
+    free(buffer);
+    return result;
+#endif
+}
+
+int gpc_set_current_dir(const char *path)
+{
+    if (path == NULL)
+        return EINVAL;
+#ifdef _WIN32
+    return SetCurrentDirectoryA(path) ? 0 : (int)GetLastError();
+#else
+    return (chdir(path) == 0) ? 0 : errno;
+#endif
+}
+
+char *gpc_get_environment_variable(const char *name)
+{
+    if (name == NULL)
+        return gpc_alloc_empty_string();
+#ifdef _WIN32
+    DWORD needed = GetEnvironmentVariableA(name, NULL, 0);
+    if (needed == 0)
+        return gpc_alloc_empty_string();
+    char *buffer = (char *)malloc((size_t)needed + 1);
+    if (buffer == NULL)
+        return gpc_alloc_empty_string();
+    if (GetEnvironmentVariableA(name, buffer, needed + 1) == 0)
+    {
+        free(buffer);
+        return gpc_alloc_empty_string();
+    }
+    char *result = gpc_string_duplicate(buffer);
+    free(buffer);
+    return result;
+#else
+    const char *value = getenv(name);
+    if (value == NULL)
+        return gpc_alloc_empty_string();
+    return gpc_string_duplicate(value);
+#endif
+}
+
+int gpc_set_environment_variable(const char *name, const char *value)
+{
+    if (name == NULL)
+        return EINVAL;
+#ifdef _WIN32
+    if (SetEnvironmentVariableA(name, value != NULL ? value : "") == 0)
+        return (int)GetLastError();
+    return 0;
+#else
+    if (value == NULL)
+        value = "";
+    return setenv(name, value, 1);
+#endif
+}
+
+int gpc_unset_environment_variable(const char *name)
+{
+    if (name == NULL)
+        return EINVAL;
+#ifdef _WIN32
+    return SetEnvironmentVariableA(name, NULL) ? 0 : (int)GetLastError();
+#else
+    return unsetenv(name);
+#endif
+}
+
+int64_t gpc_get_process_id(void)
+{
+#ifdef _WIN32
+    return (int64_t)GetCurrentProcessId();
+#else
+    return (int64_t)getpid();
+#endif
+}
+
+uintptr_t gpc_load_library(const char *path)
+{
+#ifdef _WIN32
+    HMODULE handle = LoadLibraryA(path);
+    return (uintptr_t)handle;
+#else
+    void *handle = dlopen(path != NULL ? path : NULL, RTLD_LAZY);
+    if (handle == NULL && path == NULL)
+        handle = dlopen(NULL, RTLD_LAZY);
+    return (uintptr_t)handle;
+#endif
+}
+
+uintptr_t gpc_get_proc_address(uintptr_t handle, const char *symbol)
+{
+    if (handle == 0 || symbol == NULL)
+        return 0;
+#ifdef _WIN32
+    return (uintptr_t)GetProcAddress((HMODULE)handle, symbol);
+#else
+    dlerror();
+    void *addr = dlsym((void *)handle, symbol);
+    return (uintptr_t)addr;
+#endif
+}
+
+int gpc_free_library(uintptr_t handle)
+{
+    if (handle == 0)
+        return 0;
+#ifdef _WIN32
+    return FreeLibrary((HMODULE)handle) ? 1 : 0;
+#else
+    return (dlclose((void *)handle) == 0) ? 1 : 0;
+#endif
+}
+
+int gpc_directory_create(const char *path)
+{
+    if (path == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
+        return EINVAL;
+    }
+#ifdef _WIN32
+    if (_mkdir(path) == 0)
+#else
+    if (mkdir(path, 0777) == 0)
+#endif
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(errno);
+    return errno;
+}
+
+int gpc_directory_remove(const char *path)
+{
+    if (path == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
+        return EINVAL;
+    }
+#ifdef _WIN32
+    if (_rmdir(path) == 0)
+#else
+    if (rmdir(path) == 0)
+#endif
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(errno);
+    return errno;
+}
+
+int gpc_file_rename(const char *old_path, const char *new_path)
+{
+    if (old_path == NULL || new_path == NULL)
+    {
+        gpc_ioresult_set(EINVAL);
+        return EINVAL;
+    }
+    if (rename(old_path, new_path) == 0)
+    {
+        gpc_ioresult_set(0);
+        return 0;
+    }
+    gpc_ioresult_set(errno);
+    return errno;
+}
+
 int gpc_file_exists(const char *path)
 {
     if (path == NULL)
@@ -2918,6 +3297,18 @@ int gpc_directory_exists(const char *path)
         return 0;
     return S_ISDIR(st.st_mode);
 #endif
+}
+
+int gpc_delete_file(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+        return 0;
+#if defined(_WIN32)
+    int rc = _unlink(path);
+#else
+    int rc = remove(path);
+#endif
+    return (rc == 0) ? 1 : 0;
 }
 
 /* Wrapper for memcpy to be called from assembly code */

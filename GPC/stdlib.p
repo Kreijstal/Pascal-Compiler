@@ -28,6 +28,22 @@ begin
     end
 end;
 
+procedure MkDir(path: string);
+begin
+    assembler;
+    asm
+        call gpc_directory_create
+    end
+end;
+
+procedure RmDir(path: string);
+begin
+    assembler;
+    asm
+        call gpc_directory_remove
+    end
+end;
+
 procedure assign_text_internal(var f: text; filename: string);
 begin
     assembler;
@@ -332,8 +348,12 @@ begin
 end;
 
 procedure BlockRead(var f: file; var buffer; count: longint; var result: longint); overload;
+var
+    actual: longint;
 begin
-    blockread_impl(f, buffer, count, @result);
+    actual := 0;
+    blockread_impl(f, buffer, count, @actual);
+    result := actual;
 end;
 
 
@@ -353,11 +373,27 @@ begin
     end
 end;
 
+procedure Truncate(var f: file); overload;
+begin
+    assembler;
+    asm
+        call gpc_tfile_truncate_current
+    end
+end;
+
 procedure Truncate(var f: file; length: longint); overload;
 begin
     assembler;
     asm
         call gpc_tfile_truncate
+    end
+end;
+
+function IOResult: integer;
+begin
+    assembler;
+    asm
+        call gpc_ioresult_get_and_clear
     end
 end;
 
@@ -367,8 +403,12 @@ begin
 end;
 
 procedure BlockWrite(var f: file; var buffer; count: longint; var result: longint); overload;
+var
+    actual: longint;
 begin
-    blockwrite_impl(f, buffer, count, @result);
+    actual := 0;
+    blockwrite_impl(f, buffer, count, @actual);
+    result := actual;
 end;
 
 procedure readln(var value: string);

@@ -80,6 +80,10 @@ else
   runtime_c_args += ['-DHAVE_GMP=0']
 endif
 
+if host_machine.system() != 'windows'
+  runtime_deps += [compiler.find_library('dl', required: true)]
+endif
+
 gpc_runtime_lib = static_library('gpc_runtime',
   runtime_sources,
   c_args: runtime_c_args,

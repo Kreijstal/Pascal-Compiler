@@ -48,6 +48,16 @@ function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function FileExists(const FileName: AnsiString): Boolean;
 function DeleteFile(const FileName: AnsiString): Boolean;
 function DirectoryExists(const DirName: AnsiString): Boolean;
+function RenameFile(const OldName, NewName: AnsiString): Boolean;
+function GetCurrentDir: AnsiString;
+function SetCurrentDir(const Dir: AnsiString): Boolean;
+function GetEnvironmentVariable(const Name: AnsiString): AnsiString;
+function SetEnvironmentVariable(const Name, Value: AnsiString): Boolean;
+function UnsetEnvironmentVariable(const Name: AnsiString): Boolean;
+function GetProcessID: Longint;
+function LoadLibrary(const Name: AnsiString): NativeUInt;
+function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
+function FreeLibrary(LibHandle: NativeUInt): Boolean;
 
 implementation
 
@@ -68,6 +78,16 @@ function gpc_extract_file_ext(path: PChar): AnsiString; external;
 function gpc_change_file_ext(path: PChar; extension: PChar): AnsiString; external;
 function gpc_exclude_trailing_path_delim(path: PChar): AnsiString; external;
 function gpc_delete_file(path: PChar): Integer; external;
+function gpc_file_rename(old_path: PChar; new_path: PChar): Integer; external;
+function gpc_get_current_dir: AnsiString; external;
+function gpc_set_current_dir(path: PChar): Integer; external;
+function gpc_get_environment_variable(name: PChar): AnsiString; external;
+function gpc_set_environment_variable(name: PChar; value: PChar): Integer; external;
+function gpc_unset_environment_variable(name: PChar): Integer; external;
+function gpc_get_process_id: NativeUInt; external;
+function gpc_load_library(path: PChar): NativeUInt; external;
+function gpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; external;
+function gpc_free_library(handle: NativeUInt): Integer; external;
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -421,6 +441,56 @@ end;
 function DirectoryExists(const DirName: AnsiString): Boolean;
 begin
   Result := gpc_directory_exists(ToPChar(DirName)) <> 0;
+end;
+
+function RenameFile(const OldName, NewName: AnsiString): Boolean;
+begin
+  Result := gpc_file_rename(ToPChar(OldName), ToPChar(NewName)) = 0;
+end;
+
+function GetCurrentDir: AnsiString;
+begin
+    GetCurrentDir := gpc_get_current_dir();
+end;
+
+function SetCurrentDir(const Dir: AnsiString): Boolean;
+begin
+    SetCurrentDir := gpc_set_current_dir(ToPChar(Dir)) = 0;
+end;
+
+function GetEnvironmentVariable(const Name: AnsiString): AnsiString;
+begin
+    GetEnvironmentVariable := gpc_get_environment_variable(ToPChar(Name));
+end;
+
+function SetEnvironmentVariable(const Name, Value: AnsiString): Boolean;
+begin
+    SetEnvironmentVariable := gpc_set_environment_variable(ToPChar(Name), ToPChar(Value)) = 0;
+end;
+
+function UnsetEnvironmentVariable(const Name: AnsiString): Boolean;
+begin
+    UnsetEnvironmentVariable := gpc_unset_environment_variable(ToPChar(Name)) = 0;
+end;
+
+function GetProcessID: Longint;
+begin
+    GetProcessID := gpc_get_process_id();
+end;
+
+function LoadLibrary(const Name: AnsiString): NativeUInt;
+begin
+    LoadLibrary := gpc_load_library(ToPChar(Name));
+end;
+
+function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
+begin
+    GetProcedureAddress := gpc_get_proc_address(LibHandle, ToPChar(ProcName));
+end;
+
+function FreeLibrary(LibHandle: NativeUInt): Boolean;
+begin
+    FreeLibrary := gpc_free_library(LibHandle) <> 0;
 end;
 
 end.
