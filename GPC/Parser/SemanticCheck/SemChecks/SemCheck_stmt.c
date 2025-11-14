@@ -882,7 +882,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
-        if (!saw_file_arg && expr_type == FILE_TYPE)
+        if (!saw_file_arg && expr_type == TEXT_TYPE)
         {
             saw_file_arg = 1;
             args = args->next;
@@ -945,7 +945,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         /* For read, we need to check if this is a file argument first */
         return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, NO_MUTATE);
         
-        if (!saw_file_arg && expr_type == FILE_TYPE)
+        if (!saw_file_arg && expr_type == TEXT_TYPE)
         {
             saw_file_arg = 1;
             args = args->next;
@@ -1668,88 +1668,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
-
-    /* ------------------------------------------------------------------
-     * Special-case typed file helper procedures (file_assign, file_reset,
-     * file_rewrite, file_close, file_read_*, file_write_*).
-     *
-     * These helpers are implemented in stdlib.p and mapped directly to
-     * gpc_tfile_* runtime functions. For now we only need to ensure that
-     * their arguments are individually well-typed; we skip the generic
-     * GpcType-based compatibility checks to avoid rejecting FILE_TYPE
-     * arguments due to legacy assumptions.
-     * ------------------------------------------------------------------ */
-    if (proc_id != NULL &&
-        (pascal_identifier_equals(proc_id, "file_assign") ||
-         pascal_identifier_equals(proc_id, "file_rewrite") ||
-         pascal_identifier_equals(proc_id, "file_reset") ||
-         pascal_identifier_equals(proc_id, "file_close") ||
-         pascal_identifier_equals(proc_id, "file_read_integer") ||
-         pascal_identifier_equals(proc_id, "file_write_integer") ||
-         pascal_identifier_equals(proc_id, "file_read_char") ||
-         pascal_identifier_equals(proc_id, "file_write_char") ||
-         pascal_identifier_equals(proc_id, "file_read_real") ||
-         pascal_identifier_equals(proc_id, "file_write_real")))
-    {
-        ListNode_t *arg_node = args_given;
-        int arg_index = 0;
-        while (arg_node != NULL)
-        {
-            struct Expression *arg_expr = (struct Expression *)arg_node->cur;
-            int arg_type = UNKNOWN_TYPE;
-            int mut = NO_MUTATE;
-
-            /* For read_* helpers, the second argument is a var parameter. */
-            if ((pascal_identifier_equals(proc_id, "file_read_integer") ||
-                 pascal_identifier_equals(proc_id, "file_read_char") ||
-                 pascal_identifier_equals(proc_id, "file_read_real")) &&
-                arg_index == 1)
-            {
-                mut = MUTATE;
-            }
-
-            if (arg_expr != NULL)
-            {
-                return_val += semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, mut);
-            }
-
-            arg_node = arg_node->next;
-            arg_index++;
-        }
-
-        /* Bind the helper call to the concrete stdlib procedure so codegen can treat
-         * it like a normal direct call. These helpers live in stdlib.p, so they
-         * should already exist in the current symbol table. */
-        HashNode_t *helper_proc = NULL;
-        int helper_scope = FindIdent(&helper_proc, symtab, proc_id);
-        if (helper_scope == -1 || helper_proc == NULL ||
-            helper_proc->hash_type != HASHTYPE_PROCEDURE)
-        {
-            fprintf(stderr,
-                "Error on line %d, typed file helper %s is not declared.\n\n",
-                stmt->line_num, proc_id != NULL ? proc_id : "<unknown>");
-            return ++return_val;
-        }
-
-        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-        {
-            free(stmt->stmt_data.procedure_call_data.mangled_id);
-            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-        }
-
-        if (helper_proc->mangled_id != NULL)
-            stmt->stmt_data.procedure_call_data.mangled_id = strdup(helper_proc->mangled_id);
-        else if (proc_id != NULL)
-            stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
-
-        stmt->stmt_data.procedure_call_data.resolved_proc = helper_proc;
-        stmt->stmt_data.procedure_call_data.call_hash_type = helper_proc->hash_type;
-        stmt->stmt_data.procedure_call_data.call_gpc_type = helper_proc->type;
-        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
-        semcheck_mark_call_requires_static_link(helper_proc);
-
-        return return_val;
-    }
 
     int handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "SetLength",

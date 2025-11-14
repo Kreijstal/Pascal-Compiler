@@ -55,8 +55,10 @@ static inline int get_primitive_tag_from_node(HashNode_t *node)
 /* Helper function to check if a node is a file type */
 static inline int node_is_file_type(HashNode_t *node)
 {
-    return (node != NULL && node->type != NULL &&
-            gpc_type_equals_tag(node->type, FILE_TYPE));
+    if (node == NULL || node->type == NULL)
+        return 0;
+    return gpc_type_equals_tag(node->type, FILE_TYPE) ||
+        gpc_type_equals_tag(node->type, TEXT_TYPE);
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -151,6 +153,7 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
                 case FILE_TYPE:
+                case TEXT_TYPE:
                     return 8;
                 case SET_TYPE:
                 {
@@ -1290,6 +1293,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             case STRING_TYPE:
                             case POINTER_TYPE:
                             case FILE_TYPE:
+                            case TEXT_TYPE:
                                 element_size = 8;
                                 break;
                             case CHAR_TYPE:
@@ -1424,6 +1428,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         case REAL_TYPE:
                         case STRING_TYPE:
                         case FILE_TYPE:
+                        case TEXT_TYPE:
                             element_size = 8;
                             break;
                         case BOOL:

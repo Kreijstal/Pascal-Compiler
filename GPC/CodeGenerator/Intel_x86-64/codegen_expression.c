@@ -738,11 +738,16 @@ static StackNode_t *codegen_alloc_record_temp(long long size)
 }
 
 
+static inline int type_is_file_like(int type_tag)
+{
+    return type_tag == FILE_TYPE || type_tag == TEXT_TYPE;
+}
+
 int codegen_type_uses_qword(int type_tag)
 {
     return (type_tag == LONGINT_TYPE || type_tag == REAL_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
-        type_tag == FILE_TYPE || type_tag == PROCEDURE);
+        type_is_file_like(type_tag) || type_tag == PROCEDURE);
 }
 
 int codegen_type_is_signed(int type_tag)
@@ -787,6 +792,7 @@ static GpcType* expr_get_gpc_type(const struct Expression *expr)
         case SET_TYPE:
         case ENUM_TYPE:
         case FILE_TYPE:
+        case TEXT_TYPE:
             /* These can be represented as primitive GpcTypes, but we can't
              * create them here without memory management issues.
              * Better to just return NULL and let callers fall back to legacy logic */
@@ -1156,6 +1162,7 @@ static long long codegen_sizeof_type_tag(int type_tag)
         case STRING_TYPE:
         case POINTER_TYPE:
         case FILE_TYPE:
+        case TEXT_TYPE:
         case PROCEDURE:
             return CODEGEN_POINTER_SIZE_BYTES;
         case CHAR_TYPE:

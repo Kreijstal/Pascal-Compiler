@@ -1275,6 +1275,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 case POINTER_TYPE:
                 case PROCEDURE:
                 case FILE_TYPE:
+                case TEXT_TYPE:
                 case REAL_TYPE:
                 case LONGINT_TYPE:
                 case UNKNOWN_TYPE:

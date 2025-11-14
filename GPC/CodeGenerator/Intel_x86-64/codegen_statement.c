@@ -3188,7 +3188,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     if (args != NULL)
     {
         struct Expression *first_expr = (struct Expression *)args->cur;
-        if (first_expr != NULL && expr_has_type_tag(first_expr, FILE_TYPE))
+        if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
             expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -3493,7 +3493,7 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     if (args != NULL)
     {
         struct Expression *first_expr = (struct Expression *)args->cur;
-        if (first_expr != NULL && expr_has_type_tag(first_expr, FILE_TYPE))
+        if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
             expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);

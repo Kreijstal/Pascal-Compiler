@@ -1489,7 +1489,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         struct Expression *file_expr = (struct Expression *)args->cur;
         int file_type = UNKNOWN_TYPE;
         error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
-        if (file_type != FILE_TYPE)
+        if (file_type != TEXT_TYPE)
         {
             fprintf(stderr, "Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
@@ -2282,6 +2282,7 @@ static long long sizeof_from_type_tag(int type_tag)
         case ENUM_TYPE:
             return 4;
         case FILE_TYPE:
+        case TEXT_TYPE:
             return POINTER_SIZE_BYTES;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;

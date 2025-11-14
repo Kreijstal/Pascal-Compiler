@@ -46,7 +46,7 @@ begin
 end;
 
 
-procedure assign(var f: text; filename: string);
+procedure assign(var f: text; filename: string); overload;
 begin
     assembler;
     asm
@@ -54,7 +54,7 @@ begin
     end
 end;
 
-procedure rewrite(var f: text);
+procedure rewrite(var f: text); overload;
 begin
     assembler;
     asm
@@ -62,7 +62,7 @@ begin
     end
 end;
 
-procedure reset(var f: text);
+procedure reset(var f: text); overload;
 begin
     assembler;
     asm
@@ -70,7 +70,7 @@ begin
     end
 end;
 
-procedure close(var f: text);
+procedure close(var f: text); overload;
 begin
     assembler;
     asm
@@ -84,7 +84,7 @@ end;
   functions. They do not interfere with existing text I/O.
   -------------------------------------------------------------------- }
 
-procedure file_assign(var f: file; filename: string);
+procedure assign(var f: file; filename: string); overload;
 begin
     assembler;
     asm
@@ -92,7 +92,7 @@ begin
     end
 end;
 
-procedure file_rewrite(var f: file);
+procedure rewrite(var f: file); overload;
 begin
     assembler;
     asm
@@ -100,7 +100,7 @@ begin
     end
 end;
 
-procedure file_reset(var f: file);
+procedure reset(var f: file); overload;
 begin
     assembler;
     asm
@@ -108,7 +108,7 @@ begin
     end
 end;
 
-procedure file_close(var f: file);
+procedure close(var f: file); overload;
 begin
     assembler;
     asm

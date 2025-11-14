@@ -848,6 +848,8 @@ static int var_type_to_primitive_tag(enum VarType var_type)
             return SET_TYPE;
         case HASHVAR_FILE:
             return FILE_TYPE;
+        case HASHVAR_TEXT:
+            return TEXT_TYPE;
         case HASHVAR_ENUM:
             return ENUM_TYPE;
         default:
@@ -880,6 +882,7 @@ GpcType* gpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_PCHAR:
         case HASHVAR_SET:
         case HASHVAR_FILE:
+        case HASHVAR_TEXT:
         case HASHVAR_ENUM:
         {
             int tag = var_type_to_primitive_tag(var_type);
@@ -980,6 +983,7 @@ int gpc_type_uses_qword(GpcType *type)
                 case REAL_TYPE:
                 case STRING_TYPE:
                 case FILE_TYPE:
+                case TEXT_TYPE:
                     return 1;
                 default:
                     return 0;

@@ -1545,6 +1545,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_ENUM;
                     else if (element_type == FILE_TYPE)
                         var_type = HASHVAR_FILE;
+                    else if (element_type == TEXT_TYPE)
+                        var_type = HASHVAR_TEXT;
                     else
                         var_type = HASHVAR_INTEGER;
                 }
@@ -1569,6 +1571,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_ENUM;
                     else if (base_type == FILE_TYPE)
                         var_type = HASHVAR_FILE;
+                    else if (base_type == TEXT_TYPE)
+                        var_type = HASHVAR_TEXT;
                     else if (base_type == INT_TYPE)
                         var_type = HASHVAR_INTEGER;
                     else if (base_type == PROCEDURE)
@@ -1893,7 +1897,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *text_name = strdup("text");
     if (text_name != NULL) {
-        GpcType *text_type = gpc_type_from_var_type(HASHVAR_FILE);
+        GpcType *text_type = gpc_type_from_var_type(HASHVAR_TEXT);
         assert(text_type != NULL && "Failed to create text type");
         AddBuiltinType_Typed(symtab, text_name, text_type);
         destroy_gpc_type(text_type);
@@ -2644,6 +2648,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_PCHAR;
                 else if(tree->tree_data.var_decl_data.type == RECORD_TYPE)
                     var_type = HASHVAR_RECORD;
+                else if(tree->tree_data.var_decl_data.type == FILE_TYPE)
+                    var_type = HASHVAR_FILE;
+                else if(tree->tree_data.var_decl_data.type == TEXT_TYPE)
+                    var_type = HASHVAR_TEXT;
                 else
                     var_type = HASHVAR_REAL;
                 
