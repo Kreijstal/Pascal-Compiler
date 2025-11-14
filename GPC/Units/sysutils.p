@@ -6,7 +6,7 @@ uses
     ctypes;
 
 type
-    TDateTime = longint;
+    TDateTime = Int64;
     AnsiString = string;
     PChar = ^Char;
     NativeUInt = cuint64;
@@ -18,7 +18,7 @@ const
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
-function MillisecondsBetween(startTick, endTick: longint): longint;
+function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
 function Now: TDateTime;
 function IntToStr(value: longint): AnsiString;
 function UpperCase(const S: AnsiString): AnsiString;
@@ -35,6 +35,7 @@ function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function Format(const Fmt: string; const Args: array of const): string;
 function FloatToStr(Value: Real): AnsiString;
+function StrToInt(const S: AnsiString): longint;
 function StrToFloat(const S: AnsiString): Real;
 function TryStrToFloat(const S: AnsiString; out Value: Real): Boolean;
 function TryStrToInt(const S: AnsiString; out Value: Longint): Boolean;
@@ -45,6 +46,7 @@ function ChangeFileExt(const FileName, Extension: AnsiString): AnsiString;
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function FileExists(const FileName: AnsiString): Boolean;
+function DeleteFile(const FileName: AnsiString): Boolean;
 function DirectoryExists(const DirName: AnsiString): Boolean;
 
 implementation
@@ -56,8 +58,8 @@ function gpc_file_exists(path: PChar): Integer; external;
 function gpc_directory_exists(path: PChar): Integer; external;
 procedure gpc_sleep_ms(milliseconds: integer); external;
 function gpc_get_tick_count64: NativeUInt; external;
-function gpc_now: NativeUInt; external;
-function gpc_format_datetime(format: PChar; datetime_ms: NativeUInt): AnsiString; external;
+function gpc_now: Int64; external;
+function gpc_format_datetime(format: PChar; datetime_ms: Int64): AnsiString; external;
 function gpc_string_compare(lhs: PChar; rhs: PChar): Integer; external;
 function gpc_string_pos(SubStr: PChar; S: PChar): Integer; external;
 function gpc_extract_file_path(path: PChar): AnsiString; external;
@@ -65,6 +67,7 @@ function gpc_extract_file_name(path: PChar): AnsiString; external;
 function gpc_extract_file_ext(path: PChar): AnsiString; external;
 function gpc_change_file_ext(path: PChar; extension: PChar): AnsiString; external;
 function gpc_exclude_trailing_path_delim(path: PChar): AnsiString; external;
+function gpc_delete_file(path: PChar): Integer; external;
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -84,7 +87,7 @@ begin
     GetTickCount64 := gpc_get_tick_count64();
 end;
 
-function MillisecondsBetween(startTick, endTick: longint): longint;
+function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
 begin
     if endTick >= startTick then
         MillisecondsBetween := endTick - startTick
@@ -315,9 +318,12 @@ end;
 
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 var
-    dt_value: NativeUInt;
+    dt_value: Int64;
 begin
-    dt_value := DateTime;
+    if DateTime < 0 then
+        dt_value := 0
+    else
+        dt_value := DateTime;
     FormatDateTime := gpc_format_datetime(ToPChar(FormatStr), dt_value);
 end;
 
@@ -405,6 +411,11 @@ end;
 function FileExists(const FileName: AnsiString): Boolean;
 begin
   Result := gpc_file_exists(ToPChar(FileName)) <> 0;
+end;
+
+function DeleteFile(const FileName: AnsiString): Boolean;
+begin
+  Result := gpc_delete_file(ToPChar(FileName)) <> 0;
 end;
 
 function DirectoryExists(const DirName: AnsiString): Boolean;
