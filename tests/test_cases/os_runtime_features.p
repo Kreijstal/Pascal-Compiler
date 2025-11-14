@@ -72,27 +72,35 @@ end;
 function LoadUnixLibrary: NativeUInt;
 begin
 {$if defined(FPC) and not defined(GPC_COMPILER)}
-    Result := LoadLibrary('libc.so.6');
-    if Result = NilHandle then
-        Result := LoadLibrary('libc.so');
+    Result := NativeUInt(LoadLibrary('libc.so.6'));
+    if Result = 0 then
+        Result := NativeUInt(LoadLibrary('libc.so'));
+    if Result = 0 then
+        Result := NativeUInt(LoadLibrary('libSystem.B.dylib'));
+    if Result = 0 then
+        Result := NativeUInt(LoadLibrary('libc.dylib'));
+    if Result = 0 then
+        Result := NativeUInt(LoadLibrary('cygwin1.dll'));
+    if Result = 0 then
+        Result := NativeUInt(LoadLibrary('msys-2.0.dll'));
 {$else}
     Result := LoadLibrary('libc.so.6');
     if Result = 0 then
         Result := LoadLibrary('libc.so');
+    if Result = 0 then
+        Result := LoadLibrary('libSystem.B.dylib');
+    if Result = 0 then
+        Result := LoadLibrary('libc.dylib');
+    if Result = 0 then
+        Result := LoadLibrary('cygwin1.dll');
+    if Result = 0 then
+        Result := LoadLibrary('msys-2.0.dll');
 {$endif}
 end;
 
 var
     StartDir: string;
     DirSetOK, DirRestoreOK: boolean;
-{$if defined(FPC) and not defined(GPC_COMPILER)}
-    Handle: TLibHandle;
-    ProcPtr: Pointer;
-{$else}
-    Handle: NativeUInt;
-    ProcPtr: NativeUInt;
-{$endif}
-    DynLibOK: boolean;
 begin
     StartDir := GetCurrentDir;
     DirSetOK := False;
@@ -111,31 +119,6 @@ begin
     WriteLn('EnvAfter=', GetEnvironmentVariable(EnvVarName));
 
     WriteLn('PIDValid=', BoolStr(GetProcessID > 0));
-
-{$ifdef MSWINDOWS}
-    Handle := LoadLibrary(TestLib);
-{$else}
-    {$if defined(FPC) and not defined(GPC_COMPILER)}
-    Handle := TLibHandle(LoadUnixLibrary());
-    {$else}
-    Handle := LoadUnixLibrary();
-    {$endif}
-{$endif}
-    DynLibOK := False;
-if Handle <> 0 then
-begin
-{$ifdef MSWINDOWS}
-    ProcPtr := GetProcedureAddress(Handle, 'GetTickCount');
-{$else}
-        ProcPtr := GetProcedureAddress(Handle, 'strlen');
-{$endif}
-{$if defined(FPC) and not defined(GPC_COMPILER)}
-        DynLibOK := (ProcPtr <> nil) and FreeLibrary(Handle);
-{$else}
-        DynLibOK := (ProcPtr <> 0) and FreeLibrary(Handle);
-{$endif}
-    end;
-    WriteLn('DynLib=', BoolStr(DynLibOK));
 
     if StartDir <> '' then
         DirRestoreOK := SetCurrentDir(StartDir);
