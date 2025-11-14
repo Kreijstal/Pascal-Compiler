@@ -1302,9 +1302,25 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    int is_array_expr = (arg_expr != NULL && arg_expr->is_array_expr);
-    int is_dynamic_array = (is_array_expr && arg_expr->array_is_dynamic);
-    int is_static_array = (is_array_expr && !arg_expr->array_is_dynamic);
+
+  int is_array_expr = (arg_expr != NULL && arg_expr->is_array_expr);
+    int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+    int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
+
+    /* For static arrays, convert Length() to a compile-time constant */
+    if (error_count == 0 && is_static_array)
+    {
+        long long length = arg_expr->array_upper_bound - arg_expr->array_lower_bound + 1;
+        
+        /* Convert this function call into an integer literal expression */
+        semcheck_reset_function_call_cache(expr);
+        expr->type = EXPR_INUM;
+        expr->expr_data.i_num = length;
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
+
 
     const char *mangled_name = NULL;
     if (error_count == 0 && arg_type == STRING_TYPE)

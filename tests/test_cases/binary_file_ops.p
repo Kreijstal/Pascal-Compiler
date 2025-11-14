@@ -23,7 +23,8 @@ end;
 procedure Cleanup;
 begin
   if FileExists(FileName) then
-    DeleteFile(FileName);
+    if not DeleteFile(FileName) then
+      WriteLn('Warning: Failed to delete file');
 end;
 
 var
