@@ -5,6 +5,7 @@ uses SysUtils;
 var
   F: file of Longint;
   V: Longint;
+  Count: Longint;
 begin
   Writeln('[CASE12] begin');
   Assign(F, 'dbg_case12.bin');
@@ -20,9 +21,11 @@ begin
   Writeln('[CASE12] inplace update IORes=', IOResult);
   Close(F);
   Reset(F);
-  while not EOF(F) do
+  while True do
   begin
-    BlockRead(F, V, 1);
+    BlockRead(F, V, 1, Count);
+    if Count = 0 then
+      Break;
     Writeln('[CASE12] value=', V, ' IORes=', IOResult);
   end;
   Close(F);

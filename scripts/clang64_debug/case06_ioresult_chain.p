@@ -21,9 +21,11 @@ begin
   Writeln('[CASE06] close IORes=', IOResult);
   Reset(F);
   Writeln('[CASE06] reset IORes=', IOResult);
-  while not EOF(F) do
+  while True do
   begin
     BlockRead(F, V, 1, Count);
+    if Count = 0 then
+      Break;
     Writeln('[CASE06] read value=', V, ' count=', Count, ' IORes=', IOResult);
   end;
   Close(F);

@@ -5,6 +5,7 @@ uses SysUtils;
 var
   F: file of Longint;
   V: Longint;
+  Count: Longint;
 begin
   Writeln('[CASE10] begin');
   Assign(F, 'dbg_case10.bin');
@@ -13,15 +14,25 @@ begin
   V := 5; BlockWrite(F, V, 1);
   Close(F);
   Reset(F);
-  Seek(F, FileSize(F));
+  V := 0;
+  Count := 0;
+  while True do
+  begin
+    BlockRead(F, V, 1, Count);
+    if Count = 0 then
+      Break;
+  end;
+  Seek(F, FilePos(F));
   V := 99;
   BlockWrite(F, V, 1);
   Writeln('[CASE10] append style write IORes=', IOResult);
   Close(F);
   Reset(F);
-  while not EOF(F) do
+  while True do
   begin
-    BlockRead(F, V, 1);
+    BlockRead(F, V, 1, Count);
+    if Count = 0 then
+      Break;
     Writeln('[CASE10] value=', V, ' IORes=', IOResult);
   end;
   Close(F);
