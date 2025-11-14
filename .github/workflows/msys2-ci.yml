@@ -47,6 +47,11 @@ jobs:
         rm -rf builddir/failing-tests
         meson test -v -C builddir
 
+    - name: Run clang64 debug suite (optional)
+      if: matrix.sys == 'CLANG64' && env.GPC_CI_DEBUG_MODE == 'typedfiles' && (success() || failure())
+      shell: msys2 {0}
+      run: python scripts/ci_debug.py --mode typedfiles
+
     - name: Upload meson logs (on failure)
       if: failure()
       uses: actions/upload-artifact@v4
@@ -55,4 +60,5 @@ jobs:
         path: |
           builddir/meson-logs/
           builddir/failing-tests/
+          builddir/debug/clang64/logs/
         if-no-files-found: ignore
