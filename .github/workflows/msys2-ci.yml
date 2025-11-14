@@ -8,6 +8,8 @@ on:
 
 jobs:
   msys2-build-test:
+    env:
+      GPC_CI_DEBUG_MODE: typedfiles
     strategy:
       fail-fast: false
       matrix:
