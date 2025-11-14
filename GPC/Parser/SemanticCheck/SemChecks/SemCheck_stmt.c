@@ -1936,7 +1936,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         while (cur != NULL && match_count == 0)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate->hash_type == HASHTYPE_PROCEDURE && 
+            if ((candidate->hash_type == HASHTYPE_PROCEDURE ||
+                 candidate->hash_type == HASHTYPE_FUNCTION) &&
                 candidate->id != NULL && pascal_identifier_equals(candidate->id, proc_id))
             {
                 /* Check if parameter count matches */
@@ -1982,7 +1983,9 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         else
             stmt->stmt_data.procedure_call_data.mangled_id = NULL;
         if (stmt->stmt_data.procedure_call_data.mangled_id == NULL &&
-            resolved_proc->hash_type == HASHTYPE_PROCEDURE && resolved_proc->id != NULL)
+            (resolved_proc->hash_type == HASHTYPE_PROCEDURE ||
+             resolved_proc->hash_type == HASHTYPE_FUNCTION) &&
+            resolved_proc->id != NULL)
         {
             /* Ensure direct calls have a concrete target name even without external alias */
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->id);
@@ -2063,9 +2066,10 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             ++return_val;
         }
         if(sym_return->hash_type != HASHTYPE_PROCEDURE &&
-            sym_return->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
+            sym_return->hash_type != HASHTYPE_BUILTIN_PROCEDURE &&
+            sym_return->hash_type != HASHTYPE_FUNCTION)
         {
-            fprintf(stderr, "Error on line %d, expected %s to be a procedure or builtin!\n\n",
+            fprintf(stderr, "Error on line %d, expected %s to be a procedure, function, or builtin!\n\n",
                 stmt->line_num, proc_id);
 
             ++return_val;

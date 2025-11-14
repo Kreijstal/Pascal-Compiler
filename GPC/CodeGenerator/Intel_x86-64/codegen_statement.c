@@ -4187,6 +4187,35 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
     }
 
+    if(call_hash_type == HASHTYPE_FUNCTION)
+    {
+        struct Expression *call_expr = mk_functioncall(stmt->line_num,
+            stmt->stmt_data.procedure_call_data.id != NULL ?
+                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
+            stmt->stmt_data.procedure_call_data.expr_args);
+        if (call_expr == NULL)
+            return inst_list;
+
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            call_expr->expr_data.function_call_data.mangled_id =
+                strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+        }
+        call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
+        call_expr->expr_data.function_call_data.call_gpc_type =
+            stmt->stmt_data.procedure_call_data.call_gpc_type;
+        call_expr->expr_data.function_call_data.is_call_info_valid =
+            stmt->stmt_data.procedure_call_data.is_call_info_valid;
+
+        Register_t *discard_reg = NULL;
+        inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
+        if (discard_reg != NULL)
+            free_reg(get_reg_stack(), discard_reg);
+        call_expr->expr_data.function_call_data.args_expr = NULL;
+        destroy_expr(call_expr);
+        return inst_list;
+    }
+
     if(call_hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         return codegen_builtin_proc(stmt, inst_list, ctx);

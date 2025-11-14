@@ -1302,6 +1302,8 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
+
+  int is_array_expr = (arg_expr != NULL && arg_expr->is_array_expr);
     int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
     int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
 
@@ -1319,11 +1321,39 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
+
     const char *mangled_name = NULL;
     if (error_count == 0 && arg_type == STRING_TYPE)
         mangled_name = "gpc_string_length";
     else if (error_count == 0 && is_dynamic_array)
         mangled_name = "__gpc_dynarray_length";
+    else if (error_count == 0 && is_static_array)
+    {
+        long long lower_bound = arg_expr->array_lower_bound;
+        long long upper_bound = arg_expr->array_upper_bound;
+        long long length_value = 0;
+        if (upper_bound >= lower_bound)
+            length_value = (upper_bound - lower_bound) + 1;
+
+        destroy_list(expr->expr_data.function_call_data.args_expr);
+        expr->expr_data.function_call_data.args_expr = NULL;
+        if (expr->expr_data.function_call_data.id != NULL)
+        {
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = NULL;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->type = EXPR_INUM;
+        expr->expr_data.i_num = length_value;
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
     else if (error_count == 0)
     {
         fprintf(stderr, "Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
@@ -1542,6 +1572,68 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
 
     *type_return = UNKNOWN_TYPE;
     return error_count;
+}
+
+static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int error_count = 0;
+    const char *mangled_name = NULL;
+
+    if (args == NULL)
+    {
+        mangled_name = "gpc_text_eoln_default";
+    }
+    else if (args->next == NULL)
+    {
+        struct Expression *file_expr = (struct Expression *)args->cur;
+        int file_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
+        if (file_type != TEXT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
+            error_count++;
+        }
+        else
+        {
+            mangled_name = "gpc_text_eoln";
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
+        error_count++;
+    }
+
+    if (error_count != 0 || mangled_name == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count != 0 ? error_count : 1;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for EOLN.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    expr->resolved_type = BOOL;
+    *type_return = BOOL;
+    return 0;
 }
 
 static void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr)
@@ -5260,6 +5352,8 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "EOF"))
         return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "EOLN"))
+        return semcheck_builtin_eoln(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "Low"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);
