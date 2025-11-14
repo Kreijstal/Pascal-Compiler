@@ -46,6 +46,8 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_ENUM;
         case FILE_TYPE:
             return HASHVAR_FILE;
+        case TEXT_TYPE:
+            return HASHVAR_TEXT;
         case ARRAY_OF_CONST_TYPE:
             return HASHVAR_ARRAY;
         default:
@@ -58,6 +60,9 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
     if (type_node == NULL)
         return HASHVAR_UNTYPED;
     
+    if (type_node->id != NULL && strcasecmp(type_node->id, "text") == 0)
+        return HASHVAR_TEXT;
+
     // If GpcType is available, extract VarType from it
     if (type_node->type != NULL) {
         if (type_node->type->kind == TYPE_KIND_PRIMITIVE) {

@@ -25,6 +25,12 @@ ListNode_t *codegen_record_access(struct Expression *, ListNode_t *, CodeGenCont
 ListNode_t *codegen_record_field_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_address_for_expr(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_args(ListNode_t*, ListNode_t *, CodeGenContext *ctx);
+ListNode_t *codegen_emit_class_cast_check(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx);
+ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *addr_reg);
+ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 
 int codegen_expr_is_addressable(const struct Expression *expr);
 

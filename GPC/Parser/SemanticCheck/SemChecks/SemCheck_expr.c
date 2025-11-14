@@ -69,6 +69,126 @@ static void semcheck_set_function_call_target(struct Expression *expr, HashNode_
     expr->expr_data.function_call_data.call_gpc_type = target->type;
     expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
+
+static struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
+    struct RecordType *record_info)
+{
+    if (symtab == NULL || record_info == NULL ||
+        record_info->parent_class_name == NULL)
+        return NULL;
+
+    HashNode_t *parent_node = NULL;
+    if (FindIdent(&parent_node, symtab, record_info->parent_class_name) == -1 ||
+        parent_node == NULL)
+        return NULL;
+
+    return hashnode_get_record_type(parent_node);
+}
+
+struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
+    struct RecordType *record_info, const char *property_name,
+    struct RecordType **owner_out)
+{
+    if (owner_out != NULL)
+        *owner_out = NULL;
+    if (symtab == NULL || record_info == NULL || property_name == NULL)
+        return NULL;
+
+    struct RecordType *current = record_info;
+    while (current != NULL)
+    {
+        ListNode_t *node = current->properties;
+        while (node != NULL)
+        {
+            if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
+            {
+                struct ClassProperty *property = (struct ClassProperty *)node->cur;
+                if (property->name != NULL &&
+                    pascal_identifier_equals(property->name, property_name))
+                {
+                    if (owner_out != NULL)
+                        *owner_out = current;
+                    return property;
+                }
+            }
+            node = node->next;
+        }
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+    return NULL;
+}
+
+struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out)
+{
+    if (owner_out != NULL)
+        *owner_out = NULL;
+    if (symtab == NULL || record_info == NULL || field_name == NULL)
+        return NULL;
+
+    struct RecordType *current = record_info;
+    while (current != NULL)
+    {
+        ListNode_t *field_node = current->fields;
+        while (field_node != NULL)
+        {
+            if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+            {
+                struct RecordField *field = (struct RecordField *)field_node->cur;
+                if (field->name != NULL && !record_field_is_hidden(field) &&
+                    pascal_identifier_equals(field->name, field_name))
+                {
+                    if (owner_out != NULL)
+                        *owner_out = current;
+                    return field;
+                }
+            }
+            field_node = field_node->next;
+        }
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+    return NULL;
+}
+
+HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name,
+    struct RecordType **owner_out)
+{
+    if (owner_out != NULL)
+        *owner_out = NULL;
+    if (symtab == NULL || record_info == NULL || method_name == NULL)
+        return NULL;
+
+    struct RecordType *current = record_info;
+    while (current != NULL)
+    {
+        if (current->type_id != NULL)
+        {
+            size_t class_len = strlen(current->type_id);
+            size_t method_len = strlen(method_name);
+            size_t total = class_len + 2 + method_len + 1;
+            char *candidate = (char *)malloc(total);
+            if (candidate == NULL)
+                return NULL;
+
+            snprintf(candidate, total, "%s__%s", current->type_id, method_name);
+
+            HashNode_t *method_node = NULL;
+            int find_result = FindIdent(&method_node, symtab, candidate);
+            free(candidate);
+
+            if (find_result != -1 && method_node != NULL)
+            {
+                if (owner_out != NULL)
+                    *owner_out = current;
+                return method_node;
+            }
+        }
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+    return NULL;
+}
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
 int semcheck_arrayaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
@@ -76,6 +196,15 @@ int semcheck_funccall(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_is_expr(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_as_expr(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
+static int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *property,
+    int line_num, int *type_out, struct RecordType **record_out);
+static int semcheck_transform_property_getter_call(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating,
+    HashNode_t *method_node);
 static void semcheck_clear_pointer_info(struct Expression *expr);
 static void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char *type_id);
 static int resolve_type_identifier(int *out_type, SymTab_t *symtab,
@@ -1173,13 +1302,57 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+
+  int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+  int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
+
+    /* For static arrays, convert Length() to a compile-time constant */
+    if (error_count == 0 && is_static_array)
+    {
+        long long length = arg_expr->array_upper_bound - arg_expr->array_lower_bound + 1;
+        
+        /* Convert this function call into an integer literal expression */
+        semcheck_reset_function_call_cache(expr);
+        expr->type = EXPR_INUM;
+        expr->expr_data.i_num = length;
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
+
 
     const char *mangled_name = NULL;
     if (error_count == 0 && arg_type == STRING_TYPE)
         mangled_name = "gpc_string_length";
     else if (error_count == 0 && is_dynamic_array)
         mangled_name = "__gpc_dynarray_length";
+    else if (error_count == 0 && is_static_array)
+    {
+        long long lower_bound = arg_expr->array_lower_bound;
+        long long upper_bound = arg_expr->array_upper_bound;
+        long long length_value = 0;
+        if (upper_bound >= lower_bound)
+            length_value = (upper_bound - lower_bound) + 1;
+
+        destroy_list(expr->expr_data.function_call_data.args_expr);
+        expr->expr_data.function_call_data.args_expr = NULL;
+        if (expr->expr_data.function_call_data.id != NULL)
+        {
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = NULL;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->type = EXPR_INUM;
+        expr->expr_data.i_num = length_value;
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
     else if (error_count == 0)
     {
         fprintf(stderr, "Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
@@ -1360,7 +1533,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         struct Expression *file_expr = (struct Expression *)args->cur;
         int file_type = UNKNOWN_TYPE;
         error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
-        if (file_type != FILE_TYPE)
+        if (file_type != TEXT_TYPE)
         {
             fprintf(stderr, "Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
@@ -1398,6 +1571,68 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
 
     *type_return = UNKNOWN_TYPE;
     return error_count;
+}
+
+static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int error_count = 0;
+    const char *mangled_name = NULL;
+
+    if (args == NULL)
+    {
+        mangled_name = "gpc_text_eoln_default";
+    }
+    else if (args->next == NULL)
+    {
+        struct Expression *file_expr = (struct Expression *)args->cur;
+        int file_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
+        if (file_type != TEXT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
+            error_count++;
+        }
+        else
+        {
+            mangled_name = "gpc_text_eoln";
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
+        error_count++;
+    }
+
+    if (error_count != 0 || mangled_name == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count != 0 ? error_count : 1;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for EOLN.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    expr->resolved_type = BOOL;
+    *type_return = BOOL;
+    return 0;
 }
 
 static void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr)
@@ -2153,6 +2388,7 @@ static long long sizeof_from_type_tag(int type_tag)
         case ENUM_TYPE:
             return 4;
         case FILE_TYPE:
+        case TEXT_TYPE:
             return POINTER_SIZE_BYTES;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
@@ -2415,7 +2651,8 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
         if (cur->type == LIST_RECORD_FIELD)
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field != NULL && field->name != NULL &&
+            if (field != NULL && !record_field_is_hidden(field) &&
+                field->name != NULL &&
                 pascal_identifier_equals(field->name, field_name))
             {
                 if (out_field != NULL)
@@ -2774,6 +3011,12 @@ void set_hash_meta(HashNode_t *node, int mutating)
     }
 }
 
+int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
+    long long *size_out, int line_num)
+{
+    return sizeof_from_record(symtab, record, size_out, 0, line_num);
+}
+
 /* Verifies a type is an INT_TYPE or REAL_TYPE */
 int is_type_ir(int *type)
 {
@@ -2908,6 +3151,117 @@ static int semcheck_typecast(int *type_return,
     return error_count;
 }
 
+static int semcheck_is_expr(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_IS);
+
+    int error_count = 0;
+    struct Expression *value_expr = expr->expr_data.is_data.expr;
+    if (value_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, \"is\" operator requires a value expression.\n\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int value_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+
+    struct RecordType *value_record = value_expr->record_type;
+    if (value_type != RECORD_TYPE || value_record == NULL || !record_type_is_class(value_record))
+    {
+        fprintf(stderr, "Error on line %d, \"is\" operator requires a class instance on the left-hand side.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    int target_type = expr->expr_data.is_data.target_type;
+    struct RecordType *target_record = NULL;
+    if (expr->expr_data.is_data.target_type_id != NULL)
+    {
+        target_record = semcheck_lookup_record_type(symtab,
+            expr->expr_data.is_data.target_type_id);
+    }
+    if (target_record == NULL || !record_type_is_class(target_record))
+    {
+        fprintf(stderr, "Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+    target_type = RECORD_TYPE;
+
+    expr->expr_data.is_data.target_type = target_type;
+    expr->expr_data.is_data.target_record_type = target_record;
+    expr->resolved_type = BOOL;
+    *type_return = BOOL;
+    return error_count;
+}
+
+static int semcheck_as_expr(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    (void)mutating;
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_AS);
+
+    int error_count = 0;
+    struct Expression *value_expr = expr->expr_data.as_data.expr;
+    if (value_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, \"as\" operator requires a value expression.\n\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    int value_type = UNKNOWN_TYPE;
+    error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+
+    struct RecordType *value_record = value_expr->record_type;
+    if (value_type != RECORD_TYPE || value_record == NULL || !record_type_is_class(value_record))
+    {
+        fprintf(stderr, "Error on line %d, \"as\" operator requires a class instance on the left-hand side.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+
+    int target_type = expr->expr_data.as_data.target_type;
+    struct RecordType *target_record = NULL;
+    if (expr->expr_data.as_data.target_type_id != NULL)
+    {
+        target_record = semcheck_lookup_record_type(symtab,
+            expr->expr_data.as_data.target_type_id);
+    }
+    if (target_record == NULL || !record_type_is_class(target_record))
+    {
+        fprintf(stderr, "Error on line %d, \"as\" operator requires a class type on the right-hand side.\n\n",
+            expr->line_num);
+        ++error_count;
+    }
+    target_type = RECORD_TYPE;
+
+    expr->expr_data.as_data.target_type = target_type;
+    expr->expr_data.as_data.target_record_type = target_record;
+    expr->record_type = target_record;
+    expr->resolved_type = RECORD_TYPE;
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    expr->resolved_gpc_type = create_record_type(target_record);
+    *type_return = RECORD_TYPE;
+    return error_count;
+}
+
 static int semcheck_pointer_deref(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
 {
@@ -3000,6 +3354,115 @@ static int semcheck_pointer_deref(int *type_return,
 
     *type_return = target_type;
     return error_count;
+}
+
+static int semcheck_property_type_info(SymTab_t *symtab, struct ClassProperty *property,
+    int line_num, int *type_out, struct RecordType **record_out)
+{
+    if (type_out == NULL || property == NULL)
+        return 1;
+
+    int resolved_type = property->type;
+    if (property->type_id != NULL)
+    {
+        if (resolve_type_identifier(&resolved_type, symtab, property->type_id, line_num) != 0)
+        {
+            fprintf(stderr, "Error on line %d, unable to resolve type for property %s.\n\n",
+                line_num, property->name != NULL ? property->name : "<unnamed>");
+            return 1;
+        }
+    }
+
+    if (resolved_type == UNKNOWN_TYPE && property->type_id == NULL)
+    {
+        fprintf(stderr, "Error on line %d, property %s must specify a type.\n\n",
+            line_num, property->name != NULL ? property->name : "<unnamed>");
+        return 1;
+    }
+
+    *type_out = resolved_type;
+    if (record_out != NULL)
+    {
+        if (resolved_type == RECORD_TYPE && property->type_id != NULL)
+            *record_out = semcheck_lookup_record_type(symtab, property->type_id);
+        else
+            *record_out = NULL;
+    }
+
+    return 0;
+}
+
+static int semcheck_transform_property_getter_call(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating,
+    HashNode_t *method_node)
+{
+    if (expr == NULL || expr->type != EXPR_RECORD_ACCESS || method_node == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    struct Expression *object_expr = expr->expr_data.record_access_data.record_expr;
+    if (object_expr == NULL)
+    {
+        fprintf(stderr, "Error on line %d, property getter requires an object instance.\n\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->expr_data.record_access_data.record_expr = NULL;
+    if (expr->expr_data.record_access_data.field_id != NULL)
+    {
+        free(expr->expr_data.record_access_data.field_id);
+        expr->expr_data.record_access_data.field_id = NULL;
+    }
+
+    ListNode_t *arg_node = CreateListNode(object_expr, LIST_EXPR);
+    if (arg_node == NULL)
+    {
+        fprintf(stderr, "Error on line %d, unable to allocate getter argument list.\n\n",
+            expr->line_num);
+        expr->expr_data.record_access_data.record_expr = object_expr;
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    char *id_copy = method_node->id != NULL ? strdup(method_node->id) : NULL;
+    char *mangled_copy = NULL;
+    if (method_node->mangled_id != NULL)
+        mangled_copy = strdup(method_node->mangled_id);
+
+    if ((method_node->id != NULL && id_copy == NULL) ||
+        (method_node->mangled_id != NULL && mangled_copy == NULL))
+    {
+        fprintf(stderr, "Error on line %d, unable to prepare property getter call.\n\n",
+            expr->line_num);
+        free(id_copy);
+        free(mangled_copy);
+        free(arg_node);
+        expr->expr_data.record_access_data.record_expr = object_expr;
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    expr->type = EXPR_FUNCTION_CALL;
+    expr->expr_data.function_call_data.id = id_copy;
+    expr->expr_data.function_call_data.mangled_id = mangled_copy;
+    expr->expr_data.function_call_data.args_expr = arg_node;
+    expr->expr_data.function_call_data.resolved_func = NULL;
+    expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
+    expr->expr_data.function_call_data.call_gpc_type = method_node->type;
+    expr->expr_data.function_call_data.is_call_info_valid = 1;
+    expr->record_type = NULL;
+    expr->resolved_type = UNKNOWN_TYPE;
+    expr->is_array_expr = 0;
+    expr->array_element_type = UNKNOWN_TYPE;
+    expr->array_element_type_id = NULL;
+    expr->array_element_record_type = NULL;
+    expr->array_element_size = 0;
+
+    return semcheck_expr_main(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
 static int semcheck_recordaccess(int *type_return,
@@ -3190,9 +3653,150 @@ static int semcheck_recordaccess(int *type_return,
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, 0) != 0 || field_desc == NULL)
     {
+        if (record_type_is_class(record_info))
+        {
+            struct RecordType *property_owner = NULL;
+            struct ClassProperty *property = semcheck_find_class_property(symtab,
+                record_info, field_id, &property_owner);
+            if (property != NULL)
+            {
+                if (mutating == NO_MUTATE)
+                {
+                    if (property->read_accessor == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d, property %s is write-only.\n\n",
+                            expr->line_num, property->name != NULL ? property->name : field_id);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+
+                    struct RecordField *read_field = semcheck_find_class_field(symtab,
+                        record_info, property->read_accessor, NULL);
+                    if (read_field != NULL &&
+                        resolve_record_field(symtab, record_info, property->read_accessor,
+                            &field_desc, &field_offset, expr->line_num, 0) == 0 &&
+                        field_desc != NULL)
+                    {
+                        if (!pascal_identifier_equals(field_id, property->read_accessor))
+                        {
+                            free(expr->expr_data.record_access_data.field_id);
+                            expr->expr_data.record_access_data.field_id = strdup(property->read_accessor);
+                            if (expr->expr_data.record_access_data.field_id == NULL)
+                            {
+                                fprintf(stderr, "Error on line %d, failed to allocate property field name.\n\n",
+                                    expr->line_num);
+                                *type_return = UNKNOWN_TYPE;
+                                return error_count + 1;
+                            }
+                        }
+                        goto FIELD_RESOLVED;
+                    }
+
+                    HashNode_t *getter_node = semcheck_find_class_method(symtab,
+                        property_owner, property->read_accessor, NULL);
+                    if (getter_node == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d, getter %s for property %s not found.\n\n",
+                            expr->line_num,
+                            property->read_accessor != NULL ? property->read_accessor : "<unknown>",
+                            property->name != NULL ? property->name : field_id);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+                    if (getter_node->hash_type != HASHTYPE_FUNCTION)
+                    {
+                        fprintf(stderr, "Error on line %d, property getter %s must be a function.\n\n",
+                            expr->line_num, property->read_accessor);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+
+                    return semcheck_transform_property_getter_call(type_return, symtab,
+                        expr, max_scope_lev, mutating, getter_node);
+                }
+                else
+                {
+                    if (property->write_accessor == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d, property %s is read-only.\n\n",
+                            expr->line_num, property->name != NULL ? property->name : field_id);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+
+                    struct RecordField *write_field = semcheck_find_class_field(symtab,
+                        record_info, property->write_accessor, NULL);
+                    if (write_field != NULL &&
+                        resolve_record_field(symtab, record_info, property->write_accessor,
+                            &field_desc, &field_offset, expr->line_num, 0) == 0 &&
+                        field_desc != NULL)
+                    {
+                        if (!pascal_identifier_equals(field_id, property->write_accessor))
+                        {
+                            free(expr->expr_data.record_access_data.field_id);
+                            expr->expr_data.record_access_data.field_id = strdup(property->write_accessor);
+                            if (expr->expr_data.record_access_data.field_id == NULL)
+                            {
+                                fprintf(stderr, "Error on line %d, failed to allocate property field name.\n\n",
+                                    expr->line_num);
+                                *type_return = UNKNOWN_TYPE;
+                                return error_count + 1;
+                            }
+                        }
+                        goto FIELD_RESOLVED;
+                    }
+
+                    if (mutating == BOTH_MUTATE_REFERENCE)
+                    {
+                        fprintf(stderr, "Error on line %d, property %s cannot be passed as a var parameter.\n\n",
+                            expr->line_num, property->name != NULL ? property->name : field_id);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+
+                    HashNode_t *setter_node = semcheck_find_class_method(symtab,
+                        property_owner, property->write_accessor, NULL);
+                    if (setter_node == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d, setter %s for property %s not found.\n\n",
+                            expr->line_num,
+                            property->write_accessor != NULL ? property->write_accessor : "<unknown>",
+                            property->name != NULL ? property->name : field_id);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+                    if (setter_node->hash_type != HASHTYPE_PROCEDURE)
+                    {
+                        fprintf(stderr, "Error on line %d, property setter %s must be a procedure.\n\n",
+                            expr->line_num, property->write_accessor);
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+
+                    int property_type = UNKNOWN_TYPE;
+                    struct RecordType *property_record = NULL;
+                    if (semcheck_property_type_info(symtab, property, expr->line_num,
+                            &property_type, &property_record) != 0)
+                    {
+                        *type_return = UNKNOWN_TYPE;
+                        return error_count + 1;
+                    }
+
+                    expr->record_type = (property_type == RECORD_TYPE) ? property_record : NULL;
+                    expr->resolved_type = property_type;
+                    *type_return = property_type;
+                    return error_count;
+                }
+            }
+        }
+
+        fprintf(stderr, "Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
     }
+
+FIELD_RESOLVED:
+    expr->expr_data.record_access_data.field_offset = field_offset;
 
     expr->expr_data.record_access_data.field_offset = field_offset;
 
@@ -3373,6 +3977,29 @@ static int semcheck_addressof(int *type_return,
         pointed_to_type = create_primitive_type(STRING_TYPE);
     } else if (inner_type == RECORD_TYPE && record_info != NULL) {
         pointed_to_type = create_record_type(record_info);
+    } else if (inner_type == PROCEDURE) {
+        int proc_type_owned = 0;
+        GpcType *proc_type = semcheck_resolve_expression_gpc_type(symtab, inner,
+            max_scope_lev, NO_MUTATE, &proc_type_owned);
+        if (proc_type != NULL)
+        {
+            if (!proc_type_owned)
+                gpc_type_retain(proc_type);
+            pointed_to_type = proc_type;
+        }
+
+        if (inner->type == EXPR_VAR_ID)
+        {
+            HashNode_t *proc_symbol = NULL;
+            if (FindIdent(&proc_symbol, symtab, inner->expr_data.id) >= 0 &&
+                proc_symbol != NULL && proc_symbol->hash_type == HASHTYPE_PROCEDURE)
+            {
+                expr->expr_data.addr_data.expr = NULL;
+                destroy_expr(inner);
+                expr->type = EXPR_ADDR_OF_PROC;
+                expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+            }
+        }
     }
     /* For other types, we could add more conversions here */
     
@@ -3586,6 +4213,11 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
                         if (field_cursor->type == LIST_RECORD_FIELD)
                         {
                             struct RecordField *field = (struct RecordField *)field_cursor->cur;
+                            if (field != NULL && record_field_is_hidden(field))
+                            {
+                                field_cursor = field_cursor->next;
+                                continue;
+                            }
                             if (field != NULL)
                             {
                                 if (field->name != NULL && strcmp(field->name, field_name) == 0)
@@ -3853,6 +4485,12 @@ int semcheck_expr_main(int *type_return,
             break;
         case EXPR_TYPECAST:
             return_val += semcheck_typecast(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_IS:
+            return_val += semcheck_is_expr(type_return, symtab, expr, max_scope_lev, mutating);
+            break;
+        case EXPR_AS:
+            return_val += semcheck_as_expr(type_return, symtab, expr, max_scope_lev, mutating);
             break;
 
         /*** BASE CASES ***/
@@ -4462,18 +5100,25 @@ int semcheck_varid(int *type_return,
             semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
         else
             semcheck_clear_array_info(expr);
+        expr->resolved_gpc_type = hash_return->type;
+
         if (*type_return == POINTER_TYPE)
         {
             int subtype = UNKNOWN_TYPE;
             const char *type_id = NULL;
             struct TypeAlias *alias = get_type_alias_from_node(hash_return);
-            if (alias != NULL)
+            if (alias != NULL && alias->is_pointer)
             {
                 subtype = alias->pointer_type;
                 type_id = alias->pointer_type_id;
             }
             
-            /* If subtype is unknown but we have a type_id, resolve it */
+            if (subtype == UNKNOWN_TYPE && hash_return->type != NULL &&
+                gpc_type_is_pointer(hash_return->type))
+            {
+                subtype = gpc_type_get_pointer_subtype_tag(hash_return->type);
+            }
+            
             if (subtype == UNKNOWN_TYPE && type_id != NULL)
             {
                 HashNode_t *target_node = NULL;
@@ -4491,12 +5136,18 @@ int semcheck_varid(int *type_return,
                 if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) != -1 && target_node != NULL)
                     expr->record_type = get_record_type_from_node(target_node);
             }
+            else if (hash_return->type != NULL && gpc_type_is_pointer(hash_return->type))
+            {
+                GpcType *points_to = hash_return->type->info.points_to;
+                if (points_to != NULL && gpc_type_is_record(points_to))
+                    expr->record_type = gpc_type_get_record(points_to);
+            }
         }
         if (*type_return == RECORD_TYPE)
         {
             expr->record_type = get_record_type_from_node(hash_return);
         }
-        else
+        else if (*type_return != POINTER_TYPE)
             expr->record_type = NULL;
     }
 
@@ -4700,6 +5351,8 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "EOF"))
         return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "EOLN"))
+        return semcheck_builtin_eoln(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "Low"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);
@@ -4914,20 +5567,6 @@ int semcheck_funccall(int *type_return,
     }
 
     int final_status = 0;
-
-    int match_count = 0;
-
-    if (overload_candidates != NULL)
-    {
-        ListNode_t *cur = overload_candidates;
-        while(cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
-                match_count++;
-            cur = cur->next;
-        }
-    }
 
     HashNode_t *best_match = NULL;
     int best_score = 9999;

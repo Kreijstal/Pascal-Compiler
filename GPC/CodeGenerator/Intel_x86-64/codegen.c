@@ -33,6 +33,12 @@
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
+static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
+    CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
+static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
+    StackNode_t *file_node, long long element_size, int element_hash_tag);
+static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
+    long long *element_size_out, int *element_hash_tag_out);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -40,23 +46,13 @@ static inline int node_is_record_type(HashNode_t *node)
     return hashnode_is_record(node);
 }
 
-/* Helper function to get the primitive type tag from a node */
-static inline int get_primitive_tag_from_node(HashNode_t *node)
-{
-    if (node == NULL || node->type == NULL)
-        return UNKNOWN_TYPE;
-
-    if (node->type->kind == TYPE_KIND_PRIMITIVE)
-        return gpc_type_get_primitive_tag(node->type);
-
-    return UNKNOWN_TYPE;
-}
-
 /* Helper function to check if a node is a file type */
 static inline int node_is_file_type(HashNode_t *node)
 {
-    return (node != NULL && node->type != NULL &&
-            gpc_type_equals_tag(node->type, FILE_TYPE));
+    if (node == NULL || node->type == NULL)
+        return 0;
+    return gpc_type_equals_tag(node->type, FILE_TYPE) ||
+        gpc_type_equals_tag(node->type, TEXT_TYPE);
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -65,10 +61,36 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+static inline int node_is_class_type(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+    if (!node_is_record_type(node))
+        return 0;
+    struct RecordType *record = get_record_type_from_node(node);
+    return record_type_is_class(record);
+}
+
 /* Helper function to get TypeAlias from HashNode */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     return hashnode_get_type_alias(node);
+}
+
+static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *symtab)
+{
+    if (node == NULL)
+        return NULL;
+    if (node_is_record_type(node) && node->id != NULL)
+        return node->id;
+    struct TypeAlias *alias = get_type_alias_from_node(node);
+    if (alias != NULL && alias->target_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *target = NULL;
+        if (FindIdent(&target, symtab, alias->target_type_id) != -1 && target != NULL)
+            return codegen_resolve_record_type_name(target, symtab);
+    }
+    return NULL;
 }
 
 /* Allocate the next available integer argument register (general purpose). */
@@ -125,6 +147,7 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
                 case FILE_TYPE:
+                case TEXT_TYPE:
                     return 8;
                 case SET_TYPE:
                 {
@@ -918,9 +941,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     if (type_decls == NULL)
         return;
     
-    /* VMTs are generated as read-only data structures */
+    /* RTTI metadata and VMTs are generated as read-only data structures */
     fprintf(ctx->output_file, "\n");
-    fprintf(ctx->output_file, "# Virtual Method Tables (VMT)\n");
+    fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     
     /* Iterate through all type declarations */
@@ -932,23 +955,41 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
                 struct RecordType *record_info = type_tree->tree_data.type_decl_data.info.record;
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
-                
-                /* Generate VMT if this class has virtual methods */
-                if (record_info != NULL && record_info->methods != NULL && type_name != NULL) {
-                    fprintf(ctx->output_file, "\n# VMT for class %s\n", type_name);
+                const char *class_label = (record_info != NULL && record_info->type_id != NULL) ?
+                    record_info->type_id : type_name;
+
+                if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
+                    fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl %s_VMT\n", type_name);
-                    fprintf(ctx->output_file, "%s_VMT:\n", type_name);
-                    
-                    /* Generate VMT entries for each method */
-                    ListNode_t *method_node = record_info->methods;
-                    while (method_node != NULL) {
-                        struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
-                        if (method != NULL && method->mangled_name != NULL) {
-                            /* Each VMT entry is a pointer to the method */
-                            fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
+                    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
+                    fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
+                    if (record_info->parent_class_name != NULL)
+                        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
+                    else
+                        fprintf(ctx->output_file, "\t.quad\t0\n");
+
+                    char name_label[256];
+                    snprintf(name_label, sizeof(name_label), "__gpc_typeinfo_name_%s", class_label);
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
+                    if (record_info->methods != NULL)
+                        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
+                    else
+                        fprintf(ctx->output_file, "\t.quad\t0\n");
+                    fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, class_label);
+
+                    if (record_info->methods != NULL) {
+                        fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
+                        fprintf(ctx->output_file, "\t.align 8\n");
+                        fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
+                        fprintf(ctx->output_file, "%s_VMT:\n", class_label);
+                        ListNode_t *method_node = record_info->methods;
+                        while (method_node != NULL) {
+                            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                            if (method != NULL && method->mangled_name != NULL) {
+                                fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
+                            }
+                            method_node = method_node->next;
                         }
-                        method_node = method_node->next;
                     }
                 }
             }
@@ -1246,6 +1287,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             case STRING_TYPE:
                             case POINTER_TYPE:
                             case FILE_TYPE:
+                            case TEXT_TYPE:
                                 element_size = 8;
                                 break;
                             case CHAR_TYPE:
@@ -1380,6 +1422,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         case REAL_TYPE:
                         case STRING_TYPE:
                         case FILE_TYPE:
+                        case TEXT_TYPE:
                             element_size = 8;
                             break;
                         case BOOL:
@@ -2214,7 +2257,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     #endif
     Tree_t *arg_decl;
     int type;
-    int arg_num = 0;
     ListNode_t *arg_ids;
     const char *arg_reg;
     char buffer[50];
@@ -2354,7 +2396,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             free_reg(get_reg_stack(), stack_value_reg);
 
                         arg_ids = arg_ids->next;
-                        ++arg_num;
                         continue;
                     }
 
@@ -2424,7 +2465,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             free_reg(get_reg_stack(), stack_value_reg);
                     }
                     arg_ids = arg_ids->next;
-                    ++arg_num;
                 }
                 break;
             case TREE_ARR_DECL:
@@ -2458,7 +2498,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (stack_value_reg != NULL)
                         free_reg(get_reg_stack(), stack_value_reg);
                     arg_ids = arg_ids->next;
-                    ++arg_num;
                 }
                 break;
             default:
@@ -2471,6 +2510,146 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return inst_list;
+}
+
+static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
+    CodeGenContext *ctx, StackNode_t *var_node, const char *type_name)
+{
+    (void)ctx;
+    if (var_node == NULL || type_name == NULL || type_name[0] == '\0' || var_node->is_reference)
+        return inst_list;
+
+    char typeinfo_label[512];
+    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_TYPEINFO", type_name);
+
+    char buffer[1024];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rax\n", typeinfo_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    if (var_node->is_static)
+    {
+        const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s(%%rip)\n", label);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", var_node->offset);
+    }
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
+    StackNode_t *file_node, long long element_size, int element_hash_tag)
+{
+    if (file_node == NULL || element_size <= 0)
+        return inst_list;
+
+    const char *slot_reg = current_arg_reg64(0);
+    const char *size_reg = current_arg_reg64(1);
+    const char *tag_reg = current_arg_reg32(2);
+    if (slot_reg == NULL || size_reg == NULL || tag_reg == NULL)
+        return inst_list;
+
+    char buffer[256];
+    if (file_node->is_static)
+    {
+        const char *label = (file_node->static_label != NULL) ?
+            file_node->static_label : file_node->label;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, slot_reg);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            file_node->offset, slot_reg);
+    }
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", element_size, size_reg);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", element_hash_tag, tag_reg);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = add_inst(inst_list, "\tcall\tgpc_tfile_configure\n");
+    return inst_list;
+}
+
+static int codegen_type_tag_to_hashvar(int parser_tag)
+{
+    switch (parser_tag)
+    {
+        case CHAR_TYPE:
+            return HASHVAR_CHAR;
+        case BOOL:
+            return HASHVAR_BOOLEAN;
+        case LONGINT_TYPE:
+            return HASHVAR_LONGINT;
+        case REAL_TYPE:
+            return HASHVAR_REAL;
+        case INT_TYPE:
+            return HASHVAR_INTEGER;
+        default:
+            return HASHVAR_INTEGER;
+    }
+}
+
+static long long codegen_type_tag_size(int parser_tag)
+{
+    switch (parser_tag)
+    {
+        case CHAR_TYPE:
+        case BOOL:
+            return 1;
+        case LONGINT_TYPE:
+            return 8;
+        case REAL_TYPE:
+            return 8;
+        case INT_TYPE:
+        default:
+            return 4;
+    }
+}
+
+static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
+    long long *element_size_out, int *element_hash_tag_out)
+{
+    if (alias == NULL || !alias->is_file || element_size_out == NULL || element_hash_tag_out == NULL)
+        return 0;
+
+    int parser_tag = alias->file_type;
+    HashNode_t *type_node = NULL;
+    if (parser_tag == UNKNOWN_TYPE && alias->file_type_id != NULL && symtab != NULL)
+    {
+        if (FindIdent(&type_node, symtab, (char *)alias->file_type_id) >= 0 && type_node != NULL)
+        {
+            if (type_node->type != NULL)
+                parser_tag = gpc_type_get_primitive_tag(type_node->type);
+        }
+    }
+
+    if (parser_tag == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL)
+        parser_tag = gpc_type_get_primitive_tag(type_node->type);
+
+    if (parser_tag == UNKNOWN_TYPE)
+        parser_tag = INT_TYPE;
+
+    long long elem_size = codegen_type_tag_size(parser_tag);
+    int hash_tag = codegen_type_tag_to_hashvar(parser_tag);
+
+    if (type_node != NULL && type_node->type != NULL)
+    {
+        long long resolved_size = gpc_type_sizeof(type_node->type);
+        if (resolved_size > 0)
+            elem_size = resolved_size;
+
+        int resolved_tag = gpc_type_get_primitive_tag(type_node->type);
+        if (resolved_tag != UNKNOWN_TYPE)
+            hash_tag = codegen_type_tag_to_hashvar(resolved_tag);
+    }
+
+    *element_size_out = elem_size;
+    *element_hash_tag_out = hash_tag;
+    return 1;
 }
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
@@ -2517,8 +2696,10 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             /* Initialize FILE variables to NULL */
-            if (type_node != NULL && node_is_file_type(type_node))
+            if ((type_node != NULL && node_is_file_type(type_node)) ||
+                (type_node == NULL && decl->tree_data.var_decl_data.type == FILE_TYPE))
             {
+                struct TypeAlias *decl_inline_alias = decl->tree_data.var_decl_data.inline_type_alias;
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)
                 {
@@ -2529,12 +2710,49 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
                         inst_list = add_inst(inst_list, buffer);
+
+                        long long file_elem_size = 0;
+                        int file_elem_hash = HASHVAR_INTEGER;
+                        struct TypeAlias *file_alias = get_type_alias_from_node(type_node);
+                        if (file_alias == NULL && decl_inline_alias != NULL)
+                            file_alias = decl_inline_alias;
+                        if (file_alias == NULL || !file_alias->is_file)
+                        {
+                            HashNode_t *var_hash = NULL;
+                            if (FindIdent(&var_hash, symtab, var_name) >= 0 && var_hash != NULL)
+                                file_alias = hashnode_get_type_alias(var_hash);
+                        }
+
+                        int have_component = codegen_resolve_file_component(
+                            file_alias, symtab, &file_elem_size, &file_elem_hash);
+
+                        if (have_component)
+                        {
+                            inst_list = codegen_emit_tfile_configure(inst_list,
+                                file_node, file_elem_size, file_elem_hash);
+                        }
                     }
                     ids = ids->next;
                 }
             }
 
             struct Statement *init_stmt = decl->tree_data.var_decl_data.initializer;
+            if (type_node != NULL && node_is_class_type(type_node))
+            {
+                struct RecordType *record_desc = get_record_type_from_node(type_node);
+                const char *class_type_name = (record_desc != NULL && record_desc->type_id != NULL) ?
+                    record_desc->type_id : codegen_resolve_record_type_name(type_node, symtab);
+                ListNode_t *ids = decl->tree_data.var_decl_data.ids;
+                while (ids != NULL)
+                {
+                    char *var_name = (char *)ids->cur;
+                    StackNode_t *var_node = find_label(var_name);
+                    inst_list = codegen_store_class_typeinfo(inst_list, ctx, var_node,
+                        class_type_name);
+                    ids = ids->next;
+                }
+            }
+
             if (init_stmt != NULL)
                 inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
         }

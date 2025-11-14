@@ -74,14 +74,6 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     Register_t **out_reg, const char *message);
 static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_fillchar(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_getmem(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_freemem(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_reallocmem(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list,
@@ -102,6 +94,11 @@ static int lookup_record_field_type(struct RecordType *record_type, const char *
         if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field == NULL || record_field_is_hidden(field))
+            {
+                field_node = field_node->next;
+                continue;
+            }
             if (field->name != NULL && strcmp(field->name, field_name) == 0)
                 return field->type;
         }
@@ -296,7 +293,8 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
         if (field_node->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)field_node->cur;
-            if (field->name != NULL && strcmp(field->name, field_name) == 0)
+            if (!record_field_is_hidden(field) && field->name != NULL &&
+                strcmp(field->name, field_name) == 0)
                 return field;
         }
         field_node = field_node->next;
@@ -600,6 +598,20 @@ static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *in
     if (expr == NULL || ctx == NULL || out_reg == NULL)
         return inst_list;
 
+    if (expr->type == EXPR_IS)
+        return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
+
+    if (expr->type == EXPR_AS && expr->expr_data.as_data.expr != NULL)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            return inst_list;
+        inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+        *out_reg = addr_reg;
+        return inst_list;
+    }
+
     expr_node_t *expr_tree = build_expr_tree(expr);
     Register_t *reg = get_free_reg(get_reg_stack(), &inst_list);
     if (reg == NULL)
@@ -788,6 +800,22 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
 
         *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_AS)
+    {
+        if (expr->expr_data.as_data.expr != NULL)
+        {
+            Register_t *operand_addr = NULL;
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &operand_addr);
+            if (operand_addr != NULL)
+            {
+                inst_list = codegen_emit_class_cast_check_from_address((struct Expression *)expr,
+                    inst_list, ctx, operand_addr);
+                *out_reg = operand_addr;
+                goto cleanup;
+            }
+        }
         goto cleanup;
     }
 
@@ -1395,9 +1423,9 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
@@ -1647,7 +1675,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
-    assert(stmt != NULL);
+    if (stmt == NULL)
+        return inst_list;
     assert(ctx != NULL);
     assert(symtab != NULL);
     switch(stmt->type)
@@ -1948,332 +1977,6 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
 
     free_reg(get_reg_stack(), addr_reg);
     free_reg(get_reg_stack(), length_reg);
-    free_arg_regs();
-    return inst_list;
-}
-
-static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
-    {
-        fprintf(stderr, "ERROR: Move expects three arguments.\n");
-        return inst_list;
-    }
-
-    struct Expression *src_expr = (struct Expression *)args_expr->cur;
-    struct Expression *dst_expr = (struct Expression *)args_expr->next->cur;
-    struct Expression *count_expr = (struct Expression *)args_expr->next->next->cur;
-
-    Register_t *dst_reg = NULL;
-    Register_t *src_reg = NULL;
-    Register_t *count_reg = NULL;
-
-    inst_list = codegen_address_for_expr(dst_expr, inst_list, ctx, &dst_reg);
-    if (codegen_had_error(ctx) || dst_reg == NULL)
-        return inst_list;
-    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
-    if (codegen_had_error(ctx) || src_reg == NULL)
-        return inst_list;
-    inst_list = codegen_evaluate_expr(count_expr, inst_list, ctx, &count_reg);
-    if (codegen_had_error(ctx) || count_reg == NULL)
-        return inst_list;
-    inst_list = codegen_sign_extend32_to64(inst_list, count_reg->bit_32, count_reg->bit_64);
-
-    char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_move\n");
-
-    free_reg(get_reg_stack(), dst_reg);
-    free_reg(get_reg_stack(), src_reg);
-    free_reg(get_reg_stack(), count_reg);
-    free_arg_regs();
-    return inst_list;
-}
-
-static ListNode_t *codegen_builtin_fillchar(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
-    {
-        fprintf(stderr, "ERROR: FillChar expects three arguments.\n");
-        return inst_list;
-    }
-
-    struct Expression *dest_expr = (struct Expression *)args_expr->cur;
-    struct Expression *count_expr = (struct Expression *)args_expr->next->cur;
-    struct Expression *value_expr = (struct Expression *)args_expr->next->next->cur;
-
-    if (!codegen_expr_is_addressable(dest_expr))
-    {
-        fprintf(stderr, "ERROR: FillChar destination must be addressable.\n");
-        return inst_list;
-    }
-
-    Register_t *addr_reg = NULL;
-    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &addr_reg);
-    if (codegen_had_error(ctx) || addr_reg == NULL)
-        return inst_list;
-
-    StackNode_t *dest_temp = add_l_t("fillchar_dest");
-    if (dest_temp == NULL)
-    {
-        free_reg(get_reg_stack(), addr_reg);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for FillChar destination.");
-    }
-
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, dest_temp->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), addr_reg);
-
-    Register_t *count_reg = NULL;
-    inst_list = codegen_expr_with_result(count_expr, inst_list, ctx, &count_reg);
-    if (codegen_had_error(ctx) || count_reg == NULL)
-    {
-        if (count_reg != NULL)
-            free_reg(get_reg_stack(), count_reg);
-        return inst_list;
-    }
-
-    StackNode_t *count_temp = add_l_t("fillchar_count");
-    if (count_temp == NULL)
-    {
-        free_reg(get_reg_stack(), count_reg);
-        return inst_list;
-    }
-
-    if (!expr_uses_qword_gpctype(count_expr))
-        inst_list = codegen_sign_extend32_to64(inst_list, count_reg->bit_32, count_reg->bit_64);
-
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", count_reg->bit_64, count_temp->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), count_reg);
-
-    Register_t *value_reg = NULL;
-    inst_list = codegen_expr_with_result(value_expr, inst_list, ctx, &value_reg);
-    if (codegen_had_error(ctx) || value_reg == NULL)
-    {
-        if (value_reg != NULL)
-            free_reg(get_reg_stack(), value_reg);
-        return inst_list;
-    }
-
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rcx\n", dest_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", count_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r8d\n", value_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdi\n", dest_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n", count_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%edx\n", value_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_fillchar\n");
-
-    free_reg(get_reg_stack(), value_reg);
-    free_arg_regs();
-    return inst_list;
-}
-
-static ListNode_t *codegen_builtin_getmem(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL)
-    {
-        fprintf(stderr, "ERROR: GetMem expects two arguments.\n");
-        return inst_list;
-    }
-
-    struct Expression *ptr_expr = (struct Expression *)args_expr->cur;
-    struct Expression *size_expr = (struct Expression *)args_expr->next->cur;
-
-    if (!codegen_expr_is_addressable(ptr_expr))
-    {
-        codegen_report_error(ctx, "ERROR: GetMem pointer target must be addressable.");
-        return inst_list;
-    }
-
-    Register_t *addr_reg = NULL;
-    inst_list = codegen_address_for_expr(ptr_expr, inst_list, ctx, &addr_reg);
-    if (codegen_had_error(ctx) || addr_reg == NULL)
-        return inst_list;
-
-    Register_t *size_reg = NULL;
-    inst_list = codegen_expr_with_result(size_expr, inst_list, ctx, &size_reg);
-    if (codegen_had_error(ctx) || size_reg == NULL)
-    {
-        if (size_reg != NULL)
-            free_reg(get_reg_stack(), size_reg);
-        free_reg(get_reg_stack(), addr_reg);
-        return inst_list;
-    }
-
-    if (!expr_uses_qword_gpctype(size_expr))
-        inst_list = codegen_sign_extend32_to64(inst_list, size_reg->bit_32, size_reg->bit_64);
-
-    char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", size_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_getmem\n");
-
-    free_reg(get_reg_stack(), addr_reg);
-    free_reg(get_reg_stack(), size_reg);
-    free_arg_regs();
-    return inst_list;
-}
-
-static ListNode_t *codegen_builtin_freemem(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next != NULL)
-    {
-        fprintf(stderr, "ERROR: FreeMem expects one argument.\n");
-        return inst_list;
-    }
-
-    struct Expression *ptr_expr = (struct Expression *)args_expr->cur;
-    Register_t *ptr_reg = NULL;
-    inst_list = codegen_expr_with_result(ptr_expr, inst_list, ctx, &ptr_reg);
-    if (codegen_had_error(ctx) || ptr_reg == NULL)
-        return inst_list;
-
-    char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", ptr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", ptr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_freemem\n");
-
-    free_reg(get_reg_stack(), ptr_reg);
-    free_arg_regs();
-    return inst_list;
-}
-
-static ListNode_t *codegen_builtin_reallocmem(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL)
-    {
-        fprintf(stderr, "ERROR: ReallocMem expects two arguments.\n");
-        return inst_list;
-    }
-
-    struct Expression *ptr_expr = (struct Expression *)args_expr->cur;
-    struct Expression *size_expr = (struct Expression *)args_expr->next->cur;
-
-    if (!codegen_expr_is_addressable(ptr_expr))
-    {
-        codegen_report_error(ctx, "ERROR: ReallocMem pointer target must be addressable.");
-        return inst_list;
-    }
-
-    Register_t *addr_reg = NULL;
-    inst_list = codegen_address_for_expr(ptr_expr, inst_list, ctx, &addr_reg);
-    if (codegen_had_error(ctx) || addr_reg == NULL)
-        return inst_list;
-
-    Register_t *size_reg = NULL;
-    inst_list = codegen_expr_with_result(size_expr, inst_list, ctx, &size_reg);
-    if (codegen_had_error(ctx) || size_reg == NULL)
-    {
-        if (size_reg != NULL)
-            free_reg(get_reg_stack(), size_reg);
-        free_reg(get_reg_stack(), addr_reg);
-        return inst_list;
-    }
-
-    if (!expr_uses_qword_gpctype(size_expr))
-        inst_list = codegen_sign_extend32_to64(inst_list, size_reg->bit_32, size_reg->bit_64);
-
-    char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", size_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", size_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_reallocmem\n");
-
-    free_reg(get_reg_stack(), addr_reg);
-    free_reg(get_reg_stack(), size_reg);
     free_arg_regs();
     return inst_list;
 }
@@ -2671,18 +2374,19 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     struct Expression *code_expr = (struct Expression *)args_expr->next->next->cur;
 
     Register_t *source_reg = NULL;
+    Register_t *value_addr = NULL;
+    Register_t *code_addr = NULL;
+    StackNode_t *code_spill = NULL;
+    StackNode_t *code_result_spill = NULL;
+
     inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
     if (codegen_had_error(ctx) || source_reg == NULL)
         goto cleanup;
 
-    Register_t *value_addr = NULL;
     inst_list = codegen_address_for_expr(value_expr, inst_list, ctx, &value_addr);
     if (codegen_had_error(ctx) || value_addr == NULL)
         goto cleanup;
 
-    Register_t *code_addr = NULL;
-    StackNode_t *code_spill = NULL;
-    StackNode_t *code_result_spill = NULL;
     inst_list = codegen_address_for_expr(code_expr, inst_list, ctx, &code_addr);
     if (codegen_had_error(ctx) || code_addr == NULL)
         goto cleanup;
@@ -2810,14 +2514,35 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int target_is_long = (target_expr != NULL && expr_get_type_tag(target_expr) == LONGINT_TYPE);
-    if (target_is_long)
+    int target_type_tag = (target_expr != NULL) ? expr_get_type_tag(target_expr) : UNKNOWN_TYPE;
+    int target_is_long = (target_type_tag == LONGINT_TYPE);
+    int target_is_pointer = (target_type_tag == POINTER_TYPE);
+    int target_uses_qword = target_is_long || target_is_pointer;
+
+    if (target_uses_qword)
         inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32, increment_reg->bit_64);
+
+    long long pointer_step = 1;
+    if (target_is_pointer)
+    {
+        if (codegen_sizeof_pointer_target(ctx, target_expr, &pointer_step) != 0 || pointer_step <= 0)
+            pointer_step = 1;
+    }
+
+    if (target_is_pointer && pointer_step != 1)
+    {
+        char buffer_scale[128];
+        if (target_uses_qword)
+            snprintf(buffer_scale, sizeof(buffer_scale), "\timulq\t$%lld, %s\n", pointer_step, increment_reg->bit_64);
+        else
+            snprintf(buffer_scale, sizeof(buffer_scale), "\timull\t$%lld, %s\n", pointer_step, increment_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer_scale);
+    }
 
     char buffer_main[128];
     if (!is_increment)
     {
-        if (target_is_long)
+        if (target_uses_qword)
         {
             snprintf(buffer_main, sizeof(buffer_main), "\tnegq\t%s\n", increment_reg->bit_64);
             inst_list = add_inst(inst_list, buffer_main);
@@ -2835,7 +2560,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         char buffer[128];
         if (var_node != NULL)
         {
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%%rbp)\n", increment_reg->bit_64, var_node->offset);
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%%rbp)\n", increment_reg->bit_32, var_node->offset);
@@ -2845,7 +2570,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         {
             int offset = 0;
             inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%s)\n", increment_reg->bit_64, offset, current_non_local_reg64());
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%s)\n", increment_reg->bit_32, offset, current_non_local_reg64());
@@ -2864,7 +2589,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
@@ -2879,7 +2604,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (!codegen_had_error(ctx) && addr_reg != NULL)
         {
             char buffer[128];
-            if (target_is_long)
+            if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, (%s)\n", increment_reg->bit_64, addr_reg->bit_64);
             else
                 snprintf(buffer, sizeof(buffer), "\taddl\t%s, (%s)\n", increment_reg->bit_32, addr_reg->bit_64);
@@ -3131,7 +2856,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
     if (args != NULL)
     {
         struct Expression *first_expr = (struct Expression *)args->cur;
-        if (first_expr != NULL && expr_has_type_tag(first_expr, FILE_TYPE))
+        if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
             expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -3436,7 +3161,7 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     if (args != NULL)
     {
         struct Expression *first_expr = (struct Expression *)args->cur;
-        if (first_expr != NULL && expr_has_type_tag(first_expr, FILE_TYPE))
+        if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
             expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -3682,51 +3407,6 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "readln"))
     {
         inst_list = codegen_builtin_read_like(stmt, inst_list, ctx, 1);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
-    {
-        inst_list = codegen_builtin_move(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "FillChar"))
-    {
-        inst_list = codegen_builtin_fillchar(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "GetMem"))
-    {
-        inst_list = codegen_builtin_getmem(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "FreeMem"))
-    {
-        inst_list = codegen_builtin_freemem(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "ReallocMem"))
-    {
-        inst_list = codegen_builtin_reallocmem(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
@@ -4507,6 +4187,35 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 unmangled_name ? unmangled_name : "(unknown)");
             return inst_list;
         }
+    }
+
+    if(call_hash_type == HASHTYPE_FUNCTION)
+    {
+        struct Expression *call_expr = mk_functioncall(stmt->line_num,
+            stmt->stmt_data.procedure_call_data.id != NULL ?
+                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
+            stmt->stmt_data.procedure_call_data.expr_args);
+        if (call_expr == NULL)
+            return inst_list;
+
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            call_expr->expr_data.function_call_data.mangled_id =
+                strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+        }
+        call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
+        call_expr->expr_data.function_call_data.call_gpc_type =
+            stmt->stmt_data.procedure_call_data.call_gpc_type;
+        call_expr->expr_data.function_call_data.is_call_info_valid =
+            stmt->stmt_data.procedure_call_data.is_call_info_valid;
+
+        Register_t *discard_reg = NULL;
+        inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
+        if (discard_reg != NULL)
+            free_reg(get_reg_stack(), discard_reg);
+        call_expr->expr_data.function_call_data.args_expr = NULL;
+        destroy_expr(call_expr);
+        return inst_list;
     }
 
     if(call_hash_type == HASHTYPE_BUILTIN_PROCEDURE)

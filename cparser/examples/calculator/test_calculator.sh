@@ -20,6 +20,17 @@ if [ ! -x "$CALCULATOR_EXEC" ]; then
     fi
 fi
 
+# Determine how to invoke the calculator (native binary vs Wine)
+CALCULATOR_CMD=("$CALCULATOR_EXEC")
+if [[ "${CALCULATOR_EXEC,,}" == *.exe ]]; then
+    if [ -n "$MESON_EXE_WRAPPER" ]; then
+        read -r -a _WRAPPER_ARR <<< "$MESON_EXE_WRAPPER"
+        CALCULATOR_CMD=("${_WRAPPER_ARR[@]}" "$CALCULATOR_EXEC")
+    elif command -v wine >/dev/null 2>&1; then
+        CALCULATOR_CMD=("wine" "$CALCULATOR_EXEC")
+    fi
+fi
+
 echo "Running calculator test suite..."
 
 # Counter for tests
@@ -37,7 +48,7 @@ check_case() {
     # Run the calculator and capture the output
     # Suppress Wine warnings by redirecting stderr when running .exe files
     # Strip Windows line endings (\r) that may be present in Wine output
-    local actual=$( "$CALCULATOR_EXEC" "$expression" 2>/dev/null | tr -d '\r' )
+    local actual=$( "${CALCULATOR_CMD[@]}" "$expression" 2>/dev/null | tr -d '\r' )
 
     if [ "$actual" = "$expected" ]; then
         echo "  [PASS] $name: '$expression' -> $expected"
@@ -56,7 +67,7 @@ check_fail() {
 
     # Run the calculator, redirecting stdout and stderr.
     # We expect it to fail (non-zero exit code).
-    if ! "$CALCULATOR_EXEC" "$expression" > /dev/null 2>&1; then
+    if ! "${CALCULATOR_CMD[@]}" "$expression" > /dev/null 2>&1; then
         echo "  [PASS] $name: '$expression' -> (Correctly failed)"
     else
         echo "  [FAIL] $name: '$expression' -> (Expected to fail, but succeeded)"

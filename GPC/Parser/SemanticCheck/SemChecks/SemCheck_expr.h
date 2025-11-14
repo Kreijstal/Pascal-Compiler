@@ -53,4 +53,19 @@ void semcheck_mark_call_requires_static_link(HashNode_t *node);
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
 
+int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
+    long long *size_out, int line_num);
+
+struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
+    struct RecordType *record_info, const char *property_name,
+    struct RecordType **owner_out);
+
+struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out);
+
+HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name,
+    struct RecordType **owner_out);
+
 #endif

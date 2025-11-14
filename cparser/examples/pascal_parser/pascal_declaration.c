@@ -93,7 +93,6 @@ static ParseResult skip_balanced_begin_end_fn(input_t* in, void* args, char* par
         }
 
         // Read a word to detect 'begin' or 'end'
-        int s = in->start;
         if (isalpha((unsigned char)buf[in->start]) || buf[in->start] == '_') {
             int p = in->start + 1;
             while (p < length && (isalnum((unsigned char)buf[p]) || buf[p] == '_')) p++;
@@ -442,6 +441,9 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (dispatch->array_parser && pascal_word_equals_ci(&word, "array")) {
             return run_type_branch(in, dispatch->array_parser);
         }
+        if (dispatch->file_parser && pascal_word_equals_ci(&word, "file")) {
+            return run_type_branch(in, dispatch->file_parser);
+        }
         if (dispatch->set_parser && pascal_word_equals_ci(&word, "set")) {
             return run_type_branch(in, dispatch->set_parser);
         }
@@ -738,11 +740,11 @@ static combinator_t* create_param_type_spec(void) {
         NULL
     );
 
-    return seq(new_combinator(), PASCAL_T_NONE,
+    return optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
         type_reference,
         NULL
-    );
+    ));
 }
 
 static combinator_t* create_simple_param_list(void) {
@@ -897,36 +899,6 @@ static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
     return comb;
 }
 
-// Lookahead guard: only accept a program-level BEGIN..END block as the main block
-// if the matching END is immediately followed (ignoring layout) by a '.' token.
-static ParseResult main_block_lookahead_fn(input_t* in, void* args, char* parser_name) {
-    (void)args; (void)parser_name;
-    InputState state; save_input_state(in, &state);
-
-    // Use existing combinators to ensure we see 'begin', then a balanced block, then a '.'
-    combinator_t* open_begin = token(match("begin"));
-    ParseResult r1 = parse(in, open_begin);
-    free_error(r1.is_success ? NULL : r1.value.error);
-    if (!r1.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Expected program BEGIN"), NULL); }
-
-    // Skip to matching END of this block
-    combinator_t* skipper = skip_balanced_begin_end();
-    ParseResult r2 = parse(in, skipper);
-    free_error(r2.is_success ? NULL : r2.value.error);
-    free_combinator(skipper);
-    if (!r2.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Failed to match END for program BEGIN"), NULL); }
-
-    // After END, require a '.' (with Pascal-aware token handling)
-    combinator_t* dot = token(match("."));
-    ParseResult r3 = parse(in, dot);
-    free_error(r3.is_success ? NULL : r3.value.error);
-    if (!r3.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Program END not followed by '.'"), NULL); }
-
-    // Restore input; this is only a lookahead
-    restore_input_state(in, &state);
-    return make_success(ast_nil);
-}
-
 // Helper function to wrap the content of a begin-end block in a PASCAL_T_MAIN_BLOCK node
 static ast_t* build_main_block_ast(ast_t* ast) {
     ast_t* block_node = new_ast();
@@ -1072,6 +1044,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* record_spec = record_type(PASCAL_T_RECORD_TYPE);
     combinator_t* enum_spec = enumerated_type(PASCAL_T_ENUMERATED_TYPE);
     combinator_t* array_spec = array_type(PASCAL_T_ARRAY_TYPE);
+    combinator_t* file_spec = file_type(PASCAL_T_FILE_TYPE);
     combinator_t* set_spec = set_type(PASCAL_T_SET);
     combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
     combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
@@ -1092,6 +1065,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     type_args->record_parser = record_spec;
     type_args->enumerated_parser = enum_spec;
     type_args->array_parser = array_spec;
+    type_args->file_parser = file_spec;
     type_args->set_parser = set_spec;
     type_args->range_parser = range_spec;
     type_args->pointer_parser = pointer_spec;
@@ -1901,6 +1875,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         procedure_type(PASCAL_T_PROCEDURE_TYPE),        // procedure types like procedure(x: Integer)
         function_type(PASCAL_T_FUNCTION_TYPE),          // function types like function(y: Real): Boolean
         set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
+        file_type(PASCAL_T_FILE_TYPE),                  // file types like file of Integer
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
@@ -2003,19 +1978,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         token(keyword_ci("overload")),
         NULL
     );
-    combinator_t* type_external_name_clause = seq(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("name")),
-        token(pascal_string(PASCAL_T_STRING)),
-        NULL
-    );
-    combinator_t* type_directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
-        type_external_name_clause,
-        token(pascal_string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    ));
-    // previous implementation created a 'type_routine_directive' parser but it's no longer needed here
-
     combinator_t* generic_type_decl_prog = seq(new_combinator(), PASCAL_T_GENERIC_TYPE_DECL,
         optional(token(keyword_ci("generic"))),      // optional generic keyword
         token(cident(PASCAL_T_IDENTIFIER)),           // type name
@@ -2201,6 +2163,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         many(local_threadvar_decl),
         NULL
     );
+    local_threadvar_section->extra_to_free = local_var_expr_parser;
 
     // Allow local CONST/TYPE/VAR sections to be interspersed with nested function/procedure declarations
     combinator_t* local_declaration_or_nested_function = multi(new_combinator(), PASCAL_T_NONE,

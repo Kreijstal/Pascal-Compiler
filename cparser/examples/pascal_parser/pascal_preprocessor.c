@@ -353,8 +353,29 @@ static bool handle_directive(PascalPreprocessor *pp,
 
     bool branch_active = current_branch_active(conditions);
     bool handled = false;
+    bool is_io_check_directive = false;
 
-    if (strcmp(keyword, "I") == 0 || strcmp(keyword, "INCLUDE") == 0) {
+    if (strcmp(keyword, "I") == 0) {
+        const char *cursor = rest;
+        while (*cursor && isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+        if (*cursor == '+' || *cursor == '-') {
+            const char *after = cursor + 1;
+            while (*after && isspace((unsigned char)*after)) {
+                ++after;
+            }
+            if (*after == '\0') {
+                is_io_check_directive = true;
+            }
+        }
+    }
+
+    if (is_io_check_directive) {
+        handled = true;
+        // {$I+} / {$I-} toggles I/O-checking; the compiler currently does not
+        // distinguish the modes, so treat it as a no-op directive.
+    } else if (strcmp(keyword, "I") == 0 || strcmp(keyword, "INCLUDE") == 0) {
         handled = true;
         if (!branch_active) {
             // Skip include in inactive branch

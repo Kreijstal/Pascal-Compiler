@@ -32,9 +32,9 @@ function StartsStr(const SubStr, S: string): Boolean;
 function StartsText(const SubText, Text: string): Boolean;
 function EndsStr(const SubStr, S: string): Boolean;
 function EndsText(const SubText, Text: string): Boolean;
-function DupeString(const S: string; Count: Integer): string;
 function AnsiReplaceStr(const S, OldPattern, NewPattern: string): TString;
 function AnsiReplaceText(const S, OldPattern, NewPattern: string): TString;
+function DupeString(const S: string; Count: Integer): string;
 function QuoteStringEscape(const s: string; EscapeChar: Char;
   QuoteHigh: Boolean): TString;
 function QuoteString(const s: string): TString;
@@ -120,6 +120,34 @@ begin
             Inc(StrCount);
         Inc(idx);
     end;
+end;
+
+function DupeString(const S: string; Count: Integer): string;
+var
+    i, len, offset: Integer;
+    resultStr: string;
+begin
+    if (Count <= 0) or (S = '') then
+    begin
+        DupeString := '';
+        exit;
+    end;
+
+    len := Length(S);
+    if len = 0 then
+    begin
+        DupeString := '';
+        exit;
+    end;
+
+    SetLength(resultStr, len * Count);
+    offset := 1;
+    for i := 1 to Count do
+    begin
+        Move(S[1], resultStr[offset], len);
+        Inc(offset, len);
+    end;
+    DupeString := resultStr;
 end;
 
 function StrReplace(const s, Source, Dest: string): TString;
@@ -299,22 +327,6 @@ end;
 function EndsText(const SubText, Text: string): Boolean;
 begin
     EndsText := AnsiEndsText(SubText, Text);
-end;
-
-function DupeString(const S: string; Count: Integer): string;
-var
-    i: Integer;
-    resultStr: string;
-begin
-    if Count <= 0 then
-    begin
-        DupeString := '';
-        exit;
-    end;
-    resultStr := '';
-    for i := 1 to Count do
-        resultStr := resultStr + S;
-    DupeString := resultStr;
 end;
 
 function AnsiReplaceStr(const S, OldPattern, NewPattern: string): TString;

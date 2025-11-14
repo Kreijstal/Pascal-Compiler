@@ -39,6 +39,27 @@
 #include "NameMangling.h"
 #include <stdarg.h>
 
+static int map_var_type_to_type_tag(enum VarType var_type)
+{
+    switch (var_type)
+    {
+        case HASHVAR_INTEGER:
+            return INT_TYPE;
+        case HASHVAR_LONGINT:
+            return LONGINT_TYPE;
+        case HASHVAR_REAL:
+            return REAL_TYPE;
+        case HASHVAR_BOOLEAN:
+            return BOOL;
+        case HASHVAR_CHAR:
+            return CHAR_TYPE;
+        case HASHVAR_PCHAR:
+            return STRING_TYPE;
+        default:
+            return UNKNOWN_TYPE;
+    }
+}
+
 /* Adds built-in functions */
 void semcheck_add_builtins(SymTab_t *symtab);
 
@@ -76,7 +97,6 @@ int semcheck_id_not_main(char *id)
         fprintf(stderr, "ERROR: main is special keyword, it cannot be a program, or subprogram\n");
         return 1;
     }
-
     return 0;
 }
 
@@ -860,6 +880,96 @@ static int statement_contains_asm_block(struct Statement *stmt)
     return 0;
 }
 
+static int record_has_property(struct RecordType *record_info, const char *property_name)
+{
+    if (record_info == NULL || property_name == NULL)
+        return 0;
+
+    ListNode_t *node = record_info->properties;
+    while (node != NULL)
+    {
+        if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)node->cur;
+            if (property->name != NULL &&
+                pascal_identifier_equals(property->name, property_name))
+                return 1;
+        }
+        node = node->next;
+    }
+    return 0;
+}
+
+static struct ClassProperty *clone_class_property(const struct ClassProperty *property)
+{
+    if (property == NULL)
+        return NULL;
+
+    struct ClassProperty *clone = (struct ClassProperty *)calloc(1, sizeof(struct ClassProperty));
+    if (clone == NULL)
+        return NULL;
+
+    clone->name = property->name != NULL ? strdup(property->name) : NULL;
+    clone->type = property->type;
+    clone->type_id = property->type_id != NULL ? strdup(property->type_id) : NULL;
+    clone->read_accessor = property->read_accessor != NULL ? strdup(property->read_accessor) : NULL;
+    clone->write_accessor = property->write_accessor != NULL ? strdup(property->write_accessor) : NULL;
+
+    if ((property->name != NULL && clone->name == NULL) ||
+        (property->type_id != NULL && clone->type_id == NULL) ||
+        (property->read_accessor != NULL && clone->read_accessor == NULL) ||
+        (property->write_accessor != NULL && clone->write_accessor == NULL))
+    {
+        free(clone->name);
+        free(clone->type_id);
+        free(clone->read_accessor);
+        free(clone->write_accessor);
+        free(clone);
+        return NULL;
+    }
+
+    return clone;
+}
+
+static ListNode_t *clone_property_list_unique(struct RecordType *record_info,
+    const ListNode_t *properties)
+{
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
+
+    while (properties != NULL)
+    {
+        if (properties->type == LIST_CLASS_PROPERTY && properties->cur != NULL)
+        {
+            struct ClassProperty *property = (struct ClassProperty *)properties->cur;
+            if (!record_has_property(record_info, property->name))
+            {
+                struct ClassProperty *clone = clone_class_property(property);
+                if (clone != NULL)
+                {
+                    ListNode_t *node = CreateListNode(clone, LIST_CLASS_PROPERTY);
+                    if (node != NULL)
+                    {
+                        *tail = node;
+                        tail = &node->next;
+                    }
+                    else
+                    {
+                        free(clone->name);
+                        free(clone->type_id);
+                        free(clone->read_accessor);
+                        free(clone->write_accessor);
+                        free(clone);
+                    }
+                }
+            }
+        }
+        properties = properties->next;
+    }
+
+    return head;
+}
+
 /* Helper function to check for circular inheritance */
 static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, const char *parent_name, int max_depth)
 {
@@ -885,6 +995,56 @@ static int check_circular_inheritance(SymTab_t *symtab, const char *class_name, 
     
     /* Recursively check parent's parent */
     return check_circular_inheritance(symtab, class_name, parent_record->parent_class_name, max_depth - 1);
+}
+
+static int add_class_padding_field(struct RecordType *record_info, long long padding_bytes)
+{
+    if (record_info == NULL || padding_bytes <= 0)
+        return 0;
+
+    struct RecordField *padding = (struct RecordField *)calloc(1, sizeof(struct RecordField));
+    if (padding == NULL)
+        return 1;
+
+    padding->name = NULL;
+    padding->type = CHAR_TYPE;
+    padding->is_array = 1;
+    padding->array_start = 0;
+    padding->array_end = (int)padding_bytes - 1;
+    padding->array_element_type = CHAR_TYPE;
+    padding->array_is_open = 0;
+    padding->is_hidden = 1;
+
+    ListNode_t *node = CreateListNode(padding, LIST_RECORD_FIELD);
+    record_info->fields = PushListNodeBack(record_info->fields, node);
+    return 0;
+}
+
+static int compute_class_record_size(SymTab_t *symtab, struct RecordType *record_info,
+    long long *size_out, int line_num)
+{
+    if (record_info == NULL || size_out == NULL)
+        return 1;
+
+    return semcheck_compute_record_size(symtab, record_info, size_out,
+        line_num >= 0 ? line_num : 0);
+}
+
+static int ensure_class_storage_capacity(SymTab_t *symtab, struct RecordType *record_info,
+    long long required_size, int line_num)
+{
+    if (record_info == NULL)
+        return 0;
+
+    long long current_size = 0;
+    if (compute_class_record_size(symtab, record_info, &current_size, line_num) != 0)
+        return 1;
+
+    if (current_size >= required_size)
+        return 0;
+
+    long long padding_bytes = required_size - current_size;
+    return add_class_padding_field(record_info, padding_bytes);
 }
 
 /* Helper function to merge parent class fields into derived class */
@@ -963,6 +1123,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             cloned_field->array_element_type_id = original_field->array_element_type_id ? 
                 strdup(original_field->array_element_type_id) : NULL;
             cloned_field->array_is_open = original_field->array_is_open;
+            cloned_field->is_hidden = original_field->is_hidden;
             
             /* Create list node for cloned field */
             ListNode_t *new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
@@ -1013,6 +1174,21 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             last_cloned->next = record_info->fields;
             record_info->fields = cloned_parent_fields;
         }
+    }
+
+    if (parent_record != NULL && parent_record->properties != NULL)
+    {
+        ListNode_t *cloned_properties = clone_property_list_unique(record_info,
+            parent_record->properties);
+        if (cloned_properties != NULL)
+            record_info->properties = ConcatList(cloned_properties, record_info->properties);
+    }
+
+    if (parent_record != NULL)
+    {
+        long long derived_size = 0;
+        if (compute_class_record_size(symtab, record_info, &derived_size, line_num) == 0)
+            ensure_class_storage_capacity(symtab, parent_record, derived_size, line_num);
     }
     
     return 0;
@@ -1369,6 +1545,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_ENUM;
                     else if (element_type == FILE_TYPE)
                         var_type = HASHVAR_FILE;
+                    else if (element_type == TEXT_TYPE)
+                        var_type = HASHVAR_TEXT;
                     else
                         var_type = HASHVAR_INTEGER;
                 }
@@ -1393,6 +1571,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         var_type = HASHVAR_ENUM;
                     else if (base_type == FILE_TYPE)
                         var_type = HASHVAR_FILE;
+                    else if (base_type == TEXT_TYPE)
+                        var_type = HASHVAR_TEXT;
                     else if (base_type == INT_TYPE)
                         var_type = HASHVAR_INTEGER;
                     else if (base_type == PROCEDURE)
@@ -1717,7 +1897,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *text_name = strdup("text");
     if (text_name != NULL) {
-        GpcType *text_type = gpc_type_from_var_type(HASHVAR_FILE);
+        GpcType *text_type = gpc_type_from_var_type(HASHVAR_TEXT);
         assert(text_type != NULL && "Failed to create text type");
         AddBuiltinType_Typed(symtab, text_name, text_type);
         destroy_gpc_type(text_type);
@@ -1780,46 +1960,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(readln_name);
     }
 
-    char *move_name = strdup("Move");
-    if (move_name != NULL) {
-        GpcType *move_type = create_procedure_type(NULL, NULL);
-        assert(move_type != NULL && "Failed to create Move procedure type");
-        AddBuiltinProc_Typed(symtab, move_name, move_type);
-        destroy_gpc_type(move_type);
-        free(move_name);
-    }
-    char *fillchar_name = strdup("FillChar");
-    if (fillchar_name != NULL) {
-        GpcType *fillchar_type = create_procedure_type(NULL, NULL);
-        assert(fillchar_type != NULL && "Failed to create FillChar procedure type");
-        AddBuiltinProc_Typed(symtab, fillchar_name, fillchar_type);
-        destroy_gpc_type(fillchar_type);
-        free(fillchar_name);
-    }
-    char *getmem_name = strdup("GetMem");
-    if (getmem_name != NULL) {
-        GpcType *getmem_type = create_procedure_type(NULL, NULL);
-        assert(getmem_type != NULL && "Failed to create GetMem procedure type");
-        AddBuiltinProc_Typed(symtab, getmem_name, getmem_type);
-        destroy_gpc_type(getmem_type);
-        free(getmem_name);
-    }
-    char *freemem_name = strdup("FreeMem");
-    if (freemem_name != NULL) {
-        GpcType *freemem_type = create_procedure_type(NULL, NULL);
-        assert(freemem_type != NULL && "Failed to create FreeMem procedure type");
-        AddBuiltinProc_Typed(symtab, freemem_name, freemem_type);
-        destroy_gpc_type(freemem_type);
-        free(freemem_name);
-    }
-    char *reallocmem_name = strdup("ReallocMem");
-    if (reallocmem_name != NULL) {
-        GpcType *reallocmem_type = create_procedure_type(NULL, NULL);
-        assert(reallocmem_type != NULL && "Failed to create ReallocMem procedure type");
-        AddBuiltinProc_Typed(symtab, reallocmem_name, reallocmem_type);
-        destroy_gpc_type(reallocmem_type);
-        free(reallocmem_name);
-    }
     char *val_name = strdup("Val");
     if (val_name != NULL) {
         GpcType *val_type = create_procedure_type(NULL, NULL);
@@ -1965,6 +2105,17 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinFunction_Typed(symtab, eof_name, eof_type);
         destroy_gpc_type(eof_type);
         free(eof_name);
+    }
+
+    char *eoln_name = strdup("EOLN");
+    if (eoln_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
+        assert(return_type != NULL && "Failed to create return type for EOLN");
+        GpcType *eoln_type = create_procedure_type(NULL, return_type);
+        assert(eoln_type != NULL && "Failed to create EOLN function type");
+        AddBuiltinFunction_Typed(symtab, eoln_name, eoln_type);
+        destroy_gpc_type(eoln_type);
+        free(eoln_name);
     }
 
     char *sizeof_name = strdup("SizeOf");
@@ -2260,7 +2411,55 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             }
                             goto next_identifier;
                         }
+
+                        int declared_type_tag = tree->tree_data.var_decl_data.type;
+                        int needs_inline_pointer = (declared_type_tag == POINTER_TYPE &&
+                            (type_node->type == NULL || type_node->type->kind != TYPE_KIND_POINTER));
+
+                        if (needs_inline_pointer)
+                        {
+                            GpcType *points_to = NULL;
+                            if (type_node->type != NULL)
+                            {
+                                gpc_type_retain(type_node->type);
+                                points_to = type_node->type;
+                            }
+                            else
+                            {
+                                struct RecordType *target_record = get_record_type_from_node(type_node);
+                                if (target_record != NULL)
+                                {
+                                    points_to = create_record_type(target_record);
+                                }
+                                else
+                                {
+                                    enum VarType target_var_type = get_var_type_from_node(type_node);
+                                    int primitive_tag = map_var_type_to_type_tag(target_var_type);
+                                    if (primitive_tag != UNKNOWN_TYPE)
+                                        points_to = create_primitive_type(primitive_tag);
+                                }
+                            }
+
+                            GpcType *pointer_type = create_pointer_type(points_to);
+                            func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
+                            if (func_return == 0)
+                            {
+                                HashNode_t *var_node = NULL;
+                                if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                                {
+                                    var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                    mark_hashnode_unit_info(var_node,
+                                        tree->tree_data.var_decl_data.defined_in_unit,
+                                        tree->tree_data.var_decl_data.unit_is_public);
+                                }
+                            }
+                            goto next_identifier;
+                        }
+
                         var_type = get_var_type_from_node(type_node);
+                        int resolved_tag = map_var_type_to_type_tag(var_type);
+                        if (resolved_tag != UNKNOWN_TYPE)
+                            tree->tree_data.var_decl_data.type = resolved_tag;
                         struct TypeAlias *alias = get_type_alias_from_node(type_node);
                         if (alias != NULL && alias->is_array)
                         {
@@ -2420,6 +2619,10 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     var_type = HASHVAR_PCHAR;
                 else if(tree->tree_data.var_decl_data.type == RECORD_TYPE)
                     var_type = HASHVAR_RECORD;
+                else if(tree->tree_data.var_decl_data.type == FILE_TYPE)
+                    var_type = HASHVAR_FILE;
+                else if(tree->tree_data.var_decl_data.type == TEXT_TYPE)
+                    var_type = HASHVAR_TEXT;
                 else
                     var_type = HASHVAR_REAL;
                 
@@ -2455,6 +2658,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                              * not a clone. This ensures type identity checks work correctly. */
                             var_gpc_type->info.record_info = record_type;
                         }
+                    }
+                    else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
+                        var_gpc_type != NULL)
+                    {
+                        gpc_type_set_type_alias(var_gpc_type,
+                            tree->tree_data.var_decl_data.inline_type_alias);
                     }
                 }
                 
