@@ -421,6 +421,24 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
         return 1;
     }
 
+    /* Allow procedure variables to accept explicit @proc references */
+    if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        GpcType *rhs_proc = rhs_type->info.points_to;
+        if (rhs_proc != NULL && rhs_proc->kind == TYPE_KIND_PROCEDURE)
+            return are_types_compatible_for_assignment(lhs_type, rhs_proc, symtab);
+        return 0;
+    }
+    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        GpcType *lhs_target = lhs_type->info.points_to;
+        if (lhs_target == NULL)
+            return 1; /* Generic Pointer can hold procedure addresses */
+        if (lhs_target->kind == TYPE_KIND_PROCEDURE)
+            return are_types_compatible_for_assignment(lhs_target, rhs_type, symtab);
+        return 0;
+    }
+
     /* If kinds are different, generally incompatible */
     /* Exception: we need to check for special cases */
     if (lhs_type->kind != rhs_type->kind) {
@@ -524,10 +542,8 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
             /* 4. Check each parameter's type and var status */
             ListNode_t *lhs_p = lhs_proc->params;
             ListNode_t *rhs_p = rhs_proc->params;
-            int param_position = 0;
-            
+
             while (lhs_p != NULL && rhs_p != NULL) {
-                ++param_position;
                 if (lhs_p->type != LIST_TREE || rhs_p->type != LIST_TREE)
                     return 0; /* Invalid parameter node */
 
@@ -830,6 +846,8 @@ static int var_type_to_primitive_tag(enum VarType var_type)
             return SET_TYPE;
         case HASHVAR_FILE:
             return FILE_TYPE;
+        case HASHVAR_TEXT:
+            return TEXT_TYPE;
         case HASHVAR_ENUM:
             return ENUM_TYPE;
         default:
@@ -862,6 +880,7 @@ GpcType* gpc_type_from_var_type(enum VarType var_type)
         case HASHVAR_PCHAR:
         case HASHVAR_SET:
         case HASHVAR_FILE:
+        case HASHVAR_TEXT:
         case HASHVAR_ENUM:
         {
             int tag = var_type_to_primitive_tag(var_type);
@@ -962,6 +981,7 @@ int gpc_type_uses_qword(GpcType *type)
                 case REAL_TYPE:
                 case STRING_TYPE:
                 case FILE_TYPE:
+                case TEXT_TYPE:
                     return 1;
                 default:
                     return 0;

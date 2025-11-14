@@ -17,6 +17,7 @@
 #define BUILTIN_ANY_TYPE    5
 #define RECORD_TYPE         34
 #define ARRAY_OF_CONST_TYPE 35
+#define TEXT_TYPE           36
 #define CHAR_TYPE           28
 #define POINTER_TYPE        29
 #define SET_TYPE            30

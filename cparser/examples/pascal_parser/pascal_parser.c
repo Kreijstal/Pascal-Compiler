@@ -264,6 +264,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_RANGE_TYPE: return "RANGE_TYPE";
         case PASCAL_T_POINTER_TYPE: return "POINTER_TYPE";
         case PASCAL_T_ARRAY_TYPE: return "ARRAY_TYPE";
+        case PASCAL_T_FILE_TYPE: return "FILE_TYPE";
         case PASCAL_T_RECORD_TYPE: return "RECORD_TYPE";
         case PASCAL_T_PROCEDURE_TYPE: return "PROCEDURE_TYPE";
         case PASCAL_T_FUNCTION_TYPE: return "FUNCTION_TYPE";

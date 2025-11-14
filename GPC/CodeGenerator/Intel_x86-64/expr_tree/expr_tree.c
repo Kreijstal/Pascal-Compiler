@@ -116,11 +116,6 @@ static inline const char *select_register_name(const Register_t *reg, int type_t
     return codegen_type_uses_qword(type_tag) ? reg->bit_64 : reg->bit_32;
 }
 
-static inline int expr_uses_qword(const struct Expression *expr)
-{
-    return expr_uses_qword_gpctype(expr);
-}
-
 static int expr_effective_storage_type(const struct Expression *expr)
 {
     if (expr != NULL && expr->resolved_gpc_type != NULL)
@@ -1275,6 +1270,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 case POINTER_TYPE:
                 case PROCEDURE:
                 case FILE_TYPE:
+                case TEXT_TYPE:
                 case REAL_TYPE:
                 case LONGINT_TYPE:
                 case UNKNOWN_TYPE:
