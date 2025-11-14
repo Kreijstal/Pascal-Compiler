@@ -33,6 +33,12 @@
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
+static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
+    CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
+static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
+    StackNode_t *file_node, long long element_size, int element_hash_tag);
+static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
+    long long *element_size_out, int *element_hash_tag_out);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -2548,6 +2554,120 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     return add_inst(inst_list, buffer);
 }
 
+static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
+    StackNode_t *file_node, long long element_size, int element_hash_tag)
+{
+    if (file_node == NULL || element_size <= 0)
+        return inst_list;
+
+    const char *slot_reg = current_arg_reg64(0);
+    const char *size_reg = current_arg_reg64(1);
+    const char *tag_reg = current_arg_reg32(2);
+    if (slot_reg == NULL || size_reg == NULL || tag_reg == NULL)
+        return inst_list;
+
+    char buffer[256];
+    if (file_node->is_static)
+    {
+        const char *label = (file_node->static_label != NULL) ?
+            file_node->static_label : file_node->label;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, slot_reg);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            file_node->offset, slot_reg);
+    }
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", element_size, size_reg);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", element_hash_tag, tag_reg);
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = add_inst(inst_list, "\tcall\tgpc_tfile_configure\n");
+    return inst_list;
+}
+
+static int codegen_type_tag_to_hashvar(int parser_tag)
+{
+    switch (parser_tag)
+    {
+        case CHAR_TYPE:
+            return HASHVAR_CHAR;
+        case BOOL:
+            return HASHVAR_BOOLEAN;
+        case LONGINT_TYPE:
+            return HASHVAR_LONGINT;
+        case REAL_TYPE:
+            return HASHVAR_REAL;
+        case INT_TYPE:
+            return HASHVAR_INTEGER;
+        default:
+            return HASHVAR_INTEGER;
+    }
+}
+
+static long long codegen_type_tag_size(int parser_tag)
+{
+    switch (parser_tag)
+    {
+        case CHAR_TYPE:
+        case BOOL:
+            return 1;
+        case LONGINT_TYPE:
+            return 8;
+        case REAL_TYPE:
+            return 8;
+        case INT_TYPE:
+        default:
+            return 4;
+    }
+}
+
+static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
+    long long *element_size_out, int *element_hash_tag_out)
+{
+    if (alias == NULL || !alias->is_file || element_size_out == NULL || element_hash_tag_out == NULL)
+        return 0;
+
+    int parser_tag = alias->file_type;
+    HashNode_t *type_node = NULL;
+    if (parser_tag == UNKNOWN_TYPE && alias->file_type_id != NULL && symtab != NULL)
+    {
+        if (FindIdent(&type_node, symtab, (char *)alias->file_type_id) >= 0 && type_node != NULL)
+        {
+            if (type_node->type != NULL)
+                parser_tag = gpc_type_get_primitive_tag(type_node->type);
+        }
+    }
+
+    if (parser_tag == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL)
+        parser_tag = gpc_type_get_primitive_tag(type_node->type);
+
+    if (parser_tag == UNKNOWN_TYPE)
+        parser_tag = INT_TYPE;
+
+    long long elem_size = codegen_type_tag_size(parser_tag);
+    int hash_tag = codegen_type_tag_to_hashvar(parser_tag);
+
+    if (type_node != NULL && type_node->type != NULL)
+    {
+        long long resolved_size = gpc_type_sizeof(type_node->type);
+        if (resolved_size > 0)
+            elem_size = resolved_size;
+
+        int resolved_tag = gpc_type_get_primitive_tag(type_node->type);
+        if (resolved_tag != UNKNOWN_TYPE)
+            hash_tag = codegen_type_tag_to_hashvar(resolved_tag);
+    }
+
+    *element_size_out = elem_size;
+    *element_hash_tag_out = hash_tag;
+    return 1;
+}
+
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     assert(ctx != NULL);
@@ -2594,6 +2714,12 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             /* Initialize FILE variables to NULL */
             if (type_node != NULL && node_is_file_type(type_node))
             {
+                long long file_elem_size = 0;
+                int file_elem_hash = HASHVAR_INTEGER;
+                struct TypeAlias *file_alias = get_type_alias_from_node(type_node);
+                int have_component = codegen_resolve_file_component(
+                    file_alias, symtab, &file_elem_size, &file_elem_hash);
+
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)
                 {
@@ -2604,6 +2730,10 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
                         inst_list = add_inst(inst_list, buffer);
+
+                        if (have_component)
+                            inst_list = codegen_emit_tfile_configure(inst_list,
+                                file_node, file_elem_size, file_elem_hash);
                     }
                     ids = ids->next;
                 }
