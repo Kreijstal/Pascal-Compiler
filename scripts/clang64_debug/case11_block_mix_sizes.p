@@ -1,31 +1,62 @@
-program DebugCase11BlockMix;
+program DebugCase11AppendSequences;
 
 uses SysUtils;
 
-type
-  TSmall = array[0..1] of Longint;
-  TLarge = array[0..7] of Longint;
+const
+  FileName = 'dbg_case11.bin';
 
 var
   F: file of Longint;
-  Small: TSmall;
-  Large: TLarge;
-  Count: Longint;
-  I: Integer;
+  V, Count: Longint;
+
+procedure AppendValue(Value: Longint; const Tag: string);
+var
+  PosBefore: Longint;
+begin
+  Assign(F, FileName);
+  Reset(F);
+  PosBefore := FilePos(F);
+  Seek(F, PosBefore);
+  Writeln(Tag, ' filepos_before=', PosBefore);
+  V := Value;
+  BlockWrite(F, V, 1);
+  Writeln(Tag, ' append IORes=', IOResult, ' filepos=', FilePos(F));
+  Close(F);
+end;
+
 begin
   Writeln('[CASE11] begin');
-  Assign(F, 'dbg_case11.bin');
+  Assign(F, FileName);
   {$I-}
   Rewrite(F);
-  Small[0] := 1; Small[1] := 2;
-  BlockWrite(F, Small, Length(Small), Count);
-  Writeln('[CASE11] wrote small block count=', Count, ' IORes=', IOResult);
-  for I := 0 to High(Large) do
-    Large[I] := I * 2;
-  BlockWrite(F, Large, Length(Large), Count);
-  Writeln('[CASE11] wrote large block count=', Count, ' IORes=', IOResult);
+  Writeln('[CASE11] rewrite IORes=', IOResult);
+  V := 1; BlockWrite(F, V, 1);
+  V := 2; BlockWrite(F, V, 1);
   Close(F);
+
+  AppendValue(10, '[CASE11] pass1');
+  AppendValue(20, '[CASE11] pass2');
+  AppendValue(30, '[CASE11] pass3');
+
+  Assign(F, FileName);
+  Reset(F);
+  BlockRead(F, V, 1, Count);
+  Writeln('[CASE11] read1 count=', Count, ' value=', V,
+    ' filepos=', FilePos(F), ' IORes=', IOResult);
+  BlockRead(F, V, 1, Count);
+  Writeln('[CASE11] read2 count=', Count, ' value=', V,
+    ' filepos=', FilePos(F), ' IORes=', IOResult);
+  BlockRead(F, V, 1, Count);
+  Writeln('[CASE11] read3 count=', Count, ' value=', V,
+    ' filepos=', FilePos(F), ' IORes=', IOResult);
+  BlockRead(F, V, 1, Count);
+  Writeln('[CASE11] read4 count=', Count, ' value=', V,
+    ' filepos=', FilePos(F), ' IORes=', IOResult);
+  BlockRead(F, V, 1, Count);
+  Writeln('[CASE11] read5 count=', Count, ' value=', V,
+    ' filepos=', FilePos(F), ' IORes=', IOResult);
+  Close(F);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case11.bin');
   Writeln('[CASE11] done');
 end.

@@ -1675,7 +1675,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
-    assert(stmt != NULL);
+    if (stmt == NULL)
+        return inst_list;
     assert(ctx != NULL);
     assert(symtab != NULL);
     switch(stmt->type)

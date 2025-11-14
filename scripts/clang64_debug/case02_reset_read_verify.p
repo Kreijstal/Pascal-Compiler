@@ -1,34 +1,42 @@
-program DebugCase02ResetRead;
+program DebugCase02BlockReadAdvances;
 
 uses SysUtils;
 
-type
-  TValues = array[0..2] of Longint;
+const
+  FileName = 'dbg_case02.bin';
 
 var
   F: file of Longint;
-  Values, ReadBack: TValues;
-  ReadCount: Longint;
+  V, Count: Longint;
+  I: Integer;
 begin
   Writeln('[CASE02] begin');
-  Assign(F, 'dbg_case02.bin');
+  Assign(F, FileName);
   {$I-}
   Rewrite(F);
   Writeln('[CASE02] rewrite IORes=', IOResult);
-  Values[0] := 101;
-  Values[1] := 202;
-  Values[2] := 303;
-  BlockWrite(F, Values, Length(Values));
-  Writeln('[CASE02] blockwrite IORes=', IOResult);
+  for I := 0 to 4 do
+  begin
+    V := I * 10;
+    BlockWrite(F, V, 1);
+    Writeln('[CASE02] write value=', V, ' IORes=', IOResult);
+  end;
   Close(F);
-  Writeln('[CASE02] close after write IORes=', IOResult);
+  Writeln('[CASE02] close_after_write IORes=', IOResult);
   Reset(F);
-  Writeln('[CASE02] reset IORes=', IOResult);
-  BlockRead(F, ReadBack, Length(ReadBack), ReadCount);
-  Writeln('[CASE02] blockread count=', ReadCount, ' IORes=', IOResult);
+  Writeln('[CASE02] reset IORes=', IOResult, ' filepos=', FilePos(F));
+  for I := 0 to 4 do
+  begin
+    BlockRead(F, V, 1, Count);
+    Writeln('[CASE02] read idx=', I, ' value=', V, ' count=', Count,
+      ' filepos=', FilePos(F), ' IORes=', IOResult);
+  end;
+  BlockRead(F, V, 1, Count);
+  Writeln('[CASE02] eof_read count=', Count, ' filepos=', FilePos(F),
+    ' IORes=', IOResult);
   Close(F);
-  Writeln('[CASE02] close after read IORes=', IOResult);
+  Writeln('[CASE02] final_close IORes=', IOResult);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case02.bin');
-  Writeln('[CASE02] done values=', ReadBack[0], ',', ReadBack[1], ',', ReadBack[2]);
+  Writeln('[CASE02] done');
 end.

@@ -1,42 +1,51 @@
-program DebugCase10AppendSim;
+program DebugCase10AppendSimulation;
 
 uses SysUtils;
 
+const
+  FileName = 'dbg_case10.bin';
+
 var
   F: file of Longint;
-  V: Longint;
-  Count: Longint;
+  V, Count, PosBefore: Longint;
+  EndPos: Longint;
 begin
   Writeln('[CASE10] begin');
-  Assign(F, 'dbg_case10.bin');
+  Assign(F, FileName);
   {$I-}
   Rewrite(F);
-  V := 5; BlockWrite(F, V, 1);
+  Writeln('[CASE10] rewrite IORes=', IOResult);
+  V := 5;
+  BlockWrite(F, V, 1);
+  Writeln('[CASE10] initial write IORes=', IOResult);
   Close(F);
   Reset(F);
+  Writeln('[CASE10] reset IORes=', IOResult, ' filepos=', FilePos(F));
   V := 0;
   Count := 0;
-  while True do
-  begin
+  repeat
+    PosBefore := FilePos(F);
     BlockRead(F, V, 1, Count);
-    if Count = 0 then
-      Break;
-  end;
-  Seek(F, FilePos(F));
+    Writeln('[CASE10] scan pos_before=', PosBefore, ' count=', Count,
+      ' value=', V, ' IORes=', IOResult);
+  until Count = 0;
+  EndPos := FilePos(F);
+  Writeln('[CASE10] reached eof filepos=', EndPos, ' IORes=', IOResult);
+  Seek(F, EndPos);
+  Writeln('[CASE10] seek_to_end IORes=', IOResult, ' filepos=', FilePos(F));
   V := 99;
   BlockWrite(F, V, 1);
-  Writeln('[CASE10] append style write IORes=', IOResult);
+  Writeln('[CASE10] append write IORes=', IOResult, ' filepos=', FilePos(F));
   Close(F);
   Reset(F);
-  while True do
-  begin
+  Writeln('[CASE10] reset_after_append IORes=', IOResult);
+  repeat
     BlockRead(F, V, 1, Count);
-    if Count = 0 then
-      Break;
-    Writeln('[CASE10] value=', V, ' IORes=', IOResult);
-  end;
+    Writeln('[CASE10] readback count=', Count, ' value=', V,
+      ' filepos=', FilePos(F), ' IORes=', IOResult);
+  until Count = 0;
   Close(F);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case10.bin');
   Writeln('[CASE10] done');
 end.

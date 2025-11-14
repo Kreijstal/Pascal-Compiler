@@ -1,28 +1,35 @@
-program DebugCase09CleanupSequence;
+program DebugCase09TruncateEffect;
 
 uses SysUtils;
 
+const
+  FileName = 'dbg_case09.bin';
+
 var
-  F1, F2: file of Longint;
-  V: Longint;
+  F: file of Longint;
+  V, Count: Longint;
 begin
   Writeln('[CASE09] begin');
-  Assign(F1, 'dbg_case09_a.bin');
-  Assign(F2, 'dbg_case09_b.bin');
+  Assign(F, FileName);
   {$I-}
-  Rewrite(F1);
-  Rewrite(F2);
-  Writeln('[CASE09] rewrites IORes=', IOResult);
-  V := 123;
-  BlockWrite(F1, V, 1);
-  BlockWrite(F2, V, 1);
-  Writeln('[CASE09] wrote to both files IORes=', IOResult);
-  Close(F1);
-  Writeln('[CASE09] close F1 IORes=', IOResult);
-  Close(F2);
-  Writeln('[CASE09] close F2 IORes=', IOResult);
+  Rewrite(F);
+  V := 5; BlockWrite(F, V, 1);
+  V := 6; BlockWrite(F, V, 1);
+  V := 7; BlockWrite(F, V, 1);
+  Close(F);
+  Reset(F);
+  Seek(F, 1);
+  Writeln('[CASE09] seek1 IORes=', IOResult, ' filepos=', FilePos(F));
+  Truncate(F);
+  Writeln('[CASE09] truncate_current IORes=', IOResult);
+  Seek(F, 0);
+  repeat
+    BlockRead(F, V, 1, Count);
+    Writeln('[CASE09] read count=', Count, ' value=', V,
+      ' filepos=', FilePos(F), ' IORes=', IOResult);
+  until Count = 0;
+  Close(F);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case09_a.bin');
-  DeleteFile('dbg_case09_b.bin');
   Writeln('[CASE09] done');
 end.

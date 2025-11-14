@@ -1,29 +1,37 @@
-program DebugCase04RewriteTwice;
+program DebugCase04ReadUntilEOF;
 
 uses SysUtils;
 
+const
+  FileName = 'dbg_case04.bin';
+
 var
   F: file of Longint;
-  Value: Longint;
+  V, Count: Longint;
+  LoopPos: Longint;
 begin
   Writeln('[CASE04] begin');
-  Assign(F, 'dbg_case04.bin');
+  Assign(F, FileName);
   {$I-}
   Rewrite(F);
-  Writeln('[CASE04] first rewrite IORes=', IOResult);
-  Value := 1;
-  BlockWrite(F, Value, 1);
-  Writeln('[CASE04] first blockwrite IORes=', IOResult);
+  Writeln('[CASE04] rewrite IORes=', IOResult);
+  V := 7; BlockWrite(F, V, 1);
+  V := 9; BlockWrite(F, V, 1);
+  V := 12; BlockWrite(F, V, 1);
   Close(F);
-  Writeln('[CASE04] close1 IORes=', IOResult);
-  Rewrite(F);
-  Writeln('[CASE04] second rewrite IORes=', IOResult);
-  Value := 2;
-  BlockWrite(F, Value, 1);
-  Writeln('[CASE04] second blockwrite IORes=', IOResult);
+  Reset(F);
+  Writeln('[CASE04] reset IORes=', IOResult);
+  repeat
+    LoopPos := FilePos(F);
+    BlockRead(F, V, 1, Count);
+    Writeln('[CASE04] loop filepos_before=', LoopPos,
+      ' count=', Count, ' value=', V, ' IORes=', IOResult);
+  until Count = 0;
+  Writeln('[CASE04] final filepos=', FilePos(F), ' IORes=', IOResult);
+  Seek(F, FilePos(F));
+  Writeln('[CASE04] seek_to_eof IORes=', IOResult, ' filepos=', FilePos(F));
   Close(F);
-  Writeln('[CASE04] close2 IORes=', IOResult);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case04.bin');
   Writeln('[CASE04] done');
 end.

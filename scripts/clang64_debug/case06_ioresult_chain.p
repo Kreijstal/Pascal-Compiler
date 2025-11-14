@@ -1,35 +1,39 @@
-program DebugCase06IOResult;
+program DebugCase06MixedReads;
 
 uses SysUtils;
 
+const
+  FileName = 'dbg_case06.bin';
+
 var
   F: file of Longint;
-  V: Longint;
-  Count: Longint;
+  Buf: array[0..3] of Longint;
+  Count, I: Longint;
 begin
   Writeln('[CASE06] begin');
-  Assign(F, 'dbg_case06.bin');
+  Assign(F, FileName);
   {$I-}
   Rewrite(F);
-  Writeln('[CASE06] rewrite IORes=', IOResult);
-  for V := 0 to 4 do
+  for I := 0 to 3 do
   begin
-    BlockWrite(F, V, 1, Count);
-    Writeln('[CASE06] write value=', V, ' count=', Count, ' IORes=', IOResult);
+    Buf[I] := I + 1;
+    BlockWrite(F, Buf[I], 1);
   end;
+  Writeln('[CASE06] wrote values IORes=', IOResult);
   Close(F);
-  Writeln('[CASE06] close IORes=', IOResult);
   Reset(F);
   Writeln('[CASE06] reset IORes=', IOResult);
-  while True do
-  begin
-    BlockRead(F, V, 1, Count);
-    if Count = 0 then
-      Break;
-    Writeln('[CASE06] read value=', V, ' count=', Count, ' IORes=', IOResult);
-  end;
+  BlockRead(F, Buf, 2, Count);
+  Writeln('[CASE06] blockread_two count=', Count, ' filepos=', FilePos(F),
+    ' IORes=', IOResult);
+  BlockRead(F, Buf, 1, Count);
+  Writeln('[CASE06] blockread_one count=', Count, ' filepos=', FilePos(F),
+    ' IORes=', IOResult);
+  BlockRead(F, Buf, 5, Count);
+  Writeln('[CASE06] blockread_overflow count=', Count, ' filepos=', FilePos(F),
+    ' IORes=', IOResult);
   Close(F);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case06.bin');
   Writeln('[CASE06] done');
 end.

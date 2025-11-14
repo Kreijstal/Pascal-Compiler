@@ -994,7 +994,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     int return_val;
 
     assert(symtab != NULL);
-    assert(stmt != NULL);
+    if (stmt == NULL)
+        return 0;
 
     return_val = 0;
     switch(stmt->type)
@@ -2198,12 +2199,15 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
 
     return_val = 0;
     stmt_list = stmt->stmt_data.compound_statement;
-    while(stmt_list != NULL)
+    while (stmt_list != NULL)
     {
         assert(stmt_list->type == LIST_STMT);
 
-        return_val += semcheck_stmt_main(symtab,
-            (struct Statement *)stmt_list->cur, max_scope_lev);
+        if (stmt_list->cur != NULL)
+        {
+            return_val += semcheck_stmt_main(symtab,
+                (struct Statement *)stmt_list->cur, max_scope_lev);
+        }
 
         stmt_list = stmt_list->next;
     }

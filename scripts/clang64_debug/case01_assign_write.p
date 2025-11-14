@@ -1,28 +1,30 @@
-program DebugCase01AssignWrite;
+program DebugCase01FilePosReset;
 
 uses SysUtils;
 
-type
-  TValues = array[0..2] of Longint;
+const
+  FileName = 'dbg_case01.bin';
 
 var
   F: file of Longint;
-  Values: TValues;
-  Written: Longint;
+  PosValue: Longint;
 begin
   Writeln('[CASE01] begin');
-  Assign(F, 'dbg_case01.bin');
+  Assign(F, FileName);
   {$I-}
   Rewrite(F);
   Writeln('[CASE01] rewrite IORes=', IOResult);
-  Values[0] := 11;
-  Values[1] := 22;
-  Values[2] := 33;
-  BlockWrite(F, Values, Length(Values), Written);
-  Writeln('[CASE01] blockwrite count=', Written, ' IORes=', IOResult);
   Close(F);
-  Writeln('[CASE01] close IORes=', IOResult);
+  Writeln('[CASE01] close_after_rewrite IORes=', IOResult);
+  Reset(F);
+  Writeln('[CASE01] reset IORes=', IOResult);
+  PosValue := FilePos(F);
+  Writeln('[CASE01] filepos_after_reset=', PosValue, ' IORes=', IOResult);
+  Seek(F, 0);
+  Writeln('[CASE01] seek0 IORes=', IOResult, ' filepos=', FilePos(F));
+  Close(F);
+  Writeln('[CASE01] final_close IORes=', IOResult);
+  DeleteFile(FileName);
   {$I+}
-  DeleteFile('dbg_case01.bin');
   Writeln('[CASE01] done');
 end.

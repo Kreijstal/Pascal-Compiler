@@ -222,6 +222,14 @@ begin
     end
 end;
 
+procedure filepos_impl(var f: file; var position: int64);
+begin
+    assembler;
+    asm
+        call gpc_tfile_filepos
+    end
+end;
+
 procedure move_impl(var source; var dest; count: longint);
 begin
     assembler;
@@ -374,11 +382,12 @@ begin
 end;
 
 function FilePos(var f: file): longint; overload;
+var
+    pos64: int64;
 begin
-    assembler;
-    asm
-        call gpc_tfile_filepos
-    end
+    pos64 := 0;
+    filepos_impl(f, pos64);
+    FilePos := longint(pos64);
 end;
 
 procedure Truncate(var f: file); overload;
