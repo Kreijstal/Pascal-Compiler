@@ -1302,13 +1302,42 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
-    int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+    int is_array_expr = (arg_expr != NULL && arg_expr->is_array_expr);
+    int is_dynamic_array = (is_array_expr && arg_expr->array_is_dynamic);
+    int is_static_array = (is_array_expr && !arg_expr->array_is_dynamic);
 
     const char *mangled_name = NULL;
     if (error_count == 0 && arg_type == STRING_TYPE)
         mangled_name = "gpc_string_length";
     else if (error_count == 0 && is_dynamic_array)
         mangled_name = "__gpc_dynarray_length";
+    else if (error_count == 0 && is_static_array)
+    {
+        long long lower_bound = arg_expr->array_lower_bound;
+        long long upper_bound = arg_expr->array_upper_bound;
+        long long length_value = 0;
+        if (upper_bound >= lower_bound)
+            length_value = (upper_bound - lower_bound) + 1;
+
+        destroy_list(expr->expr_data.function_call_data.args_expr);
+        expr->expr_data.function_call_data.args_expr = NULL;
+        if (expr->expr_data.function_call_data.id != NULL)
+        {
+            free(expr->expr_data.function_call_data.id);
+            expr->expr_data.function_call_data.id = NULL;
+        }
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+        {
+            free(expr->expr_data.function_call_data.mangled_id);
+            expr->expr_data.function_call_data.mangled_id = NULL;
+        }
+        semcheck_reset_function_call_cache(expr);
+        expr->type = EXPR_INUM;
+        expr->expr_data.i_num = length_value;
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
     else if (error_count == 0)
     {
         fprintf(stderr, "Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
