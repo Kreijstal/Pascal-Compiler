@@ -331,6 +331,197 @@ int gpc_tfile_write_real(GPCTextFile **slot, double value)
     return (n == 1) ? 0 : 1;
 }
 
+int gpc_tfile_blockread(GPCTextFile **slot, void *buffer, size_t count, long long *actual_read)
+{
+    if (slot == NULL || buffer == NULL)
+        return 1;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+
+    size_t elem_size = file->element_size;
+    if (elem_size == 0)
+    {
+        switch (file->element_type)
+        {
+            case GPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
+            case GPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
+            case GPC_BINARY_INT32:
+            case GPC_BINARY_UNSPECIFIED:
+            default:
+                elem_size = sizeof(int32_t);
+                break;
+        }
+        file->element_size = elem_size;
+    }
+
+    if (count == 0)
+    {
+        if (actual_read != NULL)
+            *actual_read = 0;
+        return 0;
+    }
+
+    size_t read_elems = fread(buffer, elem_size, count, file->handle);
+    if (actual_read != NULL)
+        *actual_read = (long long)read_elems;
+
+    if (read_elems == count)
+        return 0;
+    if (feof(file->handle))
+        return 1;
+    return ferror(file->handle) ? 2 : 1;
+}
+
+int gpc_tfile_blockwrite(GPCTextFile **slot, const void *buffer, size_t count, long long *actual_written)
+{
+    if (slot == NULL || buffer == NULL)
+        return 1;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+
+    size_t elem_size = file->element_size;
+    if (elem_size == 0)
+    {
+        switch (file->element_type)
+        {
+            case GPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
+            case GPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
+            case GPC_BINARY_INT32:
+            case GPC_BINARY_UNSPECIFIED:
+            default:
+                elem_size = sizeof(int32_t);
+                break;
+        }
+        file->element_size = elem_size;
+    }
+
+    if (count == 0)
+    {
+        if (actual_written != NULL)
+            *actual_written = 0;
+        return 0;
+    }
+
+    size_t written = fwrite(buffer, elem_size, count, file->handle);
+    if (actual_written != NULL)
+        *actual_written = (long long)written;
+
+    if (written == count)
+        return 0;
+    return ferror(file->handle) ? 2 : 1;
+}
+
+
+int gpc_tfile_seek(GPCTextFile **slot, long long index)
+{
+    if (slot == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+
+    size_t elem_size = file->element_size;
+    if (elem_size == 0)
+    {
+        switch (file->element_type)
+        {
+            case GPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
+            case GPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
+            case GPC_BINARY_INT32:
+            case GPC_BINARY_UNSPECIFIED:
+            default:
+                elem_size = sizeof(int32_t);
+                break;
+        }
+        file->element_size = elem_size;
+    }
+
+    if (fseeko(file->handle, elem_size * index, SEEK_SET) != 0)
+        return 1;
+    return 0;
+}
+
+int gpc_tfile_filepos(GPCTextFile **slot, long long *position)
+{
+    if (slot == NULL || position == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+
+    size_t elem_size = file->element_size;
+    if (elem_size == 0)
+    {
+        switch (file->element_type)
+        {
+            case GPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
+            case GPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
+            case GPC_BINARY_INT32:
+            case GPC_BINARY_UNSPECIFIED:
+            default:
+                elem_size = sizeof(int32_t);
+                break;
+        }
+        file->element_size = elem_size;
+    }
+
+    off_t offset = ftello(file->handle);
+    if (offset == (off_t)-1)
+        return 1;
+    *position = (long long)(offset / (off_t)elem_size);
+    return 0;
+}
+
+int gpc_tfile_truncate(GPCTextFile **slot, long long length)
+{
+    if (slot == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+
+    size_t elem_size = file->element_size;
+    if (elem_size == 0)
+    {
+        switch (file->element_type)
+        {
+            case GPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
+            case GPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
+            case GPC_BINARY_INT32:
+            case GPC_BINARY_UNSPECIFIED:
+            default:
+                elem_size = sizeof(int32_t);
+                break;
+        }
+        file->element_size = elem_size;
+    }
+
+    off_t target = (off_t)(elem_size * length);
+    if (fflush(file->handle) != 0)
+        return 1;
+
+#ifdef _WIN32
+    int fd = _fileno(file->handle);
+    if (fd == -1)
+        return 1;
+    if (_chsize_s(fd, target) != 0)
+        return 1;
+#else
+    int fd = fileno(file->handle);
+    if (fd == -1)
+        return 1;
+    if (ftruncate(fd, target) != 0)
+        return 1;
+#endif
+
+    if (fseeko(file->handle, target, SEEK_SET) != 0)
+        return 1;
+    return 0;
+}
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }

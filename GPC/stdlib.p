@@ -182,6 +182,22 @@ begin
     end
 end;
 
+procedure blockread_impl(var f: file; var buffer; count: longint; result_ptr: pointer);
+begin
+    assembler;
+    asm
+        call gpc_tfile_blockread
+    end
+end;
+
+procedure blockwrite_impl(var f: file; var buffer; count: longint; result_ptr: pointer);
+begin
+    assembler;
+    asm
+        call gpc_tfile_blockwrite
+    end
+end;
+
 procedure move_impl(var source; var dest; count: longint);
 begin
     assembler;
@@ -308,6 +324,51 @@ end;
 procedure FreeMem(var target);
 begin
     freemem_impl(target);
+end;
+
+procedure BlockRead(var f: file; var buffer; count: longint); overload;
+begin
+    blockread_impl(f, buffer, count, nil);
+end;
+
+procedure BlockRead(var f: file; var buffer; count: longint; var result: longint); overload;
+begin
+    blockread_impl(f, buffer, count, @result);
+end;
+
+
+procedure Seek(var f: file; index: longint); overload;
+begin
+    assembler;
+    asm
+        call gpc_tfile_seek
+    end
+end;
+
+function FilePos(var f: file): longint; overload;
+begin
+    assembler;
+    asm
+        call gpc_tfile_filepos
+    end
+end;
+
+procedure Truncate(var f: file; length: longint); overload;
+begin
+    assembler;
+    asm
+        call gpc_tfile_truncate
+    end
+end;
+
+procedure BlockWrite(var f: file; var buffer; count: longint); overload;
+begin
+    blockwrite_impl(f, buffer, count, nil);
+end;
+
+procedure BlockWrite(var f: file; var buffer; count: longint; var result: longint); overload;
+begin
+    blockwrite_impl(f, buffer, count, @result);
 end;
 
 procedure readln(var value: string);
