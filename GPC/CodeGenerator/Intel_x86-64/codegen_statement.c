@@ -74,8 +74,6 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     Register_t **out_reg, const char *message);
 static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_fillchar(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_getmem(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_freemem(struct Statement *stmt, ListNode_t *inst_list,
@@ -1988,105 +1986,6 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_fillchar(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
-    {
-        fprintf(stderr, "ERROR: FillChar expects three arguments.\n");
-        return inst_list;
-    }
-
-    struct Expression *dest_expr = (struct Expression *)args_expr->cur;
-    struct Expression *count_expr = (struct Expression *)args_expr->next->cur;
-    struct Expression *value_expr = (struct Expression *)args_expr->next->next->cur;
-
-    if (!codegen_expr_is_addressable(dest_expr))
-    {
-        fprintf(stderr, "ERROR: FillChar destination must be addressable.\n");
-        return inst_list;
-    }
-
-    Register_t *addr_reg = NULL;
-    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &addr_reg);
-    if (codegen_had_error(ctx) || addr_reg == NULL)
-        return inst_list;
-
-    StackNode_t *dest_temp = add_l_t("fillchar_dest");
-    if (dest_temp == NULL)
-    {
-        free_reg(get_reg_stack(), addr_reg);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for FillChar destination.");
-    }
-
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", addr_reg->bit_64, dest_temp->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), addr_reg);
-
-    Register_t *count_reg = NULL;
-    inst_list = codegen_expr_with_result(count_expr, inst_list, ctx, &count_reg);
-    if (codegen_had_error(ctx) || count_reg == NULL)
-    {
-        if (count_reg != NULL)
-            free_reg(get_reg_stack(), count_reg);
-        return inst_list;
-    }
-
-    StackNode_t *count_temp = add_l_t("fillchar_count");
-    if (count_temp == NULL)
-    {
-        free_reg(get_reg_stack(), count_reg);
-        return inst_list;
-    }
-
-    if (!expr_uses_qword_gpctype(count_expr))
-        inst_list = codegen_sign_extend32_to64(inst_list, count_reg->bit_32, count_reg->bit_64);
-
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", count_reg->bit_64, count_temp->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), count_reg);
-
-    Register_t *value_reg = NULL;
-    inst_list = codegen_expr_with_result(value_expr, inst_list, ctx, &value_reg);
-    if (codegen_had_error(ctx) || value_reg == NULL)
-    {
-        if (value_reg != NULL)
-            free_reg(get_reg_stack(), value_reg);
-        return inst_list;
-    }
-
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rcx\n", dest_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", count_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%r8d\n", value_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdi\n", dest_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n", count_temp->offset);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%edx\n", value_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = add_inst(inst_list, "\tcall\tgpc_fillchar\n");
-
-    free_reg(get_reg_stack(), value_reg);
-    free_arg_regs();
-    return inst_list;
-}
-
 static ListNode_t *codegen_builtin_getmem(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -3678,15 +3577,6 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "readln"))
     {
         inst_list = codegen_builtin_read_like(stmt, inst_list, ctx, 1);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "FillChar"))
-    {
-        inst_list = codegen_builtin_fillchar(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

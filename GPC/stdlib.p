@@ -220,6 +220,27 @@ begin
     move_impl(source, dest, count);
 end;
 
+procedure fillchar_impl(var dest; count: longint; value: integer);
+begin
+    assembler;
+    asm
+        call gpc_fillchar
+    end
+end;
+
+procedure FillChar(var dest; count: integer; value: integer); overload;
+var
+    count_long: longint;
+begin
+    count_long := count;
+    fillchar_impl(dest, count_long, value);
+end;
+
+procedure FillChar(var dest; count: longint; value: integer); overload;
+begin
+    fillchar_impl(dest, count, value);
+end;
+
 procedure readln(var value: string);
 begin
     assembler;

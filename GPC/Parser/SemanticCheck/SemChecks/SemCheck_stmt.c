@@ -402,45 +402,6 @@ static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
     return NULL;
 }
 
-static int semcheck_builtin_fillchar(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, FillChar expects exactly three arguments.\n", stmt->line_num);
-        return 1;
-    }
-
-    int return_val = 0;
-    struct Expression *dest_expr = (struct Expression *)args->cur;
-    struct Expression *count_expr = (struct Expression *)args->next->cur;
-    struct Expression *value_expr = (struct Expression *)args->next->next->cur;
-
-    int dest_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&dest_type, symtab, dest_expr, max_scope_lev, MUTATE);
-
-    int count_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&count_type, symtab, count_expr, INT_MAX, NO_MUTATE);
-    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, FillChar count must be an integer.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    int value_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
-    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != CHAR_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, FillChar value must be an integer or char.\n", stmt->line_num);
-        ++return_val;
-    }
-
-    return return_val;
-}
-
 static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (stmt == NULL)
@@ -1756,12 +1717,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "readln",
         semcheck_builtin_read_like, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "FillChar",
-        semcheck_builtin_fillchar, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 

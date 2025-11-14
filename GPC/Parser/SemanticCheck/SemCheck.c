@@ -1960,14 +1960,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(readln_name);
     }
 
-    char *fillchar_name = strdup("FillChar");
-    if (fillchar_name != NULL) {
-        GpcType *fillchar_type = create_procedure_type(NULL, NULL);
-        assert(fillchar_type != NULL && "Failed to create FillChar procedure type");
-        AddBuiltinProc_Typed(symtab, fillchar_name, fillchar_type);
-        destroy_gpc_type(fillchar_type);
-        free(fillchar_name);
-    }
     char *getmem_name = strdup("GetMem");
     if (getmem_name != NULL) {
         GpcType *getmem_type = create_procedure_type(NULL, NULL);
