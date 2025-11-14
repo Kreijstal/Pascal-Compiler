@@ -41,12 +41,18 @@ jobs:
 
     - name: Run tests
       shell: msys2 {0}
-      run: meson test -v -C builddir
+      env:
+        GPC_CI_FAILURE_DIR: builddir/failing-tests
+      run: |
+        rm -rf builddir/failing-tests
+        meson test -v -C builddir
 
     - name: Upload meson logs (on failure)
       if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: meson-logs-${{ matrix.sys }}
-        path: builddir/meson-logs/
+        path: |
+          builddir/meson-logs/
+          builddir/failing-tests/
         if-no-files-found: ignore

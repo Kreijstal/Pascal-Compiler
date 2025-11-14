@@ -10,6 +10,7 @@ import sys
 import time
 import traceback
 import unittest
+from pathlib import Path
 
 WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
@@ -51,6 +52,82 @@ VALGRIND_MODE = os.environ.get("VALGRIND", "false").lower() in ("1", "true", "ye
 # from TestCompiler.tearDownClass() and written to stderr to keep TAP output
 # intact.
 COMPILER_RUNS = []
+
+FAILURE_ARTIFACT_DIR_ENV = os.environ.get("GPC_CI_FAILURE_DIR")
+FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
+
+
+def _sanitize_test_identifier(name):
+    return (
+        name.replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "_")
+        .replace(" ", "_")
+    )
+
+
+def _copy_artifact(path, dest_dir):
+    if not path:
+        return
+    src = Path(path)
+    if not src.exists():
+        return
+    try:
+        shutil.copy2(src, dest_dir / src.name)
+    except OSError:
+        pass
+
+
+def _write_artifact_text(dest_dir, filename, content):
+    if content is None:
+        return
+    target = dest_dir / filename
+    target.write_text(str(content), encoding="utf-8", errors="ignore")
+
+
+def _store_failure_artifacts(
+    test_id,
+    base_name=None,
+    *,
+    input_file=None,
+    asm_file=None,
+    executable_file=None,
+    expected_file=None,
+    compiler_output=None,
+    normalized_output=None,
+    raw_stdout=None,
+    raw_stderr=None,
+    expected_output=None,
+    returncode=None,
+    exception_text=None,
+):
+    if FAILURE_ARTIFACT_DIR is None:
+        return
+
+    case_name = base_name or test_id.split(".")[-1]
+    dest = FAILURE_ARTIFACT_DIR / _sanitize_test_identifier(case_name)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    info_lines = [
+        f"test_id={test_id}",
+        f"case={case_name}",
+    ]
+    if returncode is not None:
+        info_lines.append(f"returncode={returncode}")
+    (dest / "info.txt").write_text(
+        "\n".join(info_lines), encoding="utf-8", errors="ignore"
+    )
+
+    for candidate in (input_file, asm_file, executable_file, expected_file):
+        _copy_artifact(candidate, dest)
+
+    _write_artifact_text(dest, "compiler-stderr.txt", compiler_output)
+    _write_artifact_text(dest, "raw-stdout.txt", raw_stdout)
+    _write_artifact_text(dest, "raw-stderr.txt", raw_stderr)
+    _write_artifact_text(dest, "normalized-output.txt", normalized_output)
+    _write_artifact_text(dest, "expected-output.txt", expected_output)
+    if exception_text:
+        _write_artifact_text(dest, "exception.txt", exception_text)
 
 # Flags that explicitly request a target ABI so we do not override them.
 EXPLICIT_TARGET_FLAGS = {
@@ -329,6 +406,40 @@ def read_file_content(filepath):
 
 
 class TestCompiler(unittest.TestCase):
+    def __init__(self, methodName="runTest"):
+        super().__init__(methodName)
+        self._artifact_context = None
+
+    def record_failure_context(self, **kwargs):
+        if FAILURE_ARTIFACT_DIR is None:
+            return
+        if self._artifact_context is None:
+            self._artifact_context = {}
+        context = {}
+        for key, value in kwargs.items():
+            if value is not None:
+                context[key] = value
+        if not context:
+            return
+        existing = dict(self._artifact_context)
+        existing.update(context)
+        if "base_name" not in existing:
+            existing["base_name"] = kwargs.get("base_name") or self.id().split(".")[-1]
+        self._artifact_context = existing
+
+    def _callTestMethod(self, method):
+        try:
+            super()._callTestMethod(method)
+        except Exception:
+            if FAILURE_ARTIFACT_DIR is not None:
+                ctx = self._artifact_context or {}
+                ctx = dict(ctx)
+                ctx.setdefault("exception_text", traceback.format_exc())
+                base_name = ctx.pop("base_name", None)
+                _store_failure_artifacts(self.id(), base_name, **ctx)
+            raise
+        finally:
+            self._artifact_context = None
     @classmethod
     def setUpClass(cls):
         cls._ensure_compiler_built()
@@ -1898,51 +2009,92 @@ def _discover_and_add_auto_tests():
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.input")
 
-                # Compile the pascal program to assembly
-                run_compiler(input_file, asm_file)
+                compiler_output = None
+                actual_output = None
+                raw_stdout = None
+                raw_stderr = None
+                expected_output = None
+                process_returncode = None
 
-                # Compile the assembly to an executable
-                self.compile_executable(asm_file, executable_file)
+                self.record_failure_context(
+                    base_name=test_base_name,
+                    input_file=input_file,
+                    asm_file=asm_file,
+                    executable_file=executable_file,
+                    expected_file=expected_output_file,
+                )
 
-                # Check if there's an input file for stdin
-                stdin_input = None
-                if os.path.exists(input_data_file):
-                    stdin_input = read_file_content(input_data_file)
-
-                # Run the executable and check the output
                 try:
-                    # Only pass input parameter if there's actual stdin data
+                    compiler_output = run_compiler(input_file, asm_file)
+
+                    self.compile_executable(asm_file, executable_file)
+
+                    stdin_input = None
+                    if os.path.exists(input_data_file):
+                        stdin_input = read_file_content(input_data_file)
+
                     if stdin_input is not None:
                         process = run_executable_with_valgrind(
-                            [executable_file], 
-                            capture_output=True, 
-                            text=True, 
+                            [executable_file],
+                            capture_output=True,
+                            text=True,
                             timeout=EXEC_TIMEOUT,
-                            input=stdin_input
+                            input=stdin_input,
                         )
                     else:
                         process = run_executable_with_valgrind(
-                            [executable_file], 
-                            capture_output=True, 
-                            text=True, 
-                            timeout=EXEC_TIMEOUT
+                            [executable_file],
+                            capture_output=True,
+                            text=True,
+                            timeout=EXEC_TIMEOUT,
                         )
+                    raw_stdout = process.stdout
+                    raw_stderr = process.stderr
+                    process_returncode = process.returncode
+
                     expected_output = read_file_content(expected_output_file)
-                    # Normalize line endings for cross-platform compatibility
-                    # On Wine/Windows, \r\n in strings gets converted by Windows text mode to \r\r\n,
-                    # which Python then reads as \n\n. Normalize by removing \r and collapsing \n\n to \n.
-                    # Normalize text mode quirks:
-                    # Windows text mode turns '\n' into '\r\n'. When original data contains
-                    # an explicit '\r\n', the CRT can yield '\r\r\n'. Compress those first.
-                    text = process.stdout
-                    while '\r\r\n' in text:
-                        text = text.replace('\r\r\n', '\r\n')
-                    # Now normalize CRLF to LF and strip stray CR
-                    actual_output = text.replace('\r\n', '\n').replace('\r', '')
+                    text = raw_stdout
+                    if text is None:
+                        text = ""
+                    while "\r\r\n" in text:
+                        text = text.replace("\r\r\n", "\r\n")
+                    actual_output = text.replace("\r\n", "\n").replace("\r", "")
+
+                    self.record_failure_context(
+                        base_name=test_base_name,
+                        compiler_output=compiler_output,
+                        normalized_output=actual_output,
+                        raw_stdout=raw_stdout,
+                        raw_stderr=raw_stderr,
+                        expected_output=expected_output,
+                        returncode=process_returncode,
+                    )
+
                     self.assertEqual(actual_output, expected_output)
-                    self.assertEqual(process.returncode, 0)
+                    self.assertEqual(process_returncode, 0)
                 except subprocess.TimeoutExpired:
+                    self.record_failure_context(
+                        base_name=test_base_name,
+                        compiler_output=compiler_output,
+                        normalized_output=actual_output,
+                        raw_stdout=raw_stdout,
+                        raw_stderr=raw_stderr,
+                        expected_output=expected_output,
+                        returncode=process_returncode,
+                        exception_text=traceback.format_exc(),
+                    )
                     self.fail(f"Test {test_base_name} execution timed out.")
+                except Exception:
+                    self.record_failure_context(
+                        base_name=test_base_name,
+                        compiler_output=compiler_output,
+                        normalized_output=actual_output,
+                        raw_stdout=raw_stdout,
+                        raw_stderr=raw_stderr,
+                        expected_output=expected_output,
+                        returncode=process_returncode,
+                    )
+                    raise
             
             test_method.__name__ = method_name
             test_method.__doc__ = f"Auto-discovered test case for {test_base_name}.p"
