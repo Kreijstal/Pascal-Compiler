@@ -46,17 +46,36 @@ static int gpc_env_flag(const char *name);
 
 int64_t gpc_current_exception = 0;
 
+typedef enum {
+    GPC_FILE_KIND_TEXT = 0,
+    GPC_FILE_KIND_BINARY = 1
+} GPCFileKind;
+
+typedef enum {
+    GPC_BINARY_UNSPECIFIED = 0,
+    GPC_BINARY_INT32,
+    GPC_BINARY_CHAR,
+    GPC_BINARY_DOUBLE
+} GPCBinaryType;
+
 typedef struct GPCTextFile
 {
     FILE *handle;
     char *path;
     int mode;
+    GPCFileKind kind;
+    GPCBinaryType element_type;
+    size_t element_size;
 } GPCTextFile;
 
 int gpc_file_is_text(void **slot)
 {
-    (void)slot;
-    return 0;
+    if (slot == NULL)
+        return 1;
+    GPCTextFile *file = (GPCTextFile *)(*slot);
+    if (file == NULL)
+        return 1;
+    return (file->kind != GPC_FILE_KIND_BINARY);
 }
 
 static FILE *gpc_text_output_stream(GPCTextFile *file)
@@ -105,6 +124,9 @@ void gpc_tfile_assign(GPCTextFile **slot, const char *path)
         *slot = file;
     }
 
+    file->kind = GPC_FILE_KIND_BINARY;
+    file->element_type = GPC_BINARY_UNSPECIFIED;
+    file->element_size = 0;
     if (file->handle != NULL)
     {
         fclose(file->handle);
@@ -122,6 +144,39 @@ void gpc_tfile_assign(GPCTextFile **slot, const char *path)
         file->path = (char *)malloc(len + 1);
         if (file->path != NULL)
             memcpy(file->path, path, len + 1);
+    }
+
+    if (file->element_type == GPC_BINARY_UNSPECIFIED)
+    {
+        file->element_type = GPC_BINARY_INT32;
+        file->element_size = sizeof(int32_t);
+    }
+}
+
+void gpc_tfile_configure(GPCTextFile **slot, size_t element_size, int element_tag)
+{
+    if (slot == NULL)
+        return;
+    GPCTextFile *file = *slot;
+    if (file == NULL)
+        return;
+    file->kind = GPC_FILE_KIND_BINARY;
+    if (element_size > 0)
+        file->element_size = element_size;
+
+    switch (element_tag)
+    {
+        case HASHVAR_CHAR:
+            file->element_type = GPC_BINARY_CHAR;
+            break;
+        case HASHVAR_REAL:
+            file->element_type = GPC_BINARY_DOUBLE;
+            break;
+        case HASHVAR_INTEGER:
+        case HASHVAR_LONGINT:
+        default:
+            file->element_type = GPC_BINARY_INT32;
+            break;
     }
 }
 
@@ -142,7 +197,10 @@ void gpc_tfile_rewrite(GPCTextFile **slot)
 
     file->handle = fopen(file->path, "wb");
     if (file->handle != NULL)
+    {
         file->mode = 1; /* write mode */
+        file->kind = GPC_FILE_KIND_BINARY;
+    }
     else
         file->mode = 0;
 }
@@ -164,7 +222,10 @@ void gpc_tfile_reset(GPCTextFile **slot)
 
     file->handle = fopen(file->path, "rb");
     if (file->handle != NULL)
+    {
         file->mode = 2; /* read mode */
+        file->kind = GPC_FILE_KIND_BINARY;
+    }
     else
         file->mode = 0;
 }
@@ -192,6 +253,8 @@ int gpc_tfile_read_int(GPCTextFile **slot, int32_t *ptr)
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
         return 1;
+    file->element_type = GPC_BINARY_INT32;
+    file->element_size = sizeof(int32_t);
     size_t n = fread(ptr, sizeof(int32_t), 1, file->handle);
     return (n == 1) ? 0 : 1;
 }
@@ -204,6 +267,8 @@ int gpc_tfile_read_char(GPCTextFile **slot, char *ptr)
     if (file == NULL || file->handle == NULL)
         return 1;
     unsigned char ch;
+    file->element_type = GPC_BINARY_CHAR;
+    file->element_size = sizeof(unsigned char);
     size_t n = fread(&ch, sizeof(unsigned char), 1, file->handle);
     if (n == 1)
     {
@@ -220,6 +285,8 @@ int gpc_tfile_read_real(GPCTextFile **slot, double *ptr)
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
         return 1;
+    file->element_type = GPC_BINARY_DOUBLE;
+    file->element_size = sizeof(double);
     size_t n = fread(ptr, sizeof(double), 1, file->handle);
     return (n == 1) ? 0 : 1;
 }
@@ -231,6 +298,8 @@ int gpc_tfile_write_int(GPCTextFile **slot, int32_t value)
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
         return 1;
+    file->element_type = GPC_BINARY_INT32;
+    file->element_size = sizeof(int32_t);
     size_t n = fwrite(&value, sizeof(int32_t), 1, file->handle);
     return (n == 1) ? 0 : 1;
 }
@@ -243,6 +312,8 @@ int gpc_tfile_write_char(GPCTextFile **slot, char value)
     if (file == NULL || file->handle == NULL)
         return 1;
     unsigned char ch = (unsigned char)value;
+    file->element_type = GPC_BINARY_CHAR;
+    file->element_size = sizeof(unsigned char);
     size_t n = fwrite(&ch, sizeof(unsigned char), 1, file->handle);
     return (n == 1) ? 0 : 1;
 }
@@ -254,6 +325,8 @@ int gpc_tfile_write_real(GPCTextFile **slot, double value)
     GPCTextFile *file = *slot;
     if (file == NULL || file->handle == NULL)
         return 1;
+    file->element_type = GPC_BINARY_DOUBLE;
+    file->element_size = sizeof(double);
     size_t n = fwrite(&value, sizeof(double), 1, file->handle);
     return (n == 1) ? 0 : 1;
 }

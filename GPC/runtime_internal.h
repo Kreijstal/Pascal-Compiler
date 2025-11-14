@@ -2,6 +2,7 @@
 #define GPC_RUNTIME_INTERNAL_H
 
 #include <stddef.h>
+#include "Parser/SemanticCheck/HashTable/HashTable.h"
 
 #if !defined(_WIN32)
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
