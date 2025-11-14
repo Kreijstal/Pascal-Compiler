@@ -20,6 +20,33 @@ begin
     pred := i - 1;
 end;
 
+<<<<<<< Updated upstream
+=======
+function file_is_text(var f: file): longint;
+begin
+    assembler;
+    asm
+        call gpc_file_is_text
+    end
+end;
+
+procedure assign_text_internal(var f: file; filename: string);
+begin
+    assembler;
+    asm
+        call gpc_text_assign
+    end
+end;
+
+procedure rewrite_text_internal(var f: file);
+begin
+    assembler;
+    asm
+        call gpc_text_rewrite
+    end
+end;
+
+>>>>>>> Stashed changes
 procedure halt;
 begin
     assembler;
@@ -48,18 +75,12 @@ end;
 
 procedure assign(var f: text; filename: string); overload;
 begin
-    assembler;
-    asm
-        call gpc_text_assign
-    end
+    assign_text_internal(f, filename);
 end;
 
 procedure rewrite(var f: text); overload;
 begin
-    assembler;
-    asm
-        call gpc_text_rewrite
-    end
+    rewrite_text_internal(f);
 end;
 
 procedure reset(var f: text); overload;

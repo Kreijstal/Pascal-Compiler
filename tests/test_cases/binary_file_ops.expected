@@ -1,8 +1,0 @@
-WriteOK=TRUE
-ReadOK=TRUE
-DataOK=TRUE
-SeekOK=TRUE
-PosOK=TRUE
-TruncOK=TRUE
-CloseAfterWrite=TRUE
-CloseAfterRead=TRUE
