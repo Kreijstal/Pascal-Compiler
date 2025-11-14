@@ -93,7 +93,6 @@ static ParseResult skip_balanced_begin_end_fn(input_t* in, void* args, char* par
         }
 
         // Read a word to detect 'begin' or 'end'
-        int s = in->start;
         if (isalpha((unsigned char)buf[in->start]) || buf[in->start] == '_') {
             int p = in->start + 1;
             while (p < length && (isalnum((unsigned char)buf[p]) || buf[p] == '_')) p++;
@@ -895,36 +894,6 @@ static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
     comb->type = COMB_MAIN_BLOCK_CONTENT;
     comb->fn = main_block_content_fn;
     return comb;
-}
-
-// Lookahead guard: only accept a program-level BEGIN..END block as the main block
-// if the matching END is immediately followed (ignoring layout) by a '.' token.
-static ParseResult main_block_lookahead_fn(input_t* in, void* args, char* parser_name) {
-    (void)args; (void)parser_name;
-    InputState state; save_input_state(in, &state);
-
-    // Use existing combinators to ensure we see 'begin', then a balanced block, then a '.'
-    combinator_t* open_begin = token(match("begin"));
-    ParseResult r1 = parse(in, open_begin);
-    free_error(r1.is_success ? NULL : r1.value.error);
-    if (!r1.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Expected program BEGIN"), NULL); }
-
-    // Skip to matching END of this block
-    combinator_t* skipper = skip_balanced_begin_end();
-    ParseResult r2 = parse(in, skipper);
-    free_error(r2.is_success ? NULL : r2.value.error);
-    free_combinator(skipper);
-    if (!r2.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Failed to match END for program BEGIN"), NULL); }
-
-    // After END, require a '.' (with Pascal-aware token handling)
-    combinator_t* dot = token(match("."));
-    ParseResult r3 = parse(in, dot);
-    free_error(r3.is_success ? NULL : r3.value.error);
-    if (!r3.is_success) { restore_input_state(in, &state); return make_failure_v2(in, "main_block_lookahead", strdup("Program END not followed by '.'"), NULL); }
-
-    // Restore input; this is only a lookahead
-    restore_input_state(in, &state);
-    return make_success(ast_nil);
 }
 
 // Helper function to wrap the content of a begin-end block in a PASCAL_T_MAIN_BLOCK node
