@@ -2012,7 +2012,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
         }
         else
         {
-            param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy, is_var_param, 0, NULL, NULL);
+            param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
+                is_var_param, 0, NULL, NULL, NULL);
         }
         
         list_builder_append(&result_builder, param_decl, LIST_TREE);
@@ -2238,7 +2239,22 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         type_info.record_type = NULL;  /* Transfer ownership */
     }
 
-    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0, inferred, initializer_stmt, inline_record);
+    struct TypeAlias *inline_alias = NULL;
+    if (type_info.is_file && type_id == NULL)
+    {
+        inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (inline_alias != NULL)
+        {
+            inline_alias->is_file = 1;
+            inline_alias->file_type = type_info.file_type;
+            inline_alias->base_type = FILE_TYPE;
+            if (type_info.file_type_id != NULL)
+                inline_alias->file_type_id = strdup(type_info.file_type_id);
+        }
+    }
+
+    Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0,
+        inferred, initializer_stmt, inline_record, inline_alias);
 
     destroy_type_info_contents(&type_info);
 
@@ -2594,7 +2610,8 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         
         /* Create variable declaration for the record const */
         ListNode_t *var_ids = CreateListNode(id, LIST_STRING);
-        Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type, type_id, 0, 0, initializer, NULL);
+        Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
+            type_id, 0, 0, initializer, NULL, NULL);
         
         if (var_builder != NULL)
             list_builder_append(var_builder, var_decl, LIST_TREE);
@@ -4353,7 +4370,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     char *self_type_id = NULL;
     if (effective_class != NULL)
         self_type_id = strdup(effective_class);
-    Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE, self_type_id, 1, 0, NULL, NULL);
+    Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
+        self_type_id, 1, 0, NULL, NULL, NULL);
     list_builder_append(&params_builder, self_param, LIST_TREE);
 
     cur = qualified->next;

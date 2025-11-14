@@ -2712,14 +2712,10 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
             }
 
             /* Initialize FILE variables to NULL */
-            if (type_node != NULL && node_is_file_type(type_node))
+            if ((type_node != NULL && node_is_file_type(type_node)) ||
+                (type_node == NULL && decl->tree_data.var_decl_data.type == FILE_TYPE))
             {
-                long long file_elem_size = 0;
-                int file_elem_hash = HASHVAR_INTEGER;
-                struct TypeAlias *file_alias = get_type_alias_from_node(type_node);
-                int have_component = codegen_resolve_file_component(
-                    file_alias, symtab, &file_elem_size, &file_elem_hash);
-
+                struct TypeAlias *decl_inline_alias = decl->tree_data.var_decl_data.inline_type_alias;
                 ListNode_t *ids = decl->tree_data.var_decl_data.ids;
                 while (ids != NULL)
                 {
@@ -2731,9 +2727,26 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
                         inst_list = add_inst(inst_list, buffer);
 
+                        long long file_elem_size = 0;
+                        int file_elem_hash = HASHVAR_INTEGER;
+                        struct TypeAlias *file_alias = get_type_alias_from_node(type_node);
+                        if (file_alias == NULL && decl_inline_alias != NULL)
+                            file_alias = decl_inline_alias;
+                        if (file_alias == NULL || !file_alias->is_file)
+                        {
+                            HashNode_t *var_hash = NULL;
+                            if (FindIdent(&var_hash, symtab, var_name) >= 0 && var_hash != NULL)
+                                file_alias = hashnode_get_type_alias(var_hash);
+                        }
+
+                        int have_component = codegen_resolve_file_component(
+                            file_alias, symtab, &file_elem_size, &file_elem_hash);
+
                         if (have_component)
+                        {
                             inst_list = codegen_emit_tfile_configure(inst_list,
                                 file_node, file_elem_size, file_elem_hash);
+                        }
                     }
                     ids = ids->next;
                 }

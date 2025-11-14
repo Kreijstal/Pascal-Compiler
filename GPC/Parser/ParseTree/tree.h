@@ -118,6 +118,7 @@ typedef struct Tree
             int inferred_type;
             struct Statement *initializer;
             struct RecordType *inline_record_type;  /* For inline record declarations */
+            struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */
             int defined_in_unit;
             int unit_is_public;
         } var_decl_data;
@@ -207,7 +208,9 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag);
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer, struct RecordType *inline_record_type);
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
+    int is_var_param, int inferred_type, struct Statement *initializer,
+    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
     char *range_str, struct Statement *initializer);

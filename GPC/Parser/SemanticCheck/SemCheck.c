@@ -2659,6 +2659,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_gpc_type->info.record_info = record_type;
                         }
                     }
+                    else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
+                        var_gpc_type != NULL)
+                    {
+                        gpc_type_set_type_alias(var_gpc_type,
+                            tree->tree_data.var_decl_data.inline_type_alias);
+                    }
                 }
                 
                 /* Always use _Typed variant, even if GpcType is NULL (UNTYPED) */

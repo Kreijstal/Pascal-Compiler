@@ -27,6 +27,7 @@ static ListNode_t *clone_member_list(const ListNode_t *members);
 static struct RecordField *clone_record_field(const struct RecordField *field);
 static struct VariantBranch *clone_variant_branch_internal(const struct VariantBranch *branch);
 static struct VariantPart *clone_variant_part_internal(const struct VariantPart *variant);
+static void clear_type_alias_fields(struct TypeAlias *alias);
 
 /* NOTE: tree_print and destroy_tree implicitely call stmt and expr functions */
 /* Tree printing */
@@ -1051,6 +1052,11 @@ void destroy_tree(Tree_t *tree)
               destroy_stmt(tree->tree_data.var_decl_data.initializer);
           if (tree->tree_data.var_decl_data.inline_record_type != NULL)
               destroy_record_type(tree->tree_data.var_decl_data.inline_record_type);
+          if (tree->tree_data.var_decl_data.inline_type_alias != NULL)
+          {
+              clear_type_alias_fields(tree->tree_data.var_decl_data.inline_type_alias);
+              free(tree->tree_data.var_decl_data.inline_type_alias);
+          }
           break;
 
         case TREE_ARR_DECL:
@@ -1086,26 +1092,7 @@ void destroy_tree(Tree_t *tree)
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
             {
                 struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
-                if (alias->target_type_id != NULL)
-                    free(alias->target_type_id);
-                if (alias->array_element_type_id != NULL)
-                    free(alias->array_element_type_id);
-                if (alias->array_dimensions != NULL)
-                    destroy_list(alias->array_dimensions);
-                if (alias->pointer_type_id != NULL)
-                    free(alias->pointer_type_id);
-                if (alias->set_element_type_id != NULL)
-                    free(alias->set_element_type_id);
-                if (alias->enum_literals != NULL)
-                    destroy_list(alias->enum_literals);
-                if (alias->file_type_id != NULL)
-                    free(alias->file_type_id);
-                /* Clean up shared GpcType for enums/sets */
-                if (alias->gpc_type != NULL)
-                {
-                    destroy_gpc_type(alias->gpc_type);
-                    alias->gpc_type = NULL;
-                }
+                clear_type_alias_fields(alias);
             }
             break;
 
@@ -1782,7 +1769,9 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
 
 /*enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_STATEMENT_TYPE};*/
 
-Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int is_var_param, int inferred_type, struct Statement *initializer, struct RecordType *inline_record_type)
+Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
+    int is_var_param, int inferred_type, struct Statement *initializer,
+    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -1797,6 +1786,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id, int i
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
     new_tree->tree_data.var_decl_data.inline_record_type = inline_record_type;
+    new_tree->tree_data.var_decl_data.inline_type_alias = inline_type_alias;
     new_tree->tree_data.var_decl_data.defined_in_unit = 0;
     new_tree->tree_data.var_decl_data.unit_is_public = 0;
 
@@ -2544,4 +2534,50 @@ struct Expression *mk_anonymous_procedure(int line_num, char *generated_name,
     new_expr->expr_data.anonymous_method_data.is_function = 0;
 
     return new_expr;
+}
+static void clear_type_alias_fields(struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return;
+
+    if (alias->target_type_id != NULL)
+    {
+        free(alias->target_type_id);
+        alias->target_type_id = NULL;
+    }
+    if (alias->array_element_type_id != NULL)
+    {
+        free(alias->array_element_type_id);
+        alias->array_element_type_id = NULL;
+    }
+    if (alias->array_dimensions != NULL)
+    {
+        destroy_list(alias->array_dimensions);
+        alias->array_dimensions = NULL;
+    }
+    if (alias->pointer_type_id != NULL)
+    {
+        free(alias->pointer_type_id);
+        alias->pointer_type_id = NULL;
+    }
+    if (alias->set_element_type_id != NULL)
+    {
+        free(alias->set_element_type_id);
+        alias->set_element_type_id = NULL;
+    }
+    if (alias->enum_literals != NULL)
+    {
+        destroy_list(alias->enum_literals);
+        alias->enum_literals = NULL;
+    }
+    if (alias->file_type_id != NULL)
+    {
+        free(alias->file_type_id);
+        alias->file_type_id = NULL;
+    }
+    if (alias->gpc_type != NULL)
+    {
+        destroy_gpc_type(alias->gpc_type);
+        alias->gpc_type = NULL;
+    }
 }
