@@ -20,8 +20,6 @@ begin
     pred := i - 1;
 end;
 
-<<<<<<< Updated upstream
-=======
 function file_is_text(var f: file): longint;
 begin
     assembler;
@@ -30,7 +28,7 @@ begin
     end
 end;
 
-procedure assign_text_internal(var f: file; filename: string);
+procedure assign_text_internal(var f: text; filename: string);
 begin
     assembler;
     asm
@@ -38,7 +36,7 @@ begin
     end
 end;
 
-procedure rewrite_text_internal(var f: file);
+procedure rewrite_text_internal(var f: text);
 begin
     assembler;
     asm
@@ -46,7 +44,6 @@ begin
     end
 end;
 
->>>>>>> Stashed changes
 procedure halt;
 begin
     assembler;

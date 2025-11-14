@@ -53,6 +53,12 @@ typedef struct GPCTextFile
     int mode;
 } GPCTextFile;
 
+int gpc_file_is_text(void **slot)
+{
+    (void)slot;
+    return 0;
+}
+
 static FILE *gpc_text_output_stream(GPCTextFile *file)
 {
     if (file != NULL && file->handle != NULL)
