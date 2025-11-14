@@ -2373,18 +2373,19 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     struct Expression *code_expr = (struct Expression *)args_expr->next->next->cur;
 
     Register_t *source_reg = NULL;
+    Register_t *value_addr = NULL;
+    Register_t *code_addr = NULL;
+    StackNode_t *code_spill = NULL;
+    StackNode_t *code_result_spill = NULL;
+
     inst_list = codegen_expr_with_result(source_expr, inst_list, ctx, &source_reg);
     if (codegen_had_error(ctx) || source_reg == NULL)
         goto cleanup;
 
-    Register_t *value_addr = NULL;
     inst_list = codegen_address_for_expr(value_expr, inst_list, ctx, &value_addr);
     if (codegen_had_error(ctx) || value_addr == NULL)
         goto cleanup;
 
-    Register_t *code_addr = NULL;
-    StackNode_t *code_spill = NULL;
-    StackNode_t *code_result_spill = NULL;
     inst_list = codegen_address_for_expr(code_expr, inst_list, ctx, &code_addr);
     if (codegen_had_error(ctx) || code_addr == NULL)
         goto cleanup;

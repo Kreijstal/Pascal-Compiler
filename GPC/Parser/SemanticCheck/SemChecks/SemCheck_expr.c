@@ -1303,9 +1303,8 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
 
-  int is_array_expr = (arg_expr != NULL && arg_expr->is_array_expr);
-    int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
-    int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
+  int is_dynamic_array = (arg_expr != NULL && arg_expr->is_array_expr && arg_expr->array_is_dynamic);
+  int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
 
     /* For static arrays, convert Length() to a compile-time constant */
     if (error_count == 0 && is_static_array)
@@ -5568,20 +5567,6 @@ int semcheck_funccall(int *type_return,
     }
 
     int final_status = 0;
-
-    int match_count = 0;
-
-    if (overload_candidates != NULL)
-    {
-        ListNode_t *cur = overload_candidates;
-        while(cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate->mangled_id != NULL && strcmp(candidate->mangled_id, mangled_name) == 0)
-                match_count++;
-            cur = cur->next;
-        }
-    }
 
     HashNode_t *best_match = NULL;
     int best_score = 9999;

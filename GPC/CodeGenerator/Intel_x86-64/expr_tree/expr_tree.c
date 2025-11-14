@@ -116,11 +116,6 @@ static inline const char *select_register_name(const Register_t *reg, int type_t
     return codegen_type_uses_qword(type_tag) ? reg->bit_64 : reg->bit_32;
 }
 
-static inline int expr_uses_qword(const struct Expression *expr)
-{
-    return expr_uses_qword_gpctype(expr);
-}
-
 static int expr_effective_storage_type(const struct Expression *expr)
 {
     if (expr != NULL && expr->resolved_gpc_type != NULL)

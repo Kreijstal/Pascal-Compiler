@@ -542,10 +542,8 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
             /* 4. Check each parameter's type and var status */
             ListNode_t *lhs_p = lhs_proc->params;
             ListNode_t *rhs_p = rhs_proc->params;
-            int param_position = 0;
-            
+
             while (lhs_p != NULL && rhs_p != NULL) {
-                ++param_position;
                 if (lhs_p->type != LIST_TREE || rhs_p->type != LIST_TREE)
                     return 0; /* Invalid parameter node */
 

@@ -46,18 +46,6 @@ static inline int node_is_record_type(HashNode_t *node)
     return hashnode_is_record(node);
 }
 
-/* Helper function to get the primitive type tag from a node */
-static inline int get_primitive_tag_from_node(HashNode_t *node)
-{
-    if (node == NULL || node->type == NULL)
-        return UNKNOWN_TYPE;
-
-    if (node->type->kind == TYPE_KIND_PRIMITIVE)
-        return gpc_type_get_primitive_tag(node->type);
-
-    return UNKNOWN_TYPE;
-}
-
 /* Helper function to check if a node is a file type */
 static inline int node_is_file_type(HashNode_t *node)
 {
@@ -2269,7 +2257,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     #endif
     Tree_t *arg_decl;
     int type;
-    int arg_num = 0;
     ListNode_t *arg_ids;
     const char *arg_reg;
     char buffer[50];
@@ -2409,7 +2396,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             free_reg(get_reg_stack(), stack_value_reg);
 
                         arg_ids = arg_ids->next;
-                        ++arg_num;
                         continue;
                     }
 
@@ -2479,7 +2465,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             free_reg(get_reg_stack(), stack_value_reg);
                     }
                     arg_ids = arg_ids->next;
-                    ++arg_num;
                 }
                 break;
             case TREE_ARR_DECL:
@@ -2513,7 +2498,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (stack_value_reg != NULL)
                         free_reg(get_reg_stack(), stack_value_reg);
                     arg_ids = arg_ids->next;
-                    ++arg_num;
                 }
                 break;
             default:
