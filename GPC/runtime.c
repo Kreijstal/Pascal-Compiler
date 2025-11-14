@@ -1787,6 +1787,31 @@ void gpc_text_rewrite(GPCTextFile **slot)
         file->mode = 0;
 }
 
+void gpc_text_append(GPCTextFile **slot)
+{
+    GPCTextFile *file = gpc_textfile_prepare(slot);
+    if (file == NULL || file->path == NULL)
+        return;
+
+    gpc_textfile_close_handle(file);
+
+    file->handle = fopen(file->path, "a");
+    if (file->handle != NULL)
+    {
+        file->mode = 1;
+        fseek(file->handle, 0, SEEK_END);
+    }
+    else
+    {
+        file->mode = 0;
+    }
+}
+
+void gpc_text_app(GPCTextFile **slot)
+{
+    gpc_text_append(slot);
+}
+
 void gpc_text_reset(GPCTextFile **slot)
 {
     GPCTextFile *file = gpc_textfile_prepare(slot);
@@ -1834,6 +1859,40 @@ int gpc_text_eof(GPCTextFile *file)
 int gpc_text_eof_default(void)
 {
     return gpc_text_eof(NULL);
+}
+
+int gpc_text_eoln(GPCTextFile *file)
+{
+    FILE *stream = gpc_text_input_stream(file);
+    if (stream == NULL)
+        return 1;
+
+    int ch = fgetc(stream);
+    if (ch == EOF)
+        return 1;
+
+    if (ch == '\r')
+    {
+        int next = fgetc(stream);
+        if (next != EOF)
+            ungetc(next, stream);
+        ungetc('\r', stream);
+        return 1;
+    }
+
+    if (ch == '\n')
+    {
+        ungetc(ch, stream);
+        return 1;
+    }
+
+    ungetc(ch, stream);
+    return 0;
+}
+
+int gpc_text_eoln_default(void)
+{
+    return gpc_text_eoln(NULL);
 }
 
 void gpc_text_readln_into(GPCTextFile *file, char **target)

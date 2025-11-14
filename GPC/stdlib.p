@@ -28,22 +28,6 @@ begin
     end
 end;
 
-procedure MkDir(path: string);
-begin
-    assembler;
-    asm
-        call gpc_directory_create
-    end
-end;
-
-procedure RmDir(path: string);
-begin
-    assembler;
-    asm
-        call gpc_directory_remove
-    end
-end;
-
 procedure assign_text_internal(var f: text; filename: string);
 begin
     assembler;
@@ -109,6 +93,30 @@ begin
     assembler;
     asm
         call gpc_text_close
+    end
+end;
+
+procedure MkDir(path: string);
+begin
+    assembler;
+    asm
+        call gpc_directory_create
+    end
+end;
+
+procedure RmDir(path: string);
+begin
+    assembler;
+    asm
+        call gpc_directory_remove
+    end
+end;
+
+procedure append(var f: text); overload;
+begin
+    assembler;
+    asm
+        call gpc_text_app;
     end
 end;
 

@@ -1558,6 +1558,68 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
     return error_count;
 }
 
+static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int error_count = 0;
+    const char *mangled_name = NULL;
+
+    if (args == NULL)
+    {
+        mangled_name = "gpc_text_eoln_default";
+    }
+    else if (args->next == NULL)
+    {
+        struct Expression *file_expr = (struct Expression *)args->cur;
+        int file_type = UNKNOWN_TYPE;
+        error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
+        if (file_type != TEXT_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
+            error_count++;
+        }
+        else
+        {
+            mangled_name = "gpc_text_eoln";
+        }
+    }
+    else
+    {
+        fprintf(stderr, "Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
+        error_count++;
+    }
+
+    if (error_count != 0 || mangled_name == NULL)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return error_count != 0 ? error_count : 1;
+    }
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
+    if (expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        fprintf(stderr, "Error: failed to allocate mangled name for EOLN.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    semcheck_reset_function_call_cache(expr);
+    expr->resolved_type = BOOL;
+    *type_return = BOOL;
+    return 0;
+}
+
 static void semcheck_free_call_args(ListNode_t *args, struct Expression *preserve_expr)
 {
     while (args != NULL)
@@ -5274,6 +5336,8 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "EOF"))
         return semcheck_builtin_eof(type_return, symtab, expr, max_scope_lev);
+    if (id != NULL && pascal_identifier_equals(id, "EOLN"))
+        return semcheck_builtin_eoln(type_return, symtab, expr, max_scope_lev);
 
     if (id != NULL && pascal_identifier_equals(id, "Low"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 0);

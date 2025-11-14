@@ -2107,6 +2107,17 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(eof_name);
     }
 
+    char *eoln_name = strdup("EOLN");
+    if (eoln_name != NULL) {
+        GpcType *return_type = gpc_type_from_var_type(HASHVAR_BOOLEAN);
+        assert(return_type != NULL && "Failed to create return type for EOLN");
+        GpcType *eoln_type = create_procedure_type(NULL, return_type);
+        assert(eoln_type != NULL && "Failed to create EOLN function type");
+        AddBuiltinFunction_Typed(symtab, eoln_name, eoln_type);
+        destroy_gpc_type(eoln_type);
+        free(eoln_name);
+    }
+
     char *sizeof_name = strdup("SizeOf");
     if (sizeof_name != NULL) {
         GpcType *return_type = gpc_type_from_var_type(HASHVAR_LONGINT);
