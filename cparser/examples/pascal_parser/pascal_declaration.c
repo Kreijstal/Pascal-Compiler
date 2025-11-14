@@ -740,11 +740,11 @@ static combinator_t* create_param_type_spec(void) {
         NULL
     );
 
-    return seq(new_combinator(), PASCAL_T_NONE,
+    return optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
         type_reference,
         NULL
-    );
+    ));
 }
 
 static combinator_t* create_simple_param_list(void) {

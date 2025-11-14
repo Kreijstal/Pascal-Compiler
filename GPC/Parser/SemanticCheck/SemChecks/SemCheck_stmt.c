@@ -79,6 +79,11 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
 static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     struct Statement *stmt, struct Expression *lhs, HashNode_t *setter_node,
     int max_scope_lev);
+static int semcheck_mangled_suffix_matches_untyped(const char *candidate_suffix,
+    const char *call_suffix);
+static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
+    const char *proc_id, const char *call_mangled);
+static int semcheck_var_decl_is_untyped(Tree_t *decl);
 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
@@ -119,7 +124,9 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
 
 
         /* Both types must be resolved for proper type checking */
-        if (arg_type == NULL || param_type == NULL)
+        int param_is_untyped = semcheck_var_decl_is_untyped(param_decl);
+
+        if ((arg_type == NULL || param_type == NULL) && !param_is_untyped)
         {
             fprintf(stderr,
                 "Error on line %d, on procedure call %s, argument %d: Unable to resolve type!\n\n",
@@ -128,7 +135,7 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
                 arg_index);
             ++return_val;
         }
-        else
+        else if (!param_is_untyped)
         {
             /* Use comprehensive GpcType-based type compatibility checking */
             if (!are_types_compatible_for_assignment(param_type, arg_type, symtab))
@@ -143,6 +150,7 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
                 ++return_val;
             }
         }
+        /* Untyped parameters accept any argument without additional checks */
 
         /* Clean up owned types */
         if (arg_type_owned && arg_type != NULL)
@@ -308,38 +316,90 @@ static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, in
     return result;
 }
 
-static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+static int semcheck_var_decl_is_untyped(Tree_t *decl)
 {
-    int return_val = 0;
-    if (stmt == NULL)
+    if (decl == NULL || decl->type != TREE_VAR_DECL)
+        return 0;
+    struct Var *var_info = &decl->tree_data.var_decl_data;
+    if (var_info->inline_record_type != NULL)
+        return 0;
+    return (var_info->type == UNKNOWN_TYPE && var_info->type_id == NULL);
+}
+
+static int semcheck_mangled_suffix_matches_untyped(const char *candidate_suffix,
+    const char *call_suffix)
+{
+    if (candidate_suffix == NULL || call_suffix == NULL)
         return 0;
 
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, Move expects exactly three arguments.\n", stmt->line_num);
+    if (*candidate_suffix == '\0' && *call_suffix == '\0')
         return 1;
-    }
 
-    struct Expression *src_expr = (struct Expression *)args->cur;
-    struct Expression *dst_expr = (struct Expression *)args->next->cur;
-    struct Expression *count_expr = (struct Expression *)args->next->next->cur;
-
-    int expr_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&expr_type, symtab, src_expr, INT_MAX, NO_MUTATE);
-
-    expr_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&expr_type, symtab, dst_expr, max_scope_lev, MUTATE);
-
-    int count_type = UNKNOWN_TYPE;
-    return_val += semcheck_expr_main(&count_type, symtab, count_expr, INT_MAX, NO_MUTATE);
-    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    while (*candidate_suffix != '\0' && *call_suffix != '\0')
     {
-        fprintf(stderr, "Error on line %d, Move count argument must be an integer.\n", stmt->line_num);
-        ++return_val;
+        if (*candidate_suffix != '_' || *call_suffix != '_')
+            return 0;
+        candidate_suffix++;
+        call_suffix++;
+
+        const char *cand_end = candidate_suffix;
+        while (*cand_end != '_' && *cand_end != '\0')
+            cand_end++;
+        const char *call_end = call_suffix;
+        while (*call_end != '_' && *call_end != '\0')
+            call_end++;
+
+        size_t cand_len = (size_t)(cand_end - candidate_suffix);
+        size_t call_len = (size_t)(call_end - call_suffix);
+        int candidate_is_untyped = (cand_len == 1 && candidate_suffix[0] == 'u');
+
+        if (!candidate_is_untyped)
+        {
+            if (cand_len != call_len || strncmp(candidate_suffix, call_suffix, cand_len) != 0)
+                return 0;
+        }
+
+        candidate_suffix = cand_end;
+        call_suffix = call_end;
     }
 
-    return return_val;
+    return (*candidate_suffix == '\0' && *call_suffix == '\0');
+}
+
+static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
+    const char *proc_id, const char *call_mangled)
+{
+    if (candidates == NULL || proc_id == NULL || call_mangled == NULL)
+        return NULL;
+
+    size_t call_prefix_len = strlen(proc_id);
+    if (strlen(call_mangled) < call_prefix_len ||
+        strncmp(call_mangled, proc_id, call_prefix_len) != 0)
+        return NULL;
+
+    const char *call_suffix = call_mangled + call_prefix_len;
+    ListNode_t *cur = candidates;
+    while (cur != NULL)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate != NULL && candidate->mangled_id != NULL && candidate->id != NULL)
+        {
+            if (pascal_identifier_equals(candidate->id, proc_id))
+            {
+                size_t cand_prefix_len = strlen(candidate->id);
+                if (strlen(candidate->mangled_id) >= cand_prefix_len &&
+                    strncmp(candidate->mangled_id, candidate->id, cand_prefix_len) == 0)
+                {
+                    const char *cand_suffix = candidate->mangled_id + cand_prefix_len;
+                    if (semcheck_mangled_suffix_matches_untyped(cand_suffix, call_suffix))
+                        return candidate;
+                }
+            }
+        }
+        cur = cur->next;
+    }
+
+    return NULL;
 }
 
 static int semcheck_builtin_fillchar(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -1700,12 +1760,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         return return_val;
 
     handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "Move",
-        semcheck_builtin_move, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "FillChar",
         semcheck_builtin_fillchar, max_scope_lev, &handled_builtin);
     if (handled_builtin)
@@ -2015,6 +2069,22 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
+    if (match_count == 0 && overload_candidates != NULL)
+    {
+        HashNode_t *wildcard_proc = semcheck_find_untyped_mangled_match(overload_candidates,
+            proc_id, mangled_name);
+        if (wildcard_proc != NULL)
+        {
+            resolved_proc = wildcard_proc;
+            match_count = 1;
+            if (wildcard_proc->mangled_id != NULL)
+            {
+                free(mangled_name);
+                mangled_name = strdup(wildcard_proc->mangled_id);
+            }
+        }
+    }
+
     /* If no exact mangled match, try forward declarations with matching parameter count */
     if (match_count == 0 && overload_candidates != NULL)
     {
@@ -2195,10 +2265,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 
                 int arg_type_owned = 0;
                 GpcType *arg_gpc_type = semcheck_resolve_expression_gpc_type(symtab, arg_expr, INT_MAX, NO_MUTATE, &arg_type_owned);
+                int param_is_untyped = semcheck_var_decl_is_untyped(arg_decl);
 
                 /* Perform type compatibility check using GpcType */
-                int types_match = 0;
-                if (expected_gpc_type == NULL || arg_gpc_type == NULL)
+                int types_match = param_is_untyped ? 1 : 0;
+                if ((expected_gpc_type == NULL || arg_gpc_type == NULL) && !param_is_untyped)
                 {
                     /* Fallback: if we can't get GpcTypes, report error */
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Unable to resolve types (expected=%p, arg=%p)!\n\n",
@@ -2209,7 +2280,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         fprintf(stderr, "  Argument type: %s\n", gpc_type_to_string(arg_gpc_type));
                     ++return_val;
                 }
-                else
+                else if (!param_is_untyped)
                 {
                     types_match = are_types_compatible_for_assignment(expected_gpc_type, arg_gpc_type, symtab);
                     

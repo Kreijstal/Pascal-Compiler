@@ -182,6 +182,44 @@ begin
     end
 end;
 
+procedure move_impl(var source; var dest; count: longint);
+begin
+    assembler;
+    asm
+        movl $GPC_TARGET_WINDOWS, %eax
+        testl %eax, %eax
+        je .Lmove_sysv
+
+        /* Win64: RCX=source, RDX=dest, R8=count -> swap RCX/RDX */
+        movq %rcx, %r9
+        movq %rdx, %rcx
+        movq %r9, %rdx
+        jmp .Lmove_call
+
+.Lmove_sysv:
+        /* SysV: RDI=source, RSI=dest, RDX=count -> swap RDI/RSI */
+        movq %rdi, %rax
+        movq %rsi, %rdi
+        movq %rax, %rsi
+
+.Lmove_call:
+        call gpc_move
+    end
+end;
+
+procedure Move(var source; var dest; count: integer); overload;
+var
+    count_long: longint;
+begin
+    count_long := count;
+    move_impl(source, dest, count_long);
+end;
+
+procedure Move(var source; var dest; count: longint); overload;
+begin
+    move_impl(source, dest, count);
+end;
+
 procedure readln(var value: string);
 begin
     assembler;

@@ -1960,14 +1960,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(readln_name);
     }
 
-    char *move_name = strdup("Move");
-    if (move_name != NULL) {
-        GpcType *move_type = create_procedure_type(NULL, NULL);
-        assert(move_type != NULL && "Failed to create Move procedure type");
-        AddBuiltinProc_Typed(symtab, move_name, move_type);
-        destroy_gpc_type(move_type);
-        free(move_name);
-    }
     char *fillchar_name = strdup("FillChar");
     if (fillchar_name != NULL) {
         GpcType *fillchar_type = create_procedure_type(NULL, NULL);

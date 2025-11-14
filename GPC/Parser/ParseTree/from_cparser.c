@@ -1949,10 +1949,13 @@ static ListNode_t *convert_param(ast_t *param_node) {
     ast_t *ids_cursor = modifier_node != NULL ? modifier_node->next : NULL;
 
     int is_var_param = 0;
+    int is_const_param = 0;
     if (modifier_node != NULL && modifier_node->sym != NULL && modifier_node->sym->name != NULL) {
         const char *modifier_name = modifier_node->sym->name;
         if (strcasecmp(modifier_name, "var") == 0 || strcasecmp(modifier_name, "out") == 0)
             is_var_param = 1;
+        else if (strcasecmp(modifier_name, "const") == 0)
+            is_const_param = 1;
     }
 
     ast_t *cursor = ids_cursor;
@@ -1968,13 +1971,19 @@ static ListNode_t *convert_param(ast_t *param_node) {
     TypeInfo type_info = {0};
 
     if (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC) {
-        fprintf(stderr, "ERROR: parameter missing type specification.\n");
-        destroy_list(ids);
-        return NULL;
+        if (!(is_var_param || is_const_param)) {
+            fprintf(stderr, "ERROR: parameter missing type specification.\n");
+            destroy_list(ids);
+            return NULL;
+        }
+        var_type = UNKNOWN_TYPE;
+        type_id = NULL;
     }
-
-    /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
-    var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+    else
+    {
+        /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
+        var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+    }
 
     ListBuilder result_builder;
     list_builder_init(&result_builder);
