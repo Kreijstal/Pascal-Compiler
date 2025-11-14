@@ -1897,6 +1897,9 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     if (args->array_parser) {
                         free_combinator_recursive(args->array_parser, visited, extras);
                     }
+                    if (args->file_parser) {
+                        free_combinator_recursive(args->file_parser, visited, extras);
+                    }
                     if (args->set_parser) {
                         free_combinator_recursive(args->set_parser, visited, extras);
                     }

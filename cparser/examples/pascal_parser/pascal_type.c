@@ -261,7 +261,7 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
     // Parse element type - support full type specs (record, set, pointer, identifier with optional [size], etc.)
     ast_t* element_ast = NULL;
     {
-        // Try a rich element type first: record/class/interface/proc/func/set/pointer/range
+        // Try a rich element type first: record/class/interface/proc/func/set/file/pointer/range
         combinator_t* packed_record = seq(new_combinator(), PASCAL_T_RECORD_TYPE,
             token(keyword_ci("packed")),
             record_type(PASCAL_T_RECORD_TYPE),
@@ -276,6 +276,7 @@ static ParseResult array_type_fn(input_t* in, void* args, char* parser_name) {
             procedure_type(PASCAL_T_PROCEDURE_TYPE),
             function_type(PASCAL_T_FUNCTION_TYPE),
             set_type(PASCAL_T_SET),
+            file_type(PASCAL_T_FILE_TYPE),
             pointer_type(PASCAL_T_POINTER_TYPE),
             range_type(PASCAL_T_RANGE_TYPE),
             token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
@@ -803,6 +804,7 @@ static combinator_t* create_record_field_type_spec(void) {
     return multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         array_type(PASCAL_T_ARRAY_TYPE),
         set_type(PASCAL_T_SET),
+        file_type(PASCAL_T_FILE_TYPE),
         pointer_type(PASCAL_T_POINTER_TYPE),
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),
         range_type(PASCAL_T_RANGE_TYPE),
@@ -1272,6 +1274,80 @@ combinator_t* set_type(tag_t tag) {
     return comb;
 }
 
+// File type parser: file or file of TypeName
+static ParseResult file_type_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    (void)parser_name;
+
+    // Parse "file"
+    combinator_t* file_keyword = token(keyword_ci("file"));
+    ParseResult file_result = parse(in, file_keyword);
+    if (!file_result.is_success) {
+        discard_failure(file_result);
+        free_combinator(file_keyword);
+        return fail_with_message("Expected 'file'", in, &state, parser_name);
+    }
+    free_ast(file_result.value.ast);
+    free_combinator(file_keyword);
+
+    // Optional "of" and element type
+    ast_t* element_type_ast = NULL;
+
+    InputState after_file_state;
+    save_input_state(in, &after_file_state);
+
+    combinator_t* of_keyword = token(keyword_ci("of"));
+    ParseResult of_result = parse(in, of_keyword);
+    if (of_result.is_success) {
+        free_ast(of_result.value.ast);
+        free_combinator(of_keyword);
+
+        combinator_t* element_type = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+            array_type(PASCAL_T_ARRAY_TYPE),
+            set_type(PASCAL_T_SET),
+            pointer_type(PASCAL_T_POINTER_TYPE),
+            enumerated_type(PASCAL_T_ENUMERATED_TYPE),
+            range_type(PASCAL_T_RANGE_TYPE),
+            record_type(PASCAL_T_RECORD_TYPE),
+            type_name(PASCAL_T_IDENTIFIER),
+            token(pascal_identifier(PASCAL_T_IDENTIFIER)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        );
+        ParseResult element_result = parse(in, element_type);
+        free_combinator(element_type);
+        if (!element_result.is_success) {
+            discard_failure(element_result);
+            return fail_with_message("Expected file element type after 'of'", in, &state, parser_name);
+        }
+        element_type_ast = element_result.value.ast;
+    } else {
+        discard_failure(of_result);
+        free_combinator(of_keyword);
+        restore_input_state(in, &after_file_state);
+    }
+
+    ast_t* file_ast = new_ast();
+    file_ast->typ = pargs ? pargs->tag : PASCAL_T_FILE_TYPE;
+    file_ast->child = element_type_ast;
+    file_ast->next = NULL;
+    set_ast_position(file_ast, in);
+
+    return make_success(file_ast);
+}
+
+combinator_t* file_type(tag_t tag) {
+    combinator_t* comb = new_combinator();
+    prim_args* args = safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    comb->args = args;
+    comb->fn = file_type_fn;
+    return comb;
+}
+
 // --- Procedure and Function Type Parsers ---
 
 // Helper to wrap parameter list in a PASCAL_T_PARAM_LIST node
@@ -1348,6 +1424,7 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
             pointer_type(PASCAL_T_POINTER_TYPE),
             enumerated_type(PASCAL_T_ENUMERATED_TYPE),
             record_type(PASCAL_T_RECORD_TYPE),
+            file_type(PASCAL_T_FILE_TYPE),
             token(cident(PASCAL_T_IDENTIFIER)),
             NULL
         );

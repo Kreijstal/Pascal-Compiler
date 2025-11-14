@@ -76,6 +76,182 @@ static FILE *gpc_text_input_stream(GPCTextFile *file)
     return stdin;
 }
 
+/* ------------------------------------------------------------------
+ * Typed file support (binary files: file of Integer/Char/Real).
+ *
+ * These helpers share the same descriptor layout as text files but
+ * open the underlying FILE* streams in binary mode and use fread/fwrite
+ * to read/write fixed-size elements.
+ * ------------------------------------------------------------------ */
+
+void gpc_tfile_assign(GPCTextFile **slot, const char *path)
+{
+    /* For now, reuse the same assign logic as text files. */
+    if (slot == NULL)
+        return;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL)
+    {
+        file = (GPCTextFile *)calloc(1, sizeof(GPCTextFile));
+        if (file == NULL)
+            return;
+        *slot = file;
+    }
+
+    if (file->handle != NULL)
+    {
+        fclose(file->handle);
+        file->handle = NULL;
+    }
+    if (file->path != NULL)
+    {
+        free(file->path);
+        file->path = NULL;
+    }
+
+    if (path != NULL)
+    {
+        size_t len = strlen(path);
+        file->path = (char *)malloc(len + 1);
+        if (file->path != NULL)
+            memcpy(file->path, path, len + 1);
+    }
+}
+
+void gpc_tfile_rewrite(GPCTextFile **slot)
+{
+    if (slot == NULL)
+        return;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->path == NULL)
+        return;
+
+    if (file->handle != NULL)
+    {
+        fclose(file->handle);
+        file->handle = NULL;
+    }
+
+    file->handle = fopen(file->path, "wb");
+    if (file->handle != NULL)
+        file->mode = 1; /* write mode */
+    else
+        file->mode = 0;
+}
+
+void gpc_tfile_reset(GPCTextFile **slot)
+{
+    if (slot == NULL)
+        return;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->path == NULL)
+        return;
+
+    if (file->handle != NULL)
+    {
+        fclose(file->handle);
+        file->handle = NULL;
+    }
+
+    file->handle = fopen(file->path, "rb");
+    if (file->handle != NULL)
+        file->mode = 2; /* read mode */
+    else
+        file->mode = 0;
+}
+
+void gpc_tfile_close(GPCTextFile **slot)
+{
+    if (slot == NULL)
+        return;
+
+    GPCTextFile *file = *slot;
+    if (file == NULL)
+        return;
+
+    if (file->handle != NULL)
+    {
+        fclose(file->handle);
+        file->handle = NULL;
+    }
+}
+
+int gpc_tfile_read_int(GPCTextFile **slot, int32_t *ptr)
+{
+    if (slot == NULL || ptr == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+    size_t n = fread(ptr, sizeof(int32_t), 1, file->handle);
+    return (n == 1) ? 0 : 1;
+}
+
+int gpc_tfile_read_char(GPCTextFile **slot, char *ptr)
+{
+    if (slot == NULL || ptr == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+    unsigned char ch;
+    size_t n = fread(&ch, sizeof(unsigned char), 1, file->handle);
+    if (n == 1)
+    {
+        *ptr = (char)ch;
+        return 0;
+    }
+    return 1;
+}
+
+int gpc_tfile_read_real(GPCTextFile **slot, double *ptr)
+{
+    if (slot == NULL || ptr == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+    size_t n = fread(ptr, sizeof(double), 1, file->handle);
+    return (n == 1) ? 0 : 1;
+}
+
+int gpc_tfile_write_int(GPCTextFile **slot, int32_t value)
+{
+    if (slot == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+    size_t n = fwrite(&value, sizeof(int32_t), 1, file->handle);
+    return (n == 1) ? 0 : 1;
+}
+
+int gpc_tfile_write_char(GPCTextFile **slot, char value)
+{
+    if (slot == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+    unsigned char ch = (unsigned char)value;
+    size_t n = fwrite(&ch, sizeof(unsigned char), 1, file->handle);
+    return (n == 1) ? 0 : 1;
+}
+
+int gpc_tfile_write_real(GPCTextFile **slot, double value)
+{
+    if (slot == NULL)
+        return 1;
+    GPCTextFile *file = *slot;
+    if (file == NULL || file->handle == NULL)
+        return 1;
+    size_t n = fwrite(&value, sizeof(double), 1, file->handle);
+    return (n == 1) ? 0 : 1;
+}
+
 static int gpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
 }

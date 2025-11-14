@@ -3870,6 +3870,29 @@ static int semcheck_addressof(int *type_return,
         pointed_to_type = create_primitive_type(STRING_TYPE);
     } else if (inner_type == RECORD_TYPE && record_info != NULL) {
         pointed_to_type = create_record_type(record_info);
+    } else if (inner_type == PROCEDURE) {
+        int proc_type_owned = 0;
+        GpcType *proc_type = semcheck_resolve_expression_gpc_type(symtab, inner,
+            max_scope_lev, NO_MUTATE, &proc_type_owned);
+        if (proc_type != NULL)
+        {
+            if (!proc_type_owned)
+                gpc_type_retain(proc_type);
+            pointed_to_type = proc_type;
+        }
+
+        if (inner->type == EXPR_VAR_ID)
+        {
+            HashNode_t *proc_symbol = NULL;
+            if (FindIdent(&proc_symbol, symtab, inner->expr_data.id) >= 0 &&
+                proc_symbol != NULL && proc_symbol->hash_type == HASHTYPE_PROCEDURE)
+            {
+                expr->expr_data.addr_data.expr = NULL;
+                destroy_expr(inner);
+                expr->type = EXPR_ADDR_OF_PROC;
+                expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+            }
+        }
     }
     /* For other types, we could add more conversions here */
     

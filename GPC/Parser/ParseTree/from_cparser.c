@@ -969,6 +969,25 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return SET_TYPE;
     }
 
+    if (spec_node->typ == PASCAL_T_FILE_TYPE) {
+        if (type_info != NULL) {
+            type_info->is_file = 1;
+            ast_t *elem = spec_node->child;
+            while (elem != NULL && elem->typ == PASCAL_T_NONE)
+                elem = elem->child;
+            if (elem != NULL && elem->typ == PASCAL_T_IDENTIFIER) {
+                char *dup = dup_symbol(elem);
+                int mapped = map_type_name(dup, &type_info->file_type_id);
+                type_info->file_type = mapped;
+                if (mapped == UNKNOWN_TYPE && type_info->file_type_id == NULL)
+                    type_info->file_type_id = dup;
+                else if (mapped != UNKNOWN_TYPE)
+                    free(dup);
+            }
+        }
+        return FILE_TYPE;
+    }
+
     if (spec_node->typ == PASCAL_T_ENUMERATED_TYPE) {
         if (type_info != NULL) {
             type_info->is_enum = 1;
@@ -1098,6 +1117,41 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
             return NULL;
 
         return create_array_type(element_type, start, end);
+    }
+
+    /* Handle file types */
+    if (spec_node->typ == PASCAL_T_FILE_TYPE) {
+        ast_t *elem = spec_node->child;
+        while (elem != NULL && elem->typ == PASCAL_T_NONE)
+            elem = elem->child;
+
+        if (elem == NULL) {
+            /* Untyped file - represented as primitive FILE_TYPE */
+            return create_primitive_type(FILE_TYPE);
+        }
+
+        /* Typed file: attempt to convert element type */
+        GpcType *element_type = convert_type_spec_to_gpctype(elem, symtab);
+        if (element_type == NULL && elem->typ == PASCAL_T_IDENTIFIER) {
+            char *elem_name = dup_symbol(elem);
+            if (elem_name != NULL) {
+                int elem_tag = map_type_name(elem_name, NULL);
+                free(elem_name);
+                if (elem_tag != UNKNOWN_TYPE) {
+                    element_type = create_primitive_type(elem_tag);
+                }
+            }
+        }
+
+        if (element_type == NULL) {
+            /* Fallback: treat as generic file */
+            return create_primitive_type(FILE_TYPE);
+        }
+
+        /* For now, represent file types as primitive FILE_TYPE with alias metadata.
+         * The detailed element type is tracked in the TypeAlias/TypeInfo structures. */
+        destroy_gpc_type(element_type);
+        return create_primitive_type(FILE_TYPE);
     }
 
     /* Handle pointer types */

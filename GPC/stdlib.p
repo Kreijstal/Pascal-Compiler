@@ -78,6 +78,92 @@ begin
     end
 end;
 
+{ --------------------------------------------------------------------
+  Typed file helpers (binary files). These are preliminary APIs that
+  operate on generic file variables and map to gpc_tfile_* runtime
+  functions. They do not interfere with existing text I/O.
+  -------------------------------------------------------------------- }
+
+procedure file_assign(var f: file; filename: string);
+begin
+    assembler;
+    asm
+        call gpc_tfile_assign
+    end
+end;
+
+procedure file_rewrite(var f: file);
+begin
+    assembler;
+    asm
+        call gpc_tfile_rewrite
+    end
+end;
+
+procedure file_reset(var f: file);
+begin
+    assembler;
+    asm
+        call gpc_tfile_reset
+    end
+end;
+
+procedure file_close(var f: file);
+begin
+    assembler;
+    asm
+        call gpc_tfile_close
+    end
+end;
+
+procedure file_read_integer(var f: file; var value: integer);
+begin
+    assembler;
+    asm
+        call gpc_tfile_read_int
+    end
+end;
+
+procedure file_write_integer(var f: file; value: integer);
+begin
+    assembler;
+    asm
+        call gpc_tfile_write_int
+    end
+end;
+
+procedure file_read_char(var f: file; var value: char);
+begin
+    assembler;
+    asm
+        call gpc_tfile_read_char
+    end
+end;
+
+procedure file_write_char(var f: file; value: char);
+begin
+    assembler;
+    asm
+        call gpc_tfile_write_char
+    end
+end;
+
+procedure file_read_real(var f: file; var value: real);
+begin
+    assembler;
+    asm
+        call gpc_tfile_read_real
+    end
+end;
+
+procedure file_write_real(var f: file; value: real);
+begin
+    assembler;
+    asm
+        call gpc_tfile_write_real
+    end
+end;
+
 procedure readln(var value: string);
 begin
     assembler;

@@ -279,6 +279,7 @@ typedef struct type_dispatch_args {
     combinator_t* record_parser;
     combinator_t* enumerated_parser;
     combinator_t* array_parser;
+    combinator_t* file_parser;
     combinator_t* set_parser;
     combinator_t* range_parser;
     combinator_t* pointer_parser;

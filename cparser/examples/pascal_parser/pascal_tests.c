@@ -1254,6 +1254,40 @@ void test_pascal_char_set(void) {
     free_input(input);
 }
 
+// Test typed file type parsing: file of Integer
+void test_pascal_typed_file_type(void) {
+    combinator_t* p = get_program_parser();
+    const char* src =
+        "program FileTest;\n"
+        "type\n"
+        "  TIntegerFile = file of Integer;\n"
+        "var\n"
+        "  F: TIntegerFile;\n"
+        "begin\n"
+        "end.\n";
+
+    input_t* input = new_input();
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+
+    ParseResult res = parse(input, p);
+    TEST_ASSERT(res.is_success);
+
+    ast_t* program_decl = res.value.ast;
+    TEST_ASSERT(program_decl != NULL);
+
+    ast_t* file_node = find_first_node_of_type(program_decl, PASCAL_T_FILE_TYPE);
+    TEST_ASSERT(file_node != NULL);
+
+    ast_t* elem_type = file_node->child;
+    TEST_ASSERT(elem_type != NULL);
+    TEST_ASSERT(elem_type->typ == PASCAL_T_TYPE_SPEC || elem_type->typ == PASCAL_T_IDENTIFIER);
+
+    free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
 // Regression: routine-local repeated const sections with typed record/array consts
 void test_program_routine_local_typed_consts(void) {
     combinator_t* p = get_program_parser();
@@ -4804,6 +4838,7 @@ TEST_LIST = {
     { "test_pascal_set_constructor", test_pascal_set_constructor },
     { "test_pascal_empty_set", test_pascal_empty_set },
     { "test_pascal_char_set", test_pascal_char_set },
+    { "test_pascal_typed_file_type", test_pascal_typed_file_type },
     { "test_pascal_range_expression", test_pascal_range_expression },
     { "test_pascal_char_range", test_pascal_char_range },
     { "test_pascal_set_union", test_pascal_set_union },

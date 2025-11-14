@@ -13,6 +13,7 @@ combinator_t* interface_type(tag_t tag);
 combinator_t* type_name(tag_t tag);
 combinator_t* pointer_type(tag_t tag);
 combinator_t* set_type(tag_t tag);
+combinator_t* file_type(tag_t tag);
 combinator_t* procedure_type(tag_t tag);
 combinator_t* function_type(tag_t tag);
 combinator_t* reference_to_type(tag_t tag);

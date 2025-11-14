@@ -421,6 +421,24 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
         return 1;
     }
 
+    /* Allow procedure variables to accept explicit @proc references */
+    if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        GpcType *rhs_proc = rhs_type->info.points_to;
+        if (rhs_proc != NULL && rhs_proc->kind == TYPE_KIND_PROCEDURE)
+            return are_types_compatible_for_assignment(lhs_type, rhs_proc, symtab);
+        return 0;
+    }
+    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        GpcType *lhs_target = lhs_type->info.points_to;
+        if (lhs_target == NULL)
+            return 1; /* Generic Pointer can hold procedure addresses */
+        if (lhs_target->kind == TYPE_KIND_PROCEDURE)
+            return are_types_compatible_for_assignment(lhs_target, rhs_type, symtab);
+        return 0;
+    }
+
     /* If kinds are different, generally incompatible */
     /* Exception: we need to check for special cases */
     if (lhs_type->kind != rhs_type->kind) {

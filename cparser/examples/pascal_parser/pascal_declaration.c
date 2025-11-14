@@ -441,6 +441,9 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (dispatch->array_parser && pascal_word_equals_ci(&word, "array")) {
             return run_type_branch(in, dispatch->array_parser);
         }
+        if (dispatch->file_parser && pascal_word_equals_ci(&word, "file")) {
+            return run_type_branch(in, dispatch->file_parser);
+        }
         if (dispatch->set_parser && pascal_word_equals_ci(&word, "set")) {
             return run_type_branch(in, dispatch->set_parser);
         }
@@ -1041,6 +1044,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* record_spec = record_type(PASCAL_T_RECORD_TYPE);
     combinator_t* enum_spec = enumerated_type(PASCAL_T_ENUMERATED_TYPE);
     combinator_t* array_spec = array_type(PASCAL_T_ARRAY_TYPE);
+    combinator_t* file_spec = file_type(PASCAL_T_FILE_TYPE);
     combinator_t* set_spec = set_type(PASCAL_T_SET);
     combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
     combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
@@ -1061,6 +1065,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     type_args->record_parser = record_spec;
     type_args->enumerated_parser = enum_spec;
     type_args->array_parser = array_spec;
+    type_args->file_parser = file_spec;
     type_args->set_parser = set_spec;
     type_args->range_parser = range_spec;
     type_args->pointer_parser = pointer_spec;
@@ -1870,6 +1875,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         procedure_type(PASCAL_T_PROCEDURE_TYPE),        // procedure types like procedure(x: Integer)
         function_type(PASCAL_T_FUNCTION_TYPE),          // function types like function(y: Real): Boolean
         set_type(PASCAL_T_SET),                         // set types like set of TAsmSehDirective
+        file_type(PASCAL_T_FILE_TYPE),                  // file types like file of Integer
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
