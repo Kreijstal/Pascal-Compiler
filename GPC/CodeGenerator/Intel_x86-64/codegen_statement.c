@@ -3156,6 +3156,7 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     Register_t *file_reg = NULL;
     StackNode_t *file_spill = NULL;
     int has_file_arg = 0;
+    int read_consumed_line = 0;
 
     /* Check if first argument is a file */
     if (args != NULL)
@@ -3257,6 +3258,9 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
                 ctx->static_link_reg = NULL;
                 ctx->static_link_reg_level = 0;
             }
+
+            if (read_line)
+                read_consumed_line = 1;
             
             args = args->next;
             continue;
@@ -3324,7 +3328,7 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     }
     
     /* If readln, consume rest of line */
-    if (read_line)
+    if (read_line && !read_consumed_line)
     {
         const char *file_dest64 = current_arg_reg64(0);
         if (has_file_arg && file_spill != NULL)
