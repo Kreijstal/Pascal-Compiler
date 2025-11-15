@@ -1848,7 +1848,47 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     HashNode_t *func_node = NULL;
     if (symtab != NULL)
-        FindIdent(&func_node, symtab, func->id);
+    {
+        /* For overloaded functions, we need to find the correct overload by matching
+         * the mangled name. FindIdent alone is insufficient because it returns the
+         * first match, which might be a different overload. */
+        if (func->mangled_id != NULL)
+        {
+            /* Try to find all identifiers with this name */
+            ListNode_t *all_matches = FindAllIdents(symtab, func->id);
+            ListNode_t *cur = all_matches;
+            
+            fprintf(stderr, "[DEBUG] Looking for function '%s' with mangled name '%s'\n",
+                func->id, func->mangled_id);
+            
+            /* Find the one with matching mangled name */
+            while (cur != NULL && func_node == NULL)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate != NULL)
+                    fprintf(stderr, "[DEBUG]   Candidate: id='%s', mangled='%s'\n",
+                        candidate->id != NULL ? candidate->id : "(null)",
+                        candidate->mangled_id != NULL ? candidate->mangled_id : "(null)");
+                if (candidate != NULL && candidate->mangled_id != NULL &&
+                    strcmp(candidate->mangled_id, func->mangled_id) == 0)
+                {
+                    func_node = candidate;
+                    fprintf(stderr, "[DEBUG]   MATCH FOUND!\n");
+                }
+                cur = cur->next;
+            }
+            
+            if (all_matches != NULL)
+                DestroyList(all_matches);
+        }
+        
+        /* Fallback to simple lookup if no mangled name or no match found */
+        if (func_node == NULL)
+        {
+            fprintf(stderr, "[DEBUG] Fallback to simple lookup\n");
+            FindIdent(&func_node, symtab, func->id);
+        }
+    }
 
     /* Check if function returns a record by examining GpcType */
     if (func_node != NULL && func_node->type != NULL &&
@@ -2131,23 +2171,42 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     {
         /* Determine if return type is Real (floating-point) */
         int is_real_return = 0;
+        fprintf(stderr, "[DEBUG] Determining return type for '%s' (mangled='%s')\n",
+            func->id, func->mangled_id);
         if (func_node != NULL && func_node->type != NULL &&
             func_node->type->kind == TYPE_KIND_PROCEDURE)
         {
             GpcType *return_type = gpc_type_get_return_type(func_node->type);
+            fprintf(stderr, "[DEBUG]   func_node->type->kind = TYPE_KIND_PROCEDURE\n");
             if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
             {
                 int tag = gpc_type_get_primitive_tag(return_type);
+                fprintf(stderr, "[DEBUG]   return_type is PRIMITIVE with tag=%d (REAL_TYPE=%d)\n", tag, REAL_TYPE);
                 if (tag == REAL_TYPE)
                     is_real_return = 1;
+            }
+            else if (return_type != NULL)
+            {
+                fprintf(stderr, "[DEBUG]   return_type has kind=%d (not PRIMITIVE)\n", return_type->kind);
+            }
+            else
+            {
+                fprintf(stderr, "[DEBUG]   return_type is NULL\n");
             }
         }
         else if (func_node != NULL && func_node->type != NULL &&
                  func_node->type->kind == TYPE_KIND_PRIMITIVE)
         {
+            fprintf(stderr, "[DEBUG]   func_node->type->kind = TYPE_KIND_PRIMITIVE\n");
             int tag = gpc_type_get_primitive_tag(func_node->type);
+            fprintf(stderr, "[DEBUG]   tag=%d (REAL_TYPE=%d)\n", tag, REAL_TYPE);
             if (tag == REAL_TYPE)
                 is_real_return = 1;
+        }
+        else
+        {
+            fprintf(stderr, "[DEBUG]   func_node=%p, func_node->type=%p\n",
+                (void*)func_node, func_node ? (void*)func_node->type : NULL);
         }
         
         /* Use movsd for Real types (return in xmm0), movq/movl for others (return in rax/eax) */
