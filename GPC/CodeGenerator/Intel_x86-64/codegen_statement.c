@@ -4789,7 +4789,9 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     char end_label[18], buffer[100];
     gen_label(end_label, 18, ctx);
     
-    /* Evaluate the selector expression once and keep the result in a register */
+    /* Evaluate the selector expression once and spill it to stack to free up registers.
+     * This prevents register exhaustion when case branches contain complex expressions
+     * or function calls that need registers for their own evaluation. */
     struct Expression *selector = stmt->stmt_data.case_data.selector_expr;
     Register_t *selector_reg = NULL;
     inst_list = codegen_expr_with_result(selector, inst_list, ctx, &selector_reg);
@@ -4797,14 +4799,32 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         return inst_list;
 
     int selector_is_qword = expr_uses_qword_gpctype(selector);
+    
+    /* Spill selector value to stack to free the register */
+    StackNode_t *selector_spill = add_l_t("case_selector");
+    if (selector_spill == NULL)
+    {
+        free_reg(get_reg_stack(), selector_reg);
+        return inst_list;
+    }
+    
+    if (selector_is_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            selector_reg->bit_64, selector_spill->offset);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n",
+            selector_reg->bit_32, selector_spill->offset);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), selector_reg);
+    selector_reg = NULL;
 
     /* Generate code for each case branch */
     ListNode_t *branch_node = stmt->stmt_data.case_data.branches;
     if (branch_node == NULL) {
-        /* No branches - selector was already evaluated */
-        free_reg(get_reg_stack(), selector_reg);
+        /* No branches - selector was already evaluated and spilled */
         return inst_list;
     }
+
 
     while (branch_node != NULL) {
         struct CaseBranch *branch = (struct CaseBranch *)branch_node->cur;
@@ -4820,25 +4840,28 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     struct Expression *label_expr = (struct Expression *)label_node->cur;
 
                     if (label_expr->type == EXPR_INUM) {
+                        /* For constant labels, compare directly against the spilled value */
                         if (selector_is_qword)
-                            snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
-                                     label_expr->expr_data.i_num, selector_reg->bit_64);
+                            snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
+                                     label_expr->expr_data.i_num, selector_spill->offset);
                         else
-                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
-                                     label_expr->expr_data.i_num, selector_reg->bit_32);
+                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
+                                     label_expr->expr_data.i_num, selector_spill->offset);
                         inst_list = add_inst(inst_list, buffer);
                         snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
                         inst_list = add_inst(inst_list, buffer);
                     } else {
+                        /* For non-constant labels, evaluate label and compare with spilled selector */
                         Register_t *label_reg = NULL;
                         inst_list = codegen_expr_with_result(label_expr, inst_list, ctx, &label_reg);
                         if (label_reg != NULL) {
+                            /* Compare selector value from stack with label */
                             if (selector_is_qword)
-                                snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
-                                         label_reg->bit_64, selector_reg->bit_64);
+                                snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, -%d(%%rbp)\n",
+                                         label_reg->bit_64, selector_spill->offset);
                             else
-                                snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
-                                         label_reg->bit_32, selector_reg->bit_32);
+                                snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, -%d(%%rbp)\n",
+                                         label_reg->bit_32, selector_spill->offset);
                             inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
                             inst_list = add_inst(inst_list, buffer);
@@ -4854,24 +4877,26 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         int emitted_lower_cmp = 0;
                         if (range->lower != NULL) {
                             if (range->lower->type == EXPR_INUM) {
+                                /* Compare constant lower bound against spilled selector */
                                 if (selector_is_qword)
-                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
-                                             range->lower->expr_data.i_num, selector_reg->bit_64);
+                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
+                                             range->lower->expr_data.i_num, selector_spill->offset);
                                 else
-                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
-                                             range->lower->expr_data.i_num, selector_reg->bit_32);
+                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
+                                             range->lower->expr_data.i_num, selector_spill->offset);
                                 inst_list = add_inst(inst_list, buffer);
                                 emitted_lower_cmp = 1;
                             } else {
                                 Register_t *lower_reg = NULL;
                                 inst_list = codegen_expr_with_result(range->lower, inst_list, ctx, &lower_reg);
                                 if (lower_reg != NULL) {
+                                    /* Compare spilled selector against lower bound */
                                     if (selector_is_qword)
-                                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
-                                                 lower_reg->bit_64, selector_reg->bit_64);
+                                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, -%d(%%rbp)\n",
+                                                 lower_reg->bit_64, selector_spill->offset);
                                     else
-                                        snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
-                                                 lower_reg->bit_32, selector_reg->bit_32);
+                                        snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, -%d(%%rbp)\n",
+                                                 lower_reg->bit_32, selector_spill->offset);
                                     inst_list = add_inst(inst_list, buffer);
                                     emitted_lower_cmp = 1;
                                     free_reg(get_reg_stack(), lower_reg);
@@ -4887,24 +4912,26 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         int emitted_upper_cmp = 0;
                         if (range->upper != NULL) {
                             if (range->upper->type == EXPR_INUM) {
+                                /* Compare constant upper bound against spilled selector */
                                 if (selector_is_qword)
-                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, %s\n",
-                                             range->upper->expr_data.i_num, selector_reg->bit_64);
+                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
+                                             range->upper->expr_data.i_num, selector_spill->offset);
                                 else
-                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, %s\n",
-                                             range->upper->expr_data.i_num, selector_reg->bit_32);
+                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
+                                             range->upper->expr_data.i_num, selector_spill->offset);
                                 inst_list = add_inst(inst_list, buffer);
                                 emitted_upper_cmp = 1;
                             } else {
                                 Register_t *upper_reg = NULL;
                                 inst_list = codegen_expr_with_result(range->upper, inst_list, ctx, &upper_reg);
                                 if (upper_reg != NULL) {
+                                    /* Compare spilled selector against upper bound */
                                     if (selector_is_qword)
-                                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %s\n",
-                                                 upper_reg->bit_64, selector_reg->bit_64);
+                                        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, -%d(%%rbp)\n",
+                                                 upper_reg->bit_64, selector_spill->offset);
                                     else
-                                        snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, %s\n",
-                                                 upper_reg->bit_32, selector_reg->bit_32);
+                                        snprintf(buffer, sizeof(buffer), "\tcmpl\t%s, -%d(%%rbp)\n",
+                                                 upper_reg->bit_32, selector_spill->offset);
                                     inst_list = add_inst(inst_list, buffer);
                                     emitted_upper_cmp = 1;
                                     free_reg(get_reg_stack(), upper_reg);
@@ -4956,7 +4983,7 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
-    free_reg(get_reg_stack(), selector_reg);
+    /* selector_reg was already freed after spilling to stack */
     return inst_list;
 }
 

@@ -3501,6 +3501,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
             CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
+            if (top_reg == NULL)
+            {
+                free_expr_tree(expr_tree);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for argument evaluation. "
+                    "Expression may be too complex for available registers.");
+                if (arg_infos != NULL)
+                    free(arg_infos);
+                return inst_list;
+            }
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, top_reg);
             free_expr_tree(expr_tree);
 
