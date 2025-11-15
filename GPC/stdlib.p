@@ -1,5 +1,82 @@
 program stdlib;
 
+{ ============================================================================
+  Compiler Intrinsic Functions
+  
+  The following functions are implemented as compiler intrinsics for
+  performance and type safety. They are documented here for reference.
+  ============================================================================ }
+
+{ SizeOf(expr) - Returns the size in bytes of a type or expression  
+  This function works in unevaluated contexts and on types.
+  Example: SizeOf(integer) returns 4
+}
+
+{ Length(x) - Returns the length of an array or string
+  For fixed-size arrays, this is a compile-time constant.
+  Example: Length(myArray) 
+}
+
+{ Sqr(x) - Returns x * x
+  Overloaded for integer, longint, and real types.
+  The compiler can constant-fold literal arguments.
+}
+
+{ Odd(x) - Returns true if x is odd, false otherwise
+  Implemented as (x mod 2) <> 0
+  Overloaded for integer and longint types.
+}
+
+{ Chr(x) - Converts an integer to a character
+  Example: Chr(65) returns 'A'
+}
+
+{ Ord(ch) - Returns the ordinal value of a character or boolean
+  For characters, returns the ASCII value.
+  For booleans, returns 0 or 1.
+}
+
+{ UpCase(ch) - Converts a character to uppercase
+  Example: UpCase('a') returns 'A'
+}
+
+{ Random - Returns a random number
+  Random: real - Returns a random real in [0, 1)
+  Random(upper: integer): integer - Returns random integer in [0, upper)
+  Random(upper: real): real - Returns random real in [0, upper)
+}
+
+{ RandomRange(low, high) - Returns a random integer in [low, high)
+  Overloaded for integer and longint types.
+}
+
+{ Copy(s, index, count) - Returns a substring
+  Example: Copy('Hello', 2, 3) returns 'ell'
+  1-based indexing.
+}
+
+{ Pos(substr, s) - Finds the position of substr in s
+  Returns 0 if not found, otherwise 1-based position.
+}
+
+{ EOF(f) - Returns true if at end of file
+  EOF: boolean - Checks standard input
+  EOF(var f: text): boolean - Checks specific file
+}
+
+{ EOLN(f) - Returns true if at end of line
+  EOLN: boolean - Checks standard input  
+  EOLN(var f: text): boolean - Checks specific file
+}
+
+{ Assigned(ptr) - Returns true if pointer is not nil
+  Works with pointer and procedure variables.
+}
+
+{ ============================================================================
+  System Procedures and Functions
+  ============================================================================ }
+
 procedure Randomize;
 begin
     assembler;
