@@ -1,13 +1,5 @@
 program stdlib;
 
-procedure sincos_impl(angle: real; var sine: real; var cosine: real);
-begin
-    assembler;
-    asm
-        call gpc_sincos_real
-    end
-end;
-
 procedure Randomize;
 begin
     assembler;
@@ -22,11 +14,6 @@ begin
     asm
         call gpc_set_randseed
     end
-end;
-
-procedure SinCos(angle: real; var sine: real; var cosine: real);
-begin
-    sincos_impl(angle, sine, cosine);
 end;
 
 function succ(i: integer): integer;
