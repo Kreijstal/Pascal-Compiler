@@ -1130,6 +1130,11 @@ void destroy_stmt(struct Statement *stmt)
           if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
             free(stmt->stmt_data.procedure_call_data.mangled_id);
           destroy_list(stmt->stmt_data.procedure_call_data.expr_args);
+          if (stmt->stmt_data.procedure_call_data.call_gpc_type != NULL)
+          {
+              destroy_gpc_type(stmt->stmt_data.procedure_call_data.call_gpc_type);
+              stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
+          }
           break;
 
         case STMT_COMPOUND_STATEMENT:
@@ -1302,6 +1307,11 @@ void destroy_expr(struct Expression *expr)
           if (expr->expr_data.function_call_data.mangled_id != NULL)
               free(expr->expr_data.function_call_data.mangled_id);
           destroy_list(expr->expr_data.function_call_data.args_expr);
+          if (expr->expr_data.function_call_data.call_gpc_type != NULL)
+          {
+              destroy_gpc_type(expr->expr_data.function_call_data.call_gpc_type);
+              expr->expr_data.function_call_data.call_gpc_type = NULL;
+          }
           break;
 
         case EXPR_INUM:
@@ -1435,6 +1445,11 @@ void destroy_expr(struct Expression *expr)
     {
         free(expr->array_element_type_id);
         expr->array_element_type_id = NULL;
+    }
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
     }
     free(expr);
 }

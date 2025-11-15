@@ -33,6 +33,25 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+static void semcheck_stmt_set_call_gpc_type(struct Statement *stmt, GpcType *type,
+    int owns_existing)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
+        return;
+
+    if (stmt->stmt_data.procedure_call_data.call_gpc_type != NULL && owns_existing)
+    {
+        destroy_gpc_type(stmt->stmt_data.procedure_call_data.call_gpc_type);
+    }
+    stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
+
+    if (type != NULL)
+    {
+        gpc_type_retain(type);
+        stmt->stmt_data.procedure_call_data.call_gpc_type = type;
+    }
+}
+
 static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
@@ -206,7 +225,8 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         
         /* Populate call info to avoid use-after-free when HashNode is freed */
         stmt->stmt_data.procedure_call_data.call_hash_type = builtin_node->hash_type;
-        stmt->stmt_data.procedure_call_data.call_gpc_type = builtin_node->type;
+        semcheck_stmt_set_call_gpc_type(stmt, builtin_node->type,
+            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         
         builtin_node->referenced += 1;
@@ -1079,10 +1099,24 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
                         temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                     }
-                    call_expr->expr_data.function_call_data.call_hash_type = temp_call.stmt_data.procedure_call_data.call_hash_type;
-                    call_expr->expr_data.function_call_data.call_gpc_type = temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                    call_expr->expr_data.function_call_data.call_hash_type =
+                        temp_call.stmt_data.procedure_call_data.call_hash_type;
+                    if (call_expr->expr_data.function_call_data.call_gpc_type != NULL)
+                    {
+                        destroy_gpc_type(call_expr->expr_data.function_call_data.call_gpc_type);
+                        call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                    }
+                    if (temp_call.stmt_data.procedure_call_data.call_gpc_type != NULL)
+                    {
+                        gpc_type_retain(temp_call.stmt_data.procedure_call_data.call_gpc_type);
+                        call_expr->expr_data.function_call_data.call_gpc_type =
+                            temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                    }
                     call_expr->expr_data.function_call_data.is_call_info_valid =
                         temp_call.stmt_data.procedure_call_data.is_call_info_valid;
+                    semcheck_stmt_set_call_gpc_type(&temp_call, NULL,
+                        temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
+                    temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
                 }
                 else
                 {
@@ -1395,7 +1429,8 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     stmt->stmt_data.procedure_call_data.expr_args = self_arg;
     stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
     stmt->stmt_data.procedure_call_data.call_hash_type = 0;
-    stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
+    semcheck_stmt_set_call_gpc_type(stmt, NULL,
+        stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
     stmt->stmt_data.procedure_call_data.is_call_info_valid = 0;
 
     return semcheck_proccall(symtab, stmt, max_scope_lev);
@@ -1860,7 +1895,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         
         /* Populate call info to avoid use-after-free when HashNode is freed */
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
-        stmt->stmt_data.procedure_call_data.call_gpc_type = resolved_proc->type;
+        semcheck_stmt_set_call_gpc_type(stmt, resolved_proc->type,
+            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
         
@@ -1891,7 +1927,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             
             /* Populate call info to avoid use-after-free when HashNode is freed */
             stmt->stmt_data.procedure_call_data.call_hash_type = proc_var->hash_type;
-            stmt->stmt_data.procedure_call_data.call_gpc_type = proc_var->type;
+            semcheck_stmt_set_call_gpc_type(stmt, proc_var->type,
+                stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
             stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
 
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);

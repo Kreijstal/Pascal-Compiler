@@ -42,14 +42,52 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
     int *type_second, struct Expression *expr2);
 int is_and_or(int *type);
 
+static void semcheck_expr_set_call_gpc_type(struct Expression *expr, GpcType *type,
+    int owns_existing)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return;
+
+    if (expr->expr_data.function_call_data.call_gpc_type != NULL && owns_existing)
+    {
+        destroy_gpc_type(expr->expr_data.function_call_data.call_gpc_type);
+    }
+    expr->expr_data.function_call_data.call_gpc_type = NULL;
+
+    if (type != NULL)
+    {
+        gpc_type_retain(type);
+        expr->expr_data.function_call_data.call_gpc_type = type;
+    }
+}
+
+static void semcheck_expr_set_resolved_gpc_type_shared(struct Expression *expr, GpcType *type)
+{
+    if (expr == NULL)
+        return;
+
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+
+    if (type != NULL)
+    {
+        gpc_type_retain(type);
+        expr->resolved_gpc_type = type;
+    }
+}
+
 static void semcheck_reset_function_call_cache(struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
         return;
 
+    int had_call_info = (expr->expr_data.function_call_data.is_call_info_valid == 1);
     expr->expr_data.function_call_data.resolved_func = NULL;
     expr->expr_data.function_call_data.call_hash_type = HASHTYPE_VAR;
-    expr->expr_data.function_call_data.call_gpc_type = NULL;
+    semcheck_expr_set_call_gpc_type(expr, NULL, had_call_info);
     expr->expr_data.function_call_data.is_call_info_valid = 0;
 }
 
@@ -64,9 +102,10 @@ static void semcheck_set_function_call_target(struct Expression *expr, HashNode_
         return;
     }
 
+    int had_call_info = (expr->expr_data.function_call_data.is_call_info_valid == 1);
     expr->expr_data.function_call_data.resolved_func = NULL;
     expr->expr_data.function_call_data.call_hash_type = target->hash_type;
-    expr->expr_data.function_call_data.call_gpc_type = target->type;
+    semcheck_expr_set_call_gpc_type(expr, target->type, had_call_info);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
 
@@ -3495,7 +3534,8 @@ static int semcheck_transform_property_getter_call(int *type_return,
     expr->expr_data.function_call_data.args_expr = arg_node;
     expr->expr_data.function_call_data.resolved_func = NULL;
     expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
-    expr->expr_data.function_call_data.call_gpc_type = method_node->type;
+    semcheck_expr_set_call_gpc_type(expr, method_node->type,
+        expr->expr_data.function_call_data.is_call_info_valid == 1);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     expr->record_type = NULL;
     expr->resolved_type = UNKNOWN_TYPE;
@@ -5156,7 +5196,7 @@ int semcheck_varid(int *type_return,
             semcheck_set_array_info_from_hashnode(expr, symtab, hash_return, expr->line_num);
         else
             semcheck_clear_array_info(expr);
-        expr->resolved_gpc_type = hash_return->type;
+        semcheck_expr_set_resolved_gpc_type_shared(expr, hash_return->type);
 
         if (*type_return == POINTER_TYPE)
         {
@@ -5812,7 +5852,7 @@ int semcheck_funccall(int *type_return,
             GpcType *return_type = gpc_type_get_return_type(hash_return->type);
             if (return_type != NULL)
             {
-                expr->resolved_gpc_type = return_type;
+                semcheck_expr_set_resolved_gpc_type_shared(expr, return_type);
                 if (return_type->kind == TYPE_KIND_ARRAY)
                     semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
                 else
@@ -5830,7 +5870,7 @@ int semcheck_funccall(int *type_return,
                             gpc_type_retain(type_node->type);
                             hash_return->type->info.proc_info.return_type = type_node->type;
                             return_type = type_node->type;
-                            expr->resolved_gpc_type = type_node->type;
+                            semcheck_expr_set_resolved_gpc_type_shared(expr, type_node->type);
                             if (return_type->kind == TYPE_KIND_ARRAY)
                                 semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
                             else
@@ -5841,13 +5881,13 @@ int semcheck_funccall(int *type_return,
             }
             else
             {
-                expr->resolved_gpc_type = NULL;
+                semcheck_expr_set_resolved_gpc_type_shared(expr, NULL);
                 semcheck_clear_array_info(expr);
             }
         }
         else
         {
-            expr->resolved_gpc_type = hash_return->type;
+            semcheck_expr_set_resolved_gpc_type_shared(expr, hash_return->type);
             semcheck_clear_array_info(expr);
         }
 
