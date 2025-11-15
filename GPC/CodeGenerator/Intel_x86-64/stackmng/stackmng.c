@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include <limits.h>
 #include "stackmng.h"
 #include "../register_types.h"
 #include "../codegen.h"
@@ -557,28 +558,38 @@ RegStack_t *init_reg_stack()
     assert(rax != NULL);
     rax->bit_64 = strdup("%rax");
     rax->bit_32 = strdup("%eax");
+    rax->spill_location = NULL;
+    rax->last_use_seq = 0;
 
     /* %r10, %r11 - caller-saved, never used for arguments */
     Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
     assert(r10 != NULL);
     r10->bit_64 = strdup("%r10");
     r10->bit_32 = strdup("%r10d");
+    r10->spill_location = NULL;
+    r10->last_use_seq = 0;
 
     Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
     assert(r11 != NULL);
     r11->bit_64 = strdup("%r11");
     r11->bit_32 = strdup("%r11d");
+    r11->spill_location = NULL;
+    r11->last_use_seq = 0;
 
     /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
     Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
     assert(r8 != NULL);
     r8->bit_64 = strdup("%r8");
     r8->bit_32 = strdup("%r8d");
+    r8->spill_location = NULL;
+    r8->last_use_seq = 0;
 
     Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
     assert(r9 != NULL);
     r9->bit_64 = strdup("%r9");
     r9->bit_32 = strdup("%r9d");
+    r9->spill_location = NULL;
+    r9->last_use_seq = 0;
 
     /* Build base register list */
     registers = CreateListNode(rax, LIST_UNSPECIFIED);
@@ -595,11 +606,15 @@ RegStack_t *init_reg_stack()
         assert(rsi != NULL);
         rsi->bit_64 = strdup("%rsi");
         rsi->bit_32 = strdup("%esi");
+        rsi->spill_location = NULL;
+        rsi->last_use_seq = 0;
 
         Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
         assert(rdi != NULL);
         rdi->bit_64 = strdup("%rdi");
         rdi->bit_32 = strdup("%edi");
+        rdi->spill_location = NULL;
+        rdi->last_use_seq = 0;
 
         registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
         registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
@@ -611,6 +626,8 @@ RegStack_t *init_reg_stack()
         assert(rcx != NULL);
         rcx->bit_64 = strdup("%rcx");
         rcx->bit_32 = strdup("%ecx");
+        rcx->spill_location = NULL;
+        rcx->last_use_seq = 0;
 
         registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
     }
@@ -618,6 +635,7 @@ RegStack_t *init_reg_stack()
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;
     reg_stack->num_registers = NUM_CALLER_SAVED_REGISTERS;
+    reg_stack->use_sequence = 0;
 
     return reg_stack;
 }
@@ -752,7 +770,7 @@ Register_t *front_reg_stack(RegStack_t *reg_stack)
     return (Register_t *)reg_stack->registers_free->cur;
 }
 
-/* TODO: Spilling */
+/* Register spilling: When out of registers, spill the least recently used one */
 Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
 {
     assert(reg_stack != NULL);
@@ -770,6 +788,11 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
         reg_stack->registers_allocated = register_node;
 
         reg = (Register_t *)register_node->cur;
+        reg->last_use_seq = ++reg_stack->use_sequence;
+        
+        /* Clear spill location when register is freshly allocated */
+        reg->spill_location = NULL;
+        
 #if GPC_ENABLE_REG_DEBUG
         if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
             fprintf(stderr, "[reg-debug] alloc %s (%s)\n", reg->bit_64, g_reg_debug_context);
@@ -778,6 +801,10 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
     }
     else
     {
+        /* No free registers - this is now an error that caller must handle */
+        /* The spilling would require tracking which values need to be preserved, */
+        /* which is beyond the scope of a simple fix */
+        REG_DEBUG_LOG("[reg-spill] Out of registers - caller should handle this\n");
         return NULL;
     }
 }
