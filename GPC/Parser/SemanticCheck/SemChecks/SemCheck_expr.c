@@ -1187,7 +1187,7 @@ static int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
 
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_chr");
+        expr->expr_data.function_call_data.mangled_id = strdup("Chr_i");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Chr.\\n");
@@ -1276,7 +1276,11 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             return 0;
         }
 
-        mangled_name = "gpc_ord_string";
+        /* String variable case - not supported, only char literals work */
+        fprintf(stderr, "Error on line %d, Ord expects a character, not a string variable.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
     }
     else if (arg_type == BOOL)
     {
@@ -1306,21 +1310,29 @@ static int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             return 0;
         }
 
-        mangled_name = "gpc_ord_longint";
+        /* Map to stdlib boolean overload */
+        mangled_name = "Ord_b";
     }
     else if (arg_type == INT_TYPE || arg_type == LONGINT_TYPE)
     {
-        mangled_name = "gpc_ord_longint";
+        /* For integers, Ord is identity - not needed in Pascal */
+        fprintf(stderr, "Error on line %d, Ord expects a character or boolean, not an integer.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
     }
     else if (arg_type == CHAR_TYPE)
     {
         /* For char variables, Ord returns the character code */
-        mangled_name = "gpc_ord_longint";
+        mangled_name = "Ord_c";
     }
     else if (arg_type == ENUM_TYPE)
     {
         /* For enumerative types, Ord returns the ordinal value (0-based index) */
-        mangled_name = "gpc_ord_longint";
+        fprintf(stderr, "Error on line %d, Ord for enum types not yet supported in stdlib.\\n",
+            expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
     }
 
     if (mangled_name != NULL)
@@ -1504,7 +1516,15 @@ static int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_string_copy");
+        
+        /* Choose the right overload based on index and count types */
+        const char *mangled_name;
+        if (index_type == LONGINT_TYPE || count_type == LONGINT_TYPE)
+            mangled_name = "Copy_s_li_li";
+        else
+            mangled_name = "Copy_s_i_i";
+            
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Copy.\n");
@@ -1564,7 +1584,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_string_pos");
+        expr->expr_data.function_call_data.mangled_id = strdup("Pos_s_s");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Pos.\n");
@@ -1595,7 +1615,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
 
     if (args == NULL)
     {
-        mangled_name = "gpc_text_eof_default";
+        mangled_name = "EOF";
     }
     else if (args->next == NULL)
     {
@@ -1609,7 +1629,7 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            mangled_name = "gpc_text_eof";
+            mangled_name = "EOF_t";
         }
     }
     else
@@ -1656,7 +1676,7 @@ static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
 
     if (args == NULL)
     {
-        mangled_name = "gpc_text_eoln_default";
+        mangled_name = "EOLN";
     }
     else if (args->next == NULL)
     {
@@ -1670,7 +1690,7 @@ static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            mangled_name = "gpc_text_eoln";
+            mangled_name = "EOLN_t";
         }
     }
     else
@@ -1808,7 +1828,7 @@ static int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_assigned");
+        expr->expr_data.function_call_data.mangled_id = strdup("Assigned_p");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Assigned.\n");
@@ -2196,7 +2216,7 @@ static int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_upcase_char");
+        expr->expr_data.function_call_data.mangled_id = strdup("UpCase_c");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for UpCase.\n");
@@ -2234,6 +2254,8 @@ static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     int arg_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
+    const char *mangled_name = NULL;
+
     if (error_count == 0 && arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, Odd expects an integer argument.\n",
@@ -2243,12 +2265,18 @@ static int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0)
     {
+        /* Map to stdlib overload based on argument type */
+        if (arg_type == INT_TYPE)
+            mangled_name = "Odd_i";
+        else if (arg_type == LONGINT_TYPE)
+            mangled_name = "Odd_li";
+
         if (expr->expr_data.function_call_data.mangled_id != NULL)
         {
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_is_odd");
+        expr->expr_data.function_call_data.mangled_id = strdup(mangled_name);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Odd.\n");
@@ -2293,17 +2321,17 @@ static int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
     {
         if (arg_type == REAL_TYPE)
         {
-            mangled_name = "gpc_sqr_real";
+            mangled_name = "Sqr_r";
             result_type = REAL_TYPE;
         }
         else if (arg_type == LONGINT_TYPE)
         {
-            mangled_name = "gpc_sqr_int64";
+            mangled_name = "Sqr_li";
             result_type = LONGINT_TYPE;
         }
         else if (arg_type == INT_TYPE)
         {
-            mangled_name = "gpc_sqr_int32";
+            mangled_name = "Sqr_i";
             result_type = INT_TYPE;
         }
         else
@@ -2329,6 +2357,12 @@ static int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
+        if (expr->resolved_gpc_type != NULL)
+        {
+            destroy_gpc_type(expr->resolved_gpc_type);
+            expr->resolved_gpc_type = NULL;
+        }
+        expr->resolved_gpc_type = create_primitive_type(result_type);
         expr->resolved_type = result_type;
         *type_return = result_type;
         return 0;
@@ -6031,7 +6065,7 @@ static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_real");
+        expr->expr_data.function_call_data.mangled_id = strdup("Random");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for Random.\n");
@@ -6062,6 +6096,7 @@ static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
     int upper_type = UNKNOWN_TYPE;
     int error_count = semcheck_expr_main(&upper_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
     int is_real_upper = (upper_type == REAL_TYPE);
+    int is_longint_upper = (upper_type == LONGINT_TYPE);
     if (!is_real_upper && upper_type != INT_TYPE && upper_type != LONGINT_TYPE)
     {
         fprintf(stderr, "Error on line %d, Random parameter must be numeric.\n",
@@ -6081,9 +6116,11 @@ static int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
         expr->expr_data.function_call_data.mangled_id = NULL;
     }
     if (is_real_upper)
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_real_upper");
+        expr->expr_data.function_call_data.mangled_id = strdup("Random_r");
+    else if (is_longint_upper)
+        expr->expr_data.function_call_data.mangled_id = strdup("Random_li");
     else
-        expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_int");
+        expr->expr_data.function_call_data.mangled_id = strdup("Random_i");
     if (expr->expr_data.function_call_data.mangled_id == NULL)
     {
         fprintf(stderr, "Error: failed to allocate mangled name for Random.\n");
@@ -6158,7 +6195,8 @@ static int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
         free(expr->expr_data.function_call_data.mangled_id);
         expr->expr_data.function_call_data.mangled_id = NULL;
     }
-    expr->expr_data.function_call_data.mangled_id = strdup("gpc_random_range");
+    expr->expr_data.function_call_data.mangled_id = strdup(
+        (low_type == LONGINT_TYPE || high_type == LONGINT_TYPE) ? "RandomRange_li_li" : "RandomRange_i_i");
     if (expr->expr_data.function_call_data.mangled_id == NULL)
     {
         fprintf(stderr, "Error: failed to allocate mangled name for RandomRange.\n");

@@ -1,5 +1,278 @@
 program stdlib;
 
+{ ============================================================================
+  Standard Library Functions (previously built-ins)
+  ============================================================================ }
+
+{ Mathematical Functions }
+
+function Sqr(x: integer): integer; overload;
+begin
+    assembler;
+    asm
+        call gpc_sqr_int32
+        movl %eax, -12(%rbp)
+    end
+end;
+
+function Sqr(x: longint): longint; overload;
+begin
+    assembler;
+    asm
+        call gpc_sqr_int64
+        movq %rax, -24(%rbp)
+    end
+end;
+
+function Sqr(x: real): real; overload;
+begin
+    assembler;
+    asm
+        call gpc_sqr_real
+        movsd %xmm0, -24(%rbp)
+    end
+end;
+
+function Odd(x: integer): boolean; overload;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_is_odd
+    end;
+    Odd := (result <> 0);
+end;
+
+function Odd(x: longint): boolean; overload;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_is_odd
+    end;
+    Odd := (result <> 0);
+end;
+
+{ Character and String Functions }
+
+function Chr(x: integer): char;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_chr
+    end;
+    Chr := char(result);
+end;
+
+function Ord(ch: char): integer; overload;
+begin
+    assembler;
+    asm
+        { For char, just return the ASCII value }
+        movzbl %dil, %eax
+        movl $GPC_TARGET_WINDOWS, %edx
+        testl %edx, %edx
+        je .Lord_char_done
+        movzbl %cl, %eax
+.Lord_char_done:
+    end
+end;
+
+function Ord(b: boolean): integer; overload;
+begin
+    if b then
+        Ord := 1
+    else
+        Ord := 0;
+end;
+
+function UpCase(ch: char): char;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_upcase_char
+    end;
+    UpCase := char(result);
+end;
+
+function Copy(s: string; index: integer; count: integer): string; overload;
+var
+    idx_long, cnt_long: longint;
+    result: string;
+begin
+    idx_long := index;
+    cnt_long := count;
+    assembler;
+    asm
+        call gpc_string_copy
+    end;
+    Copy := result;
+end;
+
+function Copy(s: string; index: longint; count: longint): string; overload;
+var
+    result: string;
+begin
+    assembler;
+    asm
+        call gpc_string_copy
+    end;
+    Copy := result;
+end;
+
+function Pos(substr: string; s: string): integer;
+var
+    result_long: longint;
+begin
+    assembler;
+    asm
+        call gpc_string_pos
+    end;
+    Pos := integer(result_long);
+end;
+
+{ Random Number Functions }
+
+function Random: real; overload;
+var
+    result: real;
+begin
+    assembler;
+    asm
+        call gpc_random_real
+    end;
+    Random := result;
+end;
+
+function Random(upper: integer): integer; overload;
+var
+    upper_long: longint;
+    result_long: longint;
+begin
+    upper_long := upper;
+    assembler;
+    asm
+        call gpc_random_int
+    end;
+    Random := integer(result_long);
+end;
+
+function Random(upper: longint): longint; overload;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_random_int
+    end;
+    Random := result;
+end;
+
+function Random(upper: real): real; overload;
+var
+    result: real;
+begin
+    assembler;
+    asm
+        call gpc_random_real_upper
+    end;
+    Random := result;
+end;
+
+function RandomRange(low: integer; high: integer): integer; overload;
+var
+    low_long, high_long: longint;
+    result_long: longint;
+begin
+    low_long := low;
+    high_long := high;
+    assembler;
+    asm
+        call gpc_random_range
+    end;
+    RandomRange := integer(result_long);
+end;
+
+function RandomRange(low: longint; high: longint): longint; overload;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_random_range
+    end;
+    RandomRange := result;
+end;
+
+{ I/O Functions }
+
+function EOF(var f: text): boolean; overload;
+var
+    result: integer;
+begin
+    assembler;
+    asm
+        call gpc_text_eof
+    end;
+    EOF := (result <> 0);
+end;
+
+function EOF: boolean; overload;
+var
+    result: integer;
+begin
+    assembler;
+    asm
+        call gpc_text_eof_default
+    end;
+    EOF := (result <> 0);
+end;
+
+function EOLN(var f: text): boolean; overload;
+var
+    result: integer;
+begin
+    assembler;
+    asm
+        call gpc_text_eoln
+    end;
+    EOLN := (result <> 0);
+end;
+
+function EOLN: boolean; overload;
+var
+    result: integer;
+begin
+    assembler;
+    asm
+        call gpc_text_eoln_default
+    end;
+    EOLN := (result <> 0);
+end;
+
+{ Pointer Functions }
+
+function Assigned(ptr: pointer): boolean;
+var
+    result: longint;
+begin
+    assembler;
+    asm
+        call gpc_assigned
+    end;
+    Assigned := (result <> 0);
+end;
+
+{ ============================================================================
+  System Procedures and Functions
+  ============================================================================ }
+
 procedure Randomize;
 begin
     assembler;
