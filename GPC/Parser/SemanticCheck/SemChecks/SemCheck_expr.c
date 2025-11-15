@@ -100,12 +100,25 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
         ListNode_t *node = current->properties;
         while (node != NULL)
         {
+#ifdef DEBUG_PROPERTY_RESOLVE
+            fprintf(stderr, "[DEBUG] inspecting property node type=%d\n", node->type);
+#endif
             if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
             {
                 struct ClassProperty *property = (struct ClassProperty *)node->cur;
+#ifdef DEBUG_PROPERTY_RESOLVE
+                fprintf(stderr, "[DEBUG] candidate property '%s' (len=%zu) vs '%s' (len=%zu)\n",
+                    property->name ? property->name : "<unnamed>",
+                    property->name ? strlen(property->name) : 0,
+                    property_name ? property_name : "<null>",
+                    property_name ? strlen(property_name) : 0);
+#endif
                 if (property->name != NULL &&
                     pascal_identifier_equals(property->name, property_name))
                 {
+#ifdef DEBUG_PROPERTY_RESOLVE
+                    fprintf(stderr, "[DEBUG] matched property %s\n", property->name);
+#endif
                     if (owner_out != NULL)
                         *owner_out = current;
                     return property;
@@ -120,7 +133,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
 
 struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
     struct RecordType *record_info, const char *field_name,
-    struct RecordType **owner_out)
+    struct RecordType **owner_out, int include_hidden)
 {
     if (owner_out != NULL)
         *owner_out = NULL;
@@ -136,7 +149,8 @@ struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
             if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
             {
                 struct RecordField *field = (struct RecordField *)field_node->cur;
-                if (field->name != NULL && !record_field_is_hidden(field) &&
+                if (field->name != NULL &&
+                    (include_hidden || !record_field_is_hidden(field)) &&
                     pascal_identifier_equals(field->name, field_name))
                 {
                     if (owner_out != NULL)
@@ -3650,9 +3664,14 @@ static int semcheck_recordaccess(int *type_return,
 
     struct RecordField *field_desc = NULL;
     long long field_offset = 0;
+    int property_matched = 0;
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, 0) != 0 || field_desc == NULL)
     {
+#ifdef DEBUG_PROPERTY_RESOLVE
+        fprintf(stderr, "DEBUG property lookup: class=%d props=%p name=%s\n",
+            record_type_is_class(record_info), (void *)record_info->properties, field_id);
+#endif
         if (record_type_is_class(record_info))
         {
             struct RecordType *property_owner = NULL;
@@ -3660,6 +3679,7 @@ static int semcheck_recordaccess(int *type_return,
                 record_info, field_id, &property_owner);
             if (property != NULL)
             {
+                property_matched = 1;
                 if (mutating == NO_MUTATE)
                 {
                     if (property->read_accessor == NULL)
@@ -3671,7 +3691,7 @@ static int semcheck_recordaccess(int *type_return,
                     }
 
                     struct RecordField *read_field = semcheck_find_class_field(symtab,
-                        record_info, property->read_accessor, NULL);
+                        record_info, property->read_accessor, NULL, 1);
                     if (read_field != NULL &&
                         resolve_record_field(symtab, record_info, property->read_accessor,
                             &field_desc, &field_offset, expr->line_num, 0) == 0 &&
@@ -3725,7 +3745,7 @@ static int semcheck_recordaccess(int *type_return,
                     }
 
                     struct RecordField *write_field = semcheck_find_class_field(symtab,
-                        record_info, property->write_accessor, NULL);
+                        record_info, property->write_accessor, NULL, 1);
                     if (write_field != NULL &&
                         resolve_record_field(symtab, record_info, property->write_accessor,
                             &field_desc, &field_offset, expr->line_num, 0) == 0 &&
@@ -3787,8 +3807,13 @@ static int semcheck_recordaccess(int *type_return,
                     *type_return = property_type;
                     return error_count;
                 }
+
+                return error_count;
             }
         }
+
+        if (property_matched)
+            return error_count;
 
         fprintf(stderr, "Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
