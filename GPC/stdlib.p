@@ -1,273 +1,77 @@
 program stdlib;
 
 { ============================================================================
-  Standard Library Functions (previously built-ins)
+  Compiler Intrinsic Functions
+  
+  The following functions are implemented as compiler intrinsics for
+  performance and type safety. They are documented here for reference.
   ============================================================================ }
 
-{ Mathematical Functions }
+{ SizeOf(expr) - Returns the size in bytes of a type or expression  
+  This function works in unevaluated contexts and on types.
+  Example: SizeOf(integer) returns 4
+}
 
-function Sqr(x: integer): integer; overload;
-begin
-    assembler;
-    asm
-        call gpc_sqr_int32
-        movl %eax, -12(%rbp)
-    end
-end;
+{ Length(x) - Returns the length of an array or string
+  For fixed-size arrays, this is a compile-time constant.
+  Example: Length(myArray) 
+}
 
-function Sqr(x: longint): longint; overload;
-begin
-    assembler;
-    asm
-        call gpc_sqr_int64
-        movq %rax, -24(%rbp)
-    end
-end;
+{ Sqr(x) - Returns x * x
+  Overloaded for integer, longint, and real types.
+  The compiler can constant-fold literal arguments.
+}
 
-function Sqr(x: real): real; overload;
-begin
-    assembler;
-    asm
-        call gpc_sqr_real
-        movsd %xmm0, -24(%rbp)
-    end
-end;
+{ Odd(x) - Returns true if x is odd, false otherwise
+  Implemented as (x mod 2) <> 0
+  Overloaded for integer and longint types.
+}
 
-function Odd(x: integer): boolean; overload;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_is_odd
-    end;
-    Odd := (result <> 0);
-end;
+{ Chr(x) - Converts an integer to a character
+  Example: Chr(65) returns 'A'
+}
 
-function Odd(x: longint): boolean; overload;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_is_odd
-    end;
-    Odd := (result <> 0);
-end;
+{ Ord(ch) - Returns the ordinal value of a character or boolean
+  For characters, returns the ASCII value.
+  For booleans, returns 0 or 1.
+}
 
-{ Character and String Functions }
+{ UpCase(ch) - Converts a character to uppercase
+  Example: UpCase('a') returns 'A'
+}
 
-function Chr(x: integer): char;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_chr
-    end;
-    Chr := char(result);
-end;
+{ Random - Returns a random number
+  Random: real - Returns a random real in [0, 1)
+  Random(upper: integer): integer - Returns random integer in [0, upper)
+  Random(upper: real): real - Returns random real in [0, upper)
+}
 
-function Ord(ch: char): integer; overload;
-begin
-    assembler;
-    asm
-        { For char, just return the ASCII value }
-        movzbl %dil, %eax
-        movl $GPC_TARGET_WINDOWS, %edx
-        testl %edx, %edx
-        je .Lord_char_done
-        movzbl %cl, %eax
-.Lord_char_done:
-    end
-end;
+{ RandomRange(low, high) - Returns a random integer in [low, high)
+  Overloaded for integer and longint types.
+}
 
-function Ord(b: boolean): integer; overload;
-begin
-    if b then
-        Ord := 1
-    else
-        Ord := 0;
-end;
+{ Copy(s, index, count) - Returns a substring
+  Example: Copy('Hello', 2, 3) returns 'ell'
+  1-based indexing.
+}
 
-function UpCase(ch: char): char;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_upcase_char
-    end;
-    UpCase := char(result);
-end;
+{ Pos(substr, s) - Finds the position of substr in s
+  Returns 0 if not found, otherwise 1-based position.
+}
 
-function Copy(s: string; index: integer; count: integer): string; overload;
-var
-    idx_long, cnt_long: longint;
-    result: string;
-begin
-    idx_long := index;
-    cnt_long := count;
-    assembler;
-    asm
-        call gpc_string_copy
-    end;
-    Copy := result;
-end;
+{ EOF(f) - Returns true if at end of file
+  EOF: boolean - Checks standard input
+  EOF(var f: text): boolean - Checks specific file
+}
 
-function Copy(s: string; index: longint; count: longint): string; overload;
-var
-    result: string;
-begin
-    assembler;
-    asm
-        call gpc_string_copy
-    end;
-    Copy := result;
-end;
+{ EOLN(f) - Returns true if at end of line
+  EOLN: boolean - Checks standard input  
+  EOLN(var f: text): boolean - Checks specific file
+}
 
-function Pos(substr: string; s: string): integer;
-var
-    result_long: longint;
-begin
-    assembler;
-    asm
-        call gpc_string_pos
-    end;
-    Pos := integer(result_long);
-end;
-
-{ Random Number Functions }
-
-function Random: real; overload;
-var
-    result: real;
-begin
-    assembler;
-    asm
-        call gpc_random_real
-    end;
-    Random := result;
-end;
-
-function Random(upper: integer): integer; overload;
-var
-    upper_long: longint;
-    result_long: longint;
-begin
-    upper_long := upper;
-    assembler;
-    asm
-        call gpc_random_int
-    end;
-    Random := integer(result_long);
-end;
-
-function Random(upper: longint): longint; overload;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_random_int
-    end;
-    Random := result;
-end;
-
-function Random(upper: real): real; overload;
-var
-    result: real;
-begin
-    assembler;
-    asm
-        call gpc_random_real_upper
-    end;
-    Random := result;
-end;
-
-function RandomRange(low: integer; high: integer): integer; overload;
-var
-    low_long, high_long: longint;
-    result_long: longint;
-begin
-    low_long := low;
-    high_long := high;
-    assembler;
-    asm
-        call gpc_random_range
-    end;
-    RandomRange := integer(result_long);
-end;
-
-function RandomRange(low: longint; high: longint): longint; overload;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_random_range
-    end;
-    RandomRange := result;
-end;
-
-{ I/O Functions }
-
-function EOF(var f: text): boolean; overload;
-var
-    result: integer;
-begin
-    assembler;
-    asm
-        call gpc_text_eof
-    end;
-    EOF := (result <> 0);
-end;
-
-function EOF: boolean; overload;
-var
-    result: integer;
-begin
-    assembler;
-    asm
-        call gpc_text_eof_default
-    end;
-    EOF := (result <> 0);
-end;
-
-function EOLN(var f: text): boolean; overload;
-var
-    result: integer;
-begin
-    assembler;
-    asm
-        call gpc_text_eoln
-    end;
-    EOLN := (result <> 0);
-end;
-
-function EOLN: boolean; overload;
-var
-    result: integer;
-begin
-    assembler;
-    asm
-        call gpc_text_eoln_default
-    end;
-    EOLN := (result <> 0);
-end;
-
-{ Pointer Functions }
-
-function Assigned(ptr: pointer): boolean;
-var
-    result: longint;
-begin
-    assembler;
-    asm
-        call gpc_assigned
-    end;
-    Assigned := (result <> 0);
-end;
+{ Assigned(ptr) - Returns true if pointer is not nil
+  Works with pointer and procedure variables.
+}
 
 { ============================================================================
   System Procedures and Functions
