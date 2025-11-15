@@ -92,6 +92,8 @@ void free_reg(RegStack_t *, Register_t *);
 void swap_reg_stack(RegStack_t *);
 Register_t *front_reg_stack(RegStack_t *);
 Register_t *get_free_reg(RegStack_t *, ListNode_t **);
+/* Force register allocation by spilling LRU register if needed */
+Register_t *get_reg_with_spill(RegStack_t *, ListNode_t **);
 int get_num_registers_free(RegStack_t *);
 int get_num_registers_alloced(RegStack_t *);
 

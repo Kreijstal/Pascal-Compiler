@@ -674,9 +674,13 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
                 if (addr_reg == NULL)
                 {
-                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
-                        "ERROR: Unable to allocate register for address expression.");
-                    goto cleanup;
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for address expression.");
+                        goto cleanup;
+                    }
                 }
                 char buffer[64];
                 snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
@@ -699,12 +703,17 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         if (var_node->is_reference)
             treat_as_reference = 1;
 
+        /* Try normal allocation first, then spill if needed */
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
         {
-            inst_list = codegen_fail_register(ctx, inst_list, out_reg,
-                "ERROR: Unable to allocate register for address expression.");
-            goto cleanup;
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for address expression.");
+                goto cleanup;
+            }
         }
 
         char buffer[96];

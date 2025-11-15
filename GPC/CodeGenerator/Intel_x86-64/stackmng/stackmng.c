@@ -809,6 +809,69 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
     }
 }
 
+/* Force register allocation by spilling the LRU register if necessary */
+Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
+{
+    assert(reg_stack != NULL);
+    assert(inst_list != NULL);
+
+    /* First try normal allocation */
+    Register_t *reg = get_free_reg(reg_stack, inst_list);
+    if (reg != NULL)
+        return reg;
+
+    /* No free registers - must spill the least recently used one */
+    ListNode_t *cur_node = reg_stack->registers_allocated;
+    Register_t *lru_reg = NULL;
+    unsigned long long oldest_seq = ULLONG_MAX;
+
+    while (cur_node != NULL)
+    {
+        Register_t *cur_reg = (Register_t *)cur_node->cur;
+        if (cur_reg->last_use_seq < oldest_seq)
+        {
+            oldest_seq = cur_reg->last_use_seq;
+            lru_reg = cur_reg;
+        }
+        cur_node = cur_node->next;
+    }
+
+    if (lru_reg == NULL)
+    {
+        REG_DEBUG_LOG("[reg-spill] ERROR: No registers available to spill\n");
+        return NULL;
+    }
+
+    /* Allocate stack slot for spill if not already allocated */
+    if (lru_reg->spill_location == NULL)
+    {
+        char spill_label[64];
+        snprintf(spill_label, sizeof(spill_label), "spill_%s", lru_reg->bit_64 + 1);  /* Skip '%' */
+        lru_reg->spill_location = add_l_t(spill_label);
+        if (lru_reg->spill_location == NULL)
+        {
+            REG_DEBUG_LOG("[reg-spill] ERROR: Failed to allocate spill slot\n");
+            return NULL;
+        }
+    }
+
+    /* Generate spill code: save current value of LRU register to stack */
+    char spill_code[128];
+    snprintf(spill_code, sizeof(spill_code), "\t# Spill %s\n\tmovq\t%s, -%d(%%rbp)\n",
+        lru_reg->bit_64, lru_reg->bit_64, lru_reg->spill_location->offset);
+    *inst_list = add_inst(*inst_list, spill_code);
+
+    REG_DEBUG_LOG("[reg-spill] Spilled %s (seq %llu) to offset -%d\n",
+        lru_reg->bit_64, lru_reg->last_use_seq, lru_reg->spill_location->offset);
+
+    /* Update LRU timestamp - this register is now "most recently used" */
+    lru_reg->last_use_seq = ++reg_stack->use_sequence;
+
+    /* Return this register for use - caller will overwrite it */
+    /* The old value is safely stored on the stack */
+    return lru_reg;
+}
+
 int get_num_registers_free(RegStack_t *reg_stack)
 {
     assert(reg_stack != NULL);

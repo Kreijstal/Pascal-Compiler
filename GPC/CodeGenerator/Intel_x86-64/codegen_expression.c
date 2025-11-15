@@ -3500,6 +3500,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             // Pass by value
             expr_tree = build_expr_tree(arg_expr);
             top_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (top_reg == NULL)
+            {
+                /* Try spilling to get a register */
+                top_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            }
             CODEGEN_DEBUG("DEBUG: top_reg at %p\n", top_reg);
             if (top_reg == NULL)
             {
