@@ -76,6 +76,8 @@ typedef struct RegStack
     ListNode_t *registers_free;
     ListNode_t *registers_allocated;
     int num_registers;
+    /* Global sequence counter for LRU tracking */
+    unsigned long long use_sequence;
 } RegStack_t;
 
 RegStack_t *init_reg_stack();
@@ -90,6 +92,8 @@ void free_reg(RegStack_t *, Register_t *);
 void swap_reg_stack(RegStack_t *);
 Register_t *front_reg_stack(RegStack_t *);
 Register_t *get_free_reg(RegStack_t *, ListNode_t **);
+/* Force register allocation by spilling LRU register if needed */
+Register_t *get_reg_with_spill(RegStack_t *, ListNode_t **);
 int get_num_registers_free(RegStack_t *);
 int get_num_registers_alloced(RegStack_t *);
 
@@ -104,6 +108,10 @@ typedef struct Register
 {
     char *bit_64;
     char *bit_32;
+    /* Spill tracking - if spilled, this points to the stack location */
+    StackNode_t *spill_location;
+    /* Sequence number for LRU tracking */
+    unsigned long long last_use_seq;
 } Register_t;
 
 
