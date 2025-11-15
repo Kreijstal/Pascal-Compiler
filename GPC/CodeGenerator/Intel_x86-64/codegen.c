@@ -1848,7 +1848,38 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     HashNode_t *func_node = NULL;
     if (symtab != NULL)
-        FindIdent(&func_node, symtab, func->id);
+    {
+        /* For overloaded functions, we need to find the correct overload by matching
+         * the mangled name. FindIdent alone is insufficient because it returns the
+         * first match, which might be a different overload. */
+        if (func->mangled_id != NULL)
+        {
+            /* Try to find all identifiers with this name */
+            ListNode_t *all_matches = FindAllIdents(symtab, func->id);
+            ListNode_t *cur = all_matches;
+            
+            /* Find the one with matching mangled name */
+            while (cur != NULL && func_node == NULL)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate != NULL && candidate->mangled_id != NULL &&
+                    strcmp(candidate->mangled_id, func->mangled_id) == 0)
+                {
+                    func_node = candidate;
+                }
+                cur = cur->next;
+            }
+            
+            if (all_matches != NULL)
+                DestroyList(all_matches);
+        }
+        
+        /* Fallback to simple lookup if no mangled name or no match found */
+        if (func_node == NULL)
+        {
+            FindIdent(&func_node, symtab, func->id);
+        }
+    }
 
     /* Check if function returns a record by examining GpcType */
     if (func_node != NULL && func_node->type != NULL &&

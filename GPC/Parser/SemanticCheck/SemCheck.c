@@ -3088,7 +3088,33 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     /* Check if already declared (e.g., by predeclare_subprogram in two-pass approach) */
     HashNode_t *existing_decl = NULL;
-    int already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
+    int already_declared = 0;
+    
+    /* For overloaded functions, find the correct overload by matching mangled name */
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
+        ListNode_t *cur = all_matches;
+        
+        while (cur != NULL && existing_decl == NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
+            {
+                existing_decl = candidate;
+                already_declared = 1;
+            }
+            cur = cur->next;
+        }
+        
+        if (all_matches != NULL)
+            DestroyList(all_matches);
+    }
+    
+    /* Fallback to simple lookup if no mangled name or no match found */
+    if (!already_declared)
+        already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
 
     if (already_declared && existing_decl != NULL &&
         subprogram->tree_data.subprogram_data.mangled_id != NULL)
