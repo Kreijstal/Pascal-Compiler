@@ -3152,6 +3152,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                             proc_type);
             semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
                 subprogram->tree_data.subprogram_data.mangled_id);
+            FindIdent(&existing_decl, symtab, id_to_use_for_lookup);
         }
         else
         {
@@ -3160,27 +3161,16 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         PushScope(symtab);
         
-        /* Create another GpcType for the recursive scope (they're separate) */
-        GpcType *proc_type_recursive = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            NULL
-        );
-        if (proc_type_recursive != NULL)
+        if (existing_decl != NULL && existing_decl->type != NULL)
         {
-            proc_type_recursive->info.proc_info.definition = subprogram;
-            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
-                proc_type_recursive->info.proc_info.return_type_id =
-                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            gpc_type_retain(existing_decl->type);
+            PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id,
+                existing_decl->type);
+            semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
+            destroy_gpc_type(existing_decl->type);
         }
-        if (proc_type_recursive != NULL)
-            proc_type_recursive->info.proc_info.definition = subprogram;
-        
-        // Push it again in the new scope to allow recursion
-        PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
-            subprogram->tree_data.subprogram_data.mangled_id,
-            proc_type_recursive);
-        semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
-            subprogram->tree_data.subprogram_data.mangled_id);
 
         new_max_scope = max_scope_lev+1;
     }
