@@ -910,7 +910,7 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
-    char buffer[50];
+    char buffer[256];
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
@@ -943,7 +943,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     /* Buffer must be large enough for very long mangled identifiers (dozens of suffixes). */
     char buffer[CODEGEN_MAX_INST_BUF];
-    char buf_leaf[64];
+    char buf_leaf[128];
     struct Expression *expr;
 
     expr = node->expr;
@@ -1226,7 +1226,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         return add_inst(inst_list, buffer);
     }
 
-    inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, 30);
+    inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf));
 
     if (expr->type == EXPR_VAR_ID)
     {
@@ -1371,8 +1371,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
-    char buffer[50];
-    char name_buf[30];
+    char buffer[256];
+    char name_buf[128];
     struct Expression *expr, *right_expr;
 
     expr = node->expr;
@@ -1415,7 +1415,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
-    inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, 30);
+    inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, sizeof(name_buf));
 
     const char *target_name = select_register_name(target_reg, expr->resolved_type);
     inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
@@ -1562,7 +1562,13 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 }
                 else if(stack_node != NULL)
                 {
-                    if (scope_depth == 0)
+                    if (stack_node->is_static)
+                    {
+                        const char *label = (stack_node->static_label != NULL) ?
+                            stack_node->static_label : stack_node->label;
+                        snprintf(buffer, buf_len, "%s(%%rip)", label);
+                    }
+                    else if (scope_depth == 0)
                     {
                         /* Variable is in current scope, access normally */
                         snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);

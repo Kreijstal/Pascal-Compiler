@@ -1,0 +1,9 @@
+Nested access OK
+Value test 1 passed
+Value test 2 passed
+Value test 3 passed
+Record test passed
+Deep nesting OK
+Deep record test passed
+Function test passed
+All non-local array tests completed

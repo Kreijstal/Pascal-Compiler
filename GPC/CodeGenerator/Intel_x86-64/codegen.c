@@ -39,6 +39,7 @@ static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
     StackNode_t *file_node, long long element_size, int element_hash_tag);
 static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
     long long *element_size_out, int *element_hash_tag_out);
+static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *name);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -674,6 +675,47 @@ static void codegen_emit_function_debug_comments(const char *func_name, CodeGenC
         "static-link=%s", needs_link ? "required" : "not-required");
 }
 
+static void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+
+    size_t idx = 0;
+    if (value == NULL || value[0] == '\0')
+    {
+        buffer[idx++] = 'v';
+    }
+    else
+    {
+        for (const char *p = value; *p != '\0' && idx + 1 < size; ++p)
+        {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '_')
+                buffer[idx++] = (char)c;
+            else
+                buffer[idx++] = '_';
+        }
+    }
+
+    if (idx == 0)
+        buffer[idx++] = 'v';
+    buffer[idx] = '\0';
+}
+
+static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *name)
+{
+    if (ctx == NULL)
+        return NULL;
+
+    char sanitized[128];
+    codegen_sanitize_identifier_for_label(name, sanitized, sizeof(sanitized));
+
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer), "__gpc_program_var_%s_%d",
+        sanitized, ++ctx->global_data_counter);
+    return strdup(buffer);
+}
+
 /* Generates a label */
 void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 {
@@ -1241,6 +1283,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
     assert(ctx != NULL);
 
+    int is_program_scope = (codegen_get_lexical_depth(ctx) == 0);
+
      cur = local_decl;
 
      while(cur != NULL)
@@ -1324,7 +1368,22 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (alias->is_open_array)
                     {
-                        add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
+                        char *static_label = NULL;
+                        if (is_program_scope)
+                        {
+                            static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && static_label != NULL)
+                            {
+                                int descriptor_bytes = codegen_dynamic_array_descriptor_bytes(element_size);
+                                int alignment = descriptor_bytes >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, descriptor_bytes, alignment);
+                            }
+                        }
+                        add_dynamic_array((char *)id_list->cur, element_size,
+                            alias->array_start, is_program_scope, static_label);
+                        if (static_label != NULL)
+                            free(static_label);
                     }
                     else
                     {
@@ -1334,7 +1393,25 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         long long total_size = (long long)length * (long long)element_size;
                         if (total_size <= 0)
                             total_size = element_size;
-                        add_array((char *)id_list->cur, (int)total_size, element_size, alias->array_start);
+                        if (is_program_scope)
+                        {
+                            char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && static_label != NULL)
+                            {
+                                int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, (int)total_size, alignment);
+                            }
+                            add_static_array((char *)id_list->cur, (int)total_size, element_size,
+                                alias->array_start, static_label);
+                            if (static_label != NULL)
+                                free(static_label);
+                        }
+                        else
+                        {
+                            add_array((char *)id_list->cur, (int)total_size, element_size,
+                                alias->array_start);
+                        }
                     }
                 }
                 else
@@ -1381,7 +1458,23 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         }
                     }
 
-                    add_l_x((char *)id_list->cur, alloc_size);
+                    if (is_program_scope)
+                    {
+                        char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                        if (ctx->output_file != NULL && static_label != NULL)
+                        {
+                            int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
+                            fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                static_label, alloc_size, alignment);
+                        }
+                        add_static_var((char *)id_list->cur, alloc_size, static_label);
+                        if (static_label != NULL)
+                            free(static_label);
+                    }
+                    else
+                    {
+                        add_l_x((char *)id_list->cur, alloc_size);
+                    }
                 }
                 id_list = id_list->next;
             };
@@ -1464,7 +1557,22 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             {
                 while (id_list != NULL)
                 {
-                    add_dynamic_array((char *)id_list->cur, element_size, arr->s_range);
+                    char *static_label = NULL;
+                    if (is_program_scope)
+                    {
+                        static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                        if (ctx->output_file != NULL && static_label != NULL)
+                        {
+                            int descriptor_bytes = codegen_dynamic_array_descriptor_bytes(element_size);
+                            int alignment = descriptor_bytes >= 8 ? 8 : DOUBLEWORD;
+                            fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                static_label, descriptor_bytes, alignment);
+                        }
+                    }
+                    add_dynamic_array((char *)id_list->cur, element_size, arr->s_range,
+                        is_program_scope, static_label);
+                    if (static_label != NULL)
+                        free(static_label);
                     id_list = id_list->next;
                 }
             }
@@ -1477,6 +1585,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (total_size <= 0)
                     total_size = element_size;
 
+                int use_static_storage = arr->has_static_storage || is_program_scope;
                 if (arr->has_static_storage)
                 {
                     if (!arr->static_storage_emitted)
@@ -1489,11 +1598,29 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 arr->init_guard_label);
                         arr->static_storage_emitted = 1;
                     }
+                }
 
+                if (use_static_storage)
+                {
                     while (id_list != NULL)
                     {
+                        const char *label_to_use = arr->static_label;
+                        char *generated_label = NULL;
+                        if (!arr->has_static_storage)
+                        {
+                            generated_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && generated_label != NULL)
+                            {
+                                int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    generated_label, total_size, alignment);
+                            }
+                            label_to_use = generated_label;
+                        }
                         add_static_array((char *)id_list->cur, total_size, element_size,
-                            arr->s_range, arr->static_label);
+                            arr->s_range, label_to_use);
+                        if (generated_label != NULL)
+                            free(generated_label);
                         id_list = id_list->next;
                     }
                 }
@@ -1864,7 +1991,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     if (returns_dynamic_array)
-        return_var = add_dynamic_array(func->id, dynamic_array_element_size, dynamic_array_lower_bound);
+        return_var = add_dynamic_array(func->id, dynamic_array_element_size,
+            dynamic_array_lower_bound, 0, NULL);
     else
         return_var = add_l_x(func->id, return_size);
 
@@ -2719,7 +2847,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                 {
                     char *var_name = (char *)ids->cur;
                     StackNode_t *array_node = find_label(var_name);
-                    if (array_node != NULL && array_node->is_dynamic)
+                    if (array_node != NULL && array_node->is_dynamic && array_node->offset > 0)
                     {
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", array_node->offset);
@@ -2748,8 +2876,11 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                     if (file_node != NULL)
                     {
                         char buffer[128];
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        if (!file_node->is_static)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
 
                         long long file_elem_size = 0;
                         int file_elem_hash = HASHVAR_INTEGER;
@@ -2806,7 +2937,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                 {
                     char *var_name = (char *)ids->cur;
                     StackNode_t *array_node = find_label(var_name);
-                    if (array_node != NULL && array_node->is_dynamic)
+                    if (array_node != NULL && array_node->is_dynamic && array_node->offset > 0)
                     {
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
