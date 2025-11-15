@@ -80,7 +80,7 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *inst_list,
+static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 
 static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
@@ -290,7 +290,7 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     ListNode_t *field_node = record_type->fields;
     while (field_node != NULL)
     {
-        if (field_node->cur != NULL)
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)field_node->cur;
             if (!record_field_is_hidden(field) && field->name != NULL &&
@@ -2262,100 +2262,6 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
-    {
-        codegen_report_error(ctx, "ERROR: SinCos expects three arguments.");
-        return inst_list;
-    }
-
-    struct Expression *angle_expr = (struct Expression *)args_expr->cur;
-    struct Expression *sin_expr = (struct Expression *)args_expr->next->cur;
-    struct Expression *cos_expr = (struct Expression *)args_expr->next->next->cur;
-
-    Register_t *angle_reg = NULL;
-    inst_list = codegen_expr_with_result(angle_expr, inst_list, ctx, &angle_reg);
-    if (codegen_had_error(ctx) || angle_reg == NULL)
-        return inst_list;
-
-    inst_list = codegen_maybe_convert_int_like_to_real(REAL_TYPE, angle_expr,
-        angle_reg, inst_list, NULL);
-    /* angle_reg contains the angle bits to be passed to gpc_sincos_bits via GP register. */
-
-    StackNode_t *angle_spill = add_l_t("sincos_angle");
-    if (angle_spill == NULL)
-    {
-        free_reg(get_reg_stack(), angle_reg);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for SinCos angle.");
-    }
-
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        angle_reg->bit_64, angle_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), angle_reg);
-
-    if (!codegen_expr_is_addressable(sin_expr) || !codegen_expr_is_addressable(cos_expr))
-    {
-        codegen_report_error(ctx, "ERROR: SinCos output arguments must be addressable.");
-        return inst_list;
-    }
-
-    Register_t *sin_addr = NULL;
-    inst_list = codegen_address_for_expr(sin_expr, inst_list, ctx, &sin_addr);
-    if (codegen_had_error(ctx) || sin_addr == NULL)
-        return inst_list;
-    StackNode_t *sin_spill = add_l_t("sincos_sin");
-    if (sin_spill == NULL)
-    {
-        free_reg(get_reg_stack(), sin_addr);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for SinCos sine target.");
-    }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        sin_addr->bit_64, sin_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), sin_addr);
-
-    Register_t *cos_addr = NULL;
-    inst_list = codegen_address_for_expr(cos_expr, inst_list, ctx, &cos_addr);
-    if (codegen_had_error(ctx) || cos_addr == NULL)
-        return inst_list;
-    StackNode_t *cos_spill = add_l_t("sincos_cos");
-    if (cos_spill == NULL)
-    {
-        free_reg(get_reg_stack(), cos_addr);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for SinCos cosine target.");
-    }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        cos_addr->bit_64, cos_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), cos_addr);
-
-    const char *arg0 = current_arg_reg64(0);
-    const char *arg1 = current_arg_reg64(1);
-    const char *arg2 = current_arg_reg64(2);
-
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", angle_spill->offset, arg0);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", sin_spill->offset, arg1);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", cos_spill->offset, arg2);
-    inst_list = add_inst(inst_list, buffer);
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_sincos_bits");
-    free_arg_regs();
-    return inst_list;
-}
-
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -3444,24 +3350,6 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SinCos"))
-    {
-        inst_list = codegen_builtin_sincos(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
-    {
-        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Inc"))
     {
         inst_list = codegen_builtin_inc(stmt, inst_list, ctx);
@@ -3492,6 +3380,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Dispose"))
     {
         inst_list = codegen_builtin_dispose(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
+    {
+        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

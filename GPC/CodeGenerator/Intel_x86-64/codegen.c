@@ -171,7 +171,9 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
         else if (node->type->kind == TYPE_KIND_RECORD || node->type->kind == TYPE_KIND_ARRAY)
         {
-            /* These should use sizeof, not this helper */
+            long long size = gpc_type_sizeof(node->type);
+            if (size > 0)
+                return (int)size;
             return -1;
         }
     }
@@ -1246,16 +1248,31 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
          tree = (Tree_t *)cur->cur;
          assert(tree != NULL);
 
-         if (tree->type == TREE_VAR_DECL)
-         {
-             id_list = tree->tree_data.var_decl_data.ids;
-             HashNode_t *type_node = NULL;
-             if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL)
-                 FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+        if (tree->type == TREE_VAR_DECL)
+        {
+            id_list = tree->tree_data.var_decl_data.ids;
+           HashNode_t *type_node = NULL;
+           if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
+               FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+           }
+            GpcType *cached_type = tree->tree_data.var_decl_data.cached_gpc_type;
 
             while(id_list != NULL)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                HashNode_t cached_type_node;
+                HashNode_t *fallback_type_node = NULL;
+                if (cached_type != NULL)
+                {
+                    memset(&cached_type_node, 0, sizeof(cached_type_node));
+                    cached_type_node.type = cached_type;
+                    fallback_type_node = &cached_type_node;
+                }
+
+                HashNode_t *effective_type_node = type_node;
+                if (effective_type_node == NULL)
+                    effective_type_node = fallback_type_node;
+
+                struct TypeAlias *alias = get_type_alias_from_node(effective_type_node);
                 if (alias != NULL && alias->is_array)
                 {
                     long long computed_size = 0;
@@ -1325,6 +1342,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     int alloc_size = DOUBLEWORD;
                     HashNode_t *var_info = NULL;
                     HashNode_t *size_node = NULL;  /* Node to get size from */
+                    HashNode_t temp_size_node;
                     
                     if (symtab != NULL)
                     {
@@ -1332,8 +1350,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             size_node = var_info;
                     }
                     /* Use type_node if we don't have specific var_info */
-                    if (size_node == NULL && type_node != NULL)
-                        size_node = type_node;
+                    if (size_node == NULL && effective_type_node != NULL)
+                        size_node = effective_type_node;
+                    if (size_node == NULL && cached_type != NULL)
+                    {
+                        memset(&temp_size_node, 0, sizeof(temp_size_node));
+                        temp_size_node.type = cached_type;
+                        size_node = &temp_size_node;
+                    }
                     
                     /* Get allocation size using helper */
                     if (size_node != NULL)
@@ -2281,6 +2305,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 arg_ids = arg_decl->tree_data.var_decl_data.ids;
                 type = arg_decl->tree_data.var_decl_data.type;
                 HashNode_t *resolved_type_node = NULL;
+                GpcType *cached_arg_type = arg_decl->tree_data.var_decl_data.cached_gpc_type;
+                HashNode_t cached_arg_node;
+                HashNode_t *cached_arg_node_ptr = NULL;
+                if (cached_arg_type != NULL)
+                {
+                    memset(&cached_arg_node, 0, sizeof(cached_arg_node));
+                    cached_arg_node.type = cached_arg_type;
+                    cached_arg_node_ptr = &cached_arg_node;
+                }
 
                 // Resolve type aliases if needed
                 if (type == UNKNOWN_TYPE && arg_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
@@ -2307,6 +2340,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         if (resolved_type_node != NULL)
                             record_type_info = get_record_type_from_node(resolved_type_node);
+                        if (record_type_info == NULL && cached_arg_node_ptr != NULL)
+                            record_type_info = get_record_type_from_node(cached_arg_node_ptr);
                     }
 
                     if (record_type_info != NULL)
@@ -2407,6 +2442,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
                              gpc_type_is_array(resolved_type_node->type))
+                    {
+                        is_array_type = 1;
+                    }
+                    else if (cached_arg_type != NULL &&
+                        gpc_type_is_array(cached_arg_type))
                     {
                         is_array_type = 1;
                     }

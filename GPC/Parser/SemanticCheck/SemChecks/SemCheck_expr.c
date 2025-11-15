@@ -131,7 +131,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     return NULL;
 }
 
-struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
+static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
     struct RecordType *record_info, const char *field_name,
     struct RecordType **owner_out, int include_hidden)
 {
@@ -163,6 +163,22 @@ struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
         current = semcheck_lookup_parent_record(symtab, current);
     }
     return NULL;
+}
+
+struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out)
+{
+    return semcheck_find_class_field_impl(symtab, record_info, field_name,
+        owner_out, 0);
+}
+
+struct RecordField *semcheck_find_class_field_including_hidden(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out)
+{
+    return semcheck_find_class_field_impl(symtab, record_info, field_name,
+        owner_out, 1);
 }
 
 HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
@@ -2463,6 +2479,12 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         return 0;
     }
 
+    if (record->has_cached_size)
+    {
+        *size_out = record->cached_size;
+        return 0;
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record type.\n",
@@ -2470,7 +2492,14 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         return 1;
     }
 
-    return sizeof_from_record_members(symtab, record->fields, size_out, depth + 1, line_num);
+    long long computed_size = 0;
+    if (sizeof_from_record_members(symtab, record->fields, &computed_size, depth + 1, line_num) != 0)
+        return 1;
+
+    record->cached_size = computed_size;
+    record->has_cached_size = 1;
+    *size_out = computed_size;
+    return 0;
 }
 
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
@@ -3690,8 +3719,9 @@ static int semcheck_recordaccess(int *type_return,
                         return error_count + 1;
                     }
 
-                    struct RecordField *read_field = semcheck_find_class_field(symtab,
-                        record_info, property->read_accessor, NULL, 1);
+                    struct RecordField *read_field =
+                        semcheck_find_class_field_including_hidden(symtab,
+                            record_info, property->read_accessor, NULL);
                     if (read_field != NULL &&
                         resolve_record_field(symtab, record_info, property->read_accessor,
                             &field_desc, &field_offset, expr->line_num, 0) == 0 &&
@@ -3744,8 +3774,9 @@ static int semcheck_recordaccess(int *type_return,
                         return error_count + 1;
                     }
 
-                    struct RecordField *write_field = semcheck_find_class_field(symtab,
-                        record_info, property->write_accessor, NULL, 1);
+                    struct RecordField *write_field =
+                        semcheck_find_class_field_including_hidden(symtab,
+                            record_info, property->write_accessor, NULL);
                     if (write_field != NULL &&
                         resolve_record_field(symtab, record_info, property->write_accessor,
                             &field_desc, &field_offset, expr->line_num, 0) == 0 &&

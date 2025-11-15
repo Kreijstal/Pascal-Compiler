@@ -3700,3 +3700,10 @@ void gpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
     if (cos_out != NULL)
         *cos_out = cos(angle);
 }
+
+void gpc_sincos_real(double angle, double *sin_out, double *cos_out)
+{
+    int64_t angle_bits = 0;
+    memcpy(&angle_bits, &angle, sizeof(angle_bits));
+    gpc_sincos_bits(angle_bits, sin_out, cos_out);
+}

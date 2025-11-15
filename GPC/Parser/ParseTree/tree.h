@@ -92,6 +92,7 @@ typedef struct Tree
             ListNode_t *args_var;
             ListNode_t *const_declarations;
             ListNode_t *label_declarations;
+            ListNode_t *type_declarations;
             int return_type; /* Should be -1 for PROCEDURE */
             char *return_type_id;
             struct TypeAlias *inline_return_type;  /* For inline complex return types like array of string */
@@ -119,6 +120,7 @@ typedef struct Tree
             struct Statement *initializer;
             struct RecordType *inline_record_type;  /* For inline record declarations */
             struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */
+            struct GpcType *cached_gpc_type;   /* Retained type info for codegen fallback */
             int defined_in_unit;
             int unit_is_public;
         } var_decl_data;
@@ -201,11 +203,13 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
 Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type);
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,
+    ListNode_t *subprograms, struct Statement *compound_statement,
     int cname_flag, int overload_flag);
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,
+    ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag);
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,

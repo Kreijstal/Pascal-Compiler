@@ -63,7 +63,7 @@ function GradToRad(Grads: Real): Real;
 function RadToGrad(Radians: Real): Real;
 function CycleToRad(Cycles: Real): Real;
 function RadToCycle(Radians: Real): Real;
-procedure SinCos(Angle: Real; var SinValue, CosValue: Real);
+procedure SinCos(Angle: Real; var SinValue, CosValue: Real); external;
 
 implementation
 
@@ -476,12 +476,6 @@ end;
 function RadToCycle(Radians: Real): Real;
 begin
     RadToCycle := gpc_rad_to_cycle(Radians);
-end;
-
-procedure SinCos(Angle: Real; var SinValue, CosValue: Real);
-begin
-    SinValue := Sin(Angle);
-    CosValue := Cos(Angle);
 end;
 
 end.

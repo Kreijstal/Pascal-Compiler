@@ -1487,8 +1487,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
         
-
-
         switch (tree->tree_data.type_decl_data.kind)
         {
             case TYPE_DECL_RECORD:
@@ -1518,12 +1516,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     {
                         return_val += vmt_result;
                     }
+
+                    long long record_size = 0;
+                    if (semcheck_compute_record_size(symtab, record_info, &record_size,
+                            tree->line_num) != 0)
+                    {
+                        return_val += 1;
+                    }
                 }
                 break;
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
-
                 if (alias_info->is_array)
                 {
                     int element_type = alias_info->array_element_type;
@@ -1598,6 +1602,24 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         }
                     }
                 }
+
+                if (alias_info->base_type == RECORD_TYPE &&
+                    tree->tree_data.type_decl_data.gpc_type != NULL &&
+                    gpc_type_is_record(tree->tree_data.type_decl_data.gpc_type))
+                {
+                    struct RecordType *alias_record =
+                        gpc_type_get_record(tree->tree_data.type_decl_data.gpc_type);
+                    if (alias_record != NULL)
+                    {
+                        long long record_size = 0;
+                        if (semcheck_compute_record_size(symtab, alias_record, &record_size,
+                                tree->line_num) != 0)
+                        {
+                            return_val += 1;
+                        }
+                    }
+                }
+
                 break;
             }
             default:
@@ -1959,7 +1981,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(readln_type);
         free(readln_name);
     }
-
     char *val_name = strdup("Val");
     if (val_name != NULL) {
         GpcType *val_type = create_procedure_type(NULL, NULL);
@@ -1976,6 +1997,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_gpc_type(str_type);
         free(str_name);
     }
+
     char *insert_name = strdup("Insert");
     if (insert_name != NULL) {
         GpcType *insert_type = create_procedure_type(NULL, NULL);
@@ -1993,14 +2015,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(delete_name);
     }
 
-    char *sincos_name = strdup("SinCos");
-    if (sincos_name != NULL) {
-        GpcType *sincos_type = create_procedure_type(NULL, NULL);
-        assert(sincos_type != NULL && "Failed to create SinCos procedure type");
-        AddBuiltinProc_Typed(symtab, sincos_name, sincos_type);
-        destroy_gpc_type(sincos_type);
-        free(sincos_name);
-    }
 
     char *inc_name = strdup("Inc");
     if (inc_name != NULL) {
@@ -2038,23 +2052,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(exclude_name);
     }
 
-    char *randomize_name = strdup("Randomize");
-    if (randomize_name != NULL) {
-        GpcType *randomize_type = create_procedure_type(NULL, NULL);
-        assert(randomize_type != NULL && "Failed to create Randomize procedure type");
-        AddBuiltinProc_Typed(symtab, randomize_name, randomize_type);
-        destroy_gpc_type(randomize_type);
-        free(randomize_name);
-    }
-
-    char *setrandseed_name = strdup("SetRandSeed");
-    if (setrandseed_name != NULL) {
-        GpcType *setrandseed_type = create_procedure_type(NULL, NULL);
-        assert(setrandseed_type != NULL && "Failed to create SetRandSeed procedure type");
-        AddBuiltinProc_Typed(symtab, setrandseed_name, setrandseed_type);
-        destroy_gpc_type(setrandseed_type);
-        free(setrandseed_name);
-    }
 
     char *new_name = strdup("New");
     if (new_name != NULL) {
@@ -2374,7 +2371,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         HashNode_t *resolved_type = NULL;
         if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.type_id != NULL)
             FindIdent(&resolved_type, symtab, tree->tree_data.var_decl_data.type_id);
-
+        if (tree->type == TREE_VAR_DECL)
+        {
+            if (tree->tree_data.var_decl_data.cached_gpc_type != NULL)
+            {
+                destroy_gpc_type(tree->tree_data.var_decl_data.cached_gpc_type);
+                tree->tree_data.var_decl_data.cached_gpc_type = NULL;
+            }
+            if (resolved_type != NULL && resolved_type->type != NULL)
+            {
+                gpc_type_retain(resolved_type->type);
+                tree->tree_data.var_decl_data.cached_gpc_type = resolved_type->type;
+            }
+        }
         while(ids != NULL)
         {
             assert(ids->cur != NULL);
@@ -2667,6 +2676,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
+                if (var_gpc_type != NULL && gpc_type_is_record(var_gpc_type))
+                {
+                    struct RecordType *var_record = gpc_type_get_record(var_gpc_type);
+                    if (var_record != NULL)
+                    {
+                        long long record_size = 0;
+                        if (semcheck_compute_record_size(symtab, var_record, &record_size,
+                                tree->line_num) != 0)
+                        {
+                            return_val += 1;
+                        }
+                    }
+                }
+
                 /* Always use _Typed variant, even if GpcType is NULL (UNTYPED) */
                 func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_gpc_type);
                 
@@ -3260,8 +3283,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* These arguments are themselves like declarations */
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
 
-    return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.declarations);
+    return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
+    return_val += semcheck_type_decls(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
 
     return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,

@@ -92,11 +92,17 @@ struct RecordType
     ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
     int is_class;             /* 1 if this record represents a class */
     char *type_id;            /* Canonical type name if available */
+    int has_cached_size;      /* 1 if cached_size has been computed */
+    long long cached_size;    /* Cached byte size for gpc_type_sizeof */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)
 {
-    return (record != NULL) ? record->is_class : 0;
+    if (record == NULL)
+        return 0;
+    if (record->is_class)
+        return 1;
+    return (record->properties != NULL);
 }
 
 static inline int record_field_is_hidden(const struct RecordField *field)

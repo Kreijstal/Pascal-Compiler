@@ -414,6 +414,10 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
         print_indent(f, num_indent);
         fprintf(f, "[LABELS]:\n");
         list_print(tree->tree_data.subprogram_data.label_declarations, f, num_indent+1);
+       
+        print_indent(f, num_indent);
+        fprintf(f, "[TYPE_DECLS]:\n");
+        list_print(tree->tree_data.subprogram_data.type_declarations, f, num_indent+1);
 
         print_indent(f, num_indent);
         fprintf(f, "[VAR_DECLS]:\n");
@@ -1037,6 +1041,7 @@ void destroy_tree(Tree_t *tree)
 
           destroy_list(tree->tree_data.subprogram_data.const_declarations);
           destroy_list(tree->tree_data.subprogram_data.label_declarations);
+          destroy_list(tree->tree_data.subprogram_data.type_declarations);
           destroy_list(tree->tree_data.subprogram_data.declarations);
 
           destroy_list(tree->tree_data.subprogram_data.subprograms);
@@ -1056,6 +1061,11 @@ void destroy_tree(Tree_t *tree)
           {
               clear_type_alias_fields(tree->tree_data.var_decl_data.inline_type_alias);
               free(tree->tree_data.var_decl_data.inline_type_alias);
+          }
+          if (tree->tree_data.var_decl_data.cached_gpc_type != NULL)
+          {
+              destroy_gpc_type(tree->tree_data.var_decl_data.cached_gpc_type);
+              tree->tree_data.var_decl_data.cached_gpc_type = NULL;
           }
           break;
 
@@ -1482,6 +1492,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
     clone->is_class = record_type->is_class;
     clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
+    clone->has_cached_size = record_type->has_cached_size;
+    clone->cached_size = record_type->cached_size;
 
     clone->fields = clone_member_list(record_type->fields);
     clone->properties = clone_property_list(record_type->properties);
@@ -1704,7 +1716,8 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
 
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,
+    ListNode_t *subprograms, struct Statement *compound_statement,
     int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
@@ -1719,6 +1732,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.const_declarations = const_decl;
     new_tree->tree_data.subprogram_data.label_declarations = label_decl;
+    new_tree->tree_data.subprogram_data.type_declarations = type_decl;
     new_tree->tree_data.subprogram_data.return_type = -1;
     new_tree->tree_data.subprogram_data.return_type_id = NULL;
     new_tree->tree_data.subprogram_data.inline_return_type = NULL;
@@ -1736,7 +1750,8 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
 }
 
 Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
-    ListNode_t *label_decl, ListNode_t *var_decl, ListNode_t *subprograms, struct Statement *compound_statement,
+    ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,
+    ListNode_t *subprograms, struct Statement *compound_statement,
     int return_type, char *return_type_id, struct TypeAlias *inline_return_type, int cname_flag, int overload_flag)
 {
     Tree_t *new_tree;
@@ -1751,6 +1766,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.args_var = args;
     new_tree->tree_data.subprogram_data.const_declarations = const_decl;
     new_tree->tree_data.subprogram_data.label_declarations = label_decl;
+    new_tree->tree_data.subprogram_data.type_declarations = type_decl;
     new_tree->tree_data.subprogram_data.return_type = return_type;
     new_tree->tree_data.subprogram_data.return_type_id = return_type_id;
     new_tree->tree_data.subprogram_data.inline_return_type = inline_return_type;
@@ -1787,6 +1803,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.initializer = initializer;
     new_tree->tree_data.var_decl_data.inline_record_type = inline_record_type;
     new_tree->tree_data.var_decl_data.inline_type_alias = inline_type_alias;
+    new_tree->tree_data.var_decl_data.cached_gpc_type = NULL;
     new_tree->tree_data.var_decl_data.defined_in_unit = 0;
     new_tree->tree_data.var_decl_data.unit_is_public = 0;
 
