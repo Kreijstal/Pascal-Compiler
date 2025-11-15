@@ -33,6 +33,25 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+static void semcheck_stmt_set_call_gpc_type(struct Statement *stmt, GpcType *type,
+    int owns_existing)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
+        return;
+
+    if (stmt->stmt_data.procedure_call_data.call_gpc_type != NULL && owns_existing)
+    {
+        destroy_gpc_type(stmt->stmt_data.procedure_call_data.call_gpc_type);
+    }
+    stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
+
+    if (type != NULL)
+    {
+        gpc_type_retain(type);
+        stmt->stmt_data.procedure_call_data.call_gpc_type = type;
+    }
+}
+
 static int semcheck_expr_is_char_set(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
@@ -206,7 +225,8 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         
         /* Populate call info to avoid use-after-free when HashNode is freed */
         stmt->stmt_data.procedure_call_data.call_hash_type = builtin_node->hash_type;
-        stmt->stmt_data.procedure_call_data.call_gpc_type = builtin_node->type;
+        semcheck_stmt_set_call_gpc_type(stmt, builtin_node->type,
+            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         
         builtin_node->referenced += 1;
@@ -533,125 +553,6 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     }
 
     return error_count;
-}
-
-static int semcheck_builtin_sincos(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next == NULL || args->next->next == NULL ||
-        args->next->next->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, SinCos expects exactly three arguments.\n",
-            stmt->line_num);
-        return 1;
-    }
-
-    int error_count = 0;
-    struct Expression *angle_expr = (struct Expression *)args->cur;
-    struct Expression *sin_expr = (struct Expression *)args->next->cur;
-    struct Expression *cos_expr = (struct Expression *)args->next->next->cur;
-
-    int angle_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&angle_type, symtab, angle_expr, INT_MAX, NO_MUTATE);
-    if (angle_type != REAL_TYPE && angle_type != INT_TYPE && angle_type != LONGINT_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, SinCos angle must be numeric.\n",
-            stmt->line_num);
-        ++error_count;
-    }
-
-    int sin_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&sin_type, symtab, sin_expr, max_scope_lev, MUTATE);
-    if (sin_type != REAL_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, SinCos sine target must be a real variable.\n",
-            stmt->line_num);
-        ++error_count;
-    }
-
-    int cos_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&cos_type, symtab, cos_expr, max_scope_lev, MUTATE);
-    if (cos_type != REAL_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, SinCos cosine target must be a real variable.\n",
-            stmt->line_num);
-        ++error_count;
-    }
-
-    return error_count;
-}
-
-static int semcheck_builtin_randomize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    (void)symtab;
-    (void)max_scope_lev;
-
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args != NULL)
-    {
-        fprintf(stderr, "Error on line %d, Randomize expects no arguments.\n",
-            stmt->line_num);
-        return 1;
-    }
-
-    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-    {
-        free(stmt->stmt_data.procedure_call_data.mangled_id);
-        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-    }
-
-    stmt->stmt_data.procedure_call_data.mangled_id = strdup("gpc_randomize");
-    if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
-    {
-        fprintf(stderr, "Error: failed to allocate mangled name for Randomize.\n");
-        return 1;
-    }
-    return 0;
-}
-
-static int semcheck_builtin_setrandseed(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    if (stmt == NULL)
-        return 0;
-
-    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
-    {
-        fprintf(stderr, "Error on line %d, SetRandSeed expects exactly one argument.\n",
-            stmt->line_num);
-        return 1;
-    }
-
-    int arg_type = UNKNOWN_TYPE;
-    if (semcheck_expr_main(&arg_type, symtab, (struct Expression *)args->cur,
-            max_scope_lev, NO_MUTATE) != 0)
-        return 1;
-
-    if (arg_type != INT_TYPE && arg_type != LONGINT_TYPE)
-    {
-        fprintf(stderr, "Error on line %d, SetRandSeed argument must be integer.\n",
-            stmt->line_num);
-        return 1;
-    }
-
-    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-    {
-        free(stmt->stmt_data.procedure_call_data.mangled_id);
-        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-    }
-    stmt->stmt_data.procedure_call_data.mangled_id = strdup("gpc_set_randseed");
-    if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
-    {
-        fprintf(stderr, "Error: failed to allocate mangled name for SetRandSeed.\n");
-        return 1;
-    }
-    return 0;
 }
 
 static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -1198,10 +1099,24 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
                         temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                     }
-                    call_expr->expr_data.function_call_data.call_hash_type = temp_call.stmt_data.procedure_call_data.call_hash_type;
-                    call_expr->expr_data.function_call_data.call_gpc_type = temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                    call_expr->expr_data.function_call_data.call_hash_type =
+                        temp_call.stmt_data.procedure_call_data.call_hash_type;
+                    if (call_expr->expr_data.function_call_data.call_gpc_type != NULL)
+                    {
+                        destroy_gpc_type(call_expr->expr_data.function_call_data.call_gpc_type);
+                        call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                    }
+                    if (temp_call.stmt_data.procedure_call_data.call_gpc_type != NULL)
+                    {
+                        gpc_type_retain(temp_call.stmt_data.procedure_call_data.call_gpc_type);
+                        call_expr->expr_data.function_call_data.call_gpc_type =
+                            temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                    }
                     call_expr->expr_data.function_call_data.is_call_info_valid =
                         temp_call.stmt_data.procedure_call_data.is_call_info_valid;
+                    semcheck_stmt_set_call_gpc_type(&temp_call, NULL,
+                        temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
+                    temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
                 }
                 else
                 {
@@ -1514,7 +1429,8 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     stmt->stmt_data.procedure_call_data.expr_args = self_arg;
     stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
     stmt->stmt_data.procedure_call_data.call_hash_type = 0;
-    stmt->stmt_data.procedure_call_data.call_gpc_type = NULL;
+    semcheck_stmt_set_call_gpc_type(stmt, NULL,
+        stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
     stmt->stmt_data.procedure_call_data.is_call_info_valid = 0;
 
     return semcheck_proccall(symtab, stmt, max_scope_lev);
@@ -1552,8 +1468,9 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
     if (property == NULL || property->write_accessor == NULL)
         return -1;
 
-    struct RecordField *write_field = semcheck_find_class_field(symtab,
-        object_record, property->write_accessor, NULL);
+    struct RecordField *write_field =
+        semcheck_find_class_field_including_hidden(symtab,
+            object_record, property->write_accessor, NULL);
     if (write_field != NULL)
         return -1;
 
@@ -1653,12 +1570,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         return return_val;
 
     handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "SinCos",
-        semcheck_builtin_sincos, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Inc",
         semcheck_builtin_inc, max_scope_lev, &handled_builtin);
     if (handled_builtin)
@@ -1679,18 +1590,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Exclude",
         semcheck_builtin_exclude, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "Randomize",
-        semcheck_builtin_randomize, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetRandSeed",
-        semcheck_builtin_setrandseed, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
@@ -1996,7 +1895,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         
         /* Populate call info to avoid use-after-free when HashNode is freed */
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
-        stmt->stmt_data.procedure_call_data.call_gpc_type = resolved_proc->type;
+        semcheck_stmt_set_call_gpc_type(stmt, resolved_proc->type,
+            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
         
@@ -2027,7 +1927,8 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             
             /* Populate call info to avoid use-after-free when HashNode is freed */
             stmt->stmt_data.procedure_call_data.call_hash_type = proc_var->hash_type;
-            stmt->stmt_data.procedure_call_data.call_gpc_type = proc_var->type;
+            semcheck_stmt_set_call_gpc_type(stmt, proc_var->type,
+                stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
             stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
 
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);

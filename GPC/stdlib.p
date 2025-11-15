@@ -1,5 +1,21 @@
 program stdlib;
 
+procedure Randomize;
+begin
+    assembler;
+    asm
+        call gpc_randomize
+    end
+end;
+
+procedure SetRandSeed(seed: longint);
+begin
+    assembler;
+    asm
+        call gpc_set_randseed
+    end
+end;
+
 function succ(i: integer): integer;
 begin
     succ := i + 1;
@@ -427,83 +443,6 @@ begin
     blockwrite_impl(f, buffer, count, @actual64);
     result := longint(actual64);
 end;
-
-procedure readln(var value: string);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lreadln_str_sysv
-        movq %rcx, %rdx
-        xorq %rcx, %rcx
-        jmp .Lreadln_str_call
-.Lreadln_str_sysv:
-        movq %rdi, %rsi
-        xorq %rdi, %rdi
-.Lreadln_str_call:
-        call gpc_text_readln_into
-    end
-end;
-
-procedure readln(var value: char);
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lreadln_char_sysv
-        movq %rcx, %rdx
-        xorq %rcx, %rcx
-        jmp .Lreadln_char_call
-.Lreadln_char_sysv:
-        movq %rdi, %rsi
-        xorq %rdi, %rdi
-.Lreadln_char_call:
-        call gpc_text_readln_into_char
-    end
-end;
-
-procedure readln(f: text; var value: string);
-begin
-    assembler;
-    asm
-        call gpc_text_readln_into
-    end
-end;
-
-procedure readln(f: text; var value: char);
-begin
-    assembler;
-    asm
-        call gpc_text_readln_into_char
-    end
-end;
-
-procedure readln;
-begin
-    assembler;
-    asm
-        movl $GPC_TARGET_WINDOWS, %eax
-        testl %eax, %eax
-        je .Lreadln_nofile_sysv
-        xorq %rcx, %rcx
-        jmp .Lreadln_nofile_call
-.Lreadln_nofile_sysv:
-        xorq %rdi, %rdi
-.Lreadln_nofile_call:
-        call gpc_text_readln_discard
-    end
-end;
-
-procedure readln(f: text);
-begin
-    assembler;
-    asm
-        call gpc_text_readln_discard
-    end
-end;
-
 
 begin
 end.

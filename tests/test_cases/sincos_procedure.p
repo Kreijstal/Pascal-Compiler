@@ -1,4 +1,7 @@
 program sincos_procedure;
+
+uses Math;
+
 var
   s, c: real;
 begin

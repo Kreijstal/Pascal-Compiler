@@ -152,7 +152,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
         return make_failure_v2(in, parser_name, strdup("Expected digit"), NULL);
     }
 
-    while (isdigit(c = read1(in)));
+    while (isdigit((unsigned char)(c = read1(in))));
     if (c != EOF) in->start--; // Back up one if not EOF
 
     // Must have decimal point
@@ -168,7 +168,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
         return make_failure_v2(in, parser_name, strdup("Expected digit after decimal point"), NULL);
     }
 
-    while (isdigit(c = read1(in)));
+    while (isdigit((unsigned char)(c = read1(in))));
     if (c != EOF) in->start--; // Back up one if not EOF
 
     // Optional exponent part (e.g., E+10, e-5, E3)
@@ -187,7 +187,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
         }
 
         // Parse remaining exponent digits
-        while (isdigit(c = read1(in)));
+        while (isdigit((unsigned char)(c = read1(in))));
         if (c != EOF) in->start--; // Back up one if not EOF
     } else if (c != EOF) {
         in->start--; // Back up if we didn't find exponent

@@ -80,7 +80,7 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *inst_list,
+static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 
 static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
@@ -290,7 +290,7 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     ListNode_t *field_node = record_type->fields;
     while (field_node != NULL)
     {
-        if (field_node->cur != NULL)
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
         {
             struct RecordField *field = (struct RecordField *)field_node->cur;
             if (!record_field_is_hidden(field) && field->name != NULL &&
@@ -708,6 +708,27 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         }
 
         char buffer[96];
+        
+        const char *static_label = NULL;
+        if (var_node->is_static)
+            static_label = (var_node->static_label != NULL) ? var_node->static_label : var_node->label;
+
+        if (static_label != NULL)
+        {
+            if (treat_as_reference)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                    static_label, addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    static_label, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
         
         /* For non-local variables (scope_depth > 0), use static link */
         if (scope_depth > 0)
@@ -1822,7 +1843,18 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             "ERROR: Unable to allocate register for SetLength descriptor.");
 
     char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", array_node->offset, descriptor_reg->bit_64);
+    if (array_node->is_static)
+    {
+        const char *label = (array_node->static_label != NULL) ?
+            array_node->static_label : array_node->label;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+            label, descriptor_reg->bit_64);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            array_node->offset, descriptor_reg->bit_64);
+    }
     inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
@@ -2262,100 +2294,6 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_sincos(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
-{
-    if (stmt == NULL || ctx == NULL)
-        return inst_list;
-
-    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next == NULL || args_expr->next->next == NULL)
-    {
-        codegen_report_error(ctx, "ERROR: SinCos expects three arguments.");
-        return inst_list;
-    }
-
-    struct Expression *angle_expr = (struct Expression *)args_expr->cur;
-    struct Expression *sin_expr = (struct Expression *)args_expr->next->cur;
-    struct Expression *cos_expr = (struct Expression *)args_expr->next->next->cur;
-
-    Register_t *angle_reg = NULL;
-    inst_list = codegen_expr_with_result(angle_expr, inst_list, ctx, &angle_reg);
-    if (codegen_had_error(ctx) || angle_reg == NULL)
-        return inst_list;
-
-    inst_list = codegen_maybe_convert_int_like_to_real(REAL_TYPE, angle_expr,
-        angle_reg, inst_list, NULL);
-    /* angle_reg contains the angle bits to be passed to gpc_sincos_bits via GP register. */
-
-    StackNode_t *angle_spill = add_l_t("sincos_angle");
-    if (angle_spill == NULL)
-    {
-        free_reg(get_reg_stack(), angle_reg);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for SinCos angle.");
-    }
-
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        angle_reg->bit_64, angle_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), angle_reg);
-
-    if (!codegen_expr_is_addressable(sin_expr) || !codegen_expr_is_addressable(cos_expr))
-    {
-        codegen_report_error(ctx, "ERROR: SinCos output arguments must be addressable.");
-        return inst_list;
-    }
-
-    Register_t *sin_addr = NULL;
-    inst_list = codegen_address_for_expr(sin_expr, inst_list, ctx, &sin_addr);
-    if (codegen_had_error(ctx) || sin_addr == NULL)
-        return inst_list;
-    StackNode_t *sin_spill = add_l_t("sincos_sin");
-    if (sin_spill == NULL)
-    {
-        free_reg(get_reg_stack(), sin_addr);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for SinCos sine target.");
-    }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        sin_addr->bit_64, sin_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), sin_addr);
-
-    Register_t *cos_addr = NULL;
-    inst_list = codegen_address_for_expr(cos_expr, inst_list, ctx, &cos_addr);
-    if (codegen_had_error(ctx) || cos_addr == NULL)
-        return inst_list;
-    StackNode_t *cos_spill = add_l_t("sincos_cos");
-    if (cos_spill == NULL)
-    {
-        free_reg(get_reg_stack(), cos_addr);
-        return codegen_fail_register(ctx, inst_list, NULL,
-            "ERROR: Unable to allocate spill slot for SinCos cosine target.");
-    }
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-        cos_addr->bit_64, cos_spill->offset);
-    inst_list = add_inst(inst_list, buffer);
-    free_reg(get_reg_stack(), cos_addr);
-
-    const char *arg0 = current_arg_reg64(0);
-    const char *arg1 = current_arg_reg64(1);
-    const char *arg2 = current_arg_reg64(2);
-
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", angle_spill->offset, arg0);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", sin_spill->offset, arg1);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", cos_spill->offset, arg2);
-    inst_list = add_inst(inst_list, buffer);
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = codegen_call_with_shadow_space(inst_list, ctx, "gpc_sincos_bits");
-    free_arg_regs();
-    return inst_list;
-}
-
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
@@ -2560,10 +2498,22 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         char buffer[128];
         if (var_node != NULL)
         {
-            if (target_uses_qword)
-                snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%%rbp)\n", increment_reg->bit_64, var_node->offset);
+            if (var_node->is_static)
+            {
+                const char *label = (var_node->static_label != NULL) ?
+                    var_node->static_label : var_node->label;
+                if (target_uses_qword)
+                    snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s(%%rip)\n", increment_reg->bit_64, label);
+                else
+                    snprintf(buffer, sizeof(buffer), "\taddl\t%s, %s(%%rip)\n", increment_reg->bit_32, label);
+            }
             else
-                snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%%rbp)\n", increment_reg->bit_32, var_node->offset);
+            {
+                if (target_uses_qword)
+                    snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%%rbp)\n", increment_reg->bit_64, var_node->offset);
+                else
+                    snprintf(buffer, sizeof(buffer), "\taddl\t%s, -%d(%%rbp)\n", increment_reg->bit_32, var_node->offset);
+            }
             inst_list = add_inst(inst_list, buffer);
         }
         else if (nonlocal_flag() == 1)
@@ -3156,6 +3106,7 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     Register_t *file_reg = NULL;
     StackNode_t *file_spill = NULL;
     int has_file_arg = 0;
+    int read_consumed_line = 0;
 
     /* Check if first argument is a file */
     if (args != NULL)
@@ -3257,6 +3208,9 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
                 ctx->static_link_reg = NULL;
                 ctx->static_link_reg_level = 0;
             }
+
+            if (read_line)
+                read_consumed_line = 1;
             
             args = args->next;
             continue;
@@ -3324,7 +3278,7 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     }
     
     /* If readln, consume rest of line */
-    if (read_line)
+    if (read_line && !read_consumed_line)
     {
         const char *file_dest64 = current_arg_reg64(0);
         if (has_file_arg && file_spill != NULL)
@@ -3440,24 +3394,6 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SinCos"))
-    {
-        inst_list = codegen_builtin_sincos(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
-    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
-    {
-        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
-        #ifdef DEBUG_CODEGEN
-        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-        #endif
-        return inst_list;
-    }
-
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Inc"))
     {
         inst_list = codegen_builtin_inc(stmt, inst_list, ctx);
@@ -3488,6 +3424,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Dispose"))
     {
         inst_list = codegen_builtin_dispose(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
+    {
+        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
@@ -3570,7 +3515,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     StackNode_t *var;
     Register_t *reg;
-    char buffer[50];
+    char buffer[CODEGEN_MAX_INST_BUF];
     struct Expression *var_expr, *assign_expr;
     int offset;
 
@@ -3757,6 +3702,20 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 if (!value_is_qword)
                     inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
             }
+            if (var->is_static)
+            {
+                const char *label = (var->static_label != NULL) ?
+                    var->static_label : var->label;
+                if (use_qword)
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s(%%rip)\n", reg->bit_64, label);
+                else if (use_byte)
+                    snprintf(buffer, sizeof(buffer), "\tmovb\t%s, %s(%%rip)\n", value_reg8, label);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s(%%rip)\n", reg->bit_32, label);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), reg);
+                return inst_list;
+            }
             if (var->is_reference)
             {
                 Register_t *ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -3766,14 +3725,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     return codegen_fail_register(ctx, inst_list, NULL,
                         "ERROR: Unable to allocate register for reference assignment.");
                 }
-                snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", var->offset, ptr_reg->bit_64);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", var->offset, ptr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 if (use_qword)
-                    snprintf(buffer, 50, "\tmovq\t%s, (%s)\n", reg->bit_64, ptr_reg->bit_64);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", reg->bit_64, ptr_reg->bit_64);
                 else if (use_byte)
-                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, ptr_reg->bit_64);
+                    snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", value_reg8, ptr_reg->bit_64);
                 else
-                    snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", reg->bit_32, ptr_reg->bit_64);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", reg->bit_32, ptr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), ptr_reg);
                 free_reg(get_reg_stack(), reg);
@@ -3783,11 +3742,11 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             {
                 /* Variable is in current scope, assign normally */
                 if (use_qword)
-                    snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
                 else if (use_byte)
-                    snprintf(buffer, 50, "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
+                    snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
                 else
-                    snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
             }
             else
             {
@@ -3796,11 +3755,11 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 if (frame_reg != NULL)
                 {
                     if (use_qword)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, frame_reg->bit_64);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, frame_reg->bit_64);
                     else if (use_byte)
-                        snprintf(buffer, 50, "\tmovb\t%s, -%d(%s)\n", value_reg8, var->offset, frame_reg->bit_64);
+                        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%s)\n", value_reg8, var->offset, frame_reg->bit_64);
                     else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, frame_reg->bit_64);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, frame_reg->bit_64);
                 }
                 else
                 {
@@ -3808,11 +3767,11 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         "ERROR: Failed to acquire static link for assignment to %s.",
                         var_expr->expr_data.id);
                     if (use_qword)
-                        snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
                     else if (use_byte)
-                        snprintf(buffer, 50, "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
+                        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
                     else
-                        snprintf(buffer, 50, "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
                 }
                 codegen_end_expression(ctx);
             }

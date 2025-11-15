@@ -536,6 +536,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
+static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest);
 
 /* Helper function to resolve enum literal identifier to its ordinal value
  * by searching through AST type section.
@@ -1629,6 +1630,8 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
     record->type_id = class_name != NULL ? strdup(class_name) : NULL;
+    record->has_cached_size = 0;
+    record->cached_size = 0;
 
     if (parent_class_name == NULL)
     {
@@ -1917,6 +1920,8 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
     record->methods = NULL;  /* Regular records don't have methods */
     record->is_class = 0;
     record->type_id = NULL;
+    record->has_cached_size = 0;
+    record->cached_size = 0;
     return record;
 }
 
@@ -2817,7 +2822,8 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                                  ListBuilder *var_builder,
                                  ListBuilder *label_builder,
                                  ListNode_t **nested_subs,
-                                 struct Statement **body_out) {
+                                 struct Statement **body_out,
+                                 ListNode_t **type_decl_list) {
     if (body_node == NULL)
         return;
 
@@ -2827,7 +2833,6 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
         while (*nested_tail != NULL)
             nested_tail = &(*nested_tail)->next;
     }
-
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     
     ast_t *cursor = body_node->child;
@@ -2836,6 +2841,8 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
         if (node != NULL) {
             switch (node->typ) {
             case PASCAL_T_TYPE_SECTION:
+                if (type_decl_list != NULL)
+                    append_type_decls_from_section(node, type_decl_list);
                 type_section_ast = node;  /* Save for const array enum resolution */
                 break;
             case PASCAL_T_CONST_SECTION:
@@ -4365,6 +4372,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ListNode_t *nested_subs = NULL;
     struct Statement *body = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
+    ListNode_t *type_decls = NULL;
 
     ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
     char *self_type_id = NULL;
@@ -4395,6 +4403,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             break;
         }
         case PASCAL_T_TYPE_SECTION:
+            append_type_decls_from_section(node, &type_decls);
             type_section_ast = node;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -4407,7 +4416,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             append_labels_from_section(node, &label_builder);
             break;
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(node, &const_decls, &var_builder, &label_builder, &nested_subs, &body);
+            convert_routine_body(node, &const_decls, &var_builder, &label_builder,
+                                 &nested_subs, &body, &type_decls);
             break;
         case PASCAL_T_BEGIN_BLOCK:
             body = convert_block(node);
@@ -4435,7 +4445,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ListNode_t *params = list_builder_finish(&params_builder);
     ListNode_t *label_decls = list_builder_finish(&label_builder);
     Tree_t *tree = mk_procedure(method_node->line, proc_name, params, const_decls,
-                                label_decls, list_builder_finish(&var_builder), nested_subs, body, 0, 0);
+                                label_decls, type_decls, list_builder_finish(&var_builder),
+                                nested_subs, body, 0, 0);
 
     free(class_name);
     free(method_name);
@@ -4479,6 +4490,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     int is_external = 0;
     char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
+    ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
         if (debug_external_nodes &&
@@ -4488,6 +4500,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
+            append_type_decls_from_section(cur, &type_decls);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -4521,7 +4534,8 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder, &nested_subs, &body);
+            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
+                                 &nested_subs, &body, &type_decls);
             nested_tail = &nested_subs;
             while (*nested_tail != NULL)
                 nested_tail = &(*nested_tail)->next;
@@ -4565,7 +4579,8 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
-                                label_decls, list_builder_finish(&var_decls_builder), nested_subs, body, is_external, 0);
+                                label_decls, type_decls, list_builder_finish(&var_decls_builder),
+                                nested_subs, body, is_external, 0);
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
@@ -4669,6 +4684,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_external = 0;
     char *external_alias = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
+    ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
         if (debug_external_nodes &&
@@ -4680,6 +4696,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
+            append_type_decls_from_section(cur, &type_decls);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -4713,7 +4730,8 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder, &nested_subs, &body);
+            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
+                                 &nested_subs, &body, &type_decls);
             nested_tail = &nested_subs;
             while (*nested_tail != NULL)
                 nested_tail = &(*nested_tail)->next;
@@ -4757,8 +4775,8 @@ static Tree_t *convert_function(ast_t *func_node) {
 
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
-                               label_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
-                               return_type, return_type_id, inline_return_type, is_external, 0);
+                                label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
+                                return_type, return_type_id, inline_return_type, is_external, 0);
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)

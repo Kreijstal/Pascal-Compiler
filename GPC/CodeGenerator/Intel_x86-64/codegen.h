@@ -157,6 +157,7 @@ typedef struct {
     char **except_labels;
     int except_depth;
     int except_capacity;
+    int global_data_counter;
     /* Lexical nesting depth for static links:
      * 0 = top-level (main program or unit)
      * 1 = nested in top-level

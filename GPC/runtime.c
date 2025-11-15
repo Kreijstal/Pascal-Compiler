@@ -796,32 +796,41 @@ int __isoc99_scanf(const char *format, ...) {
 /* Non-variadic read functions for proper Windows x64 calling convention */
 /* These avoid the issue where variadic arguments must be on stack on Windows */
 
-int gpc_read_integer(GPCTextFile *file, int32_t *ptr) {
-    if (file != NULL) {
-        return fscanf((FILE*)file, "%d", ptr);
+static inline int gpc_scanf_result_to_ioresult(int scan_res)
+{
+    if (scan_res == EOF)
+    {
+        gpc_ioresult_set(errno != 0 ? errno : EOF);
     }
-    return scanf("%d", ptr);
+    else
+    {
+        gpc_ioresult_set(0);
+    }
+    return scan_res;
+}
+
+int gpc_read_integer(GPCTextFile *file, int32_t *ptr) {
+    FILE *stream = gpc_text_input_stream(file);
+    int res = fscanf(stream, "%d", ptr);
+    return gpc_scanf_result_to_ioresult(res);
 }
 
 int gpc_read_longint(GPCTextFile *file, int64_t *ptr) {
-    if (file != NULL) {
-        return fscanf((FILE*)file, "%" PRId64, ptr);
-    }
-    return scanf("%" PRId64, ptr);
+    FILE *stream = gpc_text_input_stream(file);
+    int res = fscanf(stream, "%" PRId64, ptr);
+    return gpc_scanf_result_to_ioresult(res);
 }
 
 int gpc_read_char(GPCTextFile *file, char *ptr) {
-    if (file != NULL) {
-        return fscanf((FILE*)file, " %c", ptr);  /* Note: space before %c to skip whitespace */
-    }
-    return scanf(" %c", ptr);
+    FILE *stream = gpc_text_input_stream(file);
+    int res = fscanf(stream, " %c", ptr);
+    return gpc_scanf_result_to_ioresult(res);
 }
 
 int gpc_read_real(GPCTextFile *file, double *ptr) {
-    if (file != NULL) {
-        return fscanf((FILE*)file, "%lf", ptr);
-    }
-    return scanf("%lf", ptr);
+    FILE *stream = gpc_text_input_stream(file);
+    int res = fscanf(stream, "%lf", ptr);
+    return gpc_scanf_result_to_ioresult(res);
 }
 
 void print_integer(int n) {

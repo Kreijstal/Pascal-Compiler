@@ -39,6 +39,7 @@ static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
     StackNode_t *file_node, long long element_size, int element_hash_tag);
 static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
     long long *element_size_out, int *element_hash_tag_out);
+static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *name);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -171,7 +172,9 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
         else if (node->type->kind == TYPE_KIND_RECORD || node->type->kind == TYPE_KIND_ARRAY)
         {
-            /* These should use sizeof, not this helper */
+            long long size = gpc_type_sizeof(node->type);
+            if (size > 0)
+                return (int)size;
             return -1;
         }
     }
@@ -670,6 +673,47 @@ static void codegen_emit_function_debug_comments(const char *func_name, CodeGenC
     int needs_link = codegen_proc_requires_static_link(ctx, func_name);
     asm_debug_comment(ctx->output_file, "codegen", 1,
         "static-link=%s", needs_link ? "required" : "not-required");
+}
+
+static void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+
+    size_t idx = 0;
+    if (value == NULL || value[0] == '\0')
+    {
+        buffer[idx++] = 'v';
+    }
+    else
+    {
+        for (const char *p = value; *p != '\0' && idx + 1 < size; ++p)
+        {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '_')
+                buffer[idx++] = (char)c;
+            else
+                buffer[idx++] = '_';
+        }
+    }
+
+    if (idx == 0)
+        buffer[idx++] = 'v';
+    buffer[idx] = '\0';
+}
+
+static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *name)
+{
+    if (ctx == NULL)
+        return NULL;
+
+    char sanitized[128];
+    codegen_sanitize_identifier_for_label(name, sanitized, sizeof(sanitized));
+
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer), "__gpc_program_var_%s_%d",
+        sanitized, ++ctx->global_data_counter);
+    return strdup(buffer);
 }
 
 /* Generates a label */
@@ -1239,6 +1283,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
     assert(ctx != NULL);
 
+    int is_program_scope = (codegen_get_lexical_depth(ctx) == 0);
+
      cur = local_decl;
 
      while(cur != NULL)
@@ -1246,16 +1292,31 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
          tree = (Tree_t *)cur->cur;
          assert(tree != NULL);
 
-         if (tree->type == TREE_VAR_DECL)
-         {
-             id_list = tree->tree_data.var_decl_data.ids;
-             HashNode_t *type_node = NULL;
-             if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL)
-                 FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+        if (tree->type == TREE_VAR_DECL)
+        {
+            id_list = tree->tree_data.var_decl_data.ids;
+           HashNode_t *type_node = NULL;
+           if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
+               FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+           }
+            GpcType *cached_type = tree->tree_data.var_decl_data.cached_gpc_type;
 
             while(id_list != NULL)
             {
-                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                HashNode_t cached_type_node;
+                HashNode_t *fallback_type_node = NULL;
+                if (cached_type != NULL)
+                {
+                    memset(&cached_type_node, 0, sizeof(cached_type_node));
+                    cached_type_node.type = cached_type;
+                    fallback_type_node = &cached_type_node;
+                }
+
+                HashNode_t *effective_type_node = type_node;
+                if (effective_type_node == NULL)
+                    effective_type_node = fallback_type_node;
+
+                struct TypeAlias *alias = get_type_alias_from_node(effective_type_node);
                 if (alias != NULL && alias->is_array)
                 {
                     long long computed_size = 0;
@@ -1307,7 +1368,22 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (alias->is_open_array)
                     {
-                        add_dynamic_array((char *)id_list->cur, element_size, alias->array_start);
+                        char *static_label = NULL;
+                        if (is_program_scope)
+                        {
+                            static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && static_label != NULL)
+                            {
+                                int descriptor_bytes = codegen_dynamic_array_descriptor_bytes(element_size);
+                                int alignment = descriptor_bytes >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, descriptor_bytes, alignment);
+                            }
+                        }
+                        add_dynamic_array((char *)id_list->cur, element_size,
+                            alias->array_start, is_program_scope, static_label);
+                        if (static_label != NULL)
+                            free(static_label);
                     }
                     else
                     {
@@ -1317,7 +1393,25 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         long long total_size = (long long)length * (long long)element_size;
                         if (total_size <= 0)
                             total_size = element_size;
-                        add_array((char *)id_list->cur, (int)total_size, element_size, alias->array_start);
+                        if (is_program_scope)
+                        {
+                            char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && static_label != NULL)
+                            {
+                                int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, (int)total_size, alignment);
+                            }
+                            add_static_array((char *)id_list->cur, (int)total_size, element_size,
+                                alias->array_start, static_label);
+                            if (static_label != NULL)
+                                free(static_label);
+                        }
+                        else
+                        {
+                            add_array((char *)id_list->cur, (int)total_size, element_size,
+                                alias->array_start);
+                        }
                     }
                 }
                 else
@@ -1325,6 +1419,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     int alloc_size = DOUBLEWORD;
                     HashNode_t *var_info = NULL;
                     HashNode_t *size_node = NULL;  /* Node to get size from */
+                    HashNode_t temp_size_node;
                     
                     if (symtab != NULL)
                     {
@@ -1332,8 +1427,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             size_node = var_info;
                     }
                     /* Use type_node if we don't have specific var_info */
-                    if (size_node == NULL && type_node != NULL)
-                        size_node = type_node;
+                    if (size_node == NULL && effective_type_node != NULL)
+                        size_node = effective_type_node;
+                    if (size_node == NULL && cached_type != NULL)
+                    {
+                        memset(&temp_size_node, 0, sizeof(temp_size_node));
+                        temp_size_node.type = cached_type;
+                        size_node = &temp_size_node;
+                    }
                     
                     /* Get allocation size using helper */
                     if (size_node != NULL)
@@ -1357,7 +1458,23 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         }
                     }
 
-                    add_l_x((char *)id_list->cur, alloc_size);
+                    if (is_program_scope)
+                    {
+                        char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                        if (ctx->output_file != NULL && static_label != NULL)
+                        {
+                            int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
+                            fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                static_label, alloc_size, alignment);
+                        }
+                        add_static_var((char *)id_list->cur, alloc_size, static_label);
+                        if (static_label != NULL)
+                            free(static_label);
+                    }
+                    else
+                    {
+                        add_l_x((char *)id_list->cur, alloc_size);
+                    }
                 }
                 id_list = id_list->next;
             };
@@ -1440,7 +1557,22 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
             {
                 while (id_list != NULL)
                 {
-                    add_dynamic_array((char *)id_list->cur, element_size, arr->s_range);
+                    char *static_label = NULL;
+                    if (is_program_scope)
+                    {
+                        static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                        if (ctx->output_file != NULL && static_label != NULL)
+                        {
+                            int descriptor_bytes = codegen_dynamic_array_descriptor_bytes(element_size);
+                            int alignment = descriptor_bytes >= 8 ? 8 : DOUBLEWORD;
+                            fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                static_label, descriptor_bytes, alignment);
+                        }
+                    }
+                    add_dynamic_array((char *)id_list->cur, element_size, arr->s_range,
+                        is_program_scope, static_label);
+                    if (static_label != NULL)
+                        free(static_label);
                     id_list = id_list->next;
                 }
             }
@@ -1453,6 +1585,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (total_size <= 0)
                     total_size = element_size;
 
+                int use_static_storage = arr->has_static_storage || is_program_scope;
                 if (arr->has_static_storage)
                 {
                     if (!arr->static_storage_emitted)
@@ -1465,11 +1598,29 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 arr->init_guard_label);
                         arr->static_storage_emitted = 1;
                     }
+                }
 
+                if (use_static_storage)
+                {
                     while (id_list != NULL)
                     {
+                        const char *label_to_use = arr->static_label;
+                        char *generated_label = NULL;
+                        if (!arr->has_static_storage)
+                        {
+                            generated_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                            if (ctx->output_file != NULL && generated_label != NULL)
+                            {
+                                int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    generated_label, total_size, alignment);
+                            }
+                            label_to_use = generated_label;
+                        }
                         add_static_array((char *)id_list->cur, total_size, element_size,
-                            arr->s_range, arr->static_label);
+                            arr->s_range, label_to_use);
+                        if (generated_label != NULL)
+                            free(generated_label);
                         id_list = id_list->next;
                     }
                 }
@@ -1840,7 +1991,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     if (returns_dynamic_array)
-        return_var = add_dynamic_array(func->id, dynamic_array_element_size, dynamic_array_lower_bound);
+        return_var = add_dynamic_array(func->id, dynamic_array_element_size,
+            dynamic_array_lower_bound, 0, NULL);
     else
         return_var = add_l_x(func->id, return_size);
 
@@ -2281,6 +2433,15 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 arg_ids = arg_decl->tree_data.var_decl_data.ids;
                 type = arg_decl->tree_data.var_decl_data.type;
                 HashNode_t *resolved_type_node = NULL;
+                GpcType *cached_arg_type = arg_decl->tree_data.var_decl_data.cached_gpc_type;
+                HashNode_t cached_arg_node;
+                HashNode_t *cached_arg_node_ptr = NULL;
+                if (cached_arg_type != NULL)
+                {
+                    memset(&cached_arg_node, 0, sizeof(cached_arg_node));
+                    cached_arg_node.type = cached_arg_type;
+                    cached_arg_node_ptr = &cached_arg_node;
+                }
 
                 // Resolve type aliases if needed
                 if (type == UNKNOWN_TYPE && arg_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
@@ -2307,6 +2468,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     {
                         if (resolved_type_node != NULL)
                             record_type_info = get_record_type_from_node(resolved_type_node);
+                        if (record_type_info == NULL && cached_arg_node_ptr != NULL)
+                            record_type_info = get_record_type_from_node(cached_arg_node_ptr);
                     }
 
                     if (record_type_info != NULL)
@@ -2407,6 +2570,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
                              gpc_type_is_array(resolved_type_node->type))
+                    {
+                        is_array_type = 1;
+                    }
+                    else if (cached_arg_type != NULL &&
+                        gpc_type_is_array(cached_arg_type))
                     {
                         is_array_type = 1;
                     }
@@ -2679,7 +2847,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                 {
                     char *var_name = (char *)ids->cur;
                     StackNode_t *array_node = find_label(var_name);
-                    if (array_node != NULL && array_node->is_dynamic)
+                    if (array_node != NULL && array_node->is_dynamic && array_node->offset > 0)
                     {
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", array_node->offset);
@@ -2708,8 +2876,11 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                     if (file_node != NULL)
                     {
                         char buffer[128];
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        if (!file_node->is_static)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", file_node->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
 
                         long long file_elem_size = 0;
                         int file_elem_hash = HASHVAR_INTEGER;
@@ -2766,7 +2937,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                 {
                     char *var_name = (char *)ids->cur;
                     StackNode_t *array_node = find_label(var_name);
-                    if (array_node != NULL && array_node->is_dynamic)
+                    if (array_node != NULL && array_node->is_dynamic && array_node->offset > 0)
                     {
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n",
