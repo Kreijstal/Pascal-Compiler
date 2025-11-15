@@ -442,6 +442,7 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
             node->is_constant = 1;
             node->const_real_value = value;
         }
+        destroy_gpc_type(type);
     }
     else
     {

@@ -64,6 +64,10 @@ struct RecordField *semcheck_find_class_field(SymTab_t *symtab,
     struct RecordType *record_info, const char *field_name,
     struct RecordType **owner_out);
 
+struct RecordField *semcheck_find_class_field_including_hidden(SymTab_t *symtab,
+    struct RecordType *record_info, const char *field_name,
+    struct RecordType **owner_out);
+
 HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     struct RecordType *record_info, const char *method_name,
     struct RecordType **owner_out);

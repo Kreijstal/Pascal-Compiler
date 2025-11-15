@@ -67,7 +67,7 @@ type
         rcPaint: TRECT;
         fRestore: BOOL;
         fIncUpdate: BOOL;
-        rgbReserved1: array[0..31] of byte;
+        rgbReserved1: array[0..31] of cuint8;
     end;
 
     TSCROLLINFO = record

@@ -725,9 +725,12 @@ long long gpc_type_sizeof(GpcType *type)
             return type->info.array_of_const_info.element_size;
         
         case TYPE_KIND_RECORD:
-            /* Record size would need to be computed by iterating fields
-             * For now, we return -1 to indicate it needs special handling */
+        {
+            struct RecordType *record = type->info.record_info;
+            if (record != NULL && record->has_cached_size)
+                return record->cached_size;
             return -1;
+        }
         
         case TYPE_KIND_PROCEDURE:
             return 8; /* Procedure pointers are 8 bytes */

@@ -59,7 +59,9 @@ StackNode_t *add_l_x(char *, int size);
 StackNode_t *add_l_z(char *);
 StackNode_t *add_q_z(char *);
 StackNode_t *add_array(char *label, int total_size, int element_size, int lower_bound);
-StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound);
+StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
+    int use_static_storage, const char *static_label);
+StackNode_t *add_static_var(char *label, int size, const char *static_label);
 StackNode_t *find_in_temp(char *);
 StackNode_t *find_label(char *);
 /* Returns the scope depth (0 = current scope, 1 = parent, etc.) */

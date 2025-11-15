@@ -282,7 +282,8 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
     return new_node;
 }
 
-StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound)
+StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
+    int use_static_storage, const char *static_label)
 {
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
@@ -294,19 +295,28 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound)
     if (descriptor_size < 2 * element_size)
         descriptor_size = 2 * element_size;
 
-    cur_scope->x_offset += descriptor_size;
+    if (!use_static_storage)
+        cur_scope->x_offset += descriptor_size;
 
     /* Locals are placed below the shadow space */
     /* After prologue: RSP = RBP - 8, then we subtract frame_size */
     /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
     /* Locals should be at offsets more negative than RBP-32 */
     int offset = cur_scope->z_offset + cur_scope->x_offset;
+    if (use_static_storage)
+        offset = 0;
 
     StackNode_t *new_node = init_stack_node(offset, label, descriptor_size);
     new_node->is_array = 1;
     new_node->array_lower_bound = lower_bound;
     new_node->element_size = element_size;
     new_node->is_dynamic = 1;
+    if (use_static_storage)
+    {
+        new_node->is_static = 1;
+        if (static_label != NULL)
+            new_node->static_label = strdup(static_label);
+    }
 
     if(cur_scope->x == NULL)
     {
@@ -322,6 +332,26 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound)
         CODEGEN_DEBUG("DEBUG: Added dynamic array %s descriptor to x_offset %d\n", new_node->label, new_node->offset);
     #endif
 
+    return new_node;
+}
+
+StackNode_t *add_static_var(char *label, int size, const char *static_label)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    StackNode_t *new_node = init_stack_node(0, label, size > 0 ? size : DOUBLEWORD);
+    new_node->is_static = 1;
+    if (static_label != NULL)
+        new_node->static_label = strdup(static_label);
+
+    ListNode_t *list_node = CreateListNode(new_node, LIST_UNSPECIFIED);
+    if (cur_scope->x == NULL)
+        cur_scope->x = list_node;
+    else
+        cur_scope->x = PushListNodeBack(cur_scope->x, list_node);
     return new_node;
 }
 

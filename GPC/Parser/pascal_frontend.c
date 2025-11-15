@@ -14,6 +14,7 @@
 #include "ParseTree/tree.h"
 #include "pascal_preprocessor.h"
 #include "../flags.h"
+#include "../../cparser/parser.h"
 #include "../../cparser/examples/pascal_parser/pascal_peek.h"
 
 extern ast_t *ast_nil;
@@ -265,6 +266,7 @@ void pascal_frontend_cleanup(void)
         free_combinator(cached_program_parser);
         cached_program_parser = NULL;
     }
+
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
@@ -518,7 +520,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     }
 
     free(buffer);
-    free(input);
+    free_input(input);
     /* Don't reset file_to_parse to NULL - it's needed for semantic error reporting */
     /* file_to_parse = NULL; */
     // Don't free parser - it's cached for reuse

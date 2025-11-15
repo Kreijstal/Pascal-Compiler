@@ -1798,7 +1798,18 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         StackNode_t *var_node = find_label(inner->expr_data.id);
         if (var_node != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n", var_node->offset, target_reg->bit_64);
+            if (var_node->is_static)
+            {
+                const char *label = (var_node->static_label != NULL) ?
+                    var_node->static_label : var_node->label;
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    label, target_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    var_node->offset, target_reg->bit_64);
+            }
             return add_inst(inst_list, buffer);
         }
         else if (nonlocal_flag() == 1)
