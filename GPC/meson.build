@@ -53,6 +53,7 @@ gpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/codegen_expression.c',
   'CodeGenerator/Intel_x86-64/codegen_builtins.c',
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
+  'CodeGenerator/Intel_x86-64/graph_coloring_allocator.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
   'Optimizer/pass_manager.c',
