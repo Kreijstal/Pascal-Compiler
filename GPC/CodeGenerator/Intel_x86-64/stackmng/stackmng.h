@@ -83,6 +83,12 @@ typedef struct RegStack
     int num_registers;
     /* Global sequence counter for LRU tracking */
     unsigned long long use_sequence;
+    
+#if USE_GRAPH_COLORING_ALLOCATOR
+    /* Live range tracking for graph coloring */
+    ListNode_t *active_live_ranges;  /* List of LiveRange_t* currently being tracked */
+    int next_live_range_id;          /* ID counter for live ranges */
+#endif
 } RegStack_t;
 
 RegStack_t *init_reg_stack();
@@ -117,6 +123,11 @@ typedef struct Register
     StackNode_t *spill_location;
     /* Sequence number for LRU tracking */
     unsigned long long last_use_seq;
+    
+#if USE_GRAPH_COLORING_ALLOCATOR
+    /* Forward declaration from graph_coloring_allocator.h */
+    struct LiveRange *current_live_range;  /* Active live range for this register */
+#endif
 } Register_t;
 
 

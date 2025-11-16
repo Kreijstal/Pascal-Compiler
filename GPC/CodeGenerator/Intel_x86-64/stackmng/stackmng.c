@@ -564,6 +564,9 @@ RegStack_t *init_reg_stack()
     rax->bit_32 = strdup("%eax");
     rax->spill_location = NULL;
     rax->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    rax->current_live_range = NULL;
+#endif
 
     /* %r10, %r11 - caller-saved, never used for arguments */
     Register_t *r10 = (Register_t *)malloc(sizeof(Register_t));
@@ -572,6 +575,9 @@ RegStack_t *init_reg_stack()
     r10->bit_32 = strdup("%r10d");
     r10->spill_location = NULL;
     r10->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r10->current_live_range = NULL;
+#endif
 
     Register_t *r11 = (Register_t *)malloc(sizeof(Register_t));
     assert(r11 != NULL);
@@ -579,6 +585,9 @@ RegStack_t *init_reg_stack()
     r11->bit_32 = strdup("%r11d");
     r11->spill_location = NULL;
     r11->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r11->current_live_range = NULL;
+#endif
 
     /* %r8, %r9 - argument registers 3 and 4 (both ABIs), less commonly used */
     Register_t *r8 = (Register_t *)malloc(sizeof(Register_t));
@@ -587,6 +596,9 @@ RegStack_t *init_reg_stack()
     r8->bit_32 = strdup("%r8d");
     r8->spill_location = NULL;
     r8->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r8->current_live_range = NULL;
+#endif
 
     Register_t *r9 = (Register_t *)malloc(sizeof(Register_t));
     assert(r9 != NULL);
@@ -594,6 +606,9 @@ RegStack_t *init_reg_stack()
     r9->bit_32 = strdup("%r9d");
     r9->spill_location = NULL;
     r9->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+    r9->current_live_range = NULL;
+#endif
 
     /* Build base register list */
     registers = CreateListNode(rax, LIST_UNSPECIFIED);
@@ -612,6 +627,9 @@ RegStack_t *init_reg_stack()
         rsi->bit_32 = strdup("%esi");
         rsi->spill_location = NULL;
         rsi->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+        rsi->current_live_range = NULL;
+#endif
 
         Register_t *rdi = (Register_t *)malloc(sizeof(Register_t));
         assert(rdi != NULL);
@@ -619,6 +637,9 @@ RegStack_t *init_reg_stack()
         rdi->bit_32 = strdup("%edi");
         rdi->spill_location = NULL;
         rdi->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+        rdi->current_live_range = NULL;
+#endif
 
         registers = PushListNodeBack(registers, CreateListNode(rsi, LIST_UNSPECIFIED));
         registers = PushListNodeBack(registers, CreateListNode(rdi, LIST_UNSPECIFIED));
@@ -632,6 +653,9 @@ RegStack_t *init_reg_stack()
         rcx->bit_32 = strdup("%ecx");
         rcx->spill_location = NULL;
         rcx->last_use_seq = 0;
+#if USE_GRAPH_COLORING_ALLOCATOR
+        rcx->current_live_range = NULL;
+#endif
 
         registers = PushListNodeBack(registers, CreateListNode(rcx, LIST_UNSPECIFIED));
     }
@@ -640,6 +664,11 @@ RegStack_t *init_reg_stack()
     reg_stack->registers_free = registers;
     reg_stack->num_registers = NUM_CALLER_SAVED_REGISTERS;
     reg_stack->use_sequence = 0;
+
+#if USE_GRAPH_COLORING_ALLOCATOR
+    reg_stack->active_live_ranges = NULL;
+    reg_stack->next_live_range_id = 1;
+#endif
 
     return reg_stack;
 }
@@ -738,6 +767,16 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
 
             cur->next = reg_stack->registers_free;
             reg_stack->registers_free = cur;
+            
+#if USE_GRAPH_COLORING_ALLOCATOR
+            /* End the live range for this register */
+            if (reg->current_live_range != NULL)
+            {
+                reg->current_live_range->end_pos = reg_stack->use_sequence;
+                reg->current_live_range = NULL;
+            }
+#endif
+            
 #if GPC_ENABLE_REG_DEBUG
             if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
                 fprintf(stderr, "[reg-debug] free  %s (%s)\n", reg->bit_64, g_reg_debug_context);
@@ -797,6 +836,24 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
         /* Clear spill location when register is freshly allocated */
         reg->spill_location = NULL;
         
+#if USE_GRAPH_COLORING_ALLOCATOR
+        /* Create a new live range for this register allocation */
+        LiveRange_t *lr = create_live_range(reg_stack->next_live_range_id++, 
+                                            reg_stack->use_sequence, -1);
+        if (lr != NULL)
+        {
+            lr->preferred_reg = reg;
+            reg->current_live_range = lr;
+            
+            /* Add to active live ranges list */
+            if (reg_stack->active_live_ranges == NULL)
+                reg_stack->active_live_ranges = CreateListNode(lr, LIST_UNSPECIFIED);
+            else
+                reg_stack->active_live_ranges = PushListNodeBack(reg_stack->active_live_ranges,
+                                                                 CreateListNode(lr, LIST_UNSPECIFIED));
+        }
+#endif
+        
 #if GPC_ENABLE_REG_DEBUG
         if (strcmp(reg->bit_64, "%rcx") == 0 && g_reg_debug_context != NULL)
             fprintf(stderr, "[reg-debug] alloc %s (%s)\n", reg->bit_64, g_reg_debug_context);
@@ -805,15 +862,13 @@ Register_t *get_free_reg(RegStack_t *reg_stack, ListNode_t **inst_list)
     }
     else
     {
-        /* No free registers - this is now an error that caller must handle */
-        /* The spilling would require tracking which values need to be preserved, */
-        /* which is beyond the scope of a simple fix */
+        /* No free registers - caller should use get_reg_with_spill */
         REG_DEBUG_LOG("[reg-spill] Out of registers - caller should handle this\n");
         return NULL;
     }
 }
 
-/* Force register allocation by spilling the LRU register if necessary */
+/* Force register allocation by spilling using graph coloring or LRU */
 Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
 {
     assert(reg_stack != NULL);
@@ -824,18 +879,67 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
     if (reg != NULL)
         return reg;
 
-#if USE_GRAPH_COLORING_ALLOCATOR
-    /* Graph coloring approach: Build interference graph and use optimal spilling */
-    REG_DEBUG_LOG("[reg-alloc] Using graph coloring allocator\n");
-    
-    /* For now, fall back to LRU when graph coloring is enabled but not fully integrated */
-    /* Full integration would require tracking live ranges across entire expressions */
-    /* This is a placeholder for future complete integration */
-#endif
+    /* Out of registers - must spill */
+    Register_t *spill_reg = NULL;
 
-    /* LRU-based spilling: No free registers - must spill the least recently used one */
+#if USE_GRAPH_COLORING_ALLOCATOR
+    /* ACTUAL GRAPH COLORING IMPLEMENTATION */
+    
+    /* Build interference graph from active live ranges */
+    InterferenceGraph_t *graph = create_interference_graph(reg_stack->num_registers);
+    if (graph != NULL && reg_stack->active_live_ranges != NULL)
+    {
+        /* Copy active live ranges to the graph */
+        ListNode_t *lr_node = reg_stack->active_live_ranges;
+        while (lr_node != NULL)
+        {
+            LiveRange_t *lr = (LiveRange_t *)lr_node->cur;
+            if (lr != NULL && lr->end_pos == -1)  /* Only active (not ended) ranges */
+            {
+                add_live_range(graph, lr);
+            }
+            lr_node = lr_node->next;
+        }
+        
+        /* Run the graph coloring algorithm */
+        ListNode_t *spilled_ranges = allocate_registers_graph_coloring(graph);
+        
+        /* Find which register to spill based on graph coloring result */
+        if (spilled_ranges != NULL && spilled_ranges->cur != NULL)
+        {
+            LiveRange_t *spilled_lr = (LiveRange_t *)spilled_ranges->cur;
+            spill_reg = spilled_lr->preferred_reg;
+            REG_DEBUG_LOG("[reg-spill] Graph coloring selected %s for spilling\n",
+                spill_reg != NULL ? spill_reg->bit_64 : "NULL");
+            
+            DestroyList(spilled_ranges);
+        }
+        
+        free_interference_graph(graph);
+    }
+    
+    /* Fallback to LRU if graph coloring didn't select a register */
+    if (spill_reg == NULL)
+    {
+        REG_DEBUG_LOG("[reg-spill] Graph coloring failed, falling back to LRU\n");
+        ListNode_t *cur_node = reg_stack->registers_allocated;
+        unsigned long long oldest_seq = ULLONG_MAX;
+        
+        while (cur_node != NULL)
+        {
+            Register_t *cur_reg = (Register_t *)cur_node->cur;
+            if (cur_reg->last_use_seq < oldest_seq)
+            {
+                oldest_seq = cur_reg->last_use_seq;
+                spill_reg = cur_reg;
+            }
+            cur_node = cur_node->next;
+        }
+    }
+    
+#else
+    /* LRU-based spilling: Find least recently used register */
     ListNode_t *cur_node = reg_stack->registers_allocated;
-    Register_t *lru_reg = NULL;
     unsigned long long oldest_seq = ULLONG_MAX;
 
     while (cur_node != NULL)
@@ -844,50 +948,49 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
         if (cur_reg->last_use_seq < oldest_seq)
         {
             oldest_seq = cur_reg->last_use_seq;
-            lru_reg = cur_reg;
+            spill_reg = cur_reg;
         }
         cur_node = cur_node->next;
     }
+#endif
 
-    if (lru_reg == NULL)
+    if (spill_reg == NULL)
     {
         REG_DEBUG_LOG("[reg-spill] ERROR: No registers available to spill\n");
         return NULL;
     }
 
     /* Allocate stack slot for spill if not already allocated */
-    if (lru_reg->spill_location == NULL)
+    if (spill_reg->spill_location == NULL)
     {
         char spill_label[64];
-        snprintf(spill_label, sizeof(spill_label), "spill_%s", lru_reg->bit_64 + 1);  /* Skip '%' */
-        lru_reg->spill_location = add_l_t(spill_label);
-        if (lru_reg->spill_location == NULL)
+        snprintf(spill_label, sizeof(spill_label), "spill_%s", spill_reg->bit_64 + 1);
+        spill_reg->spill_location = add_l_t(spill_label);
+        if (spill_reg->spill_location == NULL)
         {
             REG_DEBUG_LOG("[reg-spill] ERROR: Failed to allocate spill slot\n");
             return NULL;
         }
     }
 
-    /* Generate spill code: save current value of LRU register to stack */
+    /* Generate spill code */
     char spill_code[128];
 #if USE_GRAPH_COLORING_ALLOCATOR
     snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (graph-coloring)\n\tmovq\t%s, -%d(%%rbp)\n",
-        lru_reg->bit_64, lru_reg->bit_64, lru_reg->spill_location->offset);
+        spill_reg->bit_64, spill_reg->bit_64, spill_reg->spill_location->offset);
 #else
     snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (LRU)\n\tmovq\t%s, -%d(%%rbp)\n",
-        lru_reg->bit_64, lru_reg->bit_64, lru_reg->spill_location->offset);
+        spill_reg->bit_64, spill_reg->bit_64, spill_reg->spill_location->offset);
 #endif
     *inst_list = add_inst(*inst_list, spill_code);
 
     REG_DEBUG_LOG("[reg-spill] Spilled %s (seq %llu) to offset -%d\n",
-        lru_reg->bit_64, lru_reg->last_use_seq, lru_reg->spill_location->offset);
+        spill_reg->bit_64, spill_reg->last_use_seq, spill_reg->spill_location->offset);
 
-    /* Update LRU timestamp - this register is now "most recently used" */
-    lru_reg->last_use_seq = ++reg_stack->use_sequence;
+    /* Update timestamp */
+    spill_reg->last_use_seq = ++reg_stack->use_sequence;
 
-    /* Return this register for use - caller will overwrite it */
-    /* The old value is safely stored on the stack */
-    return lru_reg;
+    return spill_reg;
 }
 
 int get_num_registers_free(RegStack_t *reg_stack)
