@@ -4160,48 +4160,91 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt, is_downto);
     }
     case PASCAL_T_FOR_IN_STMT: {
-        // The parser structure creates: FOR_IN_STMT -> [token_result, commit_result]
-        // where commit_result is seq(PASCAL_T_NONE, ...) containing the actual elements
+        // seq() creates: FOR_IN_STMT -> for_token, id, in_token, expr, do_token, stmt
+        // Navigate through wrappers: wrapper->next for siblings
+        // lazy() results have actual content in ->child
         
-        ast_t *first_child = stmt_node->child;
-        fprintf(stderr, "DEBUG: FOR_IN first_child typ=%d\n", first_child ? first_child->typ : -1);
-        
-        // Skip any wrapper nodes to get to the NONE node that contains our elements
-        ast_t *none_node = first_child;
-        while (none_node != NULL && none_node->typ != PASCAL_T_NONE) {
-            none_node = none_node->next;
+        fprintf(stderr, "DEBUG FOR_IN tree structure:\n");
+        ast_t *curr = stmt_node->child;
+        for (int i = 0; curr && i < 10; i++) {
+            fprintf(stderr, "  [%d] node=%p typ=%d child=%p next=%p\n",
+                    i, (void*)curr, curr->typ,
+                    (void*)(curr->child), (void*)(curr->next));
+            curr = curr->next;
         }
         
-        if (none_node == NULL || none_node->typ != PASCAL_T_NONE) {
-            fprintf(stderr, "ERROR: FOR_IN missing NONE wrapper\n");
+        ast_t *for_wrapper = stmt_node->child;
+        ast_t *id_wrapper = for_wrapper ? for_wrapper->next : NULL;
+        ast_t *in_wrapper = id_wrapper ? id_wrapper->next : NULL;
+        ast_t *expr_wrapper = in_wrapper ? in_wrapper->next : NULL;
+        ast_t *do_wrapper = expr_wrapper ? expr_wrapper->next : NULL;
+        ast_t *stmt_wrapper = do_wrapper ? do_wrapper->next : NULL;
+        
+        // For simple_identifier, might be wrapped in NONE
+        ast_t *id_node = id_wrapper;
+        if (id_node && id_node->typ == PASCAL_T_NONE && id_node->child) {
+            id_node = id_node->child;
+        }
+        id_node = unwrap_pascal_node(id_node);
+        
+        // For lazy(expr_parser), the result might be in child
+        ast_t *expr_node = expr_wrapper;
+        if (expr_node && expr_node->typ == PASCAL_T_NONE && expr_node->child) {
+            expr_node = expr_node->child;
+        }
+        expr_node = unwrap_pascal_node(expr_node);
+        
+        // For lazy(stmt_parser), same thing
+        ast_t *body_node = stmt_wrapper;
+        if (body_node && body_node->typ == PASCAL_T_NONE && body_node->child) {
+            body_node = body_node->child;
+        }
+        body_node = unwrap_pascal_node(body_node);
+        
+        fprintf(stderr, "DEBUG FOR_IN: id=%p typ=%d, expr=%p typ=%d, body=%p typ=%d\n",
+                (void*)id_node, id_node ? id_node->typ : -1,
+                (void*)expr_node, expr_node ? expr_node->typ : -1,
+                (void*)body_node, body_node ? body_node->typ : -1);
+        
+        if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER) {
+            fprintf(stderr, "ERROR: FOR_IN missing identifier (id_wrapper=%p typ=%d)\n",
+                    (void*)id_wrapper, id_wrapper ? id_wrapper->typ : -1);
             return NULL;
         }
         
-        // Now get the children of the NONE node
-        ast_t *id_node = unwrap_pascal_node(none_node->child);
-        ast_t *collection_node = unwrap_pascal_node(id_node ? id_node->next : NULL);
-        ast_t *body_node = unwrap_pascal_node(collection_node ? collection_node->next : NULL);
+        if (expr_node == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN missing collection expression\n");
+            return NULL;
+        }
         
-        fprintf(stderr, "DEBUG: FOR_IN id=%d, coll=%d, body=%d\n",
-                id_node ? id_node->typ : -1,
-                collection_node ? collection_node->typ : -1,
-                body_node ? body_node->typ : -1);
+        if (body_node == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN missing body statement\n");
+            return NULL;
+        }
         
         // Convert identifier to expression
         struct Expression *var_expr = NULL;
-        if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER && id_node->sym != NULL) {
+        if (id_node->sym != NULL) {
             var_expr = mk_varid(id_node->line, id_node->sym->name);
+        } else {
+            fprintf(stderr, "ERROR: FOR_IN identifier has no symbol\n");
+            return NULL;
         }
         
         // Convert collection expression
-        struct Expression *collection_expr = convert_expression(collection_node);
+        struct Expression *collection_expr = convert_expression(expr_node);
+        if (collection_expr == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN collection expression conversion failed\n");
+            destroy_expr(var_expr);
+            return NULL;
+        }
         
         // Convert body statement  
         struct Statement *body_stmt = convert_statement(body_node);
-
-        if (var_expr == NULL || collection_expr == NULL || body_stmt == NULL) {
-            fprintf(stderr, "ERROR: FOR_IN conversion failed: var=%p, coll=%p, body=%p\n",
-                    (void*)var_expr, (void*)collection_expr, (void*)body_stmt);
+        if (body_stmt == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN body statement conversion failed\n");
+            destroy_expr(var_expr);
+            destroy_expr(collection_expr);
             return NULL;
         }
 

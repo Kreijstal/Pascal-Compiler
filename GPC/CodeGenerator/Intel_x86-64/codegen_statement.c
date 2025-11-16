@@ -43,6 +43,7 @@ static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_li
 static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -1781,6 +1782,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             break;
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_FOR_IN:
+            inst_list = codegen_for_in(stmt, inst_list, ctx, symtab);
             break;
         case STMT_BREAK:
             inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
@@ -4652,6 +4656,101 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    return inst_list;
+}
+
+/* Code generation for for-in statements - lower to regular for loop */
+static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_FOR_IN);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    // Extract for-in components
+    struct Expression *loop_var = stmt->stmt_data.for_in_data.loop_var;
+    struct Expression *collection = stmt->stmt_data.for_in_data.collection;
+    struct Statement *body = stmt->stmt_data.for_in_data.do_stmt;
+
+    if (loop_var == NULL || collection == NULL || body == NULL) {
+        codegen_report_error(ctx, "ERROR: FOR-IN statement has NULL components");
+        return inst_list;
+    }
+
+    // Generate unique index variable name
+    static int for_in_counter = 0;
+    char index_var_name[64];
+    snprintf(index_var_name, sizeof(index_var_name), "__for_in_idx_%d", for_in_counter++);
+
+    // Look up the array in symbol table to get bounds
+    // For now, assume the collection is a simple variable reference to an array
+    const char *array_name = NULL;
+    if (collection->type == EXPR_VAR_ID) {
+        array_name = collection->expr_data.id;
+    } else {
+        codegen_report_error(ctx, "ERROR: FOR-IN only supports simple array variables currently");
+        return inst_list;
+    }
+
+    HashNode_t *array_node = NULL;
+    if (!FindIdent(&array_node, symtab, (char*)array_name) || array_node == NULL) {
+        codegen_report_error(ctx, "ERROR: FOR-IN array not found in symbol table");
+        return inst_list;
+    }
+
+    GpcType *array_type = array_node->type;
+    if (array_type == NULL || array_type->kind != TYPE_KIND_ARRAY) {
+        codegen_report_error(ctx, "ERROR: FOR-IN collection is not an array type");
+        return inst_list;
+    }
+
+    // Get array bounds
+    int start_index = array_type->info.array_info.start_index;
+    int end_index = array_type->info.array_info.end_index;
+
+    // Create the lowered for loop structure:
+    // for __for_in_idx := start_index to end_index do begin
+    //   loop_var := collection[__for_in_idx];
+    //   body;
+    // end;
+
+    // Create index variable expression
+    struct Expression *index_var = mk_varid(-1, strdup(index_var_name));
+    
+    // Create start and end expressions
+    struct Expression *start_expr = mk_inum(-1, start_index);
+    struct Expression *end_expr = mk_inum(-1, end_index);
+
+    // Create index assignment: __for_in_idx := start_index
+    struct Statement *index_init = mk_varassign(-1, 0, index_var, start_expr);
+
+    // Create array indexing expression: collection[__for_in_idx]
+    struct Expression *index_var_for_subscript = mk_varid(-1, strdup(index_var_name));
+    struct Expression *array_element = mk_arrayaccess(-1, collection, index_var_for_subscript);
+
+    // Create loop variable assignment: loop_var := collection[__for_in_idx]
+    struct Statement *loop_var_assign = mk_varassign(-1, 0, loop_var, array_element);
+
+    // Create compound statement: loop_var_assign; body
+    ListNode_t *compound_stmts = NULL;
+    compound_stmts = PushListNodeBack(compound_stmts, CreateListNode(loop_var_assign, LIST_STMT));
+    compound_stmts = PushListNodeBack(compound_stmts, CreateListNode(body, LIST_STMT));
+    struct Statement *compound_body = mk_compoundstatement(-1, compound_stmts);
+
+    // Create the for loop statement
+    struct Statement *for_stmt = mk_forvar(-1, index_var, end_expr, compound_body, 0);
+    for_stmt->stmt_data.for_data.for_assign_type = STMT_FOR_ASSIGN_VAR;
+    for_stmt->stmt_data.for_data.for_assign_data.var_assign = index_init;
+
+    // Generate code for the lowered for loop
+    inst_list = codegen_for(for_stmt, inst_list, ctx, symtab);
+
+    // Note: We don't need to free the created structures here because they're part of the
+    // statement tree that will be freed later. However, the index variable name was strdup'd.
+
     return inst_list;
 }
 
