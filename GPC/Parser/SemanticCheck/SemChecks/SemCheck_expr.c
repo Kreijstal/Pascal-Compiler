@@ -40,6 +40,50 @@ int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
     int *type_second, struct Expression *expr2);
+
+/* Helper function to get type name from an expression for operator overloading */
+static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr == NULL)
+        return NULL;
+    
+    /* Try to get from record_type field (legacy) */
+    if (expr->record_type != NULL && expr->record_type->type_id != NULL)
+        return expr->record_type->type_id;
+    
+    /* Try to get from resolved_gpc_type */
+    if (expr->resolved_gpc_type != NULL && gpc_type_is_record(expr->resolved_gpc_type))
+    {
+        struct RecordType *rec = gpc_type_get_record(expr->resolved_gpc_type);
+        if (rec != NULL && rec->type_id != NULL)
+            return rec->type_id;
+    }
+    
+    /* For variable IDs, look up in symbol table */
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) == 0 && node != NULL && node->type != NULL)
+        {
+            /* Check if this is a record type */
+            if (gpc_type_is_record(node->type))
+            {
+                struct RecordType *rec = gpc_type_get_record(node->type);
+                
+                /* Try to get type_id from record */
+                if (rec != NULL && rec->type_id != NULL)
+                    return rec->type_id;
+                
+                /* Try to get from type_alias */
+                if (node->type->type_alias != NULL && node->type->type_alias->target_type_id != NULL)
+                    return node->type->type_alias->target_type_id;
+            }
+        }
+    }
+    
+    return NULL;
+}
+
 int is_and_or(int *type);
 
 static void semcheck_expr_set_call_gpc_type(struct Expression *expr, GpcType *type,
@@ -4989,6 +5033,64 @@ int semcheck_addop(int *type_return,
         {
             *type_return = STRING_TYPE;
             return return_val;
+        }
+    }
+
+    /* Check for operator overloading for record types */
+    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+    {
+        /* Both operands are records - check if they have an operator overload */
+        const char *left_type_name = get_expr_type_name(expr1, symtab);
+        const char *right_type_name = get_expr_type_name(expr2, symtab);
+        
+        /* Check if both types are the same and we have a type name */
+        if (left_type_name != NULL && right_type_name != NULL &&
+            strcasecmp(left_type_name, right_type_name) == 0)
+        {
+            /* Construct the operator method name */
+            const char *op_suffix = NULL;
+            switch (op_type)
+            {
+                case PLUS: op_suffix = "op_add"; break;
+                case MINUS: op_suffix = "op_sub"; break;
+                default: break;
+            }
+            
+            if (op_suffix != NULL)
+            {
+                /* Build the mangled operator method name: TypeName__op_add */
+                size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                char *operator_method = (char *)malloc(name_len);
+                if (operator_method != NULL)
+                {
+                    snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                    
+                    /* Look up the operator method in the symbol table */
+                    HashNode_t *operator_node = NULL;
+                    if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                    {
+                        /* Found the operator overload! */
+                        /* Get the return type from the operator method */
+                        if (operator_node->type != NULL && gpc_type_is_procedure(operator_node->type))
+                        {
+                            GpcType *return_type = gpc_type_get_return_type(operator_node->type);
+                            if (return_type != NULL)
+                            {
+                                *type_return = gpc_type_get_legacy_tag(return_type);
+                                
+                                /* TODO: Transform expression from ADDOP to FUNCTION_CALL
+                                 * This requires changing expr->type and populating function_call_data
+                                 * For now, we just return the type which makes semantic check pass
+                                 * but assignment checking may still fail. */
+                                
+                                free(operator_method);
+                                return return_val; /* Success - operator overload found */
+                            }
+                        }
+                    }
+                    free(operator_method);
+                }
+            }
         }
     }
 

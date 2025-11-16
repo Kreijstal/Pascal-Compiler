@@ -1467,6 +1467,30 @@ static void resolve_array_bounds_in_gpctype(SymTab_t *symtab, GpcType *gpc_type,
     }
 }
 
+/* Register operator overloads from a record type declaration
+ * This function is called when processing TYPE_DECL_RECORD to extract
+ * operator declarations and register them in the operator registry.
+ */
+static void register_record_operators(const char *type_name, struct RecordType *record_info)
+{
+    if (type_name == NULL || record_info == NULL || record_info->fields == NULL)
+        return;
+    
+    /* Iterate through the fields list looking for METHOD_DECL AST nodes (LIST_UNSPECIFIED) */
+    ListNode_t *cur = record_info->fields;
+    while (cur != NULL)
+    {
+        /* Check if this is an operator method declaration (stored as LIST_UNSPECIFIED with AST node) */
+        if (cur->type == LIST_UNSPECIFIED && cur->cur != NULL)
+        {
+            /* This is likely an AST node - we need to extract operator info from it
+             * For now, we skip this since we need access to the full AST structure
+             * and the from_cparser conversion. This will be handled in a second pass. */
+        }
+        cur = cur->next;
+    }
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -1493,6 +1517,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
                 record_info = tree->tree_data.type_decl_data.info.record;
+                
+                /* Set the type_id on the RecordType so operator overloading can find it */
+                if (record_info != NULL && record_info->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
+                {
+                    record_info->type_id = strdup(tree->tree_data.type_decl_data.id);
+                }
                 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
@@ -1612,6 +1642,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         gpc_type_get_record(tree->tree_data.type_decl_data.gpc_type);
                     if (alias_record != NULL)
                     {
+                        /* Set the type_id on the RecordType for operator overloading */
+                        if (alias_record->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
+                        {
+                            alias_record->type_id = strdup(tree->tree_data.type_decl_data.id);
+                        }
+                        
                         long long record_size = 0;
                         if (semcheck_compute_record_size(symtab, alias_record, &record_size,
                                 tree->line_num) != 0)
