@@ -4407,6 +4407,26 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(method_name);
         return NULL;
     }
+    
+    /* Check if this is a class operator (static method) by checking the method name */
+    int is_class_operator = 0;
+    if (method_name != NULL) {
+        /* Class operators have operator symbols as names */
+        if (strcmp(method_name, "+") == 0 || strcmp(method_name, "-") == 0 ||
+            strcmp(method_name, "*") == 0 || strcmp(method_name, "/") == 0 ||
+            strcmp(method_name, "=") == 0 || strcmp(method_name, "<>") == 0 ||
+            strcmp(method_name, "<") == 0 || strcmp(method_name, ">") == 0 ||
+            strcmp(method_name, "<=") == 0 || strcmp(method_name, ">=") == 0 ||
+            strcmp(method_name, "**") == 0 ||
+            strcasecmp(method_name, "div") == 0 || strcasecmp(method_name, "mod") == 0 ||
+            strcasecmp(method_name, "and") == 0 || strcasecmp(method_name, "or") == 0 ||
+            strcasecmp(method_name, "not") == 0 || strcasecmp(method_name, "xor") == 0 ||
+            strcasecmp(method_name, "shl") == 0 || strcasecmp(method_name, "shr") == 0 ||
+            strcasecmp(method_name, "in") == 0 || strcasecmp(method_name, "is") == 0 ||
+            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0) {
+            is_class_operator = 1;
+        }
+    }
 
     ListBuilder params_builder;
     list_builder_init(&params_builder);
@@ -4426,13 +4446,16 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     struct TypeAlias *inline_return_type = NULL;
     int has_return_type = 0;
 
-    ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
-    char *self_type_id = NULL;
-    if (effective_class != NULL)
-        self_type_id = strdup(effective_class);
-    Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
-        self_type_id, 1, 0, NULL, NULL, NULL);
-    list_builder_append(&params_builder, self_param, LIST_TREE);
+    /* Add Self parameter only for instance methods, not for class operators */
+    if (!is_class_operator) {
+        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+        char *self_type_id = NULL;
+        if (effective_class != NULL)
+            self_type_id = strdup(effective_class);
+        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
+            self_type_id, 1, 0, NULL, NULL, NULL);
+        list_builder_append(&params_builder, self_param, LIST_TREE);
+    }
 
     cur = qualified->next;
     while (cur != NULL) {
@@ -4544,7 +4567,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         cur = cur->next;
     }
 
-    if (body != NULL) {
+    /* Wrap method body in WITH Self for instance methods, but not for class operators */
+    if (body != NULL && !is_class_operator) {
         struct Expression *self_expr = mk_varid(method_node->line, strdup("Self"));
         body = mk_with(method_node->line, self_expr, body);
     }
