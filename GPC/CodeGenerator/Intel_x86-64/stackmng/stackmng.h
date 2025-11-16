@@ -17,6 +17,11 @@
 #define GPC_ENABLE_REG_DEBUG 0
 #endif
 
+/* Register allocation strategy selection */
+#ifndef USE_GRAPH_COLORING_ALLOCATOR
+#define USE_GRAPH_COLORING_ALLOCATOR 0
+#endif
+
 #define DOUBLEWORD 4
 
 extern int g_stack_home_space_bytes;

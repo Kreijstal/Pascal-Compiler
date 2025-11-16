@@ -23,6 +23,13 @@ gpc_deps = [
 
 gpc_c_args = []
 
+# Enable graph coloring register allocator based on user option
+if get_option('use_graph_coloring_allocator')
+  gpc_c_args += ['-DUSE_GRAPH_COLORING_ALLOCATOR=1']
+else
+  gpc_c_args += ['-DUSE_GRAPH_COLORING_ALLOCATOR=0']
+endif
+
 if libunwind_dep.found()
   gpc_deps += libunwind_dep
   if libunwind_platform.found()

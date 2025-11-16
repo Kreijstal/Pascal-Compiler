@@ -14,6 +14,10 @@
 #include "../../../Parser/List/List.h"
 #include "../../../identifier_utils.h"
 
+#if USE_GRAPH_COLORING_ALLOCATOR
+#include "../graph_coloring_allocator.h"
+#endif
+
 #if GPC_ENABLE_REG_DEBUG
 const char *g_reg_debug_context = "default";
 #define REG_DEBUG_LOG(...) fprintf(stderr, __VA_ARGS__)
@@ -820,7 +824,16 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
     if (reg != NULL)
         return reg;
 
-    /* No free registers - must spill the least recently used one */
+#if USE_GRAPH_COLORING_ALLOCATOR
+    /* Graph coloring approach: Build interference graph and use optimal spilling */
+    REG_DEBUG_LOG("[reg-alloc] Using graph coloring allocator\n");
+    
+    /* For now, fall back to LRU when graph coloring is enabled but not fully integrated */
+    /* Full integration would require tracking live ranges across entire expressions */
+    /* This is a placeholder for future complete integration */
+#endif
+
+    /* LRU-based spilling: No free registers - must spill the least recently used one */
     ListNode_t *cur_node = reg_stack->registers_allocated;
     Register_t *lru_reg = NULL;
     unsigned long long oldest_seq = ULLONG_MAX;
@@ -857,8 +870,13 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
 
     /* Generate spill code: save current value of LRU register to stack */
     char spill_code[128];
-    snprintf(spill_code, sizeof(spill_code), "\t# Spill %s\n\tmovq\t%s, -%d(%%rbp)\n",
+#if USE_GRAPH_COLORING_ALLOCATOR
+    snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (graph-coloring)\n\tmovq\t%s, -%d(%%rbp)\n",
         lru_reg->bit_64, lru_reg->bit_64, lru_reg->spill_location->offset);
+#else
+    snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (LRU)\n\tmovq\t%s, -%d(%%rbp)\n",
+        lru_reg->bit_64, lru_reg->bit_64, lru_reg->spill_location->offset);
+#endif
     *inst_list = add_inst(*inst_list, spill_code);
 
     REG_DEBUG_LOG("[reg-spill] Spilled %s (seq %llu) to offset -%d\n",
