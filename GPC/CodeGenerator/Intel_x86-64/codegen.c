@@ -2009,11 +2009,29 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     /* Also check inline_return_type from the function tree for functions with inline record returns */
     if (!has_record_return && func->inline_return_type != NULL &&
-        func->inline_return_type->base_type == RECORD_TYPE &&
-        func->inline_return_type->record_type != NULL)
+        func->inline_return_type->base_type == RECORD_TYPE)
     {
-        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
-                func->inline_return_type->record_type, &record_return_size) == 0 &&
+        struct RecordType *inline_record = NULL;
+
+        if (func->inline_return_type->gpc_type != NULL &&
+            gpc_type_is_record(func->inline_return_type->gpc_type))
+        {
+            inline_record = gpc_type_get_record(func->inline_return_type->gpc_type);
+        }
+
+        if (inline_record == NULL &&
+            func->inline_return_type->target_type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *inline_type_node = NULL;
+            FindIdent(&inline_type_node, symtab,
+                func->inline_return_type->target_type_id);
+            if (inline_type_node != NULL)
+                inline_record = hashnode_get_record_type(inline_type_node);
+        }
+
+        if (inline_record != NULL &&
+            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                inline_record, &record_return_size) == 0 &&
             record_return_size > 0 && record_return_size <= INT_MAX)
         {
             has_record_return = 1;
@@ -2124,7 +2142,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             char ptr_buffer[64];
             snprintf(ptr_buffer, sizeof(ptr_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                 ret_reg, return_dest_slot->offset);
-            inst_list = add_inst(inst_list, ptr_buffer);
+            ListNode_t *record_return_inst = NULL;
+            record_return_inst = add_inst(record_return_inst, ptr_buffer);
+            inst_list = ConcatList(record_return_inst, inst_list);
         }
     }
 

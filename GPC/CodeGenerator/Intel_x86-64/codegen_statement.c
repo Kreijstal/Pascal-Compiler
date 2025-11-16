@@ -19,6 +19,10 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+#ifndef CODEGEN_POINTER_SIZE_BYTES
+#define CODEGEN_POINTER_SIZE_BYTES 8
+#endif
+
 static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label);
 static void codegen_pop_loop_exit(CodeGenContext *ctx);
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
@@ -1313,21 +1317,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
     if (!codegen_expr_is_addressable(src_expr))
     {
-        if (src_expr->type == EXPR_FUNCTION_CALL && expr_has_type_tag(src_expr, RECORD_TYPE))
+        if (src_expr->type == EXPR_FUNCTION_CALL)
         {
-            const char *ret_ptr_reg = current_arg_reg64(0);
-            if (ret_ptr_reg == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine register for record return pointer.");
-                free_reg(get_reg_stack(), dest_reg);
-                return inst_list;
-            }
-
-            char buffer[128];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, ret_ptr_reg);
-            inst_list = add_inst(inst_list, buffer);
-
             struct GpcType *func_type = NULL;
             if (src_expr->expr_data.function_call_data.is_call_info_valid)
             {
@@ -1345,19 +1336,58 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 }
             }
 
-            inst_list = codegen_pass_arguments(
-                src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_type, 
-                src_expr->expr_data.function_call_data.id, 1);
+            int call_returns_record = expr_has_type_tag(src_expr, RECORD_TYPE);
+            if (!call_returns_record && func_type != NULL &&
+                gpc_type_is_procedure(func_type))
+            {
+                GpcType *return_type = gpc_type_get_return_type(func_type);
+                if (return_type != NULL && gpc_type_is_record(return_type))
+                    call_returns_record = 1;
+            }
 
-            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
-                src_expr->expr_data.function_call_data.mangled_id);
-            inst_list = add_inst(inst_list, buffer);
-            inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-            codegen_release_function_call_mangled_id(src_expr);
+            if (call_returns_record)
+            {
+                const char *ret_ptr_reg = current_arg_reg64(0);
+                if (ret_ptr_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine register for record return pointer.");
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
 
-            free_reg(get_reg_stack(), dest_reg);
-            return inst_list;
+                StackNode_t *dest_save_slot = add_l_x("__record_call_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                if (dest_save_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to reserve stack slot for record return destination.");
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                char buffer[128];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    dest_reg->bit_64, dest_save_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+
+                inst_list = codegen_pass_arguments(
+                    src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                    func_type,
+                    src_expr->expr_data.function_call_data.id, 1);
+
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    dest_save_slot->offset, ret_ptr_reg);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
+                    src_expr->expr_data.function_call_data.mangled_id);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                codegen_release_function_call_mangled_id(src_expr);
+
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
         }
 
         /* Handle character set literals - they generate a temporary buffer address */
