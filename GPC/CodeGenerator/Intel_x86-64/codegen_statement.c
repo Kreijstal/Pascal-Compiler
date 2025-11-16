@@ -4680,28 +4680,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         return inst_list;
     }
 
-    // Generate unique index variable name
-    static int for_in_counter = 0;
-    char index_var_name[64];
-    snprintf(index_var_name, sizeof(index_var_name), "__for_in_idx_%d", for_in_counter++);
-
-    // Look up the array in symbol table to get bounds
-    // For now, assume the collection is a simple variable reference to an array
-    const char *array_name = NULL;
-    if (collection->type == EXPR_VAR_ID) {
-        array_name = collection->expr_data.id;
-    } else {
-        codegen_report_error(ctx, "ERROR: FOR-IN only supports simple array variables currently");
-        return inst_list;
-    }
-
-    // Look up array type info - use expression's resolved_gpc_type from semantic check
+    // Get array type info from semantic check
     GpcType *array_type = collection->resolved_gpc_type;
-    fprintf(stderr, "DEBUG: collection->resolved_gpc_type=%p\n", (void*)array_type);
-    if (array_type) {
-        fprintf(stderr, "  type kind=%d (ARRAY=%d)\n", array_type->kind, TYPE_KIND_ARRAY);
-    }
-    
     if (array_type == NULL || array_type->kind != TYPE_KIND_ARRAY) {
         codegen_report_error(ctx, "ERROR: FOR-IN collection is not an array type");
         return inst_list;
@@ -4711,45 +4691,205 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     int start_index = array_type->info.array_info.start_index;
     int end_index = array_type->info.array_info.end_index;
 
-    // Create the lowered for loop structure:
-    // for __for_in_idx := start_index to end_index do begin
-    //   loop_var := collection[__for_in_idx];
-    //   body;
-    // end;
+    // Generate labels for loop control
+    char cond_label[18], body_label[18], exit_label[18], buffer[256];
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
 
-    // Create index variable expression
-    struct Expression *index_var = mk_varid(-1, strdup(index_var_name));
+    // Allocate stack slot for the index variable
+    StackNode_t *index_slot = codegen_alloc_temp_slot("for_in_idx");
+    if (index_slot == NULL) {
+        codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for for-in index");
+        return inst_list;
+    }
+
+    // Initialize index to start_index
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, -%d(%%rbp)\n", start_index, index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Jump to condition check
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+    // Body label
+    snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Push loop exit label for break statements
+    if (!codegen_push_loop_exit(ctx, exit_label))
+        return inst_list;
+
+    // Generate code for: loop_var := collection[index]
+    // Load index from stack into a register
+    Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (index_reg == NULL) {
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for for-in index");
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
     
-    // Create start and end expressions
-    struct Expression *start_expr = mk_inum(-1, start_index);
-    struct Expression *end_expr = mk_inum(-1, end_index);
+    snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", index_slot->offset, index_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
 
-    // Create index assignment: __for_in_idx := start_index
-    struct Statement *index_init = mk_varassign(-1, 0, index_var, start_expr);
+    // Get the base address of the array (not its value)
+    Register_t *array_base_reg = NULL;
+    inst_list = codegen_address_for_expr(collection, inst_list, ctx, &array_base_reg);
+    if (array_base_reg == NULL || codegen_had_error(ctx)) {
+        free_reg(get_reg_stack(), index_reg);
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
 
-    // Create array indexing expression: collection[__for_in_idx]
-    struct Expression *index_var_for_subscript = mk_varid(-1, strdup(index_var_name));
-    struct Expression *array_element = mk_arrayaccess(-1, collection, index_var_for_subscript);
+    // Calculate offset: (index - start_index) * element_size
+    int element_size = gpc_type_sizeof(array_type->info.array_info.element_type);
+    
+    // Subtract start_index if non-zero
+    if (start_index != 0) {
+        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", start_index, index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
 
-    // Create loop variable assignment: loop_var := collection[__for_in_idx]
-    struct Statement *loop_var_assign = mk_varassign(-1, 0, loop_var, array_element);
+    // Multiply by element size
+    if (element_size > 1) {
+        if ((element_size & (element_size - 1)) == 0) {
+            // Power of 2 - use shift
+            int shift = 0;
+            int temp = element_size;
+            while (temp > 1) {
+                temp >>= 1;
+                shift++;
+            }
+            if (shift > 0) {
+                snprintf(buffer, sizeof(buffer), "\tsall\t$%d, %s\n", shift, index_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        } else {
+            // Not power of 2 - use multiply
+            snprintf(buffer, sizeof(buffer), "\timull\t$%d, %s\n", element_size, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
-    // Create compound statement: loop_var_assign; body
-    ListNode_t *compound_stmts = CreateListNode(loop_var_assign, LIST_STMT);
-    compound_stmts = PushListNodeBack(compound_stmts, CreateListNode(body, LIST_STMT));
-    struct Statement *compound_body = mk_compoundstatement(-1, compound_stmts);
+    // Sign extend to 64-bit and add to base address
+    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", index_reg->bit_64, array_base_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
 
-    // Create the for loop statement
-    struct Statement *for_stmt = mk_forvar(-1, index_var, end_expr, compound_body, 0);
-    for_stmt->stmt_data.for_data.for_assign_type = STMT_FOR_ASSIGN_VAR;
-    for_stmt->stmt_data.for_data.for_assign_data.var_assign = index_init;
+    // Now array_base_reg points to the element - load it
+    Register_t *element_reg = array_base_reg;  // Reuse the register
+    free_reg(get_reg_stack(), index_reg);
+    index_reg = NULL;
 
-    // Generate code for the lowered for loop
-    inst_list = codegen_for(for_stmt, inst_list, ctx, symtab);
+    if (element_size == 1) {
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", element_reg->bit_64, element_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 2) {
+        snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", element_reg->bit_64, element_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 4) {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", element_reg->bit_64, element_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 8) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", element_reg->bit_64, element_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else {
+        codegen_report_error(ctx, "ERROR: FOR-IN with large array elements not yet supported");
+        free_reg(get_reg_stack(), element_reg);
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
 
-    // Note: We don't need to free the created structures here because they're part of the
-    // statement tree that will be freed later. However, the index variable name was strdup'd.
+    // Assign element value to loop variable
+    // Get address of loop variable
+    Register_t *loop_var_addr_reg = NULL;
+    inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
+    if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
+        free_reg(get_reg_stack(), element_reg);
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
 
+    // Store element to loop variable (using proper byte/word/dword/qword)
+    if (element_size == 1) {
+        // Extract byte register name from 32-bit register (e.g., %eax -> %al)
+        char byte_reg[16];
+        const char *reg32 = element_reg->bit_32;
+        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
+            // %eax -> %al, %ebx -> %bl, etc.
+            snprintf(byte_reg, sizeof(byte_reg), "%%%cl", reg32[3]);
+        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
+            // %r8d -> %r8b, %r9d -> %r9b, etc.
+            int len = strlen(reg32);
+            strncpy(byte_reg, reg32, len - 1);
+            byte_reg[len - 1] = 'b';
+            byte_reg[len] = '\0';
+        } else {
+            strcpy(byte_reg, "%al");  // Fallback
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 2) {
+        // Extract word register name from 32-bit register (e.g., %eax -> %ax)
+        char word_reg[16];
+        const char *reg32 = element_reg->bit_32;
+        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
+            // %eax -> %ax, %ebx -> %bx, etc.
+            snprintf(word_reg, sizeof(word_reg), "%%%.2s", reg32 + 3);
+        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
+            // %r8d -> %r8w, %r9d -> %r9w, etc.
+            int len = strlen(reg32);
+            strncpy(word_reg, reg32, len - 1);
+            word_reg[len - 1] = 'w';
+            word_reg[len] = '\0';
+        } else {
+            strcpy(word_reg, "%ax");  // Fallback
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 4) {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", element_reg->bit_32, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 8) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", element_reg->bit_64, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    free_reg(get_reg_stack(), element_reg);
+    free_reg(get_reg_stack(), loop_var_addr_reg);
+
+    // Generate code for the loop body
+    inst_list = codegen_stmt(body, inst_list, ctx, symtab);
+    
+    // Increment index
+    snprintf(buffer, sizeof(buffer), "\tincl\t-%d(%%rbp)\n", index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Jump to condition
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+    // Condition label
+    snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Compare index with end_index
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", end_index, index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Jump to body if index <= end_index
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Exit label
+    snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Pop loop exit label
+    codegen_pop_loop_exit(ctx);
+
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
     return inst_list;
 }
 
