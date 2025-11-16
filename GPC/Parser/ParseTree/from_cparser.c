@@ -4160,46 +4160,90 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt, is_downto);
     }
     case PASCAL_T_FOR_IN_STMT: {
-        // seq() creates: FOR_IN_STMT -> for_token, id, in_token, expr, do_token, stmt
-        // Navigate through wrappers: wrapper->next for siblings
-        // lazy() results have actual content in ->child
-        
+        // DEBUG: Explore the actual tree structure
         fprintf(stderr, "DEBUG FOR_IN tree structure:\n");
         ast_t *curr = stmt_node->child;
         for (int i = 0; curr && i < 10; i++) {
             fprintf(stderr, "  [%d] node=%p typ=%d child=%p next=%p\n",
                     i, (void*)curr, curr->typ,
                     (void*)(curr->child), (void*)(curr->next));
+            if (curr->child) {
+                ast_t *child = curr->child;
+                for (int j = 0; child && j < 5; j++) {
+                    fprintf(stderr, "    [%d.%d] child=%p typ=%d child=%p next=%p\n",
+                            i, j, (void*)child, child->typ,
+                            (void*)(child->child), (void*)(child->next));
+                    child = child->next;
+                }
+            }
             curr = curr->next;
         }
         
+        // Based on debug output, it appears:
+        // [0] = for token (NONE, empty)
+        // [1] = identifier (NONE, empty - actual ID might be elsewhere)
+        // [2] = in token (has children with rest of parse)
+        
+        // Let's try a different approach - just get all children recursively
         ast_t *for_wrapper = stmt_node->child;
         ast_t *id_wrapper = for_wrapper ? for_wrapper->next : NULL;
-        ast_t *in_wrapper = id_wrapper ? id_wrapper->next : NULL;
-        ast_t *expr_wrapper = in_wrapper ? in_wrapper->next : NULL;
-        ast_t *do_wrapper = expr_wrapper ? expr_wrapper->next : NULL;
-        ast_t *stmt_wrapper = do_wrapper ? do_wrapper->next : NULL;
+        ast_t *in_token_wrapper = id_wrapper ? id_wrapper->next : NULL;
         
-        // For simple_identifier, might be wrapped in NONE
-        ast_t *id_node = id_wrapper;
-        if (id_node && id_node->typ == PASCAL_T_NONE && id_node->child) {
-            id_node = id_node->child;
+        // The identifier should be in position [1]'s content somewhere
+        // But [1] is empty NONE. Perhaps it's in [0]'s next sibling's data?
+        // Actually looking at the debug, both [0] and [1] are empty NONE nodes
+        // This suggests tokens got optimized away
+        
+        // Let me check if id_wrapper itself has the symbol data directly
+        ast_t *id_node = id_wrapper;  // Don't unwrap yet
+        fprintf(stderr, "DEBUG: id_wrapper directly: %p typ=%d sym=%p\n", 
+                (void*)id_node, id_node ? id_node->typ : -1, 
+                id_node && id_node->sym ? (void*)id_node->sym : NULL);
+        if (id_node && id_node->sym) {
+            fprintf(stderr, "  id_wrapper.sym->name=%s\n", id_node->sym->name);
         }
-        id_node = unwrap_pascal_node(id_node);
         
-        // For lazy(expr_parser), the result might be in child
+        // Try unwrapping to see if that helps
+        id_node = unwrap_pascal_node(id_wrapper);
+        fprintf(stderr, "DEBUG: id from wrapper[1]: %p typ=%d sym=%p\n", 
+                (void*)id_node, id_node ? id_node->typ : -1,
+                id_node && id_node->sym ? (void*)id_node->sym : NULL);
+        if (id_node && id_node->sym) {
+            fprintf(stderr, "  unwrapped id.sym->name=%s\n", id_node->sym->name);
+        }
+        
+        // The in_token has children - let's explore them
+        if (in_token_wrapper && in_token_wrapper->child) {
+            ast_t *after_in = in_token_wrapper->child;
+            fprintf(stderr, "DEBUG: exploring in_token children:\n");
+            for (int i = 0; after_in && i < 5; i++) {
+                fprintf(stderr, "  in.child[%d]: %p typ=%d child=%p\n", i, (void*)after_in, after_in->typ, (void*)(after_in->child));
+                after_in = after_in->next;
+            }
+        }
+        
+        // Based on exploration:
+        // in.child[0] = collection expression (might need deeper access)
+        // in.child[1] = "do" keyword wrapper (typ=9) with body in its child
+        ast_t *expr_wrapper = NULL;
+        ast_t *body_wrapper = NULL;
+        if (in_token_wrapper && in_token_wrapper->child) {
+            expr_wrapper = in_token_wrapper->child;
+            ast_t *do_wrapper = in_token_wrapper->child->next;
+            if (do_wrapper && do_wrapper->child) {
+                body_wrapper = do_wrapper->child;
+            }
+        }
+        
+        // Don't unwrap - just use the wrappers directly since they seem to have data
         ast_t *expr_node = expr_wrapper;
-        if (expr_node && expr_node->typ == PASCAL_T_NONE && expr_node->child) {
-            expr_node = expr_node->child;
-        }
-        expr_node = unwrap_pascal_node(expr_node);
+        ast_t *body_node = body_wrapper;
         
-        // For lazy(stmt_parser), same thing
-        ast_t *body_node = stmt_wrapper;
-        if (body_node && body_node->typ == PASCAL_T_NONE && body_node->child) {
-            body_node = body_node->child;
-        }
-        body_node = unwrap_pascal_node(body_node);
+        fprintf(stderr, "DEBUG: Using wrappers directly - expr=%p typ=%d sym=%s, body=%p typ=%d sym=%s\n",
+                (void*)expr_node, expr_node ? expr_node->typ : -1, 
+                expr_node && expr_node->sym ? expr_node->sym->name : "NULL",
+                (void*)body_node, body_node ? body_node->typ : -1,
+                body_node && body_node->sym ? body_node->sym->name : "NULL");
         
         fprintf(stderr, "DEBUG FOR_IN: id=%p typ=%d, expr=%p typ=%d, body=%p typ=%d\n",
                 (void*)id_node, id_node ? id_node->typ : -1,
@@ -4207,8 +4251,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                 (void*)body_node, body_node ? body_node->typ : -1);
         
         if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER) {
-            fprintf(stderr, "ERROR: FOR_IN missing identifier (id_wrapper=%p typ=%d)\n",
-                    (void*)id_wrapper, id_wrapper ? id_wrapper->typ : -1);
+            fprintf(stderr, "ERROR: FOR_IN missing identifier\n");
             return NULL;
         }
         
