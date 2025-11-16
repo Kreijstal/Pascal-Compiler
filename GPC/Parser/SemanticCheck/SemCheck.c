@@ -30,6 +30,7 @@
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/GpcType.h"
 #include "../ParseTree/from_cparser.h"
+#include "../ParseTree/operator_registry.h"
 #include "../parser_error.h"
 #include "../ErrVars.h"
 #include "./SymTab/SymTab.h"
