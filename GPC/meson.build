@@ -23,6 +23,13 @@ gpc_deps = [
 
 gpc_c_args = []
 
+# Enable graph coloring register allocator based on user option
+if get_option('use_graph_coloring_allocator')
+  gpc_c_args += ['-DUSE_GRAPH_COLORING_ALLOCATOR=1']
+else
+  gpc_c_args += ['-DUSE_GRAPH_COLORING_ALLOCATOR=0']
+endif
+
 if libunwind_dep.found()
   gpc_deps += libunwind_dep
   if libunwind_platform.found()
@@ -53,6 +60,7 @@ gpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/codegen_expression.c',
   'CodeGenerator/Intel_x86-64/codegen_builtins.c',
   'CodeGenerator/Intel_x86-64/stackmng/stackmng.c',
+  'CodeGenerator/Intel_x86-64/graph_coloring_allocator.c',
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
   'Optimizer/pass_manager.c',

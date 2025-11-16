@@ -2,3 +2,4 @@ option('run_buggy_test', type : 'boolean', value : false, description : 'Enable 
 option('build_integration_tests', type : 'boolean', value : true, description : 'Build example applications and their accompanying tests.')
 option('run_valgrind_tests', type : 'boolean', value : false, description : 'Run the slow valgrind-backed leak checks during the test suite.')
 option('with_gmp', type : 'feature', value : 'auto', description : 'Enable GMP runtime support')
+option('use_graph_coloring_allocator', type : 'boolean', value : true, description : 'Use graph coloring register allocator (Chaitin\'s algorithm) instead of simple LRU spilling')
