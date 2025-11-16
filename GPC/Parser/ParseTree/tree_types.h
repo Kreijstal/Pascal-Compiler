@@ -18,7 +18,7 @@ enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_FOR_ASSIGN_VAR, STMT_FOR_IN, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CASE, STMT_WITH,
     STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
 
-enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS };
+enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DECL_GENERIC };
 
 struct TypeAlias
 {
@@ -46,6 +46,14 @@ struct TypeAlias
     /* GpcType for this type alias - used for enums and sets to provide a shared
      * type that all literals/members reference. Owned by this structure. */
     struct GpcType *gpc_type;
+};
+
+/* Generic type declaration information */
+struct GenericDecl
+{
+    char **type_parameters;     /* Array of type parameter names (e.g., ["T"]) */
+    int num_type_params;        /* Number of type parameters */
+    void *original_ast;         /* Pointer to original AST node for substitution */
 };
 
 struct RecordType;
