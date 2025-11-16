@@ -1086,24 +1086,45 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     free_combinator(record_items);
     free(record_item_ref);
 
-    // Skip additional content until END (methods, attributes, etc.)
-    combinator_t* end_keyword = token(keyword_ci("end"));
-    combinator_t* skip_end_delimiter = token(keyword_ci("end"));
-    combinator_t* skip_to_end = until(skip_end_delimiter, PASCAL_T_NONE);
-    ParseResult skip_res = parse(in, skip_to_end);
-    if (skip_res.is_success) {
-        if (skip_res.value.ast != ast_nil)
-            free_ast(skip_res.value.ast);
+    // Parse method declarations (class operators) for advanced records
+    // Create a parser for class operator declarations in records
+    combinator_t* record_operator_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        optional(token(keyword_ci("class"))),
+        token(keyword_ci("operator")),
+        token(operator_name(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(":")),
+        create_type_ref_parser(),
+        token(match(";")),
+        NULL
+    );
+    set_combinator_name(record_operator_decl, "record_operator_decl");
+    
+    // Parse zero or more method declarations
+    combinator_t* method_list = many(record_operator_decl);
+    ParseResult methods_res = parse(in, method_list);
+    ast_t* methods_ast = NULL;
+    if (methods_res.is_success) {
+        methods_ast = (methods_res.value.ast == ast_nil) ? NULL : methods_res.value.ast;
     } else {
-        discard_failure(skip_res);
-        if (fields_ast != NULL)
-            free_ast(fields_ast);
-        free_combinator(skip_to_end);
-        free_combinator(end_keyword);
-        return fail_with_message("Failed to parse record body", in, &state, parser_name);
+        discard_failure(methods_res);
     }
-    free_combinator(skip_to_end);
+    free_combinator(method_list);
+    
+    // Attach methods to fields list if any exist
+    if (methods_ast != NULL) {
+        if (fields_ast == NULL) {
+            fields_ast = methods_ast;
+        } else {
+            // Append methods to end of fields list
+            ast_t* last_field = fields_ast;
+            while (last_field->next != NULL)
+                last_field = last_field->next;
+            last_field->next = methods_ast;
+        }
+    }
 
+    combinator_t* end_keyword = token(keyword_ci("end"));
     ParseResult end_res = parse(in, end_keyword);
     if (!end_res.is_success) {
         discard_failure(end_res);
