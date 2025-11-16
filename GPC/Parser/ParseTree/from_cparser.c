@@ -279,21 +279,63 @@ static const char *find_class_for_method(const char *method_name) {
 
 static int typed_const_counter = 0;
 
+/* Encode operator symbols into valid identifier names for assembly */
+static char *encode_operator_name(const char *op_name) {
+    if (op_name == NULL)
+        return NULL;
+    
+    /* Map common operator symbols to readable names */
+    if (strcmp(op_name, "+") == 0) return strdup("op_add");
+    if (strcmp(op_name, "-") == 0) return strdup("op_sub");
+    if (strcmp(op_name, "*") == 0) return strdup("op_mul");
+    if (strcmp(op_name, "/") == 0) return strdup("op_div");
+    if (strcmp(op_name, "=") == 0) return strdup("op_eq");
+    if (strcmp(op_name, "<>") == 0) return strdup("op_ne");
+    if (strcmp(op_name, "<") == 0) return strdup("op_lt");
+    if (strcmp(op_name, ">") == 0) return strdup("op_gt");
+    if (strcmp(op_name, "<=") == 0) return strdup("op_le");
+    if (strcmp(op_name, ">=") == 0) return strdup("op_ge");
+    if (strcmp(op_name, "**") == 0) return strdup("op_pow");
+    if (strcmp(op_name, "div") == 0 || strcmp(op_name, "DIV") == 0) return strdup("op_intdiv");
+    if (strcmp(op_name, "mod") == 0 || strcmp(op_name, "MOD") == 0) return strdup("op_mod");
+    if (strcmp(op_name, "and") == 0 || strcmp(op_name, "AND") == 0) return strdup("op_and");
+    if (strcmp(op_name, "or") == 0 || strcmp(op_name, "OR") == 0) return strdup("op_or");
+    if (strcmp(op_name, "not") == 0 || strcmp(op_name, "NOT") == 0) return strdup("op_not");
+    if (strcmp(op_name, "xor") == 0 || strcmp(op_name, "XOR") == 0) return strdup("op_xor");
+    if (strcmp(op_name, "shl") == 0 || strcmp(op_name, "SHL") == 0) return strdup("op_shl");
+    if (strcmp(op_name, "shr") == 0 || strcmp(op_name, "SHR") == 0) return strdup("op_shr");
+    if (strcmp(op_name, "in") == 0 || strcmp(op_name, "IN") == 0) return strdup("op_in");
+    if (strcmp(op_name, "is") == 0 || strcmp(op_name, "IS") == 0) return strdup("op_is");
+    if (strcmp(op_name, "as") == 0 || strcmp(op_name, "AS") == 0) return strdup("op_as");
+    if (strcmp(op_name, ":=") == 0) return strdup("op_assign");
+    
+    /* For other operators or named operators, use the name as-is */
+    return strdup(op_name);
+}
+
 static char *mangle_method_name(const char *class_name, const char *method_name) {
     if (method_name == NULL)
         return NULL;
 
     if (class_name == NULL || class_name[0] == '\0')
-        return strdup(method_name);
+        return encode_operator_name(method_name);
 
-    size_t class_len = strlen(class_name);
-    size_t method_len = strlen(method_name);
-    size_t total = class_len + 2 + method_len + 1;
-    char *result = (char *)malloc(total);
-    if (result == NULL)
+    /* Encode operator names to valid identifiers */
+    char *encoded_method = encode_operator_name(method_name);
+    if (encoded_method == NULL)
         return NULL;
 
-    snprintf(result, total, "%s__%s", class_name, method_name);
+    size_t class_len = strlen(class_name);
+    size_t method_len = strlen(encoded_method);
+    size_t total = class_len + 2 + method_len + 1;
+    char *result = (char *)malloc(total);
+    if (result == NULL) {
+        free(encoded_method);
+        return NULL;
+    }
+
+    snprintf(result, total, "%s__%s", class_name, encoded_method);
+    free(encoded_method);
     return result;
 }
 
@@ -4373,6 +4415,12 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     struct Statement *body = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
+    
+    /* Return type information for methods that are functions (like class operators) */
+    char *return_type_id = NULL;
+    int return_type = UNKNOWN_TYPE;
+    struct TypeAlias *inline_return_type = NULL;
+    int has_return_type = 0;
 
     ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
     char *self_type_id = NULL;
@@ -4400,6 +4448,61 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             ListNode_t *extra_params = convert_param(node);
             if (extra_params != NULL)
                 list_builder_extend(&params_builder, extra_params);
+            break;
+        }
+        case PASCAL_T_RETURN_TYPE: {
+            /* Method has a return type - it's a function, not a procedure */
+            has_return_type = 1;
+            TypeInfo type_info;
+            return_type = convert_type_spec(node->child, &return_type_id, NULL, &type_info);
+
+            if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
+            {
+                return_type_id = strdup(node->sym->name);
+            }
+            
+            /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
+            if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
+                type_info.is_enum || type_info.is_file || type_info.is_record) {
+                inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
+                if (inline_return_type != NULL) {
+                    memset(inline_return_type, 0, sizeof(struct TypeAlias));
+                    inline_return_type->base_type = return_type;
+                    inline_return_type->target_type_id = return_type_id;
+                    
+                    if (type_info.is_array) {
+                        inline_return_type->is_array = 1;
+                        inline_return_type->array_start = type_info.start;
+                        inline_return_type->array_end = type_info.end;
+                        inline_return_type->array_element_type = type_info.element_type;
+                        inline_return_type->array_element_type_id = type_info.element_type_id;
+                        inline_return_type->is_open_array = type_info.is_open_array;
+                    }
+                    
+                    if (type_info.is_pointer) {
+                        inline_return_type->is_pointer = 1;
+                        inline_return_type->pointer_type = type_info.pointer_type;
+                        inline_return_type->pointer_type_id = type_info.pointer_type_id;
+                    }
+                    
+                    if (type_info.is_set) {
+                        inline_return_type->is_set = 1;
+                        inline_return_type->set_element_type = type_info.set_element_type;
+                        inline_return_type->set_element_type_id = type_info.set_element_type_id;
+                    }
+                    
+                    if (type_info.is_enum) {
+                        inline_return_type->is_enum = 1;
+                        inline_return_type->enum_literals = type_info.enum_literals;
+                    }
+                    
+                    if (type_info.is_file) {
+                        inline_return_type->is_file = 1;
+                        inline_return_type->file_type = type_info.file_type;
+                        inline_return_type->file_type_id = type_info.file_type_id;
+                    }
+                }
+            }
             break;
         }
         case PASCAL_T_TYPE_SECTION:
@@ -4444,9 +4547,18 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     ListNode_t *params = list_builder_finish(&params_builder);
     ListNode_t *label_decls = list_builder_finish(&label_builder);
-    Tree_t *tree = mk_procedure(method_node->line, proc_name, params, const_decls,
-                                label_decls, type_decls, list_builder_finish(&var_builder),
-                                nested_subs, body, 0, 0);
+    
+    /* Create function if method has return type, otherwise create procedure */
+    Tree_t *tree;
+    if (has_return_type) {
+        tree = mk_function(method_node->line, proc_name, params, const_decls,
+                          label_decls, type_decls, list_builder_finish(&var_builder),
+                          nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
+    } else {
+        tree = mk_procedure(method_node->line, proc_name, params, const_decls,
+                           label_decls, type_decls, list_builder_finish(&var_builder),
+                           nested_subs, body, 0, 0);
+    }
 
     free(class_name);
     free(method_name);
