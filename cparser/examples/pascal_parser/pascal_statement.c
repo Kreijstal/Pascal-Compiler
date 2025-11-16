@@ -664,14 +664,17 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // For-in statement: for identifier in expression do statement
-    // NOTE: Don't use commit after "for" - we need to backtrack to regular for if "in" not found
+    // Use nested seq() pattern like for_stmt for consistent AST structure
     combinator_t* for_in_stmt = seq(new_combinator(), PASCAL_T_FOR_IN_STMT,
         token(keyword_ci("for")),                // for keyword (case-insensitive)
-        simple_identifier,                       // loop variable (identifier)
-        token(keyword_ci("in")),                 // in keyword (case-insensitive)
-        lazy(expr_parser),                       // collection expression
-        token(keyword_ci("do")),                 // do keyword (case-insensitive)
-        lazy(stmt_parser),                       // loop body statement
+        seq(new_combinator(), PASCAL_T_NONE,
+            simple_identifier,                       // loop variable (identifier)
+            token(keyword_ci("in")),                 // in keyword (case-insensitive)
+            lazy(expr_parser),                       // collection expression
+            token(keyword_ci("do")),                 // do keyword (case-insensitive)
+            lazy(stmt_parser),                       // loop body statement
+            NULL
+        ),
         NULL
     );
 

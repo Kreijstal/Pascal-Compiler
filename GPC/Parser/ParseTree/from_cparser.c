@@ -4160,65 +4160,29 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt, is_downto);
     }
     case PASCAL_T_FOR_IN_STMT: {
-        // The seq() with token() optimizations creates a flattened structure.
-        // Walk through all child->next siblings to find our 3 components:
-        // 1. Loop variable (IDENTIFIER)
-        // 2. Collection expression (from lazy(expr_parser))
-        // 3. Body statement (from lazy(stmt_parser))
+        // Pattern matches for_stmt: unwrap the nested NONE seq, then walk siblings
+        ast_t *id_node = unwrap_pascal_node(stmt_node->child);
+        ast_t *expr_wrapper = id_node != NULL ? id_node->next : NULL;
+        ast_t *expr_node = unwrap_pascal_node(expr_wrapper);
+        ast_t *body_wrapper = expr_wrapper != NULL ? expr_wrapper->next : NULL;
+        ast_t *body_node = unwrap_pascal_node(body_wrapper);
         
-        ast_t *nodes[10] = {NULL};
-        int count = 0;
-        ast_t *curr = stmt_node->child;
-        while (curr != NULL && count < 10) {
-            nodes[count++] = curr;
-            curr = curr->next;
+        fprintf(stderr, "DEBUG FOR_IN: id=%p typ=%d, expr=%p typ=%d, body=%p typ=%d\n",
+                (void*)id_node, id_node ? id_node->typ : -1,
+                (void*)expr_node, expr_node ? expr_node->typ : -1,
+                (void*)body_node, body_node ? body_node->typ : -1);
+        if (id_node && id_node->sym) {
+            fprintf(stderr, "  id.sym->name=%s\n", id_node->sym->name);
         }
         
-        if (count < 3) {
-            fprintf(stderr, "ERROR: FOR_IN has too few nodes (%d)\n", count);
-            return NULL;
-        }
-        
-        // Based on parser: for id in expr do stmt
-        // With token() optimization, we expect:
-        // nodes[0] = loop variable identifier  
-        // nodes[1] = collection expression (could be wrapped)
-        // nodes[2] = body statement (could be wrapped)
-        // But there might be optimized-away tokens in between
-        
-        // Find the identifier (should be first non-NONE node)
-        ast_t *id_node = NULL;
-        int id_idx = -1;
-        for (int i = 0; i < count; i++) {
-            ast_t *n = unwrap_pascal_node(nodes[i]);
-            if (n && n->typ == PASCAL_T_IDENTIFIER) {
-                id_node = n;
-                id_idx = i;
-                break;
-            }
-        }
-        
-        if (id_node == NULL) {
+        if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER) {
             fprintf(stderr, "ERROR: FOR_IN missing loop variable identifier\n");
             return NULL;
-        }
-        
-        // The collection expression should be after the identifier
-        // It might be wrapped or might need unwrapping
-        ast_t *expr_node = NULL;
-        if (id_idx + 1 < count) {
-            expr_node = unwrap_pascal_node(nodes[id_idx + 1]);
         }
         
         if (expr_node == NULL) {
             fprintf(stderr, "ERROR: FOR_IN missing collection expression\n");
             return NULL;
-        }
-        
-        // The body statement should be after the collection
-        ast_t *body_node = NULL;
-        if (id_idx + 2 < count) {
-            body_node = unwrap_pascal_node(nodes[id_idx + 2]);
         }
         
         if (body_node == NULL) {
@@ -4229,7 +4193,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         // Convert identifier to expression
         struct Expression *var_expr = NULL;
         if (id_node->sym != NULL) {
-            var_expr = mk_varid(id_node->line, id_node->sym->name);
+            var_expr = mk_varid(id_node->line, strdup(id_node->sym->name));
         } else {
             fprintf(stderr, "ERROR: FOR_IN identifier has no symbol\n");
             return NULL;

@@ -4695,13 +4695,13 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         return inst_list;
     }
 
-    HashNode_t *array_node = NULL;
-    if (!FindIdent(&array_node, symtab, (char*)array_name) || array_node == NULL) {
-        codegen_report_error(ctx, "ERROR: FOR-IN array not found in symbol table");
-        return inst_list;
+    // Look up array type info - use expression's resolved_gpc_type from semantic check
+    GpcType *array_type = collection->resolved_gpc_type;
+    fprintf(stderr, "DEBUG: collection->resolved_gpc_type=%p\n", (void*)array_type);
+    if (array_type) {
+        fprintf(stderr, "  type kind=%d (ARRAY=%d)\n", array_type->kind, TYPE_KIND_ARRAY);
     }
-
-    GpcType *array_type = array_node->type;
+    
     if (array_type == NULL || array_type->kind != TYPE_KIND_ARRAY) {
         codegen_report_error(ctx, "ERROR: FOR-IN collection is not an array type");
         return inst_list;
@@ -4735,8 +4735,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     struct Statement *loop_var_assign = mk_varassign(-1, 0, loop_var, array_element);
 
     // Create compound statement: loop_var_assign; body
-    ListNode_t *compound_stmts = NULL;
-    compound_stmts = PushListNodeBack(compound_stmts, CreateListNode(loop_var_assign, LIST_STMT));
+    ListNode_t *compound_stmts = CreateListNode(loop_var_assign, LIST_STMT);
     compound_stmts = PushListNodeBack(compound_stmts, CreateListNode(body, LIST_STMT));
     struct Statement *compound_body = mk_compoundstatement(-1, compound_stmts);
 
