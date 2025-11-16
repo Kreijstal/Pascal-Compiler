@@ -1971,6 +1971,54 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
+    
+    /* Also check return_type_id from the function tree for functions with record returns
+     * that weren't looked up in symbol table correctly (e.g., class operators) */
+    if (!has_record_return && func->return_type_id != NULL && symtab != NULL)
+    {
+        fprintf(stderr, "DEBUG: Checking return_type_id='%s' for function '%s'\n", 
+                func->return_type_id, func->id);
+        HashNode_t *return_type_node = NULL;
+        FindIdent(&return_type_node, symtab, func->return_type_id);
+        if (return_type_node != NULL)
+        {
+            fprintf(stderr, "DEBUG: Found return type node\n");
+            struct RecordType *record_type = hashnode_get_record_type(return_type_node);
+            if (record_type != NULL)
+            {
+                fprintf(stderr, "DEBUG: It's a record type!\n");
+                if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                        record_type, &record_return_size) == 0 &&
+                    record_return_size > 0 && record_return_size <= INT_MAX)
+                {
+                    fprintf(stderr, "DEBUG: Setting has_record_return=1, size=%lld\n", record_return_size);
+                    has_record_return = 1;
+                }
+            }
+        }
+        else
+        {
+            fprintf(stderr, "DEBUG: return_type_node is NULL\n");
+        }
+    }
+    else
+    {
+        fprintf(stderr, "DEBUG: Skipped return_type_id check: has_record_return=%d, return_type_id=%s, symtab=%p\n",
+                has_record_return, func->return_type_id ? func->return_type_id : "NULL", (void*)symtab);
+    }
+    
+    /* Also check inline_return_type from the function tree for functions with inline record returns */
+    if (!has_record_return && func->inline_return_type != NULL &&
+        func->inline_return_type->base_type == RECORD_TYPE &&
+        func->inline_return_type->record_type != NULL)
+    {
+        if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                func->inline_return_type->record_type, &record_return_size) == 0 &&
+            record_return_size > 0 && record_return_size <= INT_MAX)
+        {
+            has_record_return = 1;
+        }
+    }
 
     /* Only functions that close over variables need static links (excluding class methods). */
     int will_need_static_link = (!is_class_method &&
