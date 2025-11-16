@@ -963,6 +963,9 @@ void destroy_list(ListNode_t *list)
             case LIST_RECORD_FIELD:
                 destroy_record_field((struct RecordField *)cur->cur);
                 break;
+            case LIST_CLASS_PROPERTY:
+                destroy_class_property((struct ClassProperty *)cur->cur);
+                break;
             case LIST_SET_ELEMENT:
                 destroy_set_element((struct SetElement *)cur->cur);
                 break;
@@ -975,6 +978,11 @@ void destroy_list(ListNode_t *list)
                 break;
             case LIST_VARIANT_BRANCH:
                 destroy_variant_branch((struct VariantBranch *)cur->cur);
+                break;
+            case LIST_UNSPECIFIED:
+                /* LIST_UNSPECIFIED nodes have unknown content type - cannot safely free.
+                 * These are used for temporary storage where the content ownership
+                 * is managed elsewhere. Do not free cur->cur here. */
                 break;
             default:
                 fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
