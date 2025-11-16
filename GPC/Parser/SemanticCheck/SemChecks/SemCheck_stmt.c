@@ -88,6 +88,7 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
 static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
@@ -936,6 +937,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_FOR:
             return_val += semcheck_for(symtab, stmt, max_scope_lev);
+            break;
+
+        case STMT_FOR_IN:
+            return_val += semcheck_for_in(symtab, stmt, max_scope_lev);
             break;
 
         case STMT_BREAK:
@@ -2342,6 +2347,56 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     if (to_type_owned && to_gpc_type != NULL)
         destroy_gpc_type(to_gpc_type);
 
+    return return_val;
+}
+
+/** FOR-IN **/
+int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    int loop_var_type, collection_type;
+    
+    assert(symtab != NULL);
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_FOR_IN);
+    
+    struct Expression *loop_var = stmt->stmt_data.for_in_data.loop_var;
+    struct Expression *collection = stmt->stmt_data.for_in_data.collection;
+    struct Statement *do_stmt = stmt->stmt_data.for_in_data.do_stmt;
+    
+    /* Check loop variable (must be a lvalue) */
+    if (loop_var != NULL) {
+        return_val += semcheck_expr_main(&loop_var_type, symtab, loop_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
+        
+        /* Verify it's an ordinal type (int, char, etc.) */
+        if (!is_ordinal_type(loop_var_type) && loop_var_type != UNKNOWN_TYPE) {
+            fprintf(stderr, "Error on line %d: for-in loop variable must be an ordinal type!\n\n",
+                    stmt->line_num);
+            ++return_val;
+        }
+    }
+    
+    /* Check collection expression */
+    if (collection != NULL) {
+        return_val += semcheck_expr_main(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
+        
+        /* Verify it's an array type */
+        GpcType *collection_gpc_type = semcheck_resolve_expression_gpc_type(symtab, collection, 
+                                                                            INT_MAX, NO_MUTATE, NULL);
+        if (collection_gpc_type != NULL && !gpc_type_is_array(collection_gpc_type)) {
+            fprintf(stderr, "Error on line %d: for-in loop requires an array expression!\n\n",
+                    stmt->line_num);
+            ++return_val;
+        }
+        
+        /* TODO: Check that loop variable type matches array element type */
+    }
+    
+    /* Check body statement */
+    if (do_stmt != NULL) {
+        return_val += semcheck_stmt(symtab, do_stmt, max_scope_lev);
+    }
+    
     return return_val;
 }
 
