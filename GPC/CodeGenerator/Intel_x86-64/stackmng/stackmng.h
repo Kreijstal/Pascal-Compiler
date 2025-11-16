@@ -36,6 +36,8 @@ typedef struct StackNode StackNode_t;
 typedef struct RegStack RegStack_t;
 typedef struct Register Register_t;
 
+typedef void (*RegisterSpillCallback)(Register_t *reg, StackNode_t *spill_slot, void *context);
+
 #define NUM_CALLER_SAVED_REGISTERS 9
 
 /* Helper for getting special registers */
@@ -105,6 +107,8 @@ Register_t *front_reg_stack(RegStack_t *);
 Register_t *get_free_reg(RegStack_t *, ListNode_t **);
 /* Force register allocation by spilling LRU register if needed */
 Register_t *get_reg_with_spill(RegStack_t *, ListNode_t **);
+void register_set_spill_callback(Register_t *reg, RegisterSpillCallback callback, void *context);
+void register_clear_spill_callback(Register_t *reg);
 int get_num_registers_free(RegStack_t *);
 int get_num_registers_alloced(RegStack_t *);
 
@@ -123,6 +127,8 @@ typedef struct Register
     StackNode_t *spill_location;
     /* Sequence number for LRU tracking */
     unsigned long long last_use_seq;
+    RegisterSpillCallback spill_callback;
+    void *spill_context;
     
 #if USE_GRAPH_COLORING_ALLOCATOR
     /* Forward declaration from graph_coloring_allocator.h */

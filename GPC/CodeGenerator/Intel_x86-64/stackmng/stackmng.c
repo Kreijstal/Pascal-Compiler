@@ -529,6 +529,59 @@ void free_stackmng()
 
 /********* RegStack_t **********/
 
+static void apply_register_limit(RegStack_t *reg_stack)
+{
+    if (reg_stack == NULL || reg_stack->registers_free == NULL)
+        return;
+
+    const char *env_limit = getenv("GPC_FORCE_REGISTER_LIMIT");
+    if (env_limit == NULL || env_limit[0] == '\0')
+        return;
+
+    char *endptr = NULL;
+    long limit = strtol(env_limit, &endptr, 10);
+    if (endptr == env_limit || limit <= 0)
+        return;
+
+    ListNode_t *cur = reg_stack->registers_free;
+    ListNode_t *prev = NULL;
+    int retained = 0;
+
+    while (cur != NULL && retained < limit)
+    {
+        prev = cur;
+        cur = cur->next;
+        retained++;
+    }
+
+    if (cur == NULL)
+    {
+        reg_stack->num_registers = retained;
+        return;
+    }
+
+    if (prev != NULL)
+        prev->next = NULL;
+    else
+        reg_stack->registers_free = NULL;
+
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        Register_t *reg = (Register_t *)cur->cur;
+        if (reg != NULL)
+        {
+            free(reg->bit_64);
+            free(reg->bit_32);
+            free(reg);
+        }
+        free(cur);
+        cur = next;
+    }
+
+    reg_stack->num_registers = retained;
+}
+
 RegStack_t *init_reg_stack()
 {
     /*
@@ -564,6 +617,8 @@ RegStack_t *init_reg_stack()
     rax->bit_32 = strdup("%eax");
     rax->spill_location = NULL;
     rax->last_use_seq = 0;
+    rax->spill_callback = NULL;
+    rax->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
     rax->current_live_range = NULL;
 #endif
@@ -575,6 +630,8 @@ RegStack_t *init_reg_stack()
     r10->bit_32 = strdup("%r10d");
     r10->spill_location = NULL;
     r10->last_use_seq = 0;
+    r10->spill_callback = NULL;
+    r10->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r10->current_live_range = NULL;
 #endif
@@ -585,6 +642,8 @@ RegStack_t *init_reg_stack()
     r11->bit_32 = strdup("%r11d");
     r11->spill_location = NULL;
     r11->last_use_seq = 0;
+    r11->spill_callback = NULL;
+    r11->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r11->current_live_range = NULL;
 #endif
@@ -596,6 +655,8 @@ RegStack_t *init_reg_stack()
     r8->bit_32 = strdup("%r8d");
     r8->spill_location = NULL;
     r8->last_use_seq = 0;
+    r8->spill_callback = NULL;
+    r8->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r8->current_live_range = NULL;
 #endif
@@ -606,6 +667,8 @@ RegStack_t *init_reg_stack()
     r9->bit_32 = strdup("%r9d");
     r9->spill_location = NULL;
     r9->last_use_seq = 0;
+    r9->spill_callback = NULL;
+    r9->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
     r9->current_live_range = NULL;
 #endif
@@ -627,6 +690,8 @@ RegStack_t *init_reg_stack()
         rsi->bit_32 = strdup("%esi");
         rsi->spill_location = NULL;
         rsi->last_use_seq = 0;
+        rsi->spill_callback = NULL;
+        rsi->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
         rsi->current_live_range = NULL;
 #endif
@@ -637,6 +702,8 @@ RegStack_t *init_reg_stack()
         rdi->bit_32 = strdup("%edi");
         rdi->spill_location = NULL;
         rdi->last_use_seq = 0;
+        rdi->spill_callback = NULL;
+        rdi->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
         rdi->current_live_range = NULL;
 #endif
@@ -653,6 +720,8 @@ RegStack_t *init_reg_stack()
         rcx->bit_32 = strdup("%ecx");
         rcx->spill_location = NULL;
         rcx->last_use_seq = 0;
+        rcx->spill_callback = NULL;
+        rcx->spill_context = NULL;
 #if USE_GRAPH_COLORING_ALLOCATOR
         rcx->current_live_range = NULL;
 #endif
@@ -669,6 +738,8 @@ RegStack_t *init_reg_stack()
     reg_stack->active_live_ranges = NULL;
     reg_stack->next_live_range_id = 1;
 #endif
+
+    apply_register_limit(reg_stack);
 
     return reg_stack;
 }
@@ -765,6 +836,7 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
             else
                 prev->next = cur->next;
 
+            register_clear_spill_callback(reg);
             cur->next = reg_stack->registers_free;
             reg_stack->registers_free = cur;
             
@@ -788,6 +860,22 @@ void free_reg(RegStack_t *reg_stack, Register_t *reg)
     }
 
     return;
+}
+
+void register_set_spill_callback(Register_t *reg, RegisterSpillCallback callback, void *context)
+{
+    if (reg == NULL)
+        return;
+    reg->spill_callback = callback;
+    reg->spill_context = context;
+}
+
+void register_clear_spill_callback(Register_t *reg)
+{
+    if (reg == NULL)
+        return;
+    reg->spill_callback = NULL;
+    reg->spill_context = NULL;
 }
 
 void swap_reg_stack(RegStack_t *reg_stack)
@@ -960,32 +1048,35 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
         return NULL;
     }
 
-    /* Allocate stack slot for spill if not already allocated */
-    if (spill_reg->spill_location == NULL)
+    /* Allocate stack slot for this spill */
+    char spill_label[64];
+    snprintf(spill_label, sizeof(spill_label), "spill_%s_%llu",
+        spill_reg->bit_64 + 1, (unsigned long long)(reg_stack->use_sequence + 1));
+    StackNode_t *spill_slot = add_l_t_bytes(spill_label, (int)sizeof(void *));
+    if (spill_slot == NULL)
     {
-        char spill_label[64];
-        snprintf(spill_label, sizeof(spill_label), "spill_%s", spill_reg->bit_64 + 1);
-        spill_reg->spill_location = add_l_t(spill_label);
-        if (spill_reg->spill_location == NULL)
-        {
-            REG_DEBUG_LOG("[reg-spill] ERROR: Failed to allocate spill slot\n");
-            return NULL;
-        }
+        REG_DEBUG_LOG("[reg-spill] ERROR: Failed to allocate spill slot\n");
+        return NULL;
     }
+    spill_reg->spill_location = spill_slot;
 
     /* Generate spill code */
     char spill_code[128];
 #if USE_GRAPH_COLORING_ALLOCATOR
     snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (graph-coloring)\n\tmovq\t%s, -%d(%%rbp)\n",
-        spill_reg->bit_64, spill_reg->bit_64, spill_reg->spill_location->offset);
+        spill_reg->bit_64, spill_reg->bit_64, spill_slot->offset);
 #else
     snprintf(spill_code, sizeof(spill_code), "\t# Spill %s (LRU)\n\tmovq\t%s, -%d(%%rbp)\n",
-        spill_reg->bit_64, spill_reg->bit_64, spill_reg->spill_location->offset);
+        spill_reg->bit_64, spill_reg->bit_64, spill_slot->offset);
 #endif
     *inst_list = add_inst(*inst_list, spill_code);
 
     REG_DEBUG_LOG("[reg-spill] Spilled %s (seq %llu) to offset -%d\n",
-        spill_reg->bit_64, spill_reg->last_use_seq, spill_reg->spill_location->offset);
+        spill_reg->bit_64, spill_reg->last_use_seq, spill_slot->offset);
+
+    if (spill_reg->spill_callback != NULL)
+        spill_reg->spill_callback(spill_reg, spill_slot, spill_reg->spill_context);
+    register_clear_spill_callback(spill_reg);
 
     /* Update timestamp */
     spill_reg->last_use_seq = ++reg_stack->use_sequence;

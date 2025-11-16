@@ -302,6 +302,17 @@ static void codegen_reset_static_link_cache(CodeGenContext *ctx)
         ctx->static_link_reg = NULL;
     }
     ctx->static_link_reg_level = 0;
+    ctx->static_link_spill_slot = NULL;
+}
+
+static void codegen_static_link_spilled(Register_t *reg, StackNode_t *spill_slot, void *context)
+{
+    (void)reg;
+    CodeGenContext *ctx = (CodeGenContext *)context;
+    if (ctx == NULL || spill_slot == NULL)
+        return;
+    ctx->static_link_spill_slot = spill_slot;
+    ctx->static_link_reg = NULL;
 }
 
 static int codegen_find_static_link_offset(StackScope_t *scope, int *offset)
@@ -349,6 +360,29 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
         free_reg(get_reg_stack(), ctx->static_link_reg);
         ctx->static_link_reg = NULL;
         ctx->static_link_reg_level = 0;
+    }
+    else if (ctx->static_link_spill_slot != NULL)
+    {
+        if (ctx->static_link_reg_level == levels_to_traverse)
+        {
+            Register_t *reloaded = get_free_reg(get_reg_stack(), inst_list);
+            if (reloaded == NULL)
+                reloaded = get_reg_with_spill(get_reg_stack(), inst_list);
+            if (reloaded == NULL)
+                return NULL;
+
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                ctx->static_link_spill_slot->offset, reloaded->bit_64);
+            *inst_list = add_inst(*inst_list, buffer);
+
+            ctx->static_link_reg = reloaded;
+            ctx->static_link_spill_slot = NULL;
+            register_set_spill_callback(reloaded, codegen_static_link_spilled, ctx);
+            return reloaded;
+        }
+
+        ctx->static_link_spill_slot = NULL;
     }
 
     StackScope_t *scope = get_cur_scope();
@@ -407,6 +441,7 @@ Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_l
 
     ctx->static_link_reg = reg;
     ctx->static_link_reg_level = levels_to_traverse;
+    register_set_spill_callback(reg, codegen_static_link_spilled, ctx);
     return reg;
 }
 
