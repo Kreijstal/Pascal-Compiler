@@ -1939,6 +1939,10 @@ static void convert_record_members(ast_t *node, ListBuilder *builder) {
             list_builder_extend(builder, tag_fields);
             if (variant != NULL)
                 list_builder_append(builder, variant, LIST_VARIANT_PART);
+        } else if (cur->typ == PASCAL_T_METHOD_DECL) {
+            /* Store method declaration as a special marker node for operator overloading */
+            /* We'll handle this during semantic check when we know the record type name */
+            list_builder_append(builder, cur, LIST_UNSPECIFIED);
         }
     }
 }
