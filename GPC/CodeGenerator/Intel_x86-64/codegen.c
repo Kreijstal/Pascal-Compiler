@@ -2490,6 +2490,42 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
     next_gpr_index = arg_start_index;
 
+    /* Pre-pass: Save all parameter registers to temp stack slots to prevent them from being
+     * clobbered during gpc_move setup for record parameters. This is necessary because
+     * processing one record parameter may clobber registers containing subsequent parameters. */
+    ListNode_t *args_scan = args;
+    int scan_gpr_index = arg_start_index;
+    while(args_scan != NULL)
+    {
+        Tree_t *scan_decl = (Tree_t *)args_scan->cur;
+        if (scan_decl->type == TREE_VAR_DECL)
+        {
+            ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+            while(scan_ids != NULL)
+            {
+                const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
+                if (param_reg != NULL)
+                {
+                    /* Allocate temp slot and save parameter register */
+                    char temp_name[64];
+                    snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)scan_ids->cur);
+                    StackNode_t *temp_slot = add_l_x(temp_name, CODEGEN_POINTER_SIZE_BYTES);
+                    if (temp_slot != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            param_reg, temp_slot->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+                scan_ids = scan_ids->next;
+            }
+        }
+        args_scan = args_scan->next;
+    }
+    
+    /* Reset for main processing pass */
+    next_gpr_index = arg_start_index;
+
     while(args != NULL)
     {
         arg_decl = (Tree_t *)args->cur;
@@ -2569,7 +2605,33 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
                         arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
-                        const char *record_src_reg = arg_reg;
+                        
+                        /* Load parameter from temp slot that was saved in pre-pass */
+                        char temp_name[64];
+                        snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)arg_ids->cur);
+                        StackNode_t *temp_param_slot = find_label(temp_name);
+                        
+                        const char *record_src_reg = NULL;
+                        Register_t *loaded_param_reg = NULL;
+                        
+                        if (temp_param_slot != NULL)
+                        {
+                            /* Load from temp slot */
+                            loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (loaded_param_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                    temp_param_slot->offset, loaded_param_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                record_src_reg = loaded_param_reg->bit_64;
+                            }
+                        }
+                        else if (arg_reg != NULL)
+                        {
+                            /* Fallback to register (shouldn't happen if pre-pass worked) */
+                            record_src_reg = arg_reg;
+                        }
+                        
                         if (record_src_reg == NULL)
                         {
                             stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -2623,6 +2685,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         free_reg(get_reg_stack(), size_reg);
                         if (stack_value_reg != NULL)
                             free_reg(get_reg_stack(), stack_value_reg);
+                        if (loaded_param_reg != NULL)
+                            free_reg(get_reg_stack(), loaded_param_reg);
 
                         arg_ids = arg_ids->next;
                         continue;
