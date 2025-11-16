@@ -4159,6 +4159,54 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             return NULL;
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt, is_downto);
     }
+    case PASCAL_T_FOR_IN_STMT: {
+        // The parser structure creates: FOR_IN_STMT -> [token_result, commit_result]
+        // where commit_result is seq(PASCAL_T_NONE, ...) containing the actual elements
+        
+        ast_t *first_child = stmt_node->child;
+        fprintf(stderr, "DEBUG: FOR_IN first_child typ=%d\n", first_child ? first_child->typ : -1);
+        
+        // Skip any wrapper nodes to get to the NONE node that contains our elements
+        ast_t *none_node = first_child;
+        while (none_node != NULL && none_node->typ != PASCAL_T_NONE) {
+            none_node = none_node->next;
+        }
+        
+        if (none_node == NULL || none_node->typ != PASCAL_T_NONE) {
+            fprintf(stderr, "ERROR: FOR_IN missing NONE wrapper\n");
+            return NULL;
+        }
+        
+        // Now get the children of the NONE node
+        ast_t *id_node = unwrap_pascal_node(none_node->child);
+        ast_t *collection_node = unwrap_pascal_node(id_node ? id_node->next : NULL);
+        ast_t *body_node = unwrap_pascal_node(collection_node ? collection_node->next : NULL);
+        
+        fprintf(stderr, "DEBUG: FOR_IN id=%d, coll=%d, body=%d\n",
+                id_node ? id_node->typ : -1,
+                collection_node ? collection_node->typ : -1,
+                body_node ? body_node->typ : -1);
+        
+        // Convert identifier to expression
+        struct Expression *var_expr = NULL;
+        if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER && id_node->sym != NULL) {
+            var_expr = mk_varid(id_node->line, id_node->sym->name);
+        }
+        
+        // Convert collection expression
+        struct Expression *collection_expr = convert_expression(collection_node);
+        
+        // Convert body statement  
+        struct Statement *body_stmt = convert_statement(body_node);
+
+        if (var_expr == NULL || collection_expr == NULL || body_stmt == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN conversion failed: var=%p, coll=%p, body=%p\n",
+                    (void*)var_expr, (void*)collection_expr, (void*)body_stmt);
+            return NULL;
+        }
+
+        return mk_for_in(stmt_node->line, var_expr, collection_expr, body_stmt);
+    }
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
     case PASCAL_T_WITH_STMT: {

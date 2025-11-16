@@ -1196,6 +1196,12 @@ void destroy_stmt(struct Statement *stmt)
           destroy_stmt(stmt->stmt_data.for_data.do_for);
           break;
 
+        case STMT_FOR_IN:
+          destroy_expr(stmt->stmt_data.for_in_data.loop_var);
+          destroy_expr(stmt->stmt_data.for_in_data.collection);
+          destroy_stmt(stmt->stmt_data.for_in_data.do_stmt);
+          break;
+
         case STMT_ASM_BLOCK:
           free(stmt->stmt_data.asm_block_data.code);
           break;
@@ -2126,6 +2132,23 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
   new_stmt->stmt_data.for_data.is_downto = is_downto;
 
   return new_stmt;
+}
+
+struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Expression *collection,
+                             struct Statement *do_stmt)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = 0;
+    new_stmt->type = STMT_FOR_IN;
+    new_stmt->stmt_data.for_in_data.loop_var = loop_var;
+    new_stmt->stmt_data.for_in_data.collection = collection;
+    new_stmt->stmt_data.for_in_data.do_stmt = do_stmt;
+
+    return new_stmt;
 }
 
 struct Statement *mk_asmblock(int line_num, char *code)
