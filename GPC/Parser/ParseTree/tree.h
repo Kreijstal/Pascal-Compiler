@@ -79,6 +79,7 @@ typedef struct Tree
                 } range;
                 struct RecordType *record;
                 struct TypeAlias alias;
+                struct GenericDecl generic;
             } info;
         } type_decl_data;
 

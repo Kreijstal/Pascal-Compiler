@@ -1659,6 +1659,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
                 break;
             }
+            case TYPE_DECL_GENERIC:
+                /* Generic type declarations are registered in the generic registry
+                 * but not added to the symbol table until specialized */
+                var_type = HASHVAR_INTEGER;  /* Placeholder - generics don't go in symbol table directly */
+                /* TODO: Register generic declaration in generic_registry */
+                break;
             default:
                 var_type = HASHVAR_INTEGER;
                 break;
