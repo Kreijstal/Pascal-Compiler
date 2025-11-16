@@ -4913,6 +4913,73 @@ int semcheck_relop(int *type_return,
             }
             else if (relop_type == EQ || relop_type == NE)
             {
+                /* Check for operator overloading for record types first */
+                if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+                {
+                    const char *left_type_name = get_expr_type_name(expr1, symtab);
+                    const char *right_type_name = get_expr_type_name(expr2, symtab);
+                    
+                    if (left_type_name != NULL && right_type_name != NULL &&
+                        strcasecmp(left_type_name, right_type_name) == 0)
+                    {
+                        const char *op_suffix = (relop_type == EQ) ? "op_eq" : "op_ne";
+                        size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                        char *operator_method = (char *)malloc(name_len);
+                        
+                        if (operator_method != NULL)
+                        {
+                            snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                            
+                            HashNode_t *operator_node = NULL;
+                            if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                            {
+                                if (operator_node->type != NULL && gpc_type_is_procedure(operator_node->type))
+                                {
+                                    GpcType *return_type = gpc_type_get_return_type(operator_node->type);
+                                    if (return_type != NULL)
+                                    {
+                                        /* Transform expression from RELOP to FUNCTION_CALL */
+                                        struct Expression *saved_left = expr->expr_data.relop_data.left;
+                                        struct Expression *saved_right = expr->expr_data.relop_data.right;
+                                        
+                                        expr->type = EXPR_FUNCTION_CALL;
+                                        
+                                        expr->expr_data.function_call_data.id = strdup(operator_method);
+                                        /* Use the actual mangled name from the symbol table */
+                                        if (operator_node->mangled_id != NULL)
+                                            expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                                        else
+                                            expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+                                        
+                                        ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
+                                        ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                        arg1->next = arg2;
+                                        expr->expr_data.function_call_data.args_expr = arg1;
+                                        
+                                        expr->expr_data.function_call_data.resolved_func = operator_node;
+                                        expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                                        expr->expr_data.function_call_data.call_gpc_type = operator_node->type;
+                                        gpc_type_retain(operator_node->type);
+                                        expr->expr_data.function_call_data.is_call_info_valid = 1;
+                                        
+                                        if (expr->resolved_gpc_type != NULL)
+                                        {
+                                            destroy_gpc_type(expr->resolved_gpc_type);
+                                        }
+                                        expr->resolved_gpc_type = return_type;
+                                        gpc_type_retain(return_type);
+                                        
+                                        free(operator_method);
+                                        *type_return = BOOL;
+                                        return return_val;
+                                    }
+                                }
+                            }
+                            free(operator_method);
+                        }
+                    }
+                }
+                
                 semcheck_coerce_char_string_operands(&type_first, expr1, &type_second, expr2);
 
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
@@ -5078,13 +5145,56 @@ int semcheck_addop(int *type_return,
                             {
                                 *type_return = gpc_type_get_legacy_tag(return_type);
                                 
-                                /* TODO: Transform expression from ADDOP to FUNCTION_CALL
-                                 * This requires changing expr->type and populating function_call_data
-                                 * For now, we just return the type which makes semantic check pass
-                                 * but assignment checking may still fail. */
+                                /* Transform expression from ADDOP to FUNCTION_CALL */
+                                /* Save the operands before we overwrite the union */
+                                struct Expression *saved_left = expr->expr_data.addop_data.left_expr;
+                                struct Expression *saved_right = expr->expr_data.addop_data.right_term;
+                                
+                                /* Change expression type to FUNCTION_CALL */
+                                expr->type = EXPR_FUNCTION_CALL;
+                                
+                                /* Populate function_call_data */
+                                expr->expr_data.function_call_data.id = strdup(operator_method);
+                                /* Use the actual mangled name from the symbol table */
+                                if (operator_node->mangled_id != NULL)
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                                else
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+                                
+                                /* Create argument list with both operands */
+                                ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
+                                ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                arg1->next = arg2;
+                                expr->expr_data.function_call_data.args_expr = arg1;
+                                
+                                expr->expr_data.function_call_data.resolved_func = operator_node;
+                                
+                                /* Cache operator method type info for codegen */
+                                expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                                expr->expr_data.function_call_data.call_gpc_type = operator_node->type;
+                                gpc_type_retain(operator_node->type); /* Increment ref count */
+                                expr->expr_data.function_call_data.is_call_info_valid = 1;
+                                
+                                /* Set resolved_gpc_type to the return type */
+                                if (expr->resolved_gpc_type != NULL)
+                                {
+                                    destroy_gpc_type(expr->resolved_gpc_type);
+                                }
+                                expr->resolved_gpc_type = return_type;
+                                gpc_type_retain(return_type); /* Increment ref count */
+                                
+                                /* For record return types, preserve record type info */
+                                if (gpc_type_is_record(return_type))
+                                {
+                                    struct RecordType *ret_record = gpc_type_get_record(return_type);
+                                    if (ret_record != NULL)
+                                    {
+                                        expr->record_type = ret_record;
+                                    }
+                                }
                                 
                                 free(operator_method);
-                                return return_val; /* Success - operator overload found */
+                                return return_val; /* Success - operator overload transformed */
                             }
                         }
                     }
@@ -5160,6 +5270,106 @@ int semcheck_mulop(int *type_return,
             *type_return = SET_TYPE;
         }
         return return_val;
+    }
+
+    /* Check for operator overloading for record types */
+    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+    {
+        /* Both operands are records - check if they have an operator overload */
+        const char *left_type_name = get_expr_type_name(expr1, symtab);
+        const char *right_type_name = get_expr_type_name(expr2, symtab);
+        
+        /* Check if both types are the same and we have a type name */
+        if (left_type_name != NULL && right_type_name != NULL &&
+            strcasecmp(left_type_name, right_type_name) == 0)
+        {
+            /* Construct the operator method name */
+            const char *op_suffix = NULL;
+            switch (op_type)
+            {
+                case STAR: op_suffix = "op_mul"; break;
+                case SLASH: op_suffix = "op_div"; break;
+                default: break;
+            }
+            
+            if (op_suffix != NULL)
+            {
+                /* Build the mangled operator method name: TypeName__op_mul */
+                size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                char *operator_method = (char *)malloc(name_len);
+                if (operator_method != NULL)
+                {
+                    snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                    
+                    /* Look up the operator method in the symbol table */
+                    HashNode_t *operator_node = NULL;
+                    if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                    {
+                        /* Found the operator overload! */
+                        if (operator_node->type != NULL && gpc_type_is_procedure(operator_node->type))
+                        {
+                            GpcType *return_type = gpc_type_get_return_type(operator_node->type);
+                            if (return_type != NULL)
+                            {
+                                *type_return = gpc_type_get_legacy_tag(return_type);
+                                
+                                /* Transform expression from MULOP to FUNCTION_CALL */
+                                /* Save the operands before we overwrite the union */
+                                struct Expression *saved_left = expr->expr_data.mulop_data.left_term;
+                                struct Expression *saved_right = expr->expr_data.mulop_data.right_factor;
+                                
+                                /* Change expression type to FUNCTION_CALL */
+                                expr->type = EXPR_FUNCTION_CALL;
+                                
+                                /* Populate function_call_data */
+                                expr->expr_data.function_call_data.id = strdup(operator_method);
+                                /* Use the actual mangled name from the symbol table */
+                                if (operator_node->mangled_id != NULL)
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                                else
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+                                
+                                /* Create argument list with both operands */
+                                ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
+                                ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                arg1->next = arg2;
+                                expr->expr_data.function_call_data.args_expr = arg1;
+                                
+                                expr->expr_data.function_call_data.resolved_func = operator_node;
+                                
+                                /* Cache operator method type info for codegen */
+                                expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                                expr->expr_data.function_call_data.call_gpc_type = operator_node->type;
+                                gpc_type_retain(operator_node->type);
+                                expr->expr_data.function_call_data.is_call_info_valid = 1;
+                                
+                                /* Set resolved_gpc_type to the return type */
+                                if (expr->resolved_gpc_type != NULL)
+                                {
+                                    destroy_gpc_type(expr->resolved_gpc_type);
+                                }
+                                expr->resolved_gpc_type = return_type;
+                                gpc_type_retain(return_type);
+                                
+                                /* For record return types, preserve record type info */
+                                if (gpc_type_is_record(return_type))
+                                {
+                                    struct RecordType *ret_record = gpc_type_get_record(return_type);
+                                    if (ret_record != NULL)
+                                    {
+                                        expr->record_type = ret_record;
+                                    }
+                                }
+                                
+                                free(operator_method);
+                                return return_val; /* Success - operator overload transformed */
+                            }
+                        }
+                    }
+                    free(operator_method);
+                }
+            }
+        }
     }
 
     /* Checking numeric types */
