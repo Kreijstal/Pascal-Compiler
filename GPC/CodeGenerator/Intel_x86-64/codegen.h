@@ -172,6 +172,7 @@ typedef struct {
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
     int static_link_reg_level;
+    StackNode_t *static_link_spill_slot;
     int pending_stack_arg_bytes;
 } CodeGenContext;
 

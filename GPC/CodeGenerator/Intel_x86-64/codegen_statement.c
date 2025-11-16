@@ -4810,7 +4810,8 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     int selector_is_qword = expr_uses_qword_gpctype(selector);
     
     /* Spill selector value to stack to free the register */
-    StackNode_t *selector_spill = add_l_t("case_selector");
+    StackNode_t *selector_spill = selector_is_qword ?
+        add_l_t_bytes("case_selector", 8) : add_l_t("case_selector");
     if (selector_spill == NULL)
     {
         free_reg(get_reg_stack(), selector_reg);

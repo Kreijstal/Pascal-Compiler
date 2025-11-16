@@ -54,6 +54,40 @@ static int formal_decl_is_open_array(Tree_t *decl);
 static long long codegen_static_array_length(const struct Expression *expr);
 static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *ctx, const char *usage);
 
+typedef struct ArgInfo
+{
+    Register_t *reg;
+    StackNode_t *spill;
+    struct Expression *expr;
+    int expected_type;
+    int is_pointer_like;
+    int assigned_class;
+    int assigned_index;
+    int pass_via_stack;
+    int stack_slot;
+    int stack_offset;
+} ArgInfo;
+
+static void arginfo_register_spill_handler(Register_t *reg, StackNode_t *spill_slot, void *context)
+{
+    ArgInfo *info = (ArgInfo *)context;
+    if (info == NULL || spill_slot == NULL)
+        return;
+    info->reg = NULL;
+    info->spill = spill_slot;
+}
+
+static void arginfo_assign_register(ArgInfo *info, Register_t *reg, struct Expression *expr)
+{
+    if (info == NULL)
+        return;
+    info->reg = reg;
+    info->spill = NULL;
+    info->expr = expr;
+    if (reg != NULL)
+        register_set_spill_callback(reg, arginfo_register_spill_handler, info);
+}
+
 static const char *codegen_class_typeinfo_label(struct RecordType *record,
     const char *fallback_id)
 {
@@ -3154,19 +3188,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         ARG_CLASS_SSE = 1
     };
 
-    typedef struct ArgInfo
-    {
-        Register_t *reg;
-        StackNode_t *spill;
-        struct Expression *expr;
-        int expected_type;
-        int is_pointer_like;
-        int assigned_class;
-        int assigned_index;
-        int pass_via_stack;
-        int stack_slot;
-        int stack_offset;
-    } ArgInfo;
 
     int total_args = 0;
     for (ListNode_t *cur = args; cur != NULL; cur = cur->next)
@@ -3343,9 +3364,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_infos != NULL)
             {
-                arg_infos[arg_num].reg = desc_addr_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
+                arginfo_assign_register(&arg_infos[arg_num], desc_addr_reg, arg_expr);
             }
         }
         else if(is_var_param || is_array_param || is_array_arg)
@@ -3383,9 +3402,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_infos != NULL)
             {
-                arg_infos[arg_num].reg = addr_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
+                arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
             }
         }
         else if (arg_expr != NULL && expr_has_type_tag(arg_expr, RECORD_TYPE))
@@ -3490,9 +3507,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_infos != NULL)
             {
-                arg_infos[arg_num].reg = result_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
+                arginfo_assign_register(&arg_infos[arg_num], result_reg, arg_expr);
             }
         }
         else
@@ -3552,9 +3567,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             else if (arg_infos != NULL)
             {
-                arg_infos[arg_num].reg = top_reg;
-                arg_infos[arg_num].spill = NULL;
-                arg_infos[arg_num].expr = arg_expr;
+                arginfo_assign_register(&arg_infos[arg_num], top_reg, arg_expr);
             }
         }
 

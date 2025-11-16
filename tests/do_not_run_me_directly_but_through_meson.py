@@ -1521,6 +1521,32 @@ class TestCompiler(unittest.TestCase):
         self.assertIn("call\tgpc_move", asm_source)
         self.assertIn("call\tsucc_i", asm_source)
 
+    def test_register_spill_restores_value(self):
+        """Ensures spilled registers are correctly reloaded when register pressure is high."""
+        input_file, asm_file, executable_file = self._get_test_paths("register_spill_limit")
+
+        prev_limit = os.environ.get("GPC_FORCE_REGISTER_LIMIT")
+        os.environ["GPC_FORCE_REGISTER_LIMIT"] = "2"
+        try:
+            run_compiler(input_file, asm_file)
+        finally:
+            if prev_limit is None:
+                os.environ.pop("GPC_FORCE_REGISTER_LIMIT", None)
+            else:
+                os.environ["GPC_FORCE_REGISTER_LIMIT"] = prev_limit
+
+        self.compile_executable(asm_file, executable_file)
+
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+
+        self.assertEqual(result.stdout.strip(), "36")
+
     def test_record_exotic_program(self):
         """Parses a program that uses packed and variant record constructs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_exotic.p")

@@ -116,6 +116,50 @@ static inline const char *select_register_name(const Register_t *reg, int type_t
     return codegen_type_uses_qword(type_tag) ? reg->bit_64 : reg->bit_32;
 }
 
+static void expr_tree_register_spill_handler(Register_t *reg, StackNode_t *spill_slot, void *context)
+{
+    expr_node_t *node = (expr_node_t *)context;
+    if (node == NULL || spill_slot == NULL)
+        return;
+    node->spill_slot = spill_slot;
+    node->reg = NULL;
+}
+
+static int leaf_expr_requires_reference_value(struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID)
+        return 0;
+
+    int scope_depth = 0;
+    StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+    HashNode_t *symbol_node = NULL;
+    if (ctx->symtab != NULL)
+        FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+    int treat_as_reference = 0;
+    if (stack_node != NULL && stack_node->is_reference)
+        treat_as_reference = 1;
+    else if (symbol_node != NULL && symbol_node->is_var_parameter)
+        treat_as_reference = 1;
+
+    if (!treat_as_reference)
+        return 0;
+
+    int expr_type = expr_get_type_tag(expr);
+    if (expr_type == UNKNOWN_TYPE && symbol_node != NULL && symbol_node->type != NULL)
+        expr_type = gpc_type_get_legacy_tag(symbol_node->type);
+
+    int is_array_like =
+        expr->array_is_dynamic ||
+        expr->is_array_expr ||
+        (expr->resolved_gpc_type != NULL && gpc_type_is_array(expr->resolved_gpc_type));
+
+    if (!is_array_like && expr_type != RECORD_TYPE && expr_type != SET_TYPE)
+        return 1;
+
+    return 0;
+}
+
 static int expr_effective_storage_type(const struct Expression *expr)
 {
     if (expr != NULL && expr->resolved_gpc_type != NULL)
@@ -503,6 +547,7 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     assert(new_node != NULL);
     new_node->expr = expr;
     new_node->reg = NULL;
+    new_node->spill_slot = NULL;
 
     /* Building the tree */
     switch(expr->type)
@@ -631,6 +676,16 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
     #endif
 
+    if (node->reg == NULL && node->spill_slot != NULL)
+    {
+        inst_list = emit_load_from_stack(inst_list, target_reg,
+            node->expr->resolved_type, node->spill_slot->offset);
+        node->reg = target_reg;
+        register_set_spill_callback(target_reg, expr_tree_register_spill_handler, node);
+        node->spill_slot = NULL;
+        return inst_list;
+    }
+
     if(node->reg != NULL)
     {
         char buffer[64];
@@ -668,6 +723,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     {
         inst_list = gencode_case0(node, inst_list, ctx, target_reg);
         node->reg = target_reg;
+        register_set_spill_callback(target_reg, expr_tree_register_spill_handler, node);
     }
     /* CASE 1 */
     else if (node->right_expr == NULL)
@@ -1378,7 +1434,9 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     expr = node->expr;
     right_expr = node->right_expr->expr;
     assert(right_expr != NULL);
-    if (!leaf_expr_is_simple(right_expr))
+    int rhs_requires_reference = leaf_expr_requires_reference_value(right_expr, ctx);
+
+    if (!leaf_expr_is_simple(right_expr) || rhs_requires_reference)
     {
         Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (rhs_reg == NULL)

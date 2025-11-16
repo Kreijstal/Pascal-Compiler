@@ -27,6 +27,7 @@ typedef struct expr_node
 
     struct Expression *expr;
     Register_t *reg;
+    StackNode_t *spill_slot;
 } expr_node_t;
 
 expr_node_t *build_expr_tree(struct Expression *);
