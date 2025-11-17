@@ -2324,6 +2324,24 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
       tree->line_num);
 
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
+    if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
+    {
+        ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
+        while (debug_cur != NULL)
+        {
+            if (debug_cur->type == LIST_TREE && debug_cur->cur != NULL)
+            {
+                Tree_t *debug_tree = (Tree_t *)debug_cur->cur;
+                if (debug_tree->type == TREE_TYPE_DECL && debug_tree->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[GPC] program type decl: %s kind=%d\n",
+                        debug_tree->tree_data.type_decl_data.id,
+                        debug_tree->tree_data.type_decl_data.kind);
+                }
+            }
+            debug_cur = debug_cur->next;
+        }
+    }
     return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
