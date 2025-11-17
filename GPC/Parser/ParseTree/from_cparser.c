@@ -4674,11 +4674,17 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 }
 
 static struct Statement *convert_block(ast_t *block_node) {
-    if (block_node == NULL)
+    if (block_node == NULL) {
+        fprintf(stderr, "DEBUG: convert_block called with NULL node\n");
         return NULL;
+    }
 
+    fprintf(stderr, "DEBUG: convert_block called for block node type=%d\n", block_node->typ);
     ast_t *stmts = block_node->child;
+    fprintf(stderr, "DEBUG: convert_block: stmts child node = %p, type=%d\n", 
+            (void*)stmts, stmts ? stmts->typ : -1);
     ListNode_t *list = convert_statement_list(stmts);
+    fprintf(stderr, "DEBUG: convert_block: statement list = %p\n", (void*)list);
     return mk_compoundstatement(block_node->line, list);
 }
 
@@ -5246,7 +5252,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         return NULL;
     }
 
+    /* DEBUG: Print root AST node type */
+    fprintf(stderr, "DEBUG: Root AST node type = %d (line %d)\n", cur->typ, cur->line);
+
     if (cur->typ == PASCAL_T_PROGRAM_DECL) {
+        fprintf(stderr, "DEBUG: Processing as PROGRAM_DECL\n");
         /* The structure of PASCAL_T_PROGRAM_DECL is:
          *   - optional(program_header)       [PASCAL_T_PROGRAM_HEADER or NULL/skipped]
          *   - optional(uses_section)          [PASCAL_T_USES_SECTION or NULL/skipped]
@@ -5309,6 +5319,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             }
             
+            /* DEBUG: Print what we're processing */
+            fprintf(stderr, "DEBUG: PROGRAM_DECL processing section type=%d\n", section->typ);
+            
             switch (section->typ) {
             case PASCAL_T_CONST_SECTION:
                 append_const_decls_from_section(section, &const_decls, &var_decls_builder, type_section_ast);
@@ -5349,7 +5362,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             case PASCAL_T_BEGIN_BLOCK:
             case PASCAL_T_MAIN_BLOCK:
+                fprintf(stderr, "DEBUG: About to call convert_block for program body, section type=%d\n", section->typ);
                 body = convert_block(section);
+                fprintf(stderr, "DEBUG: convert_block returned body=%p\n", (void*)body);
                 break;
             default:
                 break;
@@ -5359,13 +5374,18 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
 
         visited_set_destroy(visited);
         
+        fprintf(stderr, "DEBUG: Creating program tree with body=%p for file line=%d\n", 
+                (void*)body, cur->line);
         ListNode_t *label_decls = list_builder_finish(&label_builder);
         Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
                                   list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
+        fprintf(stderr, "DEBUG: Created program tree, tree->body=%p\n", 
+                tree ? (void*)tree->tree_data.program_data.body_statement : NULL);
         return tree;
     }
 
     if (cur->typ == PASCAL_T_UNIT_DECL) {
+        fprintf(stderr, "DEBUG: Processing as UNIT_DECL\n");
         ast_t *unit_name_node = cur->child;
         char *unit_id = unit_name_node != NULL ? dup_symbol(unit_name_node) : strdup("unit");
 
@@ -5559,10 +5579,13 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     }
 
     /* Handle implicit program (file starts with uses/type/var/begin without program declaration) */
-    if (cur->typ == PASCAL_T_USES_SECTION || cur->typ == PASCAL_T_TYPE_SECTION ||
-        cur->typ == PASCAL_T_VAR_SECTION || cur->typ == PASCAL_T_CONST_SECTION ||
-        cur->typ == PASCAL_T_BEGIN_BLOCK || cur->typ == PASCAL_T_MAIN_BLOCK) {
+    /* BUT: Do NOT treat interface/implementation sections as implicit programs - those are unit parts */
+    if (cur->typ != PASCAL_T_INTERFACE_SECTION && cur->typ != PASCAL_T_IMPLEMENTATION_SECTION &&
+        (cur->typ == PASCAL_T_USES_SECTION || cur->typ == PASCAL_T_TYPE_SECTION ||
+         cur->typ == PASCAL_T_VAR_SECTION || cur->typ == PASCAL_T_CONST_SECTION ||
+         cur->typ == PASCAL_T_BEGIN_BLOCK || cur->typ == PASCAL_T_MAIN_BLOCK)) {
         
+        fprintf(stderr, "DEBUG: Treating as implicit program, first section type=%d\n", cur->typ);
         /* Treat as an implicit program with default name */
         char *program_id = strdup("program");
         ListNode_t *args = NULL;
@@ -5595,6 +5618,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             
             ast_t *node = unwrap_pascal_node(section);
+            
+            /* DEBUG: Print what AST node types we're seeing */
+            if (node != NULL) {
+                fprintf(stderr, "DEBUG: Processing implicit program section node type=%d\n", node->typ);
+            }
+            
             if (node != NULL) {
                 switch (node->typ) {
                 case PASCAL_T_USES_SECTION:

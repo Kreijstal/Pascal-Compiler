@@ -1,3 +1,5 @@
+program TestRecordOperatorsFGL;
+
 {$ifdef FPC}
   {$mode objfpc}{$H+}{$J-}
   {$modeswitch advancedrecords}
