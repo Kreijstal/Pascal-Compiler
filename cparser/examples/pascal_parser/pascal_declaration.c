@@ -1859,9 +1859,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        optional(token(keyword_ci("specialize"))),      // optional specialize keyword
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
-        type_arg_list,                          // Now parse the full type argument list
+        peek(create_generic_type_lookahead()),          // Lookahead to ensure '< identifier' pattern
+        type_arg_list,                                  // Now parse the full type argument list
         NULL
     );
 
@@ -1879,8 +1880,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
+        constructed_type,                               // constructed types like TFoo<Integer> (try before plain identifiers)
         token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),  // custom types with optional [size]
-        constructed_type,                               // constructed types like TFoo<Integer> (try last to avoid conflicts)
         NULL
     );
 

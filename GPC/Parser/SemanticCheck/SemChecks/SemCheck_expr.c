@@ -5739,6 +5739,14 @@ int semcheck_funccall(int *type_return,
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
 
+    if (id != NULL && strncmp(id, "__tfpg_ctor$", strlen("__tfpg_ctor$")) == 0)
+    {
+        if (type_return != NULL)
+            *type_return = RECORD_TYPE;
+        expr->resolved_type = RECORD_TYPE;
+        return 0;
+    }
+
     if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);
 

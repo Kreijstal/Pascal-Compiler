@@ -1657,6 +1657,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
 
+                const char *debug_alias = getenv("GPC_DEBUG_GENERIC_CLONES");
+                if (debug_alias != NULL && tree->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[GPC] semcheck alias %s: base_type=%d target=%s gpc_type=%p kind=%d\n",
+                        tree->tree_data.type_decl_data.id,
+                        alias_info->base_type,
+                        alias_info->target_type_id != NULL ? alias_info->target_type_id : "<null>",
+                        (void *)tree->tree_data.type_decl_data.gpc_type,
+                        tree->tree_data.type_decl_data.gpc_type != NULL ?
+                            tree->tree_data.type_decl_data.gpc_type->kind : -1);
+                }
+
                 break;
             }
             case TYPE_DECL_GENERIC:

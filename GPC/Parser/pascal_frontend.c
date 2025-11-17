@@ -12,6 +12,7 @@
 #include "ErrVars.h"
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
+#include "ParseTree/generic_types.h"
 #include "pascal_preprocessor.h"
 #include "../flags.h"
 #include "../../cparser/parser.h"
@@ -158,6 +159,17 @@ static bool buffer_starts_with_unit(const char *buffer, size_t length)
 // Cache for initialized parsers to avoid expensive re-initialization
 static combinator_t *cached_unit_parser = NULL;
 static combinator_t *cached_program_parser = NULL;
+static bool generic_registry_ready = false;
+
+static void reset_generic_registry(void)
+{
+    if (generic_registry_ready) {
+        generic_registry_cleanup();
+    } else {
+        generic_registry_ready = true;
+    }
+    generic_registry_init();
+}
 
 static combinator_t *get_or_create_unit_parser(void)
 {
@@ -266,13 +278,19 @@ void pascal_frontend_cleanup(void)
         free_combinator(cached_program_parser);
         cached_program_parser = NULL;
     }
-
+    if (generic_registry_ready)
+    {
+        generic_registry_cleanup();
+        generic_registry_ready = false;
+    }
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
 {
     if (error_out != NULL)
         *error_out = NULL;
+
+    reset_generic_registry();
 
     size_t length = 0;
     char *buffer = read_file(path, &length);

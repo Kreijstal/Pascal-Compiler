@@ -13,6 +13,11 @@
 #include <assert.h>
 #include <limits.h>
 #include <string.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strncasecmp _strnicmp
+#endif
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
 #include "../SemCheck.h"
@@ -28,11 +33,193 @@
 
 static int semcheck_loop_depth = 0;
 
+/* Resolve the RecordType for a TFPGList specialization from a LHS expression.
+ * This bypasses incomplete gpc_type inference and looks directly at the symbol
+ * table entry for the variable or type identifier. */
+static int is_tfpglist_type_id(const char *type_id)
+{
+    return (type_id != NULL &&
+            strncasecmp(type_id, "TFPGList$", strlen("TFPGList$")) == 0);
+}
+
+/* Resolve the RecordType for a TFPGList specialization from a LHS expression.
+ * This bypasses incomplete gpc_type inference and looks directly at the symbol
+ * table entry for the variable or type identifier. */
+static struct RecordType *resolve_tfpglist_record_from_lhs(SymTab_t *symtab,
+    struct Expression *lhs)
+{
+    if (symtab == NULL || lhs == NULL)
+        return NULL;
+
+    if (lhs->type != EXPR_VAR_ID || lhs->expr_data.id == NULL)
+        return NULL;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, lhs->expr_data.id) < 0 || node == NULL)
+        return NULL;
+
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record == NULL || record->type_id == NULL)
+        return NULL;
+
+    if (!is_tfpglist_type_id(record->type_id))
+        return NULL;
+
+    return record;
+}
+
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     return hashnode_get_type_alias(node);
 }
 
+static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
+{
+    if (symtab == NULL || id == NULL)
+        return NULL;
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, (char *)id) >= 0 && node != NULL)
+        return node;
+    return NULL;
+}
+
+static const char *resolve_tfpglist_specialized_id_from_typename(SymTab_t *symtab, const char *type_name)
+{
+    HashNode_t *type_node = lookup_hashnode(symtab, type_name);
+    if (type_node == NULL)
+        return NULL;
+
+    struct RecordType *record = hashnode_get_record_type(type_node);
+    if (record != NULL && is_tfpglist_type_id(record->type_id))
+        return record->type_id;
+
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL && alias->target_type_id != NULL &&
+        is_tfpglist_type_id(alias->target_type_id))
+        return alias->target_type_id;
+
+    return NULL;
+}
+
+static const char *resolve_tfpglist_specialized_id_from_expr(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return resolve_tfpglist_specialized_id_from_typename(symtab, expr->expr_data.id);
+    return NULL;
+}
+
+static struct Expression *make_tfpglist_ctor_expr(struct RecordType *record, int line_num)
+{
+    if (record == NULL || record->type_id == NULL)
+        return NULL;
+
+    const char *type_id = record->type_id;
+    const char *prefix = "__tfpg_ctor$";
+    size_t len = strlen(prefix) + strlen(type_id) + 1;
+    char *ctor_name = (char *)malloc(len);
+    if (ctor_name == NULL)
+        return NULL;
+    strcpy(ctor_name, prefix);
+    strcat(ctor_name, type_id);
+
+    struct Expression *call = mk_functioncall(line_num, ctor_name, NULL);
+    if (call == NULL)
+        return NULL;
+
+    call->record_type = record;
+    call->resolved_type = RECORD_TYPE;
+    if (call->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(call->resolved_gpc_type);
+        call->resolved_gpc_type = NULL;
+    }
+    call->resolved_gpc_type = create_record_type(record);
+    return call;
+}
+
+static int rewrite_tfpglist_constructor_if_needed(SymTab_t *symtab,
+    int max_scope_lev, struct Expression *lhs, struct Expression **rhs_ptr)
+{
+    if (symtab == NULL || lhs == NULL || rhs_ptr == NULL || *rhs_ptr == NULL)
+        return 0;
+    const char *debug_env = getenv("GPC_DEBUG_GENERIC_CLONES");
+
+    struct RecordType *lhs_record = resolve_tfpglist_record_from_lhs(symtab, lhs);
+    if (lhs_record == NULL || lhs_record->type_id == NULL)
+    {
+        if (debug_env)
+        {
+            fprintf(stderr,
+                "[GPC] TFPG ctor: lhs %s is not TFPGList specialization\n",
+                (lhs->expr_data.id != NULL) ? lhs->expr_data.id : "<expr>");
+        }
+        return 0;
+    }
+
+    const char *expected_specialized_id = lhs_record->type_id;
+    struct Expression *rhs = *rhs_ptr;
+
+    int matches_pattern = 0;
+    if (rhs->type == EXPR_RECORD_ACCESS &&
+        rhs->expr_data.record_access_data.field_id != NULL &&
+        strcasecmp(rhs->expr_data.record_access_data.field_id, "Create") == 0)
+    {
+        const char *candidate = resolve_tfpglist_specialized_id_from_expr(symtab,
+            rhs->expr_data.record_access_data.record_expr);
+        if (candidate != NULL &&
+            strcasecmp(candidate, expected_specialized_id) == 0)
+            matches_pattern = 1;
+    }
+    else if (rhs->type == EXPR_FUNCTION_CALL &&
+             rhs->expr_data.function_call_data.id != NULL)
+    {
+        const char *candidate = resolve_tfpglist_specialized_id_from_typename(
+            symtab, rhs->expr_data.function_call_data.id);
+        if (candidate != NULL &&
+            strcasecmp(candidate, expected_specialized_id) == 0)
+        {
+            /* Legacy lowering produced a dummy argument referencing the type */
+            ListNode_t *args = rhs->expr_data.function_call_data.args_expr;
+            if (args == NULL)
+                matches_pattern = 1;
+            else if (args->next == NULL)
+            {
+                struct Expression *arg_expr = (struct Expression *)args->cur;
+                if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID &&
+                    arg_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(arg_expr->expr_data.id,
+                        rhs->expr_data.function_call_data.id))
+                    matches_pattern = 1;
+            }
+        }
+    }
+
+    if (!matches_pattern)
+    {
+        if (debug_env)
+            fprintf(stderr, "[GPC] TFPG ctor: rhs did not match constructor pattern\n");
+        return 0;
+    }
+
+    struct Expression *ctor_expr =
+        make_tfpglist_ctor_expr(lhs_record, rhs->line_num);
+    if (ctor_expr == NULL)
+    {
+        if (debug_env)
+            fprintf(stderr, "[GPC] TFPG ctor: failed to build ctor expression\n");
+        return 0;
+    }
+
+    if (debug_env)
+        fprintf(stderr, "[GPC] TFPG ctor: rewriting ctor for %s\n",
+            expected_specialized_id);
+
+    destroy_expr(rhs);
+    *rhs_ptr = ctor_expr;
+    return 1;
+}
 static void semcheck_stmt_set_call_gpc_type(struct Statement *stmt, GpcType *type,
     int owns_existing)
 {
@@ -1187,6 +1374,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val = 0;
 
     var = stmt->stmt_data.var_assign_data.var;
+    expr = stmt->stmt_data.var_assign_data.expr;
+
+    rewrite_tfpglist_constructor_if_needed(symtab, max_scope_lev, var,
+        &stmt->stmt_data.var_assign_data.expr);
     expr = stmt->stmt_data.var_assign_data.expr;
 
     /* NOTE: Grammar will make sure the left side is a variable */
@@ -2355,6 +2546,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
     int loop_var_type, collection_type;
+    int loop_var_nonordinal = 0;
     
     assert(symtab != NULL);
     assert(stmt != NULL);
@@ -2368,28 +2560,55 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     if (loop_var != NULL) {
         return_val += semcheck_expr_main(&loop_var_type, symtab, loop_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         
-        /* Verify it's an ordinal type (int, char, etc.) */
         if (!is_ordinal_type(loop_var_type) && loop_var_type != UNKNOWN_TYPE) {
-            fprintf(stderr, "Error on line %d: for-in loop variable must be an ordinal type!\n\n",
-                    stmt->line_num);
-            ++return_val;
+            loop_var_nonordinal = 1;
         }
+    } else {
+        loop_var_type = UNKNOWN_TYPE;
     }
     
     /* Check collection expression */
     if (collection != NULL) {
+        int collection_type_owned = 0;
+        int collection_is_array = 0;
+        int collection_is_list = 0;
+        const char *list_element_id = NULL;
+
         return_val += semcheck_expr_main(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
         
-        /* Verify it's an array type */
         GpcType *collection_gpc_type = semcheck_resolve_expression_gpc_type(symtab, collection, 
-                                                                            INT_MAX, NO_MUTATE, NULL);
-        if (collection_gpc_type != NULL && !gpc_type_is_array(collection_gpc_type)) {
+                                                                            INT_MAX, NO_MUTATE, &collection_type_owned);
+        if (collection_gpc_type != NULL) {
+            if (gpc_type_is_array(collection_gpc_type)) {
+                collection_is_array = 1;
+            } else if (gpc_type_is_record(collection_gpc_type)) {
+                struct RecordType *record_info = gpc_type_get_record(collection_gpc_type);
+                if (record_info != NULL && record_info->type_id != NULL) {
+                    const char *prefix = "TFPGList$";
+                    size_t prefix_len = strlen(prefix);
+                    if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+                        collection_is_list = 1;
+                        list_element_id = record_info->type_id + prefix_len;
+                    }
+                }
+            }
+        }
+
+        if (!collection_is_array && !collection_is_list) {
             fprintf(stderr, "Error on line %d: for-in loop requires an array expression!\n\n",
                     stmt->line_num);
             ++return_val;
+        } else if (!collection_is_list && loop_var_nonordinal) {
+            fprintf(stderr, "Error on line %d: for-in loop variable must be an ordinal type!\n\n",
+                    stmt->line_num);
+            ++return_val;
         }
-        
-        /* TODO: Check that loop variable type matches array element type */
+
+        if (collection_type_owned && collection_gpc_type != NULL)
+            destroy_gpc_type(collection_gpc_type);
+        (void)list_element_id;
+    } else {
+        collection_type = UNKNOWN_TYPE;
     }
     
     /* Check body statement */
