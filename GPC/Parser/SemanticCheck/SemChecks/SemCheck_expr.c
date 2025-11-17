@@ -4987,9 +4987,10 @@ int semcheck_relop(int *type_return,
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
                 int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok)
+                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
                 {
-                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, or character types!\n\n",
+                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
