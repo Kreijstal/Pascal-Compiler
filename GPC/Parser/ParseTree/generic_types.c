@@ -1,9 +1,16 @@
 #include "generic_types.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 #include "../SemanticCheck/HashTable/HashTable.h"
+#include "tree.h"
+#include "tree_types.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+/* Forward declarations */
+extern struct RecordType *clone_record_type(const struct RecordType *record_type);
+extern int PushTypeOntoScope_Typed(struct SymTab *symtab, char *id, GpcType *type);
+extern void destroy_gpc_type(GpcType *type);
 
 // Global generic type registry
 static GenericRegistry g_generic_registry = {NULL, NULL};
@@ -214,6 +221,55 @@ GpcType* generic_substitute_all_parameters(GpcType* type, char** param_names, Gp
     return result;
 }
 
+/* Helper function to substitute type parameters in a RecordType's fields */
+static void substitute_type_params_in_record(struct RecordType* record, 
+                                             char** type_params,
+                                             char** concrete_types,
+                                             int num_params) {
+    if (record == NULL || type_params == NULL || concrete_types == NULL || num_params == 0) {
+        return;
+    }
+
+    /* Iterate through fields and substitute type_id references */
+    ListNode_t* field_node = record->fields;
+    while (field_node != NULL) {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL) {
+            struct RecordField* field = (struct RecordField*)field_node->cur;
+            
+            /* Check if field's type_id matches any type parameter */
+            if (field->type_id != NULL) {
+                for (int i = 0; i < num_params; i++) {
+                    if (strcmp(field->type_id, type_params[i]) == 0) {
+                        /* Substitute with concrete type */
+                        free(field->type_id);
+                        field->type_id = strdup(concrete_types[i]);
+                        break;
+                    }
+                }
+            }
+            
+            /* Also check array element type_id */
+            if (field->is_array && field->array_element_type_id != NULL) {
+                for (int i = 0; i < num_params; i++) {
+                    if (strcmp(field->array_element_type_id, type_params[i]) == 0) {
+                        /* Substitute with concrete type */
+                        free(field->array_element_type_id);
+                        field->array_element_type_id = strdup(concrete_types[i]);
+                        break;
+                    }
+                }
+            }
+            
+            /* Recursively substitute in nested records */
+            if (field->nested_record != NULL) {
+                substitute_type_params_in_record(field->nested_record, type_params, 
+                                                concrete_types, num_params);
+            }
+        }
+        field_node = field_node->next;
+    }
+}
+
 /* Process all pending specializations and add them to the symbol table */
 int generic_process_specializations(struct SymTab* symtab) {
     if (symtab == NULL) {
@@ -292,8 +348,65 @@ int generic_process_specializations(struct SymTab* symtab) {
             continue;
         }
 
-        /* TODO: Actually perform specialization by cloning and substituting
-         * For now, mark as processed but don't create the type */
+        /* Actually perform specialization by creating a specialized type */
+        Tree_t* generic_tree = generic_decl->original_decl;
+        if (generic_tree == NULL || generic_tree->type != TREE_TYPE_DECL) {
+            fprintf(stderr, "Error: Invalid generic declaration for '%s'\n", spec->generic_name);
+            free(concrete_gpc_types);
+            errors++;
+            spec = spec->next;
+            continue;
+        }
+
+        /* For now, handle only record/class generics */
+        if (generic_tree->tree_data.type_decl_data.kind != TYPE_DECL_RECORD &&
+            generic_tree->tree_data.type_decl_data.kind != TYPE_DECL_ALIAS) {
+            /* Skip non-record/non-alias generics for now */
+            free(concrete_gpc_types);
+            spec = spec->next;
+            continue;
+        }
+
+        /* Create a specialized type by cloning and substituting */
+        GpcType* specialized_type = NULL;
+        
+        if (generic_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
+            /* Clone the record type and substitute type parameters in field types */
+            struct RecordType* generic_record = generic_tree->tree_data.type_decl_data.info.record;
+            if (generic_record != NULL) {
+                struct RecordType* specialized_record = clone_record_type(generic_record);
+                if (specialized_record != NULL) {
+                    /* Substitute type parameters in field type_ids */
+                    substitute_type_params_in_record(specialized_record, 
+                                                     generic_decl->type_parameters,
+                                                     spec->concrete_types,
+                                                     generic_decl->num_type_params);
+                    
+                    /* Update the specialized record's type_id */
+                    if (specialized_record->type_id != NULL) {
+                        free(specialized_record->type_id);
+                    }
+                    specialized_record->type_id = strdup(spec->specialized_name);
+                    
+                    /* Create GpcType for the specialized record */
+                    specialized_type = create_record_type(specialized_record);
+                }
+            }
+        }
+        
+        if (specialized_type != NULL) {
+            /* Add the specialized type to the symbol table */
+            if (PushTypeOntoScope_Typed(symtab, spec->specialized_name, specialized_type) == 0) {
+                /* Success - store the GpcType in the specialization */
+                spec->specialized_type = specialized_type;
+            } else {
+                /* Failed to add to symbol table */
+                fprintf(stderr, "Error: Failed to add specialized type '%s' to symbol table\n",
+                       spec->specialized_name);
+                destroy_gpc_type(specialized_type);
+                errors++;
+            }
+        }
         
         free(concrete_gpc_types);
         spec = spec->next;

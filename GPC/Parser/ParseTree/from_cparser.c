@@ -776,6 +776,89 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     if (spec_node == NULL)
         return UNKNOWN_TYPE;
 
+    /* Handle constructed types (generic specializations like TFoo<Integer>) */
+    if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+        /* Extract generic name and type arguments to create mangled name */
+        ast_t *id_node = spec_node->child;
+        if (id_node == NULL || id_node->sym == NULL)
+            return UNKNOWN_TYPE;
+        
+        char *generic_name = strdup(id_node->sym->name);
+        if (generic_name == NULL)
+            return UNKNOWN_TYPE;
+        
+        /* Find TYPE_ARG_LIST */
+        ast_t *arg_list_node = id_node->next;
+        while (arg_list_node != NULL && arg_list_node->typ != PASCAL_T_TYPE_ARG_LIST) {
+            arg_list_node = arg_list_node->next;
+        }
+        
+        if (arg_list_node == NULL) {
+            free(generic_name);
+            return UNKNOWN_TYPE;
+        }
+        
+        /* Count and extract type arguments */
+        int num_args = 0;
+        ast_t *arg = arg_list_node->child;
+        while (arg != NULL) {
+            if (arg->typ == PASCAL_T_TYPE_ARG) {
+                num_args++;
+            }
+            arg = arg->next;
+        }
+        
+        if (num_args == 0) {
+            free(generic_name);
+            return UNKNOWN_TYPE;
+        }
+        
+        /* Extract concrete type names */
+        char **concrete_types = malloc(sizeof(char*) * num_args);
+        if (concrete_types == NULL) {
+            free(generic_name);
+            return UNKNOWN_TYPE;
+        }
+        
+        arg = arg_list_node->child;
+        int idx = 0;
+        while (arg != NULL && idx < num_args) {
+            if (arg->typ == PASCAL_T_TYPE_ARG && arg->child != NULL && arg->child->sym != NULL) {
+                concrete_types[idx] = strdup(arg->child->sym->name);
+                if (concrete_types[idx] == NULL) {
+                    for (int i = 0; i < idx; i++) {
+                        free(concrete_types[i]);
+                    }
+                    free(concrete_types);
+                    free(generic_name);
+                    return UNKNOWN_TYPE;
+                }
+                idx++;
+            }
+            arg = arg->next;
+        }
+        
+        /* Register specialization and create mangled name */
+        generic_registry_add_specialization(generic_name, concrete_types, num_args);
+        char *mangled = generic_mangle_name(generic_name, concrete_types, num_args);
+        
+        /* Cleanup */
+        for (int i = 0; i < num_args; i++) {
+            free(concrete_types[i]);
+        }
+        free(concrete_types);
+        free(generic_name);
+        
+        /* Return the mangled name as type_id */
+        if (type_id_out != NULL) {
+            *type_id_out = mangled;
+        } else {
+            free(mangled);
+        }
+        
+        return UNKNOWN_TYPE; /* Type will be looked up by mangled name */
+    }
+
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
         int result = map_type_name(dup, type_id_out);
@@ -1173,10 +1256,16 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
             free(concrete_types[i]);
         }
         free(concrete_types);
+        
+        /* Store the mangled name to use for type lookup later */
+        char* mangled_name = generic_mangle_name(generic_name, spec->concrete_types, spec->num_concrete_types);
         free(generic_name);
 
-        /* Return NULL for now - specialized type will be created during semantic check */
-        /* The specialized_type field will be filled in later */
+        /* Return NULL for now - the specialized type will be created during semantic check
+         * The type will then be looked up by its mangled name during variable declaration */
+        /* NOTE: We could potentially look it up immediately if it's already been specialized,
+         * but that would require access to the symbol table here, which we don't have */
+        free(mangled_name);
         return NULL;
     }
 
