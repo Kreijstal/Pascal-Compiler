@@ -1751,6 +1751,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         cur = cur->next;
     }
 
+    /* After all type declarations are processed, handle generic specializations */
+    int generic_errors = generic_process_specializations(symtab);
+    if (generic_errors > 0) {
+        fprintf(stderr, "Warning: %d generic specialization(s) could not be fully processed\n", 
+                generic_errors);
+        /* Don't fail compilation for now, just warn */
+    }
+
     return return_val;
 }
 

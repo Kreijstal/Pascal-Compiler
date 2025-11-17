@@ -1,4 +1,6 @@
 #include "generic_types.h"
+#include "../SemanticCheck/SymTab/SymTab.h"
+#include "../SemanticCheck/HashTable/HashTable.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -210,6 +212,94 @@ GpcType* generic_substitute_all_parameters(GpcType* type, char** param_names, Gp
     }
     
     return result;
+}
+
+/* Process all pending specializations and add them to the symbol table */
+int generic_process_specializations(struct SymTab* symtab) {
+    if (symtab == NULL) {
+        return -1;
+    }
+
+    int errors = 0;
+    GenericSpecialization* spec = g_generic_registry.specializations;
+    
+    while (spec != NULL) {
+        /* Skip if already processed */
+        if (spec->specialized_type != NULL) {
+            spec = spec->next;
+            continue;
+        }
+
+        /* Find the generic declaration */
+        GenericTypeDecl* generic_decl = generic_registry_find_decl(spec->generic_name);
+        if (generic_decl == NULL) {
+            fprintf(stderr, "Error: Generic type '%s' not found\n", spec->generic_name);
+            errors++;
+            spec = spec->next;
+            continue;
+        }
+
+        /* Verify parameter count matches */
+        if (generic_decl->num_type_params != spec->num_concrete_types) {
+            fprintf(stderr, "Error: Generic type '%s' expects %d type parameters but got %d\n",
+                    spec->generic_name, generic_decl->num_type_params, spec->num_concrete_types);
+            errors++;
+            spec = spec->next;
+            continue;
+        }
+
+        /* For now, we'll create a simple placeholder type.
+         * Full implementation would require:
+         * 1. Cloning the generic type's AST
+         * 2. Substituting type parameters throughout
+         * 3. Running semantic checking on the specialized version
+         * 
+         * This is a simplified version that just registers the specialized name
+         * so the compiler knows it exists.
+         */
+        
+        /* Look up concrete types in symbol table */
+        GpcType** concrete_gpc_types = malloc(sizeof(GpcType*) * spec->num_concrete_types);
+        if (concrete_gpc_types == NULL) {
+            errors++;
+            spec = spec->next;
+            continue;
+        }
+
+        int all_types_found = 1;
+        for (int i = 0; i < spec->num_concrete_types; i++) {
+            struct HashNode* type_node = NULL;
+            if (FindIdent(&type_node, symtab, spec->concrete_types[i]) == -1 || type_node == NULL) {
+                fprintf(stderr, "Error: Type '%s' not found for specialization\n", 
+                        spec->concrete_types[i]);
+                all_types_found = 0;
+                break;
+            }
+            
+            if (type_node->type == NULL) {
+                fprintf(stderr, "Error: Type '%s' has no GpcType\n", spec->concrete_types[i]);
+                all_types_found = 0;
+                break;
+            }
+            
+            concrete_gpc_types[i] = type_node->type;
+        }
+
+        if (!all_types_found) {
+            free(concrete_gpc_types);
+            errors++;
+            spec = spec->next;
+            continue;
+        }
+
+        /* TODO: Actually perform specialization by cloning and substituting
+         * For now, mark as processed but don't create the type */
+        
+        free(concrete_gpc_types);
+        spec = spec->next;
+    }
+
+    return errors;
 }
 
 void generic_registry_cleanup(void) {

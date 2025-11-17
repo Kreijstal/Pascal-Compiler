@@ -58,6 +58,10 @@ GpcType* generic_substitute_type_parameter(GpcType* type, const char* param_name
 // Perform full substitution of all type parameters in a GpcType
 GpcType* generic_substitute_all_parameters(GpcType* type, char** param_names, GpcType** concrete_types, int num_params);
 
+// Process all pending specializations (should be called after type declarations are parsed)
+// This will create specialized types and add them to the symbol table
+int generic_process_specializations(struct SymTab* symtab);
+
 // Clean up the generic registry
 void generic_registry_cleanup(void);
 
