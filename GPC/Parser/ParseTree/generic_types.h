@@ -55,6 +55,9 @@ char* generic_mangle_name(const char* generic_name, char** concrete_types, int n
 // Perform type parameter substitution in a GpcType
 GpcType* generic_substitute_type_parameter(GpcType* type, const char* param_name, GpcType* concrete_type);
 
+// Perform full substitution of all type parameters in a GpcType
+GpcType* generic_substitute_all_parameters(GpcType* type, char** param_names, GpcType** concrete_types, int num_params);
+
 // Clean up the generic registry
 void generic_registry_cleanup(void);
 

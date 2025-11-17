@@ -20,6 +20,7 @@
 #include "type_tags.h"
 #include "pascal_parser.h"
 #include "GpcType.h"
+#include "generic_types.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 
 /* ============================================================================
@@ -1094,6 +1095,90 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
 
     if (spec_node == NULL)
         return NULL;
+
+    /* Handle constructed types (generic type specialization like TFoo<Integer>) */
+    if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+        /* Structure: CONSTRUCTED_TYPE -> ID -> TYPE_ARG_LIST -> TYPE_ARG ... */
+        ast_t *id_node = spec_node->child;
+        if (id_node == NULL || id_node->sym == NULL)
+            return NULL;
+
+        char *generic_name = strdup(id_node->sym->name);
+        if (generic_name == NULL)
+            return NULL;
+
+        /* Find TYPE_ARG_LIST to extract concrete types */
+        ast_t *arg_list_node = id_node->next;
+        while (arg_list_node != NULL && arg_list_node->typ != PASCAL_T_TYPE_ARG_LIST) {
+            arg_list_node = arg_list_node->next;
+        }
+
+        if (arg_list_node == NULL) {
+            free(generic_name);
+            return NULL;
+        }
+
+        /* Count type arguments */
+        int num_args = 0;
+        ast_t *arg = arg_list_node->child;
+        while (arg != NULL) {
+            if (arg->typ == PASCAL_T_TYPE_ARG) {
+                num_args++;
+            }
+            arg = arg->next;
+        }
+
+        if (num_args == 0) {
+            free(generic_name);
+            return NULL;
+        }
+
+        /* Extract concrete type names */
+        char **concrete_types = malloc(sizeof(char*) * num_args);
+        if (concrete_types == NULL) {
+            free(generic_name);
+            return NULL;
+        }
+
+        arg = arg_list_node->child;
+        int idx = 0;
+        while (arg != NULL && idx < num_args) {
+            if (arg->typ == PASCAL_T_TYPE_ARG) {
+                /* Type argument should have an identifier child */
+                ast_t *type_id = arg->child;
+                if (type_id != NULL && type_id->sym != NULL) {
+                    concrete_types[idx] = strdup(type_id->sym->name);
+                    if (concrete_types[idx] == NULL) {
+                        /* Cleanup on error */
+                        for (int i = 0; i < idx; i++) {
+                            free(concrete_types[i]);
+                        }
+                        free(concrete_types);
+                        free(generic_name);
+                        return NULL;
+                    }
+                    idx++;
+                }
+            }
+            arg = arg->next;
+        }
+
+        /* Register this as a specialization request */
+        GenericSpecialization *spec = generic_registry_add_specialization(
+            generic_name, concrete_types, num_args
+        );
+
+        /* Cleanup temporary arrays (registry makes its own copies) */
+        for (int i = 0; i < num_args; i++) {
+            free(concrete_types[i]);
+        }
+        free(concrete_types);
+        free(generic_name);
+
+        /* Return NULL for now - specialized type will be created during semantic check */
+        /* The specialized_type field will be filled in later */
+        return NULL;
+    }
 
     /* Handle primitive types by identifier */
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
