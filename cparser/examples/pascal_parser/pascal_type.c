@@ -375,8 +375,14 @@ static combinator_t* create_type_ref_parser(void) {
     );
     combinator_t* simple_type = token(cident(PASCAL_T_IDENTIFIER));
     
+    // Include array types, records, and other complex type specs
+    // This allows class fields to have types like "array of T"
     return multi(new_combinator(), PASCAL_T_NONE,
         constructed_type,
+        array_type(PASCAL_T_ARRAY_TYPE),
+        set_type(PASCAL_T_SET),
+        pointer_type(PASCAL_T_POINTER_TYPE),
+        file_type(PASCAL_T_FILE_TYPE),
         simple_type,
         NULL
     );
