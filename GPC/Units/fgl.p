@@ -1,23 +1,27 @@
-{ Minimal FGL (Free Pascal Generic Library) unit stub
+{ Free Pascal Generic Library (FGL) - stub implementation
   
-  NOTE: Full generic/template support is not yet implemented in this compiler.
-  
-  This stub allows FGL-using code to compile by providing type declarations
-  that the parser recognizes. Actual specialized implementations must be
-  provided in the using program or specialized manually.
-  
-  The test record_operators_fgl.p provides its own TMyRecordList implementation
-  inline, so this unit just needs to exist for the 'uses FGL' clause.
+  This unit provides declarations for FGL generic types. The actual
+  implementations must be specialized in user code.
 }
 
 unit FGL;
 
 interface
 
-{ The generic TFPGList declaration is recognized by the parser but not
-  yet fully supported by the type system. Users must provide specialized
-  versions in their own code until full generic support is implemented. }
+type
+  { Generic list container - declaration only
+    Users must provide specialized implementations }
+  TFPGList<T> = class
+    procedure Add(const Item: T);
+    function Get(Index: Integer): T;
+    property Items[Index: Integer]: T read Get; default;
+    property Count: Integer;
+  end;
 
 implementation
+
+{ TFPGList methods are not implemented in the stub.
+  Specialized versions must be provided by the compiler's generic
+  instantiation system or in user code. }
 
 end.

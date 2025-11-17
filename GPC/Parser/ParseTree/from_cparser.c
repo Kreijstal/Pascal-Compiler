@@ -5558,6 +5558,107 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         return tree;
     }
 
+    /* Handle implicit program (file starts with uses/type/var/begin without program declaration) */
+    if (cur->typ == PASCAL_T_USES_SECTION || cur->typ == PASCAL_T_TYPE_SECTION ||
+        cur->typ == PASCAL_T_VAR_SECTION || cur->typ == PASCAL_T_CONST_SECTION ||
+        cur->typ == PASCAL_T_BEGIN_BLOCK || cur->typ == PASCAL_T_MAIN_BLOCK) {
+        
+        /* Treat as an implicit program with default name */
+        char *program_id = strdup("program");
+        ListNode_t *args = NULL;
+        ListNode_t *uses = NULL;
+        ListNode_t *const_decls = NULL;
+        ListBuilder var_decls_builder;
+        list_builder_init(&var_decls_builder);
+        ListBuilder label_builder;
+        list_builder_init(&label_builder);
+        ListNode_t *type_decls = NULL;
+        ListNode_t *subprograms = NULL;
+        ListNode_t **subprograms_tail = &subprograms;
+        struct Statement *body = NULL;
+        ast_t *type_section_ast = NULL;
+
+        /* Create visited set */
+        VisitedSet *visited = visited_set_create();
+        if (visited == NULL) {
+            fprintf(stderr, "ERROR: Failed to allocate visited set\n");
+            free(program_id);
+            return NULL;
+        }
+
+        /* Process all top-level sections */
+        ast_t *section = cur;
+        while (section != NULL) {
+            if (!is_safe_to_continue(visited, section)) {
+                fprintf(stderr, "ERROR: Circular reference detected in implicit program, stopping traversal\n");
+                break;
+            }
+            
+            ast_t *node = unwrap_pascal_node(section);
+            if (node != NULL) {
+                switch (node->typ) {
+                case PASCAL_T_USES_SECTION:
+                    append_uses_from_section(node, &uses);
+                    break;
+                case PASCAL_T_TYPE_SECTION:
+                    type_section_ast = node;
+                    append_type_decls_from_section(node, &type_decls);
+                    break;
+                case PASCAL_T_CONST_SECTION:
+                    append_const_decls_from_section(node, &const_decls, &var_decls_builder, type_section_ast);
+                    break;
+                case PASCAL_T_VAR_SECTION:
+                    list_builder_extend(&var_decls_builder, convert_var_section(node));
+                    break;
+                case PASCAL_T_LABEL_SECTION:
+                    append_labels_from_section(node, &label_builder);
+                    break;
+                case PASCAL_T_PROCEDURE_DECL: {
+                    Tree_t *proc = convert_procedure(node);
+                    if (proc != NULL) {
+                        ListNode_t *list_node = CreateListNode(proc, LIST_TREE);
+                        *subprograms_tail = list_node;
+                        subprograms_tail = &list_node->next;
+                    }
+                    break;
+                }
+                case PASCAL_T_FUNCTION_DECL: {
+                    Tree_t *func = convert_function(node);
+                    if (func != NULL) {
+                        ListNode_t *list_node = CreateListNode(func, LIST_TREE);
+                        *subprograms_tail = list_node;
+                        subprograms_tail = &list_node->next;
+                    }
+                    break;
+                }
+                case PASCAL_T_METHOD_IMPL: {
+                    Tree_t *method_tree = convert_method_impl(node);
+                    if (method_tree != NULL) {
+                        ListNode_t *list_node = CreateListNode(method_tree, LIST_TREE);
+                        *subprograms_tail = list_node;
+                        subprograms_tail = &list_node->next;
+                    }
+                    break;
+                }
+                case PASCAL_T_BEGIN_BLOCK:
+                case PASCAL_T_MAIN_BLOCK:
+                    body = convert_block(node);
+                    break;
+                default:
+                    break;
+                }
+            }
+            section = section->next;
+        }
+
+        visited_set_destroy(visited);
+
+        ListNode_t *label_decls = list_builder_finish(&label_builder);
+        Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
+                                  list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
+        return tree;
+    }
+
     fprintf(stderr, "ERROR: Unsupported Pascal AST root type %d.\n", cur->typ);
     return NULL;
 }
