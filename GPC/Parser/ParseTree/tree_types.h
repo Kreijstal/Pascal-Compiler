@@ -11,6 +11,10 @@
 /* Forward declarations to avoid circular dependencies */
 struct GpcType;
 struct HashNode;  /* Forward declare HashNode to avoid circular dependency */
+struct Tree;      /* Forward declare Tree so MethodTemplate can reference it */
+struct ast_t;     /* Forward-declare AST type without including parser headers */
+struct GenericTypeDecl;
+struct RecordType;
 
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
@@ -24,6 +28,7 @@ struct TypeAlias
 {
     int base_type;
     char *target_type_id;
+    struct RecordType *inline_record_type;
     int is_array;
     int array_start;
     int array_end;
@@ -53,10 +58,9 @@ struct GenericDecl
 {
     char **type_parameters;     /* Array of type parameter names (e.g., ["T"]) */
     int num_type_params;        /* Number of type parameters */
-    void *original_ast;         /* Pointer to original AST node for substitution */
+    struct ast_t *original_ast; /* Pointer to original AST node for substitution */
+    struct RecordType *record_template; /* Optional record/class template for generics */
 };
-
-struct RecordType;
 
 struct RecordField
 {
@@ -92,16 +96,47 @@ struct MethodInfo
     int vmt_index;            /* Index in VMT (-1 if not virtual) */
 };
 
+enum MethodTemplateKind
+{
+    METHOD_TEMPLATE_UNKNOWN = 0,
+    METHOD_TEMPLATE_PROCEDURE,
+    METHOD_TEMPLATE_FUNCTION,
+    METHOD_TEMPLATE_CONSTRUCTOR,
+    METHOD_TEMPLATE_DESTRUCTOR,
+    METHOD_TEMPLATE_OPERATOR
+};
+
+/* Template copy of a method declaration for future instantiation */
+struct MethodTemplate
+{
+    char *name;               /* Simple method name */
+    struct ast_t *method_ast; /* Cloned AST for the original declaration */
+    struct Tree *method_tree; /* Converted Tree_t template built on-demand */
+    enum MethodTemplateKind kind;  /* Method classification */
+    int is_class_method;      /* 1 if declared with CLASS */
+    int is_virtual;           /* 1 if directive virtual found */
+    int is_override;          /* 1 if directive override found */
+    int has_return_type;      /* 1 if function with explicit return type */
+    struct ast_t *params_ast;       /* Pointer inside method_ast for parameter list */
+    struct ast_t *return_type_ast;  /* Pointer inside method_ast for return type */
+    struct ast_t *directives_ast;   /* Pointer inside method_ast for directives */
+    struct ast_t *method_impl_ast;  /* Cloned AST for the implementation */
+};
+
 struct RecordType
 {
     ListNode_t *fields;
     ListNode_t *properties;
     char *parent_class_name;  /* For class inheritance */
     ListNode_t *methods;      /* List of MethodInfo for virtual/override methods */
+    ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
     char *type_id;            /* Canonical type name if available */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for gpc_type_sizeof */
+    struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */
+    char **generic_args;      /* Concrete type arguments for specialization */
+    int num_generic_args;
 };
 
 static inline int record_type_is_class(const struct RecordType *record)

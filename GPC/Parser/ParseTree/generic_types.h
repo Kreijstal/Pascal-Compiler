@@ -15,6 +15,7 @@ struct GenericTypeDecl {
     char** type_parameters;        // Array of type parameter names (e.g., ["T"])
     int num_type_params;           // Number of type parameters
     Tree_t* original_decl;         // Original AST node for the generic declaration
+    struct RecordType *record_template; // Cached record/class template for instantiation
     GenericTypeDecl* next;         // Linked list of generic declarations
 };
 
