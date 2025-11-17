@@ -2855,6 +2855,75 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     return decl;
 }
 
+/* Convert a generic type declaration node (TFoo<T> = ...) */
+static Tree_t *convert_generic_type_decl(ast_t *generic_decl_node) {
+    if (generic_decl_node == NULL)
+        return NULL;
+
+    /* Structure: GENERIC_TYPE_DECL -> ID -> TYPE_PARAM_LIST -> TYPE_SPEC */
+    ast_t *id_node = generic_decl_node->child;
+    if (id_node == NULL || id_node->sym == NULL)
+        return NULL;
+
+    char *id = strdup(id_node->sym->name);
+    if (id == NULL)
+        return NULL;
+
+    /* Find TYPE_PARAM_LIST to extract type parameters */
+    ast_t *param_list_node = id_node->next;
+    while (param_list_node != NULL && param_list_node->typ != PASCAL_T_TYPE_PARAM_LIST) {
+        param_list_node = param_list_node->next;
+    }
+
+    char **type_params = NULL;
+    int num_params = 0;
+
+    if (param_list_node != NULL) {
+        /* Count parameters first */
+        ast_t *param = param_list_node->child;
+        while (param != NULL) {
+            if (param->typ == PASCAL_T_TYPE_PARAM && param->sym != NULL) {
+                num_params++;
+            }
+            param = param->next;
+        }
+
+        /* Allocate and populate parameter array */
+        if (num_params > 0) {
+            type_params = malloc(sizeof(char*) * num_params);
+            if (type_params == NULL) {
+                free(id);
+                return NULL;
+            }
+
+            param = param_list_node->child;
+            int idx = 0;
+            while (param != NULL && idx < num_params) {
+                if (param->typ == PASCAL_T_TYPE_PARAM && param->sym != NULL) {
+                    type_params[idx] = strdup(param->sym->name);
+                    if (type_params[idx] == NULL) {
+                        /* Cleanup on error */
+                        for (int i = 0; i < idx; i++) {
+                            free(type_params[i]);
+                        }
+                        free(type_params);
+                        free(id);
+                        return NULL;
+                    }
+                    idx++;
+                }
+                param = param->next;
+            }
+        }
+    }
+
+    /* Create the generic type declaration tree node */
+    Tree_t *decl = mk_generic_type_decl(generic_decl_node->line, id, type_params, num_params, 
+                                        (void*)generic_decl_node);
+
+    return decl;
+}
+
 static struct Statement *convert_statement(ast_t *stmt_node);
 static struct Statement *convert_block(ast_t *block_node);
 static Tree_t *convert_procedure(ast_t *proc_node);
@@ -3053,6 +3122,13 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         
         if (type_decl->typ == PASCAL_T_TYPE_DECL) {
             Tree_t *decl = convert_type_decl(type_decl);
+            if (decl != NULL) {
+                ListNode_t *node = CreateListNode(decl, LIST_TREE);
+                *tail = node;
+                tail = &node->next;
+            }
+        } else if (type_decl->typ == PASCAL_T_GENERIC_TYPE_DECL) {
+            Tree_t *decl = convert_generic_type_decl(type_decl);
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;

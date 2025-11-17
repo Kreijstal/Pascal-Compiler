@@ -31,6 +31,7 @@
 #include "../ParseTree/GpcType.h"
 #include "../ParseTree/from_cparser.h"
 #include "../ParseTree/operator_registry.h"
+#include "../ParseTree/generic_types.h"
 #include "../parser_error.h"
 #include "../ErrVars.h"
 #include "./SymTab/SymTab.h"
@@ -775,6 +776,9 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     assert(parse_tree != NULL);
     assert(sem_result != NULL);
+
+    /* Initialize the generic type registry */
+    generic_registry_init();
 
     symtab = InitSymTab();
     semcheck_add_builtins(symtab);
@@ -1660,11 +1664,33 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 break;
             }
             case TYPE_DECL_GENERIC:
-                /* Generic type declarations are registered in the generic registry
-                 * but not added to the symbol table until specialized */
-                var_type = HASHVAR_INTEGER;  /* Placeholder - generics don't go in symbol table directly */
-                /* TODO: Register generic declaration in generic_registry */
-                break;
+            {
+                /* Register generic type declaration in the generic registry */
+                struct GenericDecl *generic_decl = &tree->tree_data.type_decl_data.info.generic;
+                
+                if (generic_decl->type_parameters != NULL && generic_decl->num_type_params > 0) {
+                    /* Register in generic registry for later specialization */
+                    GenericTypeDecl *registered = generic_registry_add_decl(
+                        tree->tree_data.type_decl_data.id,
+                        generic_decl->type_parameters,
+                        generic_decl->num_type_params,
+                        tree
+                    );
+                    
+                    if (registered == NULL) {
+                        semantic_error(tree->line_num, 0, 
+                            "Failed to register generic type %s", 
+                            tree->tree_data.type_decl_data.id);
+                        return_val += 1;
+                    }
+                }
+                
+                /* Generic types are not added to symbol table directly */
+                /* They are only added when specialized (e.g., TFoo<Integer>) */
+                /* Skip the normal type registration below */
+                cur = cur->next;
+                continue;
+            }
             default:
                 var_type = HASHVAR_INTEGER;
                 break;

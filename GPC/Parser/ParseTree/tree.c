@@ -1743,6 +1743,26 @@ Tree_t *mk_record_type(int line_num, char *id, struct RecordType *record_type)
     return new_tree;
 }
 
+Tree_t *mk_generic_type_decl(int line_num, char *id, char **type_params, int num_type_params, void *original_ast)
+{
+    Tree_t *new_tree;
+    new_tree = (Tree_t *)malloc(sizeof(Tree_t));
+    assert(new_tree != NULL);
+
+    new_tree->line_num = line_num;
+    new_tree->type = TREE_TYPE_DECL;
+    new_tree->tree_data.type_decl_data.id = id;
+    new_tree->tree_data.type_decl_data.kind = TYPE_DECL_GENERIC;
+    new_tree->tree_data.type_decl_data.gpc_type = NULL;
+    new_tree->tree_data.type_decl_data.info.generic.type_parameters = type_params;
+    new_tree->tree_data.type_decl_data.info.generic.num_type_params = num_type_params;
+    new_tree->tree_data.type_decl_data.info.generic.original_ast = original_ast;
+    new_tree->tree_data.type_decl_data.defined_in_unit = 0;
+    new_tree->tree_data.type_decl_data.unit_is_public = 0;
+
+    return new_tree;
+}
+
 
 Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const_decl,
     ListNode_t *label_decl, ListNode_t *type_decl, ListNode_t *var_decl,

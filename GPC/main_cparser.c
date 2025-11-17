@@ -34,6 +34,7 @@
 #include "flags.h"
 #include "Parser/ParseTree/tree.h"
 #include "Parser/ParseTree/from_cparser.h"
+#include "Parser/ParseTree/generic_types.h"
 #include "Parser/pascal_frontend.h"
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
@@ -956,6 +957,9 @@ int main(int argc, char **argv)
     destroy_tree(prelude_tree);
     destroy_tree(user_tree);
     free(stdlib_path);
+
+    /* Clean up generic type registry */
+    generic_registry_cleanup();
 
     if (ast_nil != NULL)
     {
