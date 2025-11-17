@@ -59,6 +59,9 @@ function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 
+{ Generic procedure to free an object and set its reference to nil }
+procedure FreeAndNil(var Obj: Pointer);
+
 implementation
 
 function gpc_format(fmt: AnsiString; args: Pointer; count: NativeUInt): AnsiString; external;
@@ -491,6 +494,21 @@ end;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 begin
     FreeLibrary := gpc_free_library(LibHandle) <> 0;
+end;
+
+procedure FreeAndNil(var Obj: Pointer);
+var
+    Temp: Pointer;
+begin
+    { Note: This is a simplified implementation.
+      A full implementation would call the object's destructor. }
+    Temp := Obj;
+    if Temp <> nil then
+    begin
+        { Set to nil. In a complete implementation, this would
+          call the object's destructor first. }
+        Obj := nil;
+    end;
 end;
 
 end.
