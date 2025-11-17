@@ -161,14 +161,12 @@ static combinator_t *cached_unit_parser = NULL;
 static combinator_t *cached_program_parser = NULL;
 static bool generic_registry_ready = false;
 
-static void reset_generic_registry(void)
+static void ensure_generic_registry(void)
 {
-    if (generic_registry_ready) {
-        generic_registry_cleanup();
-    } else {
-        generic_registry_ready = true;
-    }
+    if (generic_registry_ready)
+        return;
     generic_registry_init();
+    generic_registry_ready = true;
 }
 
 static combinator_t *get_or_create_unit_parser(void)
@@ -290,7 +288,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (error_out != NULL)
         *error_out = NULL;
 
-    reset_generic_registry();
+    ensure_generic_registry();
 
     size_t length = 0;
     char *buffer = read_file(path, &length);
@@ -476,6 +474,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     file_to_parse = (char *)path;
 
     ParseResult result = parse(input, parser);
+    if (getenv("GPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL &&
+        path != NULL && (strstr(path, "fgl.p") != NULL || strstr(path, "FGL.p") != NULL))
+    {
+        fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);
+        print_pascal_ast(result.value.ast);
+        fprintf(stderr, "==== End AST ====\n");
+    }
     Tree_t *tree = NULL;
     bool success = false;
     if (!result.is_success)

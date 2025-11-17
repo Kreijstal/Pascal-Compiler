@@ -32,4 +32,8 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab);
  */
 void get_class_methods(const char *class_name, ListNode_t **methods_out, int *count_out);
 
+void from_cparser_enable_pending_specializations(void);
+void from_cparser_disable_pending_specializations(void);
+void resolve_pending_generic_aliases(Tree_t *program_tree);
+
 #endif /* FROM_CPARSER_H */

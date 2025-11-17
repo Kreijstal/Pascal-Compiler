@@ -169,11 +169,24 @@ typedef struct {
     char *file_type_id;
     int is_record;
     struct RecordType *record_type;
+    int is_generic_specialization;
+    char *generic_base_name;
+    ListNode_t *generic_type_args;
     int is_range;
     int range_known;
     long long range_start;
     long long range_end;
 } TypeInfo;
+
+typedef struct PendingGenericAlias {
+    Tree_t *decl;
+    char *base_name;
+    ListNode_t *type_args;
+    struct PendingGenericAlias *next;
+} PendingGenericAlias;
+
+static PendingGenericAlias *g_pending_generic_aliases = NULL;
+static int g_allow_pending_specializations = 0;
 
 static void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
@@ -195,6 +208,14 @@ static void destroy_type_info_contents(TypeInfo *info) {
         free(info->file_type_id);
         info->file_type_id = NULL;
     }
+    if (info->generic_base_name != NULL) {
+        free(info->generic_base_name);
+        info->generic_base_name = NULL;
+    }
+    if (info->generic_type_args != NULL) {
+        destroy_list(info->generic_type_args);
+        info->generic_type_args = NULL;
+    }
     if (info->enum_literals != NULL) {
         destroy_list(info->enum_literals);
         info->enum_literals = NULL;
@@ -207,6 +228,41 @@ static void destroy_type_info_contents(TypeInfo *info) {
         destroy_record_type(info->record_type);
         info->record_type = NULL;
     }
+}
+
+static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
+    if (!g_allow_pending_specializations || decl == NULL || type_info == NULL)
+        return;
+    if (type_info->generic_base_name == NULL || type_info->generic_type_args == NULL)
+        return;
+
+    PendingGenericAlias *entry = (PendingGenericAlias *)calloc(1, sizeof(PendingGenericAlias));
+    if (entry == NULL)
+        return;
+
+    entry->decl = decl;
+    entry->base_name = type_info->generic_base_name;
+    entry->type_args = type_info->generic_type_args;
+    entry->next = g_pending_generic_aliases;
+    g_pending_generic_aliases = entry;
+    if (getenv("GPC_DEBUG_TFPG") != NULL &&
+        decl->tree_data.type_decl_data.id != NULL &&
+        entry->base_name != NULL)
+    {
+        fprintf(stderr, "[GPC] deferred generic alias %s base %s\n",
+                decl->tree_data.type_decl_data.id, entry->base_name);
+    }
+
+    type_info->generic_base_name = NULL;
+    type_info->generic_type_args = NULL;
+}
+
+void from_cparser_enable_pending_specializations(void) {
+    g_allow_pending_specializations = 1;
+}
+
+void from_cparser_disable_pending_specializations(void) {
+    g_allow_pending_specializations = 0;
 }
 
 static ast_t *unwrap_pascal_node(ast_t *node);
@@ -426,7 +482,38 @@ static void list_builder_extend(ListBuilder *builder, ListNode_t *nodes) {
         builder->tail_next = &(*builder->tail_next)->next;
 }
 
+static char *dup_first_identifier_in_node(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    node = unwrap_pascal_node(node);
+    if (node == NULL)
+        return NULL;
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] inspect node typ=%d (%s) sym=%s\n",
+            node->typ, pascal_tag_to_string(node->typ),
+            (node->sym != NULL && node->sym->name != NULL) ? node->sym->name : "<null>");
+    if ((node->typ == PASCAL_T_IDENTIFIER ||
+         node->typ == PASCAL_T_TYPE_ARG) &&
+        node->sym != NULL && node->sym->name != NULL)
+        return dup_symbol(node);
+    ast_t *child = node->child;
+    while (child != NULL)
+    {
+        char *dup = dup_first_identifier_in_node(child);
+        if (dup != NULL)
+            return dup;
+        child = child->next;
+    }
+    return NULL;
+}
+
 static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] collect_constructed_type_args start node=%p typ=%d (%s)\n",
+            (void *)args_node,
+            args_node != NULL ? args_node->typ : -1,
+            args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
     if (args_node == NULL)
         return NULL;
 
@@ -441,18 +528,21 @@ static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
         ast_t *node = unwrap_pascal_node(cursor);
         if (node == NULL)
             node = cursor;
-        if (node != NULL && node->typ == PASCAL_T_TYPE_ARG) {
-            ast_t *type_node = node->child;
-            if (type_node != NULL && type_node->typ == PASCAL_T_TYPE_SPEC && type_node->child != NULL)
-                type_node = type_node->child;
-            while (type_node != NULL && type_node->typ == PASCAL_T_NONE)
-                type_node = type_node->child;
-            if (type_node != NULL) {
-                char *dup = dup_symbol(type_node);
-                if (dup != NULL)
-                    list_builder_append(&builder, dup, LIST_STRING);
+
+        if (node != NULL && node->typ == PASCAL_T_TYPE_ARG)
+        {
+            char *dup = dup_first_identifier_in_node(node);
+            if (getenv("GPC_DEBUG_TFPG") != NULL)
+                fprintf(stderr, "[GPC] collect args extracted=%s\n", dup != NULL ? dup : "<null>");
+            if (dup != NULL)
+            {
+                ListNode_t *append_node = list_builder_append(&builder, dup, LIST_STRING);
+                if (getenv("GPC_DEBUG_TFPG") != NULL)
+                    fprintf(stderr, "[GPC] appended type_arg node=%p type=%d\n",
+                        (void *)append_node, append_node != NULL ? append_node->type : -1);
             }
         }
+
         cursor = cursor->next;
     }
     return list_builder_finish(&builder);
@@ -470,6 +560,7 @@ static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out,
     ast_t *node = spec_node;
     if (node->typ == PASCAL_T_TYPE_SPEC && node->child != NULL)
         node = node->child;
+    node = unwrap_pascal_node(node);
     if (node == NULL || node->typ != PASCAL_T_CONSTRUCTED_TYPE)
         return 0;
 
@@ -478,6 +569,15 @@ static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out,
         name_node = name_node->child;
     if (name_node == NULL)
         return 0;
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+    {
+        fprintf(stderr, "[GPC] constructed type base node typ=%d (%s) sym=%s next_typ=%d (%s)\n",
+            name_node->typ,
+            pascal_tag_to_string(name_node->typ),
+            (name_node->sym != NULL && name_node->sym->name != NULL) ? name_node->sym->name : "<null>",
+            name_node->next != NULL ? name_node->next->typ : -1,
+            name_node->next != NULL ? pascal_tag_to_string(name_node->next->typ) : "<null>");
+    }
 
     char *base_name = dup_symbol(name_node);
     if (base_name == NULL)
@@ -519,6 +619,24 @@ static char *mangle_specialized_type_name(const char *base_name, char **type_ids
         if (type_ids[i] != NULL)
             strcat(result, type_ids[i]);
     }
+    return result;
+}
+
+static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args) {
+    if (base_name == NULL)
+        return NULL;
+    int count = ListLength(type_args);
+    if (count <= 0)
+        return strdup(base_name);
+    char **arg_ids = (char **)calloc((size_t)count, sizeof(char *));
+    if (arg_ids == NULL)
+        return NULL;
+    int idx = 0;
+    for (ListNode_t *cur = type_args; cur != NULL && idx < count; cur = cur->next, ++idx) {
+        arg_ids[idx] = (char *)(cur->cur);
+    }
+    char *result = mangle_specialized_type_name(base_name, arg_ids, count);
+    free(arg_ids);
     return result;
 }
 
@@ -578,21 +696,25 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     if (base_name == NULL)
         return NULL;
 
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
     GenericTypeDecl *generic = generic_registry_find_decl(base_name);
     if (generic == NULL || generic->record_template == NULL) {
-        destroy_list(type_args);
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record missing decl for %s\n", base_name);
         return NULL;
     }
 
     int arg_count = ListLength(type_args);
     if (arg_count != generic->num_type_params || arg_count <= 0) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record wrong arg count for %s: got %d expected %d\n",
+                    base_name, arg_count, generic->num_type_params);
         destroy_list(type_args);
         return NULL;
     }
 
     char **arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
     if (arg_types == NULL) {
-        destroy_list(type_args);
         return NULL;
     }
 
@@ -607,9 +729,10 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
         }
         cur = cur->next;
     }
-    destroy_list(type_args);
 
     if (idx != arg_count) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record failed to copy args for %s\n", base_name);
         for (int i = 0; i < arg_count; ++i)
             free(arg_types[i]);
         free(arg_types);
@@ -626,6 +749,8 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
 
     struct RecordType *record = clone_record_type(generic->record_template);
     if (record == NULL) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record failed to clone template for %s\n", base_name);
         free(specialized_name);
         for (int i = 0; i < arg_count; ++i)
             free(arg_types[i]);
@@ -649,6 +774,8 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     else
         free(specialized_name);
 
+    if (debug_env != NULL && record->type_id != NULL)
+        fprintf(stderr, "[GPC] instantiated generic record %s\n", record->type_id);
     return record;
 }
 
@@ -805,10 +932,60 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
     }
 }
 
+void resolve_pending_generic_aliases(Tree_t *program_tree)
+{
+    PendingGenericAlias *cur = g_pending_generic_aliases;
+    g_pending_generic_aliases = NULL;
+    ListNode_t **clone_dest = NULL;
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE)
+        clone_dest = &program_tree->tree_data.program_data.subprograms;
+
+    while (cur != NULL) {
+        PendingGenericAlias *next = cur->next;
+        char *specialized_name = NULL;
+        struct RecordType *record = instantiate_generic_record(cur->base_name, cur->type_args, &specialized_name);
+        if (record != NULL && cur->decl != NULL &&
+            cur->decl->type == TREE_TYPE_DECL &&
+            cur->decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        {
+            struct TypeAlias *alias = &cur->decl->tree_data.type_decl_data.info.alias;
+            if (alias->inline_record_type != NULL)
+                destroy_record_type(alias->inline_record_type);
+            alias->inline_record_type = record;
+            alias->base_type = RECORD_TYPE;
+            if (cur->decl->tree_data.type_decl_data.gpc_type == NULL)
+                cur->decl->tree_data.type_decl_data.gpc_type = create_record_type(record);
+            if (clone_dest != NULL)
+                append_specialized_method_clones(cur->decl, clone_dest);
+            if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
+                cur->base_name != NULL)
+            {
+                fprintf(stderr, "[GPC] resolved generic alias %s for %s\n",
+                        cur->decl->tree_data.type_decl_data.id, cur->base_name);
+            }
+        } else {
+            fprintf(stderr, "ERROR: Failed to instantiate generic record %s for deferred alias.\n",
+                    cur->base_name != NULL ? cur->base_name : "<unknown>");
+            if (record != NULL)
+                destroy_record_type(record);
+        }
+        if (specialized_name != NULL)
+            free(specialized_name);
+        if (cur->base_name != NULL)
+            free(cur->base_name);
+        if (cur->type_args != NULL)
+            destroy_list(cur->type_args);
+        free(cur);
+        cur = next;
+    }
+}
+
 static ListNode_t *collect_constructed_type_args(ast_t *args_node);
 static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out);
 static struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out);
 static char *mangle_specialized_type_name(const char *base_name, char **type_ids, int num_types);
+static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args);
 static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types);
 static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types);
 static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast);
@@ -817,6 +994,10 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
 static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record);
 static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record);
 static void append_subprogram_node(ListNode_t **dest, Tree_t *tree);
+static char *dup_first_identifier_in_node(ast_t *node);
+static char *dup_first_identifier_in_node(ast_t *node);
+
+
 
 /* Collect type argument identifiers from a \"specialize\" type argument list.
  * The argument subtree is simpler than CONSTRUCTED_TYPE: it consists of identifiers
@@ -841,7 +1022,10 @@ static ListNode_t *collect_specialize_type_args(ast_t *args_node) {
         cursor = cursor->next;
     }
 
-    return list_builder_finish(&builder);
+    ListNode_t *result = list_builder_finish(&builder);
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] collect_constructed_type_args result=%p\n", (void *)result);
+    return result;
 }
 
 /* Extract generic base name and type arguments from a \"specialize\" type
@@ -860,6 +1044,7 @@ static int extract_specialize_type_info(ast_t *spec_node, char **base_name_out, 
     ast_t *node = spec_node;
     if (node->typ == PASCAL_T_TYPE_SPEC && node->child != NULL)
         node = node->child;
+    node = unwrap_pascal_node(node);
     if (node == NULL)
         return 0;
 
@@ -1237,6 +1422,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->file_type_id = NULL;
         type_info->is_record = 0;
         type_info->record_type = NULL;
+        type_info->is_generic_specialization = 0;
+        type_info->generic_base_name = NULL;
+        type_info->generic_type_args = NULL;
         type_info->is_range = 0;
         type_info->range_known = 0;
         type_info->range_start = 0;
@@ -1249,9 +1437,16 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     ast_t *spec_node = type_spec;
     if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
         spec_node = spec_node->child;
+    spec_node = unwrap_pascal_node(spec_node);
 
     if (spec_node == NULL)
         return UNKNOWN_TYPE;
+
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] convert_type_spec node typ=%d (%s) sym=%s\n",
+            spec_node->typ,
+            pascal_tag_to_string(spec_node->typ),
+            (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
 
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
@@ -1286,9 +1481,6 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         if (is_generic) {
             char *specialized_name = NULL;
             struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
-            free(base_name);
-            if (type_args != NULL)
-                destroy_list(type_args);
 
             if (record != NULL) {
                 if (getenv("GPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
@@ -1299,6 +1491,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 if (type_info != NULL) {
                     type_info->is_record = 1;
                     type_info->record_type = record;
+                    type_info->is_generic_specialization = 1;
                     record = NULL;
                 } else if (record_out != NULL) {
                     *record_out = record;
@@ -1310,10 +1503,39 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     *type_id_out = specialized_name;
                 else
                     free(specialized_name);
+                free(base_name);
+                if (type_args != NULL)
+                    destroy_list(type_args);
                 return RECORD_TYPE;
             }
+
+            int can_defer = (g_allow_pending_specializations && type_info != NULL);
+            if (can_defer) {
+                if (type_info != NULL) {
+                    type_info->is_record = 1;
+                    type_info->is_generic_specialization = 1;
+                    type_info->generic_base_name = base_name;
+                    type_info->generic_type_args = type_args;
+                }
+                if (type_id_out != NULL) {
+                    if (*type_id_out != NULL) {
+                        free(*type_id_out);
+                    }
+                    if (specialized_name == NULL)
+                        specialized_name = mangle_specialized_name_from_list(base_name, type_args);
+                    *type_id_out = specialized_name;
+                    specialized_name = NULL;
+                }
+                if (specialized_name != NULL)
+                    free(specialized_name);
+                return RECORD_TYPE;
+            }
+
             if (specialized_name != NULL)
                 free(specialized_name);
+            free(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
         }
     }
     if (spec_node->typ == PASCAL_T_RANGE_TYPE) {
@@ -1617,10 +1839,15 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
     ast_t *spec_node = type_spec;
     if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
         spec_node = spec_node->child;
+    spec_node = unwrap_pascal_node(spec_node);
 
     if (spec_node == NULL)
         return NULL;
 
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] convert_type_spec_to_gpctype node typ=%d sym=%s\n",
+            spec_node->typ,
+            (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
     /* Generic type specializations: constructed TFoo<T> or \"specialize TFoo<T>\" */
     {
         char *base_name = NULL;
@@ -3468,6 +3695,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
     int mapped_type = UNKNOWN_TYPE;
     ast_t *class_spec = NULL;
     if (spec_node != NULL) {
+        if (getenv("GPC_DEBUG_TFPG") != NULL)
+            fprintf(stderr, "[GPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
+                spec_node->typ,
+                (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>",
+                id != NULL ? id : "<null>");
         if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
             class_spec = spec_node;
         } else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
@@ -3479,9 +3711,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
             record_type = convert_class_type(id, class_spec);
         } else {
             mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
-            if (getenv("GPC_DEBUG_TFPG") != NULL && type_id != NULL)
+            if (getenv("GPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[GPC] convert_type_decl after convert_type_spec id=%s mapped=%d type_id=%s record_type=%p type_info.record=%p\n",
-                    id, mapped_type, type_id, (void *)record_type, (void *)type_info.record_type);
+                    id, mapped_type,
+                    type_id != NULL ? type_id : "<null>",
+                    (void *)record_type, (void *)type_info.record_type);
         }
     }
 
@@ -3497,7 +3731,7 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
         decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
                                  type_info.element_type_id, type_info.start, type_info.end);
         type_info.element_type_id = NULL;
-    } else if (type_info.is_record && type_info.record_type != NULL && type_id != NULL) {
+    } else if (type_info.is_record && type_id != NULL) {
         /* Alias to a record type (including generic specializations) */
         decl = mk_typealiasdecl(type_decl_node->line, id, 0, RECORD_TYPE, type_id, 0, 0);
         type_id = NULL;
@@ -3520,7 +3754,7 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
             decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
             decl->tree_data.type_decl_data.id != NULL)
         {
-            fprintf(stderr, "[GPC] convert_type_decl alias %s: base=%d target=%s gpc=%p kind=%d type_info.is_record=%d record=%p\n",
+            fprintf(stderr, "[GPC] convert_type_decl alias %s: base=%d target=%s gpc=%p kind=%d type_info.is_record=%d record=%p generic=%d\n",
                 decl->tree_data.type_decl_data.id,
                 decl->tree_data.type_decl_data.info.alias.base_type,
                 decl->tree_data.type_decl_data.info.alias.target_type_id ?
@@ -3529,7 +3763,8 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
                 decl->tree_data.type_decl_data.gpc_type ?
                     decl->tree_data.type_decl_data.gpc_type->kind : -1,
                 type_info.is_record,
-                (void *)type_info.record_type);
+                (void *)type_info.record_type,
+                type_info.is_generic_specialization);
         }
     }
     else if (gpc_type != NULL)
@@ -3572,6 +3807,9 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
                 decl->tree_data.type_decl_data.gpc_type =
                     create_record_type(alias->inline_record_type);
             }
+        }
+        if (type_info.is_generic_specialization && type_info.record_type == NULL) {
+            register_pending_generic_alias(decl, &type_info);
         }
     }
 
@@ -3868,7 +4106,39 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         if (unwrapped == NULL)
             unwrapped = type_decl;
 
-        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_GENERIC_TYPE_DECL) {
+        if (getenv("GPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
+            char *name = dup_first_identifier_in_node(unwrapped);
+            fprintf(stderr, "[GPC] type-section decl tag=%d (%s) name=%s\n",
+                    unwrapped->typ,
+                    pascal_tag_to_string(unwrapped->typ),
+                    name != NULL ? name : "<none>");
+            if (name != NULL)
+                free(name);
+        }
+
+        int treat_as_generic = 0;
+        if (unwrapped != NULL) {
+            if (unwrapped->typ == PASCAL_T_GENERIC_TYPE_DECL) {
+                treat_as_generic = 1;
+            } else if (unwrapped->typ == PASCAL_T_TYPE_DECL) {
+                ast_t *id_node = unwrapped->child;
+                while (id_node != NULL && id_node->typ != PASCAL_T_IDENTIFIER)
+                    id_node = id_node->next;
+                ast_t *next = id_node != NULL ? id_node->next : NULL;
+                if (next != NULL && next->typ == PASCAL_T_TYPE_PARAM_LIST)
+                    treat_as_generic = 1;
+            }
+        }
+
+        if (treat_as_generic && unwrapped != NULL) {
+            if (getenv("GPC_DEBUG_TFPG") != NULL) {
+                char *type_name = dup_first_identifier_in_node(unwrapped);
+                if (type_name != NULL) {
+                    fprintf(stderr, "[GPC] append_type_decls_from_section saw generic-like %s (tag=%d)\n",
+                            type_name, unwrapped->typ);
+                    free(type_name);
+                }
+            }
             Tree_t *decl = convert_generic_type_decl(unwrapped);
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
