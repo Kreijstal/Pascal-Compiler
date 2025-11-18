@@ -1505,12 +1505,22 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     cur = type_decls;
     while(cur != NULL)
     {
+        int loop_start_errors = return_val;
+        
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
         const char *debug_env_check = getenv("GPC_DEBUG_TFPG");
+        if (debug_env_check != NULL)
+        {
+            fprintf(stderr, "[GPC] semcheck_type_decls processing: id=%s kind=%d return_val=%d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                tree->tree_data.type_decl_data.kind, loop_start_errors);
+        }
+
+        int before_switch_errors = return_val;
 
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
@@ -1746,6 +1756,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 break;
         }
 
+        if (debug_env_check != NULL && return_val > before_switch_errors)
+        {
+            fprintf(stderr, "[GPC] Error in switch for type %s (kind=%d), was %d now %d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                tree->tree_data.type_decl_data.kind, before_switch_errors, return_val);
+        }
+
+        const char *debug_env2 = getenv("GPC_DEBUG_TFPG");
+        int before_symtab_errors = return_val;
+
         GpcType *gpc_type = tree->tree_data.type_decl_data.gpc_type;
 
 
@@ -1806,6 +1826,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
             }
+        }
+
+        if (debug_env2 != NULL && return_val > before_symtab_errors)
+        {
+            fprintf(stderr, "[GPC] Error increased in type %s (kind=%d), was %d now %d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                tree->tree_data.type_decl_data.kind, before_symtab_errors, return_val);
         }
 
         cur = cur->next;

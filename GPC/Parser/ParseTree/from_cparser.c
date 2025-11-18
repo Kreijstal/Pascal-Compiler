@@ -2212,76 +2212,96 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
         return NULL;
 
-    ListNode_t *names_head = NULL;
-    ListNode_t **names_tail = &names_head;
     ast_t *cursor = field_decl_node->child;
-    char *type_id = NULL;
-    int field_type = UNKNOWN_TYPE;
+    ListNode_t *names = convert_identifier_list(&cursor);
+    if (names == NULL) {
+        return NULL;
+    }
 
-    while (cursor != NULL) {
-        ast_t *unwrapped = unwrap_pascal_node(cursor);
-        if (unwrapped != NULL)
-            cursor = unwrapped;
-
-        if (cursor->typ == PASCAL_T_IDENTIFIER) {
-            if (cursor->next == NULL) {
-                char *candidate = dup_symbol(cursor);
-                if (candidate != NULL) {
-                    char *mapped_id = NULL;
-                    int mapped_type = map_type_name(candidate, &mapped_id);
-                    if (mapped_type != UNKNOWN_TYPE) {
-                        field_type = mapped_type;
-                        free(candidate);
-                        type_id = mapped_id;
-                    } else {
-                        type_id = candidate;
-                    }
-                }
-            } else {
-                char *name = dup_symbol(cursor);
-                if (name != NULL) {
-                    ListNode_t *name_node = CreateListNode(name, LIST_STRING);
-                    *names_tail = name_node;
-                    names_tail = &name_node->next;
-                }
-            }
-        }
-
+    /* Skip to the type specification */
+    while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
+           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_ARRAY_TYPE) {
         cursor = cursor->next;
     }
 
-    if (names_head == NULL)
-        return NULL;
+    char *field_type_id = NULL;
+    struct RecordType *nested_record = NULL;
+    TypeInfo field_info;
+    memset(&field_info, 0, sizeof(TypeInfo));
+    int field_type = UNKNOWN_TYPE;
+
+    if (cursor != NULL) {
+        /* Use convert_type_spec to properly handle all type forms including arrays */
+        field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+    } else if (names != NULL) {
+        /* Fallback: if no type spec, try to parse last name as type */
+        char *candidate = pop_last_identifier(&names);
+        if (candidate != NULL) {
+            char *mapped_id = NULL;
+            int mapped_type = map_type_name(candidate, &mapped_id);
+            if (mapped_type != UNKNOWN_TYPE) {
+                field_type = mapped_type;
+                field_type_id = mapped_id;
+                free(candidate);
+            } else {
+                field_type_id = candidate;
+            }
+        }
+    }
 
     ListBuilder result;
     list_builder_init(&result);
-    ListNode_t *name_node = names_head;
+
+    ListNode_t *name_node = names;
     while (name_node != NULL) {
         char *field_name = (char *)name_node->cur;
+        char *type_id_copy = NULL;
+        if (field_type_id != NULL)
+            type_id_copy = strdup(field_type_id);
+
+        struct RecordType *nested_copy = NULL;
+        if (nested_record != NULL) {
+            if (name_node->next == NULL) {
+                nested_copy = nested_record;
+                nested_record = NULL;
+            } else {
+                nested_copy = clone_record_type(nested_record);
+            }
+        }
+
         struct RecordField *field_desc = (struct RecordField *)calloc(1, sizeof(struct RecordField));
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
-            field_desc->type_id = type_id != NULL ? strdup(type_id) : NULL;
-            field_desc->nested_record = NULL;
-            field_desc->is_array = 0;
-            field_desc->array_start = 0;
-            field_desc->array_end = 0;
-            field_desc->array_element_type = UNKNOWN_TYPE;
-            field_desc->array_element_type_id = NULL;
-            field_desc->array_is_open = 0;
+            field_desc->type_id = type_id_copy;
+            field_desc->nested_record = nested_copy;
+            field_desc->is_array = field_info.is_array;
+            field_desc->array_start = field_info.start;
+            field_desc->array_end = field_info.end;
+            field_desc->array_element_type = field_info.element_type;
+            field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_is_open = field_info.is_open_array;
+            field_info.element_type_id = NULL;  /* Ownership transferred */
+            field_desc->is_hidden = 0;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
-            free(field_name);
+            if (field_name != NULL)
+                free(field_name);
+            if (type_id_copy != NULL)
+                free(type_id_copy);
+            destroy_record_type(nested_copy);
         }
 
-        ListNode_t *next = name_node->next;
+        ListNode_t *next_name = name_node->next;
         free(name_node);
-        name_node = next;
+        name_node = next_name;
     }
 
-    if (type_id != NULL)
-        free(type_id);
+    if (field_type_id != NULL)
+        free(field_type_id);
+    if (nested_record != NULL)
+        destroy_record_type(nested_record);
 
     return list_builder_finish(&result);
 }
