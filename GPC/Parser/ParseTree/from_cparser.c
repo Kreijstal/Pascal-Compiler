@@ -662,11 +662,29 @@ static void substitute_record_type_parameters(struct RecordType *record, Generic
 static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types) {
     if (field == NULL)
         return;
+    
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && field->name != NULL)
+    {
+        fprintf(stderr, "[GPC] substitute_record_field BEFORE: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
+            field->name, field->is_array,
+            field->type_id ? field->type_id : "<null>",
+            field->array_element_type_id ? field->array_element_type_id : "<null>");
+    }
+    
     substitute_identifier(&field->type_id, generic_decl, arg_types);
     if (field->array_element_type_id != NULL)
         substitute_identifier(&field->array_element_type_id, generic_decl, arg_types);
     if (field->nested_record != NULL)
         substitute_record_type_parameters(field->nested_record, generic_decl, arg_types);
+    
+    if (debug_env != NULL && field->name != NULL)
+    {
+        fprintf(stderr, "[GPC] substitute_record_field AFTER: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
+            field->name, field->is_array,
+            field->type_id ? field->type_id : "<null>",
+            field->array_element_type_id ? field->array_element_type_id : "<null>");
+    }
 }
 
 static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types) {
