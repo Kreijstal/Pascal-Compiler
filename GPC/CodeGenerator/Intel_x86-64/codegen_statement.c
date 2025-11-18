@@ -1856,21 +1856,53 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     struct Expression *len_expr = (struct Expression *)args_expr->next->cur;
 
     struct Expression *array_expr = target_expr;
+    const char *array_id = NULL;
 
-    if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+    /* Handle both simple variables and field access (e.g., self.FItems) */
+    if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
     {
-        fprintf(stderr, "ERROR: SetLength first argument must be a variable identifier.\n");
+        array_id = array_expr->expr_data.id;
+    }
+    else if (array_expr != NULL && array_expr->type == EXPR_RECORD_ACCESS)
+    {
+        /* For field access like self.FItems, use the field name */
+        array_id = array_expr->expr_data.record_access_data.field_id;
+    }
+
+    if (array_id == NULL)
+    {
+        fprintf(stderr, "ERROR: SetLength first argument must be a variable or field identifier.\n");
         return inst_list;
     }
 
-    StackNode_t *array_node = find_label(array_expr->expr_data.id);
-    if (array_node == NULL || !array_node->is_dynamic)
+    StackNode_t *array_node = find_label((char *)array_id);
+    int is_field_array = 0;
+    long long field_offset = 0;
+    
+    /* If not found in local stack, might be a field of the current object */
+    if (array_node == NULL && array_expr->type == EXPR_RECORD_ACCESS)
     {
-        fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_expr->expr_data.id);
+        is_field_array = 1;
+        field_offset = array_expr->expr_data.record_access_data.field_offset;
+    }
+    
+    if (!is_field_array && (array_node == NULL || !array_node->is_dynamic))
+    {
+        fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_id);
         return inst_list;
     }
 
-    int element_size = codegen_dynamic_array_element_size(ctx, array_node, array_expr);
+    int element_size;
+    if (is_field_array)
+    {
+        /* For field arrays, we need to determine element size from the expression type */
+        /* For now, assume Integer (4 bytes) - this should be improved */
+        element_size = 4;
+    }
+    else
+    {
+        element_size = codegen_dynamic_array_element_size(ctx, array_node, array_expr);
+    }
 
     inst_list = codegen_expr(len_expr, inst_list, ctx);
     if (codegen_had_error(ctx))
@@ -1886,7 +1918,50 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             "ERROR: Unable to allocate register for SetLength descriptor.");
 
     char buffer[128];
-    if (array_node->is_static)
+    if (is_field_array)
+    {
+        /* For field arrays, calculate address as self + field_offset */
+        /* Get self pointer from first local variable (convention for methods) */
+        StackNode_t *self_node = find_label("self");
+        if (self_node == NULL)
+        {
+            /* Try alternate names */
+            self_node = find_label("Self");
+        }
+        
+        if (self_node != NULL)
+        {
+            /* Load self pointer */
+            Register_t *self_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (self_reg == NULL)
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for self pointer.");
+            
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                self_node->offset, self_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Calculate field address: self + offset */
+            if (field_offset > 0)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%lld(%s), %s\n",
+                    field_offset, self_reg->bit_64, descriptor_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    self_reg->bit_64, descriptor_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), self_reg);
+        }
+        else
+        {
+            fprintf(stderr, "ERROR: Cannot find self pointer for field array SetLength.\n");
+            return inst_list;
+        }
+    }
+    else if (array_node->is_static)
     {
         const char *label = (array_node->static_label != NULL) ?
             array_node->static_label : array_node->label;
