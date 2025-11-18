@@ -4783,27 +4783,49 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
         // Allocate stack slot for loop index
         StackNode_t *index_slot = codegen_alloc_temp_slot("fpg_idx");
-        if (index_slot == NULL) {
-            codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for FOR-IN index");
+        // Allocate stack slot for object pointer to survive loop calls
+        StackNode_t *obj_ptr_slot = codegen_alloc_temp_slot("fpg_obj");
+        
+        if (index_slot == NULL || obj_ptr_slot == NULL) {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for FOR-IN variables");
             return inst_list;
         }
 
         // Get address of collection object (L)
-        Register_t *obj_reg = NULL;
-        inst_list = codegen_address_for_expr(collection, inst_list, ctx, &obj_reg);
-        if (obj_reg == NULL || codegen_had_error(ctx)) {
+        Register_t *obj_addr_reg = NULL;
+        inst_list = codegen_address_for_expr(collection, inst_list, ctx, &obj_addr_reg);
+        if (obj_addr_reg == NULL || codegen_had_error(ctx)) {
             return inst_list;
         }
+        
+        // Dereference L to get the actual object pointer and store in stack slot
+        Register_t *temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (temp_reg == NULL) {
+            free_reg(get_reg_stack(), obj_addr_reg);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for object pointer load");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", obj_addr_reg->bit_64, temp_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        
+        // Store object pointer to stack
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", temp_reg->bit_64, obj_ptr_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        
+        free_reg(get_reg_stack(), obj_addr_reg);
 
-        // Load FCount (at offset 16: 8 bytes for __gpc_class_typeinfo + 8 bytes for FItems pointer)
+        // Load FCount
+        // Layout: [0..7]: TypeInfo, [8..23]: FItems (descriptor: data + length), [24..31]: FCount
         Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (count_reg == NULL) {
-            free_reg(get_reg_stack(), obj_reg);
+            free_reg(get_reg_stack(), temp_reg);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for count");
             return inst_list;
         }
-        snprintf(buffer, sizeof(buffer), "\tmovq\t16(%s), %s\n", obj_reg->bit_64, count_reg->bit_64);
+        // Use temp_reg (holding obj ptr) to access FCount at offset 24
+        snprintf(buffer, sizeof(buffer), "\tmovq\t24(%s), %s\n", temp_reg->bit_64, count_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), temp_reg);
 
         // Initialize index to 0
         snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", index_slot->offset);
@@ -4819,7 +4841,6 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         // Push loop exit label for break statements
         if (!codegen_push_loop_exit(ctx, exit_label)) {
             free_reg(get_reg_stack(), count_reg);
-            free_reg(get_reg_stack(), obj_reg);
             return inst_list;
         }
 
@@ -4829,14 +4850,29 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         if (fitems_reg == NULL) {
             codegen_pop_loop_exit(ctx);
             free_reg(get_reg_stack(), count_reg);
-            free_reg(get_reg_stack(), obj_reg);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for FItems");
             return inst_list;
         }
         
-        // Load FItems pointer from object
-        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n", obj_reg->bit_64, fitems_reg->bit_64);
+        // Load object pointer from stack to temp register (reusing fitems_reg temporarily to save registers? No, safer to use another temp)
+        Register_t *obj_reload_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (obj_reload_reg == NULL) {
+             // Fallback: try to use fitems_reg if possible, but let's error for now or optimize later
+             // Actually, we can just load directly from stack to register if we had one.
+             // Let's grab a register.
+             free_reg(get_reg_stack(), fitems_reg);
+             codegen_pop_loop_exit(ctx);
+             free_reg(get_reg_stack(), count_reg);
+             codegen_report_error(ctx, "ERROR: Unable to allocate register for object reload");
+             return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", obj_ptr_slot->offset, obj_reload_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
+
+        // Load FItems pointer from object
+        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n", obj_reload_reg->bit_64, fitems_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), obj_reload_reg);
 
         // Load index into register
         Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -4844,7 +4880,6 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             free_reg(get_reg_stack(), fitems_reg);
             codegen_pop_loop_exit(ctx);
             free_reg(get_reg_stack(), count_reg);
-            free_reg(get_reg_stack(), obj_reg);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for index");
             return inst_list;
         }
@@ -4868,7 +4903,6 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             free_reg(get_reg_stack(), fitems_reg);
             codegen_pop_loop_exit(ctx);
             free_reg(get_reg_stack(), count_reg);
-            free_reg(get_reg_stack(), obj_reg);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for element");
             return inst_list;
         }
@@ -4885,7 +4919,6 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             free_reg(get_reg_stack(), fitems_reg);
             codegen_pop_loop_exit(ctx);
             free_reg(get_reg_stack(), count_reg);
-            free_reg(get_reg_stack(), obj_reg);
             return inst_list;
         }
 
@@ -4930,7 +4963,6 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), count_reg);
-        free_reg(get_reg_stack(), obj_reg);
 
         // Exit label
         snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);

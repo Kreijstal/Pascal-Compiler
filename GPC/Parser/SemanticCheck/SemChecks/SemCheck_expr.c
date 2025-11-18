@@ -2635,7 +2635,8 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
         if (field->array_is_open || field->array_end < field->array_start)
         {
-            *size_out = POINTER_SIZE_BYTES;
+            /* Dynamic arrays are descriptors {void *data, int64_t length}, so 16 bytes */
+            *size_out = POINTER_SIZE_BYTES * 2;
             return 0;
         }
 
