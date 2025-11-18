@@ -1259,80 +1259,112 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (stmt->stmt_data.inherited_data.call_expr != NULL)
             {
                 struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
-                HashNode_t *target_symbol = NULL;
-                const char *call_id = call_expr->expr_data.function_call_data.id;
-                if (call_id != NULL)
-                    FindIdent(&target_symbol, symtab, (char *)call_id);
-
-                int is_function_symbol = (target_symbol != NULL) &&
-                    (target_symbol->hash_type == HASHTYPE_FUNCTION ||
-                     target_symbol->hash_type == HASHTYPE_FUNCTION_RETURN);
-
-                if (call_expr->type == EXPR_FUNCTION_CALL && !is_function_symbol)
+                
+                /* Handle EXPR_VAR_ID by converting to EXPR_FUNCTION_CALL */
+                if (call_expr->type == EXPR_VAR_ID)
                 {
-                    struct Statement temp_call;
-                    memset(&temp_call, 0, sizeof(temp_call));
-                    temp_call.type = STMT_PROCEDURE_CALL;
-                    temp_call.line_num = stmt->line_num;
-                    temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
-                    temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
-                    temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
-                    temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
-
-                    return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
-
-                    if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
-                    {
-                        if (call_expr->expr_data.function_call_data.mangled_id != NULL)
-                        {
-                            free(call_expr->expr_data.function_call_data.mangled_id);
-                            call_expr->expr_data.function_call_data.mangled_id = NULL;
-                        }
-                        call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
-                        temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
-                    }
-                    call_expr->expr_data.function_call_data.call_hash_type =
-                        temp_call.stmt_data.procedure_call_data.call_hash_type;
-                    if (call_expr->expr_data.function_call_data.call_gpc_type != NULL)
-                    {
-                        destroy_gpc_type(call_expr->expr_data.function_call_data.call_gpc_type);
-                        call_expr->expr_data.function_call_data.call_gpc_type = NULL;
-                    }
-                    if (temp_call.stmt_data.procedure_call_data.call_gpc_type != NULL)
-                    {
-                        gpc_type_retain(temp_call.stmt_data.procedure_call_data.call_gpc_type);
-                        call_expr->expr_data.function_call_data.call_gpc_type =
-                            temp_call.stmt_data.procedure_call_data.call_gpc_type;
-                    }
-                    call_expr->expr_data.function_call_data.is_call_info_valid =
-                        temp_call.stmt_data.procedure_call_data.is_call_info_valid;
-                    semcheck_stmt_set_call_gpc_type(&temp_call, NULL,
-                        temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
-                    temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
-                }
-                else
-                {
-                    /* Handle other expression types (e.g., EXPR_VAR_ID for simple inherited calls) */
-                    if (call_expr->type == EXPR_VAR_ID)
-                    {
-                        /* Convert EXPR_VAR_ID to EXPR_FUNCTION_CALL for inherited method calls */
-                        call_expr->type = EXPR_FUNCTION_CALL;
-                        call_expr->expr_data.function_call_data.args_expr = NULL;
-                        call_expr->expr_data.function_call_data.mangled_id = NULL;
-                        call_expr->expr_data.function_call_data.is_call_info_valid = 0;
-                    }
+                    /* Save the id from the VAR_ID before converting */
+                    char *var_id = call_expr->expr_data.id;
                     
-                    if (call_expr->type == EXPR_FUNCTION_CALL)
+                    /* Convert to EXPR_FUNCTION_CALL */
+                    call_expr->type = EXPR_FUNCTION_CALL;
+                    call_expr->expr_data.function_call_data.id = var_id;
+                    call_expr->expr_data.function_call_data.args_expr = NULL;
+                    call_expr->expr_data.function_call_data.mangled_id = NULL;
+                    call_expr->expr_data.function_call_data.resolved_func = NULL;
+                    call_expr->expr_data.function_call_data.call_hash_type = 0;
+                    call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                    call_expr->expr_data.function_call_data.is_call_info_valid = 0;
+                }
+                
+                if (call_expr->type == EXPR_FUNCTION_CALL)
+                {
+                    HashNode_t *target_symbol = NULL;
+                    const char *call_id = call_expr->expr_data.function_call_data.id;
+                    if (call_id != NULL)
+                        FindIdent(&target_symbol, symtab, (char *)call_id);
+
+                    int is_function_symbol = (target_symbol != NULL) &&
+                        (target_symbol->hash_type == HASHTYPE_FUNCTION ||
+                         target_symbol->hash_type == HASHTYPE_FUNCTION_RETURN);
+
+                    if (!is_function_symbol)
+                    {
+                        /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
+                        const char *method_name = call_expr->expr_data.function_call_data.id;
+                        HashNode_t *self_node = NULL;
+                        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
+                            self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
+                            self_node->type->info.record_info != NULL)
+                        {
+                            struct RecordType *current_class = self_node->type->info.record_info;
+                            
+                            /* Check if there's no parent class and this is Create or Destroy */
+                            if (current_class->parent_class_name == NULL && method_name != NULL &&
+                                (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
+                            {
+                                /* No parent class - treat inherited Create/Destroy as no-op */
+                                if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                                {
+                                    fprintf(stderr, "[GPC] Inherited %s with no parent class - treating as no-op\n",
+                                            method_name);
+                                }
+                                /* Skip the call - it's a no-op */
+                                break;
+                            }
+                        }
+                        
+                        struct Statement temp_call;
+                        memset(&temp_call, 0, sizeof(temp_call));
+                        temp_call.type = STMT_PROCEDURE_CALL;
+                        temp_call.line_num = stmt->line_num;
+                        temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                        temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
+                        temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
+
+                        return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
+
+                        if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
+                        {
+                            if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                            {
+                                free(call_expr->expr_data.function_call_data.mangled_id);
+                                call_expr->expr_data.function_call_data.mangled_id = NULL;
+                            }
+                            call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
+                            temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        }
+                        call_expr->expr_data.function_call_data.call_hash_type =
+                            temp_call.stmt_data.procedure_call_data.call_hash_type;
+                        if (call_expr->expr_data.function_call_data.call_gpc_type != NULL)
+                        {
+                            destroy_gpc_type(call_expr->expr_data.function_call_data.call_gpc_type);
+                            call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                        }
+                        if (temp_call.stmt_data.procedure_call_data.call_gpc_type != NULL)
+                        {
+                            gpc_type_retain(temp_call.stmt_data.procedure_call_data.call_gpc_type);
+                            call_expr->expr_data.function_call_data.call_gpc_type =
+                                temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                        }
+                        call_expr->expr_data.function_call_data.is_call_info_valid =
+                            temp_call.stmt_data.procedure_call_data.is_call_info_valid;
+                        semcheck_stmt_set_call_gpc_type(&temp_call, NULL,
+                            temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
+                        temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
+                    }
+                    else
                     {
                         int inherited_type = UNKNOWN_TYPE;
                         return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                     }
-                    else
-                    {
-                        /* For other expression types, use general expression checking */
-                        int expr_type = UNKNOWN_TYPE;
-                        return_val += semcheck_expr_main(&expr_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
-                    }
+                }
+                else
+                {
+                    /* For other expression types, use general expression checking */
+                    int expr_type = UNKNOWN_TYPE;
+                    return_val += semcheck_expr_main(&expr_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                 }
             }
             break;
@@ -1932,6 +1964,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             char *method_name = strdup(double_underscore + 2);
             
             if (class_name != NULL && method_name != NULL) {
+                if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                {
+                    fprintf(stderr, "[GPC] Trying to resolve inherited call: class=%s method=%s\n",
+                            class_name, method_name);
+                }
                 /* Look up the class to find its parent */
                 HashNode_t *class_node = NULL;
                 if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL && 
@@ -1941,8 +1978,42 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     struct RecordType *record_info = class_node->type->info.record_info;
                     char *parent_class_name = record_info->parent_class_name;
                     
+                    if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                    {
+                        fprintf(stderr, "[GPC]   Found class %s, parent_class_name=%s\n",
+                                class_name, parent_class_name ? parent_class_name : "<NULL>");
+                    }
+                    
+                    /* If there's no parent class and we're calling Create or Destroy,
+                     * treat it as a no-op (success) for compatibility with code that
+                     * expects TObject as implicit parent */
+                    if (parent_class_name == NULL && method_name != NULL &&
+                        (strcasecmp(method_name, "Create") == 0 ||
+                         strcasecmp(method_name, "Destroy") == 0))
+                    {
+                        if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                        {
+                            fprintf(stderr, "[GPC] Inherited %s with no parent class - treating as no-op\n",
+                                    method_name);
+                        }
+                        /* Set a dummy resolved_proc to indicate success */
+                        /* We'll create a minimal HashNode to represent the no-op call */
+                        resolved_proc = (HashNode_t *)calloc(1, sizeof(HashNode_t));
+                        if (resolved_proc != NULL)
+                        {
+                            resolved_proc->id = strdup(proc_id);
+                            resolved_proc->hash_type = HASHTYPE_PROCEDURE;
+                            resolved_proc->type = NULL;
+                            resolved_proc->mangled_id = strdup(proc_id);
+                            match_count = 1;
+                            
+                            /* Mark this as a no-op inherited call */
+                            /* The codegen will need to handle this specially */
+                        }
+                    }
+                    
                     /* Walk up the inheritance chain */
-                    while (parent_class_name != NULL) {
+                    while (parent_class_name != NULL && resolved_proc == NULL) {
                         /* Try to find the method in the parent class */
                         char *parent_method_name = (char *)malloc(strlen(parent_class_name) + 2 + strlen(method_name) + 1);
                         if (parent_method_name != NULL) {
