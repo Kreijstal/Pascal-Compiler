@@ -1845,6 +1845,39 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
             }
+            
+            /* For generic specializations with inline record types, also register the
+             * record type under its mangled name so cloned methods can find it */
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && 
+                alias_info != NULL && 
+                alias_info->inline_record_type != NULL &&
+                alias_info->inline_record_type->type_id != NULL)
+            {
+                const char *mangled_name = alias_info->inline_record_type->type_id;
+                
+                /* Only register if not already registered to avoid redeclaration errors */
+                HashNode_t *existing = NULL;
+                if (FindIdent(&existing, symtab, mangled_name) == -1)
+                {
+                    /* Create a GpcType for the inline record if not already created */
+                    GpcType *inline_gpc_type = create_record_type(alias_info->inline_record_type);
+                    if (inline_gpc_type != NULL)
+                    {
+                        int push_result = PushTypeOntoScope_Typed(symtab, mangled_name, inline_gpc_type);
+                        if (push_result == 0)
+                        {
+                            if (debug_env2 != NULL)
+                            {
+                                fprintf(stderr, "[GPC] Registered inline record type %s for alias %s\n",
+                                        mangled_name, tree->tree_data.type_decl_data.id);
+                            }
+                            /* Ownership transferred to symbol table */
+                        }
+                        /* Note: On failure, we leak the GpcType, but this should not happen
+                         * in practice since we checked that the name doesn't exist */
+                    }
+                }
+            }
         }
 
         if (debug_env2 != NULL && return_val > before_symtab_errors)
