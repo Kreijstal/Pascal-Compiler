@@ -5623,8 +5623,43 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     ast_t *class_node = qualified->child;
-    ast_t *method_id_node = class_node != NULL ? class_node->next : NULL;
-    if (class_node == NULL || method_id_node == NULL)
+    if (class_node == NULL)
+        return NULL;
+    
+    // Skip over the optional type parameter list (PASCAL_T_TYPE_PARAM_LIST) if present
+    // The structure is: class_node [type_params] . method_id_node
+    ast_t *cursor = class_node->next;
+    if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+        fprintf(stderr, "[GPC] convert_method_impl: class_node->typ=%d\n", class_node->typ);
+        if (class_node->sym && class_node->sym->name)
+            fprintf(stderr, "[GPC]   class_node->name=%s\n", class_node->sym->name);
+        if (cursor) {
+            fprintf(stderr, "[GPC]   cursor->typ=%d\n", cursor->typ);
+            if (cursor->sym && cursor->sym->name)
+                fprintf(stderr, "[GPC]   cursor->name=%s\n", cursor->sym->name);
+        }
+    }
+    
+    // Skip type parameter list if present
+    if (cursor != NULL && cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
+        cursor = cursor->next;
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
+            fprintf(stderr, "[GPC]   after type_params cursor->typ=%d\n", cursor->typ);
+            if (cursor->sym && cursor->sym->name)
+                fprintf(stderr, "[GPC]   after type_params cursor->name=%s\n", cursor->sym->name);
+        }
+    }
+    
+    // Skip the dot token if present (it may be wrapped)
+    while (cursor != NULL && cursor->typ != PASCAL_T_IDENTIFIER) {
+        cursor = cursor->next;
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
+            fprintf(stderr, "[GPC]   skipping non-identifier cursor->typ=%d\n", cursor->typ);
+        }
+    }
+    
+    ast_t *method_id_node = cursor;
+    if (method_id_node == NULL)
         return NULL;
 
     char *class_name = dup_symbol(class_node);
@@ -5845,6 +5880,22 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);
+    
+    /* Check if this method belongs to a generic type. If so, we've recorded the AST
+     * template above and should NOT generate a concrete implementation. Return NULL
+     * to prevent adding this to the subprograms list. */
+    GenericTypeDecl *generic_decl = generic_registry_find_decl(effective_class);
+    if (generic_decl != NULL && generic_decl->record_template != NULL) {
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+            fprintf(stderr, "[GPC] convert_method_impl: recorded template for %s.%s, not generating concrete impl\n", 
+                    effective_class, method_name);
+        }
+        if (cleaned_class_name != NULL)
+            free(cleaned_class_name);
+        free(class_name);
+        free(method_name);
+        return NULL;
+    }
     
     if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
         fprintf(stderr, "[GPC] convert_method_impl: class=%s method=%s\n", effective_class, method_name);
