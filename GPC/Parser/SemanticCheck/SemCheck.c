@@ -31,6 +31,7 @@
 #include "../ParseTree/GpcType.h"
 #include "../ParseTree/from_cparser.h"
 #include "../ParseTree/operator_registry.h"
+#include "../ParseTree/generic_types.h"
 #include "../parser_error.h"
 #include "../ErrVars.h"
 #include "./SymTab/SymTab.h"
@@ -1548,11 +1549,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         return_val += vmt_result;
                     }
 
-                    long long record_size = 0;
-                    if (semcheck_compute_record_size(symtab, record_info, &record_size,
-                            tree->line_num) != 0)
+                    /* Skip size computation for generic templates (not yet specialized)
+                     * Size can only be computed after type parameters are substituted */
+                    int is_unspecialized_generic = (record_info->generic_decl != NULL && 
+                                                     record_info->num_generic_args == 0);
+                    
+                    if (!is_unspecialized_generic)
                     {
-                        return_val += 1;
+                        long long record_size = 0;
+                        if (semcheck_compute_record_size(symtab, record_info, &record_size,
+                                tree->line_num) != 0)
+                        {
+                            return_val += 1;
+                        }
                     }
                 }
                 break;
@@ -1648,11 +1657,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                             alias_record->type_id = strdup(tree->tree_data.type_decl_data.id);
                         }
                         
-                        long long record_size = 0;
-                        if (semcheck_compute_record_size(symtab, alias_record, &record_size,
-                                tree->line_num) != 0)
+                        /* Skip size computation for generic templates (not yet specialized)
+                         * Size can only be computed after type parameters are substituted */
+                        int is_unspecialized_generic = (alias_record->generic_decl != NULL && 
+                                                         alias_record->num_generic_args == 0);
+                        
+                        if (!is_unspecialized_generic)
                         {
-                            return_val += 1;
+                            long long record_size = 0;
+                            if (semcheck_compute_record_size(symtab, alias_record, &record_size,
+                                    tree->line_num) != 0)
+                            {
+                                return_val += 1;
+                            }
                         }
                     }
                 }
@@ -1672,11 +1689,36 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 break;
             }
             case TYPE_DECL_GENERIC:
-                /* Generic type declarations are registered in the generic registry
-                 * but not added to the symbol table until specialized */
-                var_type = HASHVAR_INTEGER;  /* Placeholder - generics don't go in symbol table directly */
-                /* TODO: Register generic declaration in generic_registry */
+            {
+                /* Register generic type declaration in the generic registry */
+                struct GenericDecl *generic_info = &tree->tree_data.type_decl_data.info.generic;
+                
+                if (generic_info != NULL && generic_info->num_type_params > 0)
+                {
+                    /* Register the generic declaration */
+                    GenericTypeDecl *generic_decl = generic_registry_add_decl(
+                        tree->tree_data.type_decl_data.id,
+                        generic_info->type_parameters,
+                        generic_info->num_type_params,
+                        tree
+                    );
+                    
+                    if (generic_decl != NULL)
+                    {
+                        /* Store reference to record template if this is a class/record */
+                        if (generic_info->record_template != NULL)
+                        {
+                            generic_decl->record_template = generic_info->record_template;
+                        }
+                    }
+                }
+                
+                /* Generics don't go in symbol table directly, only specialized instances do */
+                var_type = HASHVAR_INTEGER;  /* Placeholder */
+                /* Skip the normal PushTypeOntoScope for generics */
+                func_return = 0;
                 break;
+            }
             default:
                 var_type = HASHVAR_INTEGER;
                 break;
@@ -1686,7 +1728,17 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
 
 
-        if (gpc_type != NULL) {
+        /* Skip symbol table registration for generic declarations - they're only in the registry */
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
+        {
+            /* Generic declarations are already registered in generic_registry */
+            /* Skip the rest of symbol table handling */
+            if (func_return == 0)
+            {
+                /* Continue to next type declaration */
+            }
+        }
+        else if (gpc_type != NULL) {
             /* Set type_alias on GpcType before pushing */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
             {
@@ -2754,11 +2806,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     struct RecordType *var_record = gpc_type_get_record(var_gpc_type);
                     if (var_record != NULL)
                     {
-                        long long record_size = 0;
-                        if (semcheck_compute_record_size(symtab, var_record, &record_size,
-                                tree->line_num) != 0)
+                        /* Skip size computation for generic templates (not yet specialized)
+                         * Size can only be computed after type parameters are substituted */
+                        int is_unspecialized_generic = (var_record->generic_decl != NULL && 
+                                                         var_record->num_generic_args == 0);
+                        
+                        if (!is_unspecialized_generic)
                         {
-                            return_val += 1;
+                            long long record_size = 0;
+                            if (semcheck_compute_record_size(symtab, var_record, &record_size,
+                                    tree->line_num) != 0)
+                            {
+                                return_val += 1;
+                            }
                         }
                     }
                 }

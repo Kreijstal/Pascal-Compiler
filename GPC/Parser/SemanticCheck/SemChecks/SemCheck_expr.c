@@ -2538,16 +2538,31 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, (char *)type_id) == -1 || target_node == NULL)
         {
-            fprintf(stderr, "Error on line %d, SizeOf references unknown type %s.\n",
-                line_num, type_id);
-            return 1;
+            /* For generic type parameters that haven't been resolved yet,
+             * treat as unknown size rather than hard error - this allows
+             * generic templates to be processed without full instantiation */
+            const char *debug_env = getenv("GPC_DEBUG_TFPG");
+            if (debug_env != NULL)
+            {
+                fprintf(stderr, "[GPC] SizeOf: unknown type %s at line %d (may be unresolved generic parameter)\n",
+                    type_id, line_num);
+            }
+            *size_out = 0;  /* Unknown size - caller should handle */
+            return 1;  /* Still return error to indicate unresolved */
         }
         return sizeof_from_hashnode(symtab, target_node, size_out, depth + 1, line_num);
     }
 
-    fprintf(stderr, "Error on line %d, unable to resolve type information for SizeOf.\n",
-        line_num);
-    return 1;
+    /* If both type_tag and type_id are unspecified, we can't compute size.
+     * This might happen for generic type parameters - don't print error, just fail gracefully */
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL)
+    {
+        fprintf(stderr, "[GPC] SizeOf: unable to resolve type at line %d (unspecified type_tag and type_id)\n",
+            line_num);
+    }
+    *size_out = 0;
+    return 1;  /* Return error - caller should check if this is expected */
 }
 
 static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
