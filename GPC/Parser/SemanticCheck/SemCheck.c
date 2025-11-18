@@ -1510,6 +1510,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
+        const char *debug_env_check = getenv("GPC_DEBUG_TFPG");
+
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
         
@@ -1693,7 +1695,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Register generic type declaration in the generic registry */
                 struct GenericDecl *generic_info = &tree->tree_data.type_decl_data.info.generic;
                 
-                if (generic_info != NULL && generic_info->num_type_params > 0)
+                const char *debug_env = getenv("GPC_DEBUG_TFPG");
+                if (debug_env != NULL)
+                {
+                    fprintf(stderr, "[GPC] semcheck TYPE_DECL_GENERIC: id=%s num_params=%d\n",
+                        tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                        generic_info ? generic_info->num_type_params : -1);
+                }
+                
+                if (generic_info != NULL && generic_info->num_type_params > 0 && 
+                    generic_info->type_parameters != NULL)
                 {
                     /* Register the generic declaration */
                     GenericTypeDecl *generic_decl = generic_registry_add_decl(
@@ -1710,6 +1721,17 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             generic_decl->record_template = generic_info->record_template;
                         }
+                        
+                        if (debug_env != NULL)
+                        {
+                            fprintf(stderr, "[GPC] Registered generic type %s with %d parameters\n",
+                                tree->tree_data.type_decl_data.id, generic_info->num_type_params);
+                        }
+                    }
+                    else if (debug_env != NULL)
+                    {
+                        fprintf(stderr, "[GPC] Failed to register generic type %s\n",
+                            tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>");
                     }
                 }
                 
@@ -1787,6 +1809,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
 
         cur = cur->next;
+    }
+
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && return_val > 0)
+    {
+        fprintf(stderr, "[GPC] semcheck_type_decls returning error count: %d\n", return_val);
+    }
+    else if (debug_env != NULL)
+    {
+        fprintf(stderr, "[GPC] semcheck_type_decls completed successfully\n");
     }
 
     return return_val;
