@@ -2612,6 +2612,12 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
         return 0;
     }
 
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && field->name != NULL) {
+        fprintf(stderr, "[GPC] compute_field_size: field=%s type=%d type_id=%s is_array=%d\n",
+            field->name, field->type, field->type_id ? field->type_id : "<null>", field->is_array);
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
@@ -2657,6 +2663,20 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
     if (field->nested_record != NULL)
         return sizeof_from_record(symtab, field->nested_record, size_out, depth + 1, line_num);
+
+    /* For fields in generic class instantiations that have unresolved types,
+     * treat as pointer-sized (common for dynamic arrays like "array of T") */
+    if (field->type == UNKNOWN_TYPE && field->type_id == NULL)
+    {
+        const char *debug_env = getenv("GPC_DEBUG_TFPG");
+        if (debug_env != NULL && field->name != NULL)
+        {
+            fprintf(stderr, "[GPC] compute_field_size: field %s has unresolved type, assuming pointer size\n",
+                field->name);
+        }
+        *size_out = POINTER_SIZE_BYTES;
+        return 0;
+    }
 
     return sizeof_from_type_ref(symtab, field->type, field->type_id, size_out, depth + 1, line_num);
 }
