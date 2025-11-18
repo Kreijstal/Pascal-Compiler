@@ -128,6 +128,22 @@ static struct Expression *make_tfpglist_ctor_expr(struct RecordType *record, int
     if (call == NULL)
         return NULL;
 
+    /* Set the mangled_id to the actual Create constructor method name */
+    /* Format: ClassName__Create_u */
+    size_t mangled_len = strlen(type_id) + strlen("__Create_u") + 1;
+    char *mangled_name = (char *)malloc(mangled_len);
+    if (mangled_name != NULL)
+    {
+        strcpy(mangled_name, type_id);
+        strcat(mangled_name, "__Create_u");
+        call->expr_data.function_call_data.mangled_id = mangled_name;
+        
+        if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
+        {
+            fprintf(stderr, "[GPC] TFPG ctor: set mangled_id to %s\n", mangled_name);
+        }
+    }
+
     call->record_type = record;
     call->resolved_type = RECORD_TYPE;
     if (call->resolved_gpc_type != NULL)

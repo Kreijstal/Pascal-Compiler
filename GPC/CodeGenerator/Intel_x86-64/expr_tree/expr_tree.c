@@ -1140,8 +1140,22 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (static_link_expr_active)
             codegen_end_expression(ctx);
 
-        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
-        inst_list = add_inst(inst_list, buffer);
+        const char *call_target = expr->expr_data.function_call_data.mangled_id;
+        if (call_target == NULL)
+            call_target = expr->expr_data.function_call_data.id;
+        
+        if (call_target != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* This should never happen - emit error */
+            snprintf(buffer, sizeof(buffer), "\t# ERROR: function call with NULL target\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         codegen_release_function_call_mangled_id(expr);
         if (expr_has_type_tag(expr, REAL_TYPE))
