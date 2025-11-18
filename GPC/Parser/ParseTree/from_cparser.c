@@ -5603,6 +5603,19 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ast_t *qualified = unwrap_pascal_node(cur);
     if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
         if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+            fprintf(stderr, "[GPC] convert_method_impl: cur=%p typ=%d\n",
+                    (void*)cur, cur ? cur->typ : -1);
+            if (cur && cur->sym && cur->sym->name) {
+                fprintf(stderr, "[GPC]   cur->sym->name=%s\n", cur->sym->name);
+            }
+            fprintf(stderr, "[GPC] convert_method_impl: qualified=%p typ=%d\n",
+                    (void*)qualified, qualified ? qualified->typ : -1);
+            if (qualified && qualified->sym && qualified->sym->name) {
+                fprintf(stderr, "[GPC]   qualified->sym->name=%s\n", qualified->sym->name);
+            }
+            if (qualified && qualified->child) {
+                fprintf(stderr, "[GPC]   qualified->child->typ=%d\n", qualified->child->typ);
+            }
             fprintf(stderr, "[GPC] convert_method_impl: no qualified identifier (typ=%d)\n",
                     qualified ? qualified->typ : -1);
         }
@@ -6387,6 +6400,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     
                     ast_t *node = unwrap_pascal_node(definition);
                     if (node != NULL) {
+                        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+                            fprintf(stderr, "[GPC] implementation section node typ=%d\n", node->typ);
+                        }
                         switch (node->typ) {
                         case PASCAL_T_USES_SECTION:
                             append_uses_from_section(node, &implementation_uses);
