@@ -1309,13 +1309,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (current_class->parent_class_name == NULL && method_name != NULL &&
                                 (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
                             {
-                                /* No parent class - treat inherited Create/Destroy as no-op */
+                                /* No parent class - convert to empty compound statement (no-op) */
                                 if (getenv("GPC_DEBUG_INHERITED") != NULL)
                                 {
-                                    fprintf(stderr, "[GPC] Inherited %s with no parent class - treating as no-op\n",
+                                    fprintf(stderr, "[GPC] Inherited %s with no parent class - converting to no-op\n",
                                             method_name);
                                 }
-                                /* Skip the call - it's a no-op */
+                                /* Convert this inherited statement to an empty compound statement */
+                                stmt->type = STMT_COMPOUND_STATEMENT;
+                                stmt->stmt_data.compound_statement = NULL;
+                                /* No errors */
                                 break;
                             }
                         }
@@ -1988,34 +1991,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     {
                         fprintf(stderr, "[GPC]   Found class %s, parent_class_name=%s\n",
                                 class_name, parent_class_name ? parent_class_name : "<NULL>");
-                    }
-                    
-                    /* If there's no parent class and we're calling Create or Destroy,
-                     * treat it as a no-op (success) for compatibility with code that
-                     * expects TObject as implicit parent */
-                    if (parent_class_name == NULL && method_name != NULL &&
-                        (strcasecmp(method_name, "Create") == 0 ||
-                         strcasecmp(method_name, "Destroy") == 0))
-                    {
-                        if (getenv("GPC_DEBUG_INHERITED") != NULL)
-                        {
-                            fprintf(stderr, "[GPC] Inherited %s with no parent class - treating as no-op\n",
-                                    method_name);
-                        }
-                        /* Set a dummy resolved_proc to indicate success */
-                        /* We'll create a minimal HashNode to represent the no-op call */
-                        resolved_proc = (HashNode_t *)calloc(1, sizeof(HashNode_t));
-                        if (resolved_proc != NULL)
-                        {
-                            resolved_proc->id = strdup(proc_id);
-                            resolved_proc->hash_type = HASHTYPE_PROCEDURE;
-                            resolved_proc->type = NULL;
-                            resolved_proc->mangled_id = strdup(proc_id);
-                            match_count = 1;
-                            
-                            /* Mark this as a no-op inherited call */
-                            /* The codegen will need to handle this specially */
-                        }
                     }
                     
                     /* Walk up the inheritance chain */
