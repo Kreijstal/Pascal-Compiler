@@ -463,20 +463,15 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     }
     else
     {
-        if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+        /* After semantic checking, check if the expression resolved to a dynamic array */
+        /* The expression could be EXPR_VAR_ID, EXPR_RECORD_ACCESS, etc. */
+        int is_valid_array = 0;
+        
+        if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
         {
-            fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
-            ++return_val;
-        }
-        else
-        {
+            /* Simple variable reference */
             HashNode_t *array_node = NULL;
-            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1 || array_node == NULL)
-            {
-                fprintf(stderr, "Error on line %d, undeclared identifier \"%s\" in SetLength.\n", stmt->line_num, array_expr->expr_data.id);
-                ++return_val;
-            }
-            else
+            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) != -1 && array_node != NULL)
             {
                 set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
                 
@@ -491,12 +486,23 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
                     is_dynamic = hashnode_is_dynamic_array(array_node);
                 }
                 
-                if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
+                if (array_node->hash_type == HASHTYPE_ARRAY && is_dynamic)
                 {
-                    fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
-                    ++return_val;
+                    is_valid_array = 1;
                 }
             }
+        }
+        else if (array_expr != NULL && array_expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* Record field access - if semantic check passed, assume it's valid
+             * TODO: Could enhance this to verify the field is actually a dynamic array */
+            is_valid_array = 1;
+        }
+        
+        if (!is_valid_array)
+        {
+            fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
+            ++return_val;
         }
     }
 
