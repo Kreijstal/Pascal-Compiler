@@ -23,6 +23,18 @@
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../../Parser/ParseTree/GpcType.h"
+
+static int ends_with(const char *str, const char *suffix)
+{
+    if (!str || !suffix)
+        return 0;
+    size_t len_str = strlen(str);
+    size_t len_suffix = strlen(suffix);
+    if (len_suffix > len_str)
+        return 0;
+    return strncmp(str + len_str - len_suffix, suffix, len_suffix) == 0;
+}
 
 static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
@@ -1077,12 +1089,67 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         /* Pass arguments, shifted by 1 if static link is passed */
         int arg_start_index = should_pass_static_link ? 1 : 0;
+
+        /* CONSTRUCTOR CALL DETECTION */
+        int is_constructor = 0;
+        const char *func_name = expr->expr_data.function_call_data.id;
+        if (func_name != NULL && (strcmp(func_name, "Create") == 0 || ends_with(func_name, "__Create")))
+        {
+            if (expr->resolved_gpc_type != NULL && gpc_type_is_record(expr->resolved_gpc_type))
+            {
+                ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+                if (args != NULL && args->cur != NULL)
+                {
+                    struct Expression *first_arg = (struct Expression *)args->cur;
+                    if (first_arg->resolved_gpc_type != NULL && gpc_type_is_record(first_arg->resolved_gpc_type))
+                    {
+                        is_constructor = 1;
+                    }
+                }
+            }
+        }
+
+        if (is_constructor)
+        {
+            long long instance_size = gpc_type_sizeof(expr->resolved_gpc_type);
+
+            /* 1. Allocate memory */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdi\n", instance_size);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tcall\tmalloc\n");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            /* 2. Get VMT and Self, then initialize VMT */
+            Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (vmt_reg)
+            {
+                inst_list = codegen_pass_arguments_for_constructor_vmt(
+                    expr->expr_data.function_call_data.args_expr, inst_list, ctx, vmt_reg);
+
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", vmt_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                free_reg(get_reg_stack(), vmt_reg);
+            }
+
+            /* 3. Pass Self as the first argument */
+            const char *self_arg_reg = current_arg_reg64(0);
+            if (self_arg_reg)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", target_reg->bit_64, self_arg_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            arg_start_index = 1;
+        }
+
         const char *proc_name_hint = expr->expr_data.function_call_data.id;
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
             proc_name_hint = mangled_name_hint;
 
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
+        inst_list = codegen_pass_arguments(
+            is_constructor ? expr->expr_data.function_call_data.args_expr->next : expr->expr_data.function_call_data.args_expr,
             inst_list, ctx, func_type, proc_name_hint, arg_start_index);
 
         /* Invalidate static link cache after argument evaluation
@@ -1158,7 +1225,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         codegen_release_function_call_mangled_id(expr);
-        if (expr_has_type_tag(expr, REAL_TYPE))
+
+        if (is_constructor)
+        {
+             /* For constructors, the target register already holds the allocated instance. No move needed. */
+        }
+        else if (expr_has_type_tag(expr, REAL_TYPE))
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
         else if (expr_uses_qword_gpctype(expr))
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);

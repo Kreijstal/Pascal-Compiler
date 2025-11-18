@@ -3810,6 +3810,29 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     return inst_list;
 }
 
+ListNode_t *codegen_pass_arguments_for_constructor_vmt(ListNode_t *args, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *vmt_reg)
+{
+    if (args == NULL)
+        return inst_list;
+
+    struct Expression *first_arg_expr = (struct Expression *)args->cur;
+    if (first_arg_expr == NULL)
+        return inst_list;
+
+    Register_t *reg = NULL;
+    inst_list = codegen_expr_with_result(first_arg_expr, inst_list, ctx, &reg);
+    if (reg != NULL)
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", reg->bit_64, vmt_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), reg);
+    }
+
+    return inst_list;
+}
+
 ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (ctx != NULL && ctx->pending_stack_arg_bytes > 0)
