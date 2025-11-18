@@ -5118,10 +5118,25 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (identifier_node == NULL)
         identifier_node = field_node;
 
-    if (identifier_node == NULL || identifier_node->typ != PASCAL_T_IDENTIFIER)
+    /* Handle the case where field_node is a FUNC_CALL: obj.method(args)
+     * In this case, we need to extract the method name from the FUNC_CALL node */
+    ast_t *method_name_node = identifier_node;
+    if (identifier_node != NULL && identifier_node->typ == PASCAL_T_FUNC_CALL) {
+        /* The function name is the first child of the FUNC_CALL node */
+        method_name_node = identifier_node->child;
+        if (method_name_node != NULL) {
+            method_name_node = unwrap_pascal_node(method_name_node);
+        }
+        /* args_start should be the second child (the arguments) if not already provided */
+        if (args_start == NULL && identifier_node->child != NULL) {
+            args_start = identifier_node->child->next;
+        }
+    }
+
+    if (method_name_node == NULL || method_name_node->typ != PASCAL_T_IDENTIFIER)
         return NULL;
 
-    char *method_name = dup_symbol(identifier_node);
+    char *method_name = dup_symbol(method_name_node);
     if (method_name == NULL)
         return NULL;
 
@@ -5144,8 +5159,14 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (class_name != NULL) {
         proc_name = mangle_method_name(class_name, method_name);
     } else {
-        /* No class found, just use the method name as-is */
-        proc_name = strdup(method_name);
+        /* No class found at parse time. Create a placeholder name that semantic checker
+         * will resolve based on the object's type. Use format "__methodname" to indicate
+         * this is a method call that needs type-based resolution. */
+        size_t len = strlen(method_name) + 3;  /* __ + name + \0 */
+        proc_name = (char *)malloc(len);
+        if (proc_name != NULL) {
+            snprintf(proc_name, len, "__%s", method_name);
+        }
     }
     
     free(method_name);
