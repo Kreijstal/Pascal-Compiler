@@ -4682,6 +4682,26 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
     // Get array type info from semantic check
     GpcType *array_type = collection->resolved_gpc_type;
+    
+    // Check if this is a TFPGList (specialized generic list)
+    int is_fpglist = 0;
+    if (array_type != NULL && array_type->kind == TYPE_KIND_RECORD) {
+        struct RecordType *record_info = gpc_type_get_record(array_type);
+        if (record_info != NULL && record_info->type_id != NULL) {
+            const char *prefix = "TFPGList$";
+            size_t prefix_len = strlen(prefix);
+            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+                is_fpglist = 1;
+            }
+        }
+    }
+    
+    if (is_fpglist) {
+        codegen_report_error(ctx, "ERROR: FOR-IN loops over TFPGList are not yet supported in code generation\n"
+                                  "       Workaround: Use a regular for loop with Count and Items[] instead");
+        return inst_list;
+    }
+    
     if (array_type == NULL || array_type->kind != TYPE_KIND_ARRAY) {
         codegen_report_error(ctx, "ERROR: FOR-IN collection is not an array type");
         return inst_list;
