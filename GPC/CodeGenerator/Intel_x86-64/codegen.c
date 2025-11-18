@@ -1030,14 +1030,28 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
+            struct RecordType *record_info = NULL;
+            const char *class_label = NULL;
+            
             /* Check if this is a record/class type with methods */
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
-                struct RecordType *record_info = type_tree->tree_data.type_decl_data.info.record;
+                record_info = type_tree->tree_data.type_decl_data.info.record;
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
-                const char *class_label = (record_info != NULL && record_info->type_id != NULL) ?
+                class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
+            }
+            /* Also check for TYPE_DECL_ALIAS that points to specialized generic classes */
+            else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+                if (record_info != NULL && record_info->type_id != NULL) {
+                    /* Check if this is a specialized generic (has $ in the name) */
+                    if (strchr(record_info->type_id, '$') != NULL) {
+                        class_label = record_info->type_id;
+                    }
+                }
+            }
 
-                if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
+            if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
                     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
                     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
@@ -1067,12 +1081,11 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                             if (method != NULL && method->mangled_name != NULL) {
                                 fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
                             }
-                            method_node = method_node->next;
+                                                    method_node = method_node->next;
                         }
                     }
                 }
             }
-        }
         cur = cur->next;
     }
     

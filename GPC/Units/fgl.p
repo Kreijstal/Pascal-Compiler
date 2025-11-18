@@ -4,6 +4,8 @@ unit FGL;
 
 interface
 
+uses SysUtils;
+
 type
   generic TFPGListEnumerator<T> = record
   private
