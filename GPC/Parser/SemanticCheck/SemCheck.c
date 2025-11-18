@@ -1676,11 +1676,30 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         
                         if (!is_unspecialized_generic)
                         {
+                            const char *debug_env3 = getenv("GPC_DEBUG_TFPG");
+                            if (debug_env3 != NULL)
+                            {
+                                fprintf(stderr, "[GPC] Computing size for alias %s, generic_decl=%p num_args=%d\n",
+                                    tree->tree_data.type_decl_data.id,
+                                    (void*)alias_record->generic_decl,
+                                    alias_record->num_generic_args);
+                            }
+                            
                             long long record_size = 0;
                             if (semcheck_compute_record_size(symtab, alias_record, &record_size,
                                     tree->line_num) != 0)
                             {
+                                if (debug_env3 != NULL)
+                                {
+                                    fprintf(stderr, "[GPC] Size computation FAILED for %s\n",
+                                        tree->tree_data.type_decl_data.id);
+                                }
                                 return_val += 1;
+                            }
+                            else if (debug_env3 != NULL)
+                            {
+                                fprintf(stderr, "[GPC] Size computation succeeded for %s: %lld bytes\n",
+                                    tree->tree_data.type_decl_data.id, record_size);
                             }
                         }
                     }

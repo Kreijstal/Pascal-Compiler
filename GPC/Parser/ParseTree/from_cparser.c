@@ -1244,6 +1244,16 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("boolean");
         return BOOL;
     }
+    if (strcasecmp(name, "NativeInt") == 0 || strcasecmp(name, "cint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");
+        return LONGINT_TYPE;
+    }
+    if (strcasecmp(name, "NativeUInt") == 0 || strcasecmp(name, "cuint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");  // Treat unsigned as signed for size purposes
+        return LONGINT_TYPE;
+    }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
     }
