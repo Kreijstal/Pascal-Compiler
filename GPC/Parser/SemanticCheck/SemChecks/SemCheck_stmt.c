@@ -1312,8 +1312,27 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 }
                 else
                 {
-                    int inherited_type = UNKNOWN_TYPE;
-                    return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                    /* Handle other expression types (e.g., EXPR_VAR_ID for simple inherited calls) */
+                    if (call_expr->type == EXPR_VAR_ID)
+                    {
+                        /* Convert EXPR_VAR_ID to EXPR_FUNCTION_CALL for inherited method calls */
+                        call_expr->type = EXPR_FUNCTION_CALL;
+                        call_expr->expr_data.function_call_data.args_expr = NULL;
+                        call_expr->expr_data.function_call_data.mangled_id = NULL;
+                        call_expr->expr_data.function_call_data.is_call_info_valid = 0;
+                    }
+                    
+                    if (call_expr->type == EXPR_FUNCTION_CALL)
+                    {
+                        int inherited_type = UNKNOWN_TYPE;
+                        return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                    }
+                    else
+                    {
+                        /* For other expression types, use general expression checking */
+                        int expr_type = UNKNOWN_TYPE;
+                        return_val += semcheck_expr_main(&expr_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                    }
                 }
             }
             break;
