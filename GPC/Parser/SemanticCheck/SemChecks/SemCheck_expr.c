@@ -2538,16 +2538,31 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, (char *)type_id) == -1 || target_node == NULL)
         {
-            fprintf(stderr, "Error on line %d, SizeOf references unknown type %s.\n",
-                line_num, type_id);
-            return 1;
+            /* For generic type parameters that haven't been resolved yet,
+             * treat as unknown size rather than hard error - this allows
+             * generic templates to be processed without full instantiation */
+            const char *debug_env = getenv("GPC_DEBUG_TFPG");
+            if (debug_env != NULL)
+            {
+                fprintf(stderr, "[GPC] SizeOf: unknown type %s at line %d (may be unresolved generic parameter)\n",
+                    type_id, line_num);
+            }
+            *size_out = 0;  /* Unknown size - caller should handle */
+            return 1;  /* Still return error to indicate unresolved */
         }
         return sizeof_from_hashnode(symtab, target_node, size_out, depth + 1, line_num);
     }
 
-    fprintf(stderr, "Error on line %d, unable to resolve type information for SizeOf.\n",
-        line_num);
-    return 1;
+    /* If both type_tag and type_id are unspecified, we can't compute size.
+     * This might happen for generic type parameters - don't print error, just fail gracefully */
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL)
+    {
+        fprintf(stderr, "[GPC] SizeOf: unable to resolve type at line %d (unspecified type_tag and type_id)\n",
+            line_num);
+    }
+    *size_out = 0;
+    return 1;  /* Return error - caller should check if this is expected */
 }
 
 static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
@@ -2597,6 +2612,12 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
         return 0;
     }
 
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && field->name != NULL) {
+        fprintf(stderr, "[GPC] compute_field_size: field=%s type=%d type_id=%s is_array=%d\n",
+            field->name, field->type, field->type_id ? field->type_id : "<null>", field->is_array);
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
@@ -2606,6 +2627,12 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
     if (field->is_array)
     {
+        const char *debug_env = getenv("GPC_DEBUG_TFPG");
+        if (debug_env != NULL && field->name != NULL) {
+            fprintf(stderr, "[GPC] compute_field_size array: field=%s is_open=%d start=%d end=%d\n",
+                field->name, field->array_is_open, field->array_start, field->array_end);
+        }
+
         if (field->array_is_open || field->array_end < field->array_start)
         {
             *size_out = POINTER_SIZE_BYTES;
@@ -4987,9 +5014,10 @@ int semcheck_relop(int *type_return,
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
                 int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok)
+                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
                 {
-                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, or character types!\n\n",
+                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
                     ++return_val;
                 }

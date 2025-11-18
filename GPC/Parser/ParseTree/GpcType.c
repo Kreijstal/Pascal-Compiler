@@ -439,6 +439,19 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
         return 0;
     }
 
+    /* Allow class instances to be compatible with untyped Pointer parameters 
+     * This is needed for procedures like FreeAndNil(var Obj: Pointer) */
+    if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_RECORD)
+    {
+        /* Check if rhs is a class (classes are always heap-allocated and pointer-compatible) */
+        if (rhs_type->info.record_info != NULL && record_type_is_class(rhs_type->info.record_info))
+        {
+            /* Allow if lhs is untyped Pointer (points_to == NULL) */
+            if (lhs_type->info.points_to == NULL)
+                return 1;
+        }
+    }
+
     /* If kinds are different, generally incompatible */
     /* Exception: we need to check for special cases */
     if (lhs_type->kind != rhs_type->kind) {

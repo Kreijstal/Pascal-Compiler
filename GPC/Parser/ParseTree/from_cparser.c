@@ -662,11 +662,29 @@ static void substitute_record_type_parameters(struct RecordType *record, Generic
 static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types) {
     if (field == NULL)
         return;
+    
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && field->name != NULL)
+    {
+        fprintf(stderr, "[GPC] substitute_record_field BEFORE: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
+            field->name, field->is_array,
+            field->type_id ? field->type_id : "<null>",
+            field->array_element_type_id ? field->array_element_type_id : "<null>");
+    }
+    
     substitute_identifier(&field->type_id, generic_decl, arg_types);
     if (field->array_element_type_id != NULL)
         substitute_identifier(&field->array_element_type_id, generic_decl, arg_types);
     if (field->nested_record != NULL)
         substitute_record_type_parameters(field->nested_record, generic_decl, arg_types);
+    
+    if (debug_env != NULL && field->name != NULL)
+    {
+        fprintf(stderr, "[GPC] substitute_record_field AFTER: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
+            field->name, field->is_array,
+            field->type_id ? field->type_id : "<null>",
+            field->array_element_type_id ? field->array_element_type_id : "<null>");
+    }
 }
 
 static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types) {
@@ -785,8 +803,11 @@ static void record_generic_method_impl(const char *class_name, const char *metho
         return;
 
     GenericTypeDecl *generic = generic_registry_find_decl(class_name);
-    if (generic == NULL || generic->record_template == NULL)
+    if (generic == NULL || generic->record_template == NULL) {
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && class_name != NULL)
+            fprintf(stderr, "[GPC] record_generic_method_impl: no generic decl for %s\n", class_name);
         return;
+    }
 
     ListNode_t *cur = generic->record_template->method_templates;
     while (cur != NULL)
@@ -798,6 +819,8 @@ static void record_generic_method_impl(const char *class_name, const char *metho
                 strcasecmp(template->name, method_name) == 0)
             {
                 template->method_impl_ast = copy_ast(method_ast);
+                if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL)
+                    fprintf(stderr, "[GPC] recorded method implementation for %s.%s\n", class_name, method_name);
                 break;
             }
         }
@@ -894,10 +917,18 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
         return;
     if (decl->type != TREE_TYPE_DECL)
         return;
-    if (decl->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
+    
+    struct RecordType *record = NULL;
+    
+    // Get the record from either TYPE_DECL_RECORD or TYPE_DECL_ALIAS
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
+        record = decl->tree_data.type_decl_data.info.record;
+    } else if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+        record = decl->tree_data.type_decl_data.info.alias.inline_record_type;
+    } else {
         return;
+    }
 
-    struct RecordType *record = decl->tree_data.type_decl_data.info.record;
     if (record == NULL || record->method_templates == NULL ||
         record->generic_decl == NULL || record->generic_args == NULL ||
         record->num_generic_args <= 0)
@@ -1225,6 +1256,16 @@ static int map_type_name(const char *name, char **type_id_out) {
         if (type_id_out != NULL)
             *type_id_out = strdup("boolean");
         return BOOL;
+    }
+    if (strcasecmp(name, "NativeInt") == 0 || strcasecmp(name, "cint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");
+        return LONGINT_TYPE;
+    }
+    if (strcasecmp(name, "NativeUInt") == 0 || strcasecmp(name, "cuint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");  // Treat unsigned as signed for size purposes
+        return LONGINT_TYPE;
     }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
@@ -2194,76 +2235,96 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
         return NULL;
 
-    ListNode_t *names_head = NULL;
-    ListNode_t **names_tail = &names_head;
     ast_t *cursor = field_decl_node->child;
-    char *type_id = NULL;
-    int field_type = UNKNOWN_TYPE;
+    ListNode_t *names = convert_identifier_list(&cursor);
+    if (names == NULL) {
+        return NULL;
+    }
 
-    while (cursor != NULL) {
-        ast_t *unwrapped = unwrap_pascal_node(cursor);
-        if (unwrapped != NULL)
-            cursor = unwrapped;
-
-        if (cursor->typ == PASCAL_T_IDENTIFIER) {
-            if (cursor->next == NULL) {
-                char *candidate = dup_symbol(cursor);
-                if (candidate != NULL) {
-                    char *mapped_id = NULL;
-                    int mapped_type = map_type_name(candidate, &mapped_id);
-                    if (mapped_type != UNKNOWN_TYPE) {
-                        field_type = mapped_type;
-                        free(candidate);
-                        type_id = mapped_id;
-                    } else {
-                        type_id = candidate;
-                    }
-                }
-            } else {
-                char *name = dup_symbol(cursor);
-                if (name != NULL) {
-                    ListNode_t *name_node = CreateListNode(name, LIST_STRING);
-                    *names_tail = name_node;
-                    names_tail = &name_node->next;
-                }
-            }
-        }
-
+    /* Skip to the type specification */
+    while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
+           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_ARRAY_TYPE) {
         cursor = cursor->next;
     }
 
-    if (names_head == NULL)
-        return NULL;
+    char *field_type_id = NULL;
+    struct RecordType *nested_record = NULL;
+    TypeInfo field_info;
+    memset(&field_info, 0, sizeof(TypeInfo));
+    int field_type = UNKNOWN_TYPE;
+
+    if (cursor != NULL) {
+        /* Use convert_type_spec to properly handle all type forms including arrays */
+        field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+    } else if (names != NULL) {
+        /* Fallback: if no type spec, try to parse last name as type */
+        char *candidate = pop_last_identifier(&names);
+        if (candidate != NULL) {
+            char *mapped_id = NULL;
+            int mapped_type = map_type_name(candidate, &mapped_id);
+            if (mapped_type != UNKNOWN_TYPE) {
+                field_type = mapped_type;
+                field_type_id = mapped_id;
+                free(candidate);
+            } else {
+                field_type_id = candidate;
+            }
+        }
+    }
 
     ListBuilder result;
     list_builder_init(&result);
-    ListNode_t *name_node = names_head;
+
+    ListNode_t *name_node = names;
     while (name_node != NULL) {
         char *field_name = (char *)name_node->cur;
+        char *type_id_copy = NULL;
+        if (field_type_id != NULL)
+            type_id_copy = strdup(field_type_id);
+
+        struct RecordType *nested_copy = NULL;
+        if (nested_record != NULL) {
+            if (name_node->next == NULL) {
+                nested_copy = nested_record;
+                nested_record = NULL;
+            } else {
+                nested_copy = clone_record_type(nested_record);
+            }
+        }
+
         struct RecordField *field_desc = (struct RecordField *)calloc(1, sizeof(struct RecordField));
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
-            field_desc->type_id = type_id != NULL ? strdup(type_id) : NULL;
-            field_desc->nested_record = NULL;
-            field_desc->is_array = 0;
-            field_desc->array_start = 0;
-            field_desc->array_end = 0;
-            field_desc->array_element_type = UNKNOWN_TYPE;
-            field_desc->array_element_type_id = NULL;
-            field_desc->array_is_open = 0;
+            field_desc->type_id = type_id_copy;
+            field_desc->nested_record = nested_copy;
+            field_desc->is_array = field_info.is_array;
+            field_desc->array_start = field_info.start;
+            field_desc->array_end = field_info.end;
+            field_desc->array_element_type = field_info.element_type;
+            field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_is_open = field_info.is_open_array;
+            field_info.element_type_id = NULL;  /* Ownership transferred */
+            field_desc->is_hidden = 0;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
-            free(field_name);
+            if (field_name != NULL)
+                free(field_name);
+            if (type_id_copy != NULL)
+                free(type_id_copy);
+            destroy_record_type(nested_copy);
         }
 
-        ListNode_t *next = name_node->next;
+        ListNode_t *next_name = name_node->next;
         free(name_node);
-        name_node = next;
+        name_node = next_name;
     }
 
-    if (type_id != NULL)
-        free(type_id);
+    if (field_type_id != NULL)
+        free(field_type_id);
+    if (nested_record != NULL)
+        destroy_record_type(nested_record);
 
     return list_builder_finish(&result);
 }
@@ -5531,13 +5592,22 @@ static struct Statement *convert_block(ast_t *block_node) {
 }
 
 static Tree_t *convert_method_impl(ast_t *method_node) {
+    if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+        fprintf(stderr, "[GPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
+    }
+    
     if (method_node == NULL)
         return NULL;
 
     ast_t *cur = method_node->child;
     ast_t *qualified = unwrap_pascal_node(cur);
-    if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER)
+    if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+            fprintf(stderr, "[GPC] convert_method_impl: no qualified identifier (typ=%d)\n",
+                    qualified ? qualified->typ : -1);
+        }
         return NULL;
+    }
 
     ast_t *class_node = qualified->child;
     ast_t *method_id_node = class_node != NULL ? class_node->next : NULL;
@@ -5550,11 +5620,27 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         return NULL;
     }
+    
+    // For generic classes, strip the type parameters from the class name
+    // e.g., "TFPGList<T>" -> "TFPGList"
+    char *cleaned_class_name = NULL;
+    if (class_name != NULL) {
+        char *bracket = strchr(class_name, '<');
+        if (bracket != NULL) {
+            size_t len = (size_t)(bracket - class_name);
+            cleaned_class_name = (char *)malloc(len + 1);
+            if (cleaned_class_name != NULL) {
+                memcpy(cleaned_class_name, class_name, len);
+                cleaned_class_name[len] = '\0';
+            }
+        }
+    }
 
     const char *registered_class = find_class_for_method(method_name);
     /* Prefer the explicitly specified class name from the qualified identifier,
      * falling back to the registered class if no explicit class was given */
-    const char *effective_class = class_name != NULL ? class_name : registered_class;
+    const char *effective_class = (cleaned_class_name != NULL) ? cleaned_class_name : 
+                                  (class_name != NULL) ? class_name : registered_class;
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
@@ -5746,7 +5832,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);
+    
+    if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+        fprintf(stderr, "[GPC] convert_method_impl: class=%s method=%s\n", effective_class, method_name);
+    }
 
+    if (cleaned_class_name != NULL)
+        free(cleaned_class_name);
     free(class_name);
     free(method_name);
     return tree;
