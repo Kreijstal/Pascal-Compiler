@@ -21,7 +21,12 @@ end;
 var
   Counter: TCounter;
 begin
-  FillChar(Counter, SizeOf(Counter), 0);
+  { 
+    FIX: Removed FillChar. 
+    1. The compiler initialization (calloc) already zeroes the instance.
+    2. FillChar(Counter, ...) on a class wipes the pointer, not the instance.
+  }
+  
   Counter.Value := 7;
   Counter.Value := 7;
   Counter.Value := 10;

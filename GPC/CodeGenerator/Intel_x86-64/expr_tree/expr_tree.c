@@ -1278,13 +1278,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         codegen_release_function_call_mangled_id(expr);
         
-        /* For constructors, return the instance pointer instead of constructor return value */
+        /* For constructors, use the return value from the constructor (Self in %rax).
+         * Constructors now properly return Self, so we don't need to rely on the
+         * saved instance register which could be clobbered during the call. */
         if (is_constructor && constructor_instance_reg != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                constructor_instance_reg->bit_64, target_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
+            /* Free the constructor_instance_reg as we won't use it */
             free_reg(get_reg_stack(), constructor_instance_reg);
+            
+            /* Get the constructor return value from %rax */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {

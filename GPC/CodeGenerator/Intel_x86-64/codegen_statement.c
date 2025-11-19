@@ -1310,34 +1310,93 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
         }
 
         Register_t *src_reg = NULL;
-        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
-        if (codegen_had_error(ctx) || src_reg == NULL)
+        
+        /* For function calls (especially constructors), the expression evaluates to the pointer value directly.
+         * For variable references, we need to load the pointer from the variable.
+         * We check if the source is addressable to distinguish these cases. */
+        int src_is_addressable = codegen_expr_is_addressable(src_expr);
+        
+        if (src_is_addressable)
         {
-            if (src_reg != NULL)
+            /* Source is a variable - get its address and load the pointer value */
+            inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            
+            /* Load the pointer value from the variable */
+            Register_t *ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (ptr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
                 free_reg(get_reg_stack(), src_reg);
-            free_reg(get_reg_stack(), dest_reg);
-            return inst_list;
-        }
-
-        /* Load the pointer value from source and store it to destination */
-        Register_t *ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (ptr_reg == NULL)
-        {
-            free_reg(get_reg_stack(), dest_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for class pointer copy.");
+            }
+            
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", src_reg->bit_64, ptr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", ptr_reg->bit_64, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), ptr_reg);
             free_reg(get_reg_stack(), src_reg);
-            return codegen_fail_register(ctx, inst_list, NULL,
-                "ERROR: Unable to allocate register for class pointer copy.");
         }
-
-        char buffer[128];
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", src_reg->bit_64, ptr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", ptr_reg->bit_64, dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-
-        free_reg(get_reg_stack(), ptr_reg);
-        free_reg(get_reg_stack(), src_reg);
-        free_reg(get_reg_stack(), dest_reg);
+        else
+        {
+            /* Source is a function call or expression that returns the pointer value directly.
+             * Save dest_reg to the stack before evaluating source to prevent it from being clobbered. */
+            StackNode_t *dest_save_slot = add_l_x("__class_assign_dest__", CODEGEN_POINTER_SIZE_BYTES);
+            if (dest_save_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to reserve stack slot for class assignment destination.");
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                dest_reg->bit_64, dest_save_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), dest_reg);
+            dest_reg = NULL;
+            
+            /* Evaluate the source expression (constructor call) */
+            inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                return inst_list;
+            }
+            
+            /* Restore dest_reg from stack */
+            dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (dest_reg == NULL)
+            {
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for class assignment destination restore.");
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                dest_save_slot->offset, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* src_reg already contains the pointer value - store it directly */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", src_reg->bit_64, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), src_reg);
+        }
+        
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
         return inst_list;
     }
 
