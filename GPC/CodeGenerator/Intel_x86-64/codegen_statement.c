@@ -1360,9 +1360,6 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                         is_constructor = 1;
                     else if (strcmp(func_mangled_name, "Create") == 0)
                         is_constructor = 1;
-                    
-                    fprintf(stderr, "DEBUG assign_record: mangled=%s, is_constructor=%d\n",
-                        func_mangled_name, is_constructor);
                 }
                 
                 /* For constructors, allocate heap memory and initialize VMT */
@@ -1385,13 +1382,11 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     
                     if (class_record != NULL && record_type_is_class(class_record))
                     {
-                        fprintf(stderr, "DEBUG assign_record: Detected class constructor, instance_size check\n");
                         /* Get the size of the class instance */
                         long long instance_size = 0;
                         if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
                             instance_size > 0)
                         {
-                            fprintf(stderr, "DEBUG assign_record: Allocating instance, size=%lld\n", instance_size);
                             char buffer[128];
                             
                             /* Save dest_reg to stack since it will be clobbered by function calls */
@@ -1407,14 +1402,20 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                                 dest_reg->bit_64, dest_save_slot->offset);
                             inst_list = add_inst(inst_list, buffer);
                             
-                            /* Allocate memory using malloc */
-                            const char *malloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                            /* Allocate zero-initialized memory using calloc
+                             * This ensures all fields (including dynamic array descriptors) start at zero */
+                            const char *size_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                            const char *count_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+                            
+                            /* calloc(1, instance_size) - allocate 1 element of size instance_size */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                                instance_size, malloc_arg_reg);
+                                instance_size, count_arg_reg);
                             inst_list = add_inst(inst_list, buffer);
                             
                             inst_list = codegen_vect_reg(inst_list, 0);
-                            inst_list = add_inst(inst_list, "\tcall\tmalloc\n");
+                            inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
                             free_arg_regs();
                             
                             /* Save the allocated instance pointer */
@@ -1477,7 +1478,6 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             inst_list = add_inst(inst_list, buffer);
                             
                             /* Store the instance pointer in the destination */
-                            fprintf(stderr, "DEBUG assign_record: Storing instance pointer into destination\n");
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
                                 constructor_instance_reg->bit_64, dest_reg->bit_64);
                             inst_list = add_inst(inst_list, buffer);
