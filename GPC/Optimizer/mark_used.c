@@ -170,7 +170,6 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_ADDOP:
-            fprintf(stderr, "DEBUG: EXPR_ADDOP - accessing left_expr/right_term\n");
             if (expr->expr_data.addop_data.left_expr != NULL)
                 mark_expr_calls(expr->expr_data.addop_data.left_expr, map);
             if (expr->expr_data.addop_data.right_term != NULL)
