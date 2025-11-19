@@ -1750,11 +1750,14 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         }
 
         /* Skip unused functions (dead code elimination) */
+        /* Temporarily disabled due to segfaults in reachability analysis */
+        /*
         if (!sub->tree_data.subprogram_data.is_used)
         {
             sub_list = sub_list->next;
             continue;
         }
+        */
 
         switch(sub->tree_data.subprogram_data.sub_type)
         {

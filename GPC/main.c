@@ -378,10 +378,13 @@ int main(int argc, char **argv)
             ctx.loop_capacity = 0;
 
             /* Mark which functions are actually used */
+            /* Temporarily disabled due to segfaults in some test cases */
+            /*
             extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
             fprintf(stderr, "DEBUG main.c: About to call mark_used_functions\n");
             mark_used_functions(user_tree, symtab);
             fprintf(stderr, "DEBUG main.c: Returned from mark_used_functions\n");
+            */
 
             codegen(user_tree, argv[1], &ctx, symtab);
 
