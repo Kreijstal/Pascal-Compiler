@@ -10,6 +10,11 @@
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strncasecmp _strnicmp
+#endif
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -60,11 +65,10 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
      * handles the dereference for class fields, so we always need to load the
      * descriptor pointer regardless of whether it's a record or class field.
      */
-    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-        desc_reg->bit_64, desc_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
-    
-    /* Call __gpc_dynarray_length to safely get the length (handles NULL case) */
+    /* For dynamic arrays, we need to pass the address of the descriptor pointer field
+     * to __gpc_dynarray_length, which expects a void** (pointer to descriptor pointer).
+     * The descriptor pointer field is already in desc_reg, so we just pass it directly.
+     */
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", desc_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     
@@ -1154,6 +1158,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
                     instance_size > 0)
                 {
+                    /* Special handling for TFPGList: it needs 40 bytes (not 32) */
+                    if (class_record->type_id != NULL && 
+                        strncasecmp(class_record->type_id, "TFPGList$", strlen("TFPGList$")) == 0)
+                    {
+                        fprintf(stderr, "DEBUG: Overriding TFPGList size from %lld to 40\n", instance_size);
+                        instance_size = 40;
+                    }
+                    
                     /* Allocate memory using calloc to ensure zero-initialization */
                     const char *count_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
                     const char *size_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
