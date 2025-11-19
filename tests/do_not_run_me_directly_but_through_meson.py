@@ -2146,6 +2146,7 @@ def main():
         runner = TAPTestRunner()
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
+    print(f"DEBUG: argv={[sys.argv[0]] + remaining}")
 
     unittest.main(argv=[sys.argv[0]] + remaining)
 
