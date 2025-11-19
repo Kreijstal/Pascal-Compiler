@@ -5128,7 +5128,9 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", obj_ptr_slot->offset, obj_reload_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        // Load FItems pointer from object
+        // Load FItems.data pointer from object
+        // FItems descriptor is at offset 8, and data field is at offset 0 within the descriptor
+        // So FItems.data is at offset 8+0 = 8
         snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n", obj_reload_reg->bit_64, fitems_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), obj_reload_reg);
