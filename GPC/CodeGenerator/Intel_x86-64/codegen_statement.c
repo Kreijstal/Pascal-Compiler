@@ -1348,6 +1348,148 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
             if (call_returns_record)
             {
+                const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
+                const char *func_id = src_expr->expr_data.function_call_data.id;
+                
+                /* Check if this is a constructor call */
+                int is_constructor = 0;
+                if (func_mangled_name != NULL)
+                {
+                    const char *create_pos = strstr(func_mangled_name, "__Create");
+                    if (create_pos != NULL)
+                        is_constructor = 1;
+                    else if (strcmp(func_mangled_name, "Create") == 0)
+                        is_constructor = 1;
+                    
+                    fprintf(stderr, "DEBUG assign_record: mangled=%s, is_constructor=%d\n",
+                        func_mangled_name, is_constructor);
+                }
+                
+                /* For constructors, allocate heap memory and initialize VMT */
+                Register_t *constructor_instance_reg = NULL;
+                if (is_constructor)
+                {
+                    /* Get the class type from the source expression or first argument */
+                    struct RecordType *class_record = src_expr->record_type;
+                    
+                    if (class_record == NULL)
+                    {
+                        ListNode_t *first_arg = src_expr->expr_data.function_call_data.args_expr;
+                        if (first_arg != NULL && first_arg->cur != NULL)
+                        {
+                            struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                            if (class_expr != NULL)
+                                class_record = class_expr->record_type;
+                        }
+                    }
+                    
+                    if (class_record != NULL && record_type_is_class(class_record))
+                    {
+                        fprintf(stderr, "DEBUG assign_record: Detected class constructor, instance_size check\n");
+                        /* Get the size of the class instance */
+                        long long instance_size = 0;
+                        if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
+                            instance_size > 0)
+                        {
+                            fprintf(stderr, "DEBUG assign_record: Allocating instance, size=%lld\n", instance_size);
+                            char buffer[128];
+                            
+                            /* Save dest_reg to stack since it will be clobbered by function calls */
+                            StackNode_t *dest_save_slot = add_l_x("__constructor_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                            if (dest_save_slot == NULL)
+                            {
+                                codegen_report_error(ctx,
+                                    "ERROR: Unable to reserve stack slot for constructor destination.");
+                                free_reg(get_reg_stack(), dest_reg);
+                                return inst_list;
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                dest_reg->bit_64, dest_save_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Allocate memory using malloc */
+                            const char *malloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                                instance_size, malloc_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            inst_list = codegen_vect_reg(inst_list, 0);
+                            inst_list = add_inst(inst_list, "\tcall\tmalloc\n");
+                            free_arg_regs();
+                            
+                            /* Save the allocated instance pointer */
+                            constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (constructor_instance_reg == NULL)
+                            {
+                                codegen_report_error(ctx, 
+                                    "ERROR: Unable to allocate register for constructor instance.");
+                                free_reg(get_reg_stack(), dest_reg);
+                                return inst_list;
+                            }
+                            
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
+                                constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Initialize VMT pointer in the allocated instance */
+                            /* Use the class's TYPEINFO label instead of evaluating the first argument
+                             * to avoid side effects like storing into the destination variable */
+                            const char *class_type_id = class_record->type_id;
+                            if (class_type_id != NULL)
+                            {
+                                /* Load VMT (TYPEINFO) address */
+                                Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                                if (vmt_reg != NULL)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %s\n",
+                                        class_type_id, vmt_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    
+                                    /* Store VMT into first 8 bytes of instance */
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                        vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    
+                                    free_reg(get_reg_stack(), vmt_reg);
+                                }
+                            }
+                            
+                            /* Pass the allocated instance as the first argument (Self) */
+                            const char *self_arg_reg = current_arg_reg64(0);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                constructor_instance_reg->bit_64, self_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Pass remaining arguments starting from index 1 (skip class type argument) */
+                            inst_list = codegen_pass_arguments(
+                                src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                                func_type, func_id, 1);
+                            
+                            /* Call the constructor */
+                            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", func_mangled_name);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                            codegen_release_function_call_mangled_id(src_expr);
+                            
+                            /* Restore dest_reg from stack */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                dest_save_slot->offset, dest_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Store the instance pointer in the destination */
+                            fprintf(stderr, "DEBUG assign_record: Storing instance pointer into destination\n");
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                constructor_instance_reg->bit_64, dest_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            free_reg(get_reg_stack(), constructor_instance_reg);
+                            free_reg(get_reg_stack(), dest_reg);
+                            return inst_list;
+                        }
+                    }
+                }
+                
+                /* Normal record-returning function (non-constructor) */
                 const char *ret_ptr_reg = current_arg_reg64(0);
                 if (ret_ptr_reg == NULL)
                 {
@@ -4244,6 +4386,11 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* Use cached information from semantic checking */
         call_hash_type = stmt->stmt_data.procedure_call_data.call_hash_type;
         call_gpc_type = stmt->stmt_data.procedure_call_data.call_gpc_type;
+        
+        fprintf(stderr, "DEBUG codegen_proc_call: id=%s, mangled=%s, hash_type=%d\n",
+            unmangled_name ? unmangled_name : "NULL",
+            proc_name ? proc_name : "NULL", 
+            call_hash_type);
     }
     else
     {
