@@ -1056,14 +1056,9 @@ typedef struct {
 int64_t __gpc_dynarray_length(void *descriptor_ptr)
 {
     if (descriptor_ptr == NULL)
-    {
-        fprintf(stderr, "[dynarray_length] NULL descriptor\n");
         return 0;
-    }
     
     gpc_dynarray_descriptor_t *desc = (gpc_dynarray_descriptor_t *)descriptor_ptr;
-    fprintf(stderr, "[dynarray_length] desc=%p, data=%p, length=%lld\n",
-            desc, desc->data, (long long)desc->length);
     return desc->length;
 }
 
@@ -1075,22 +1070,13 @@ int64_t __gpc_dynarray_length(void *descriptor_ptr)
  */
 void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t element_size)
 {
-    fprintf(stderr, "[dynarray_setlength] ENTER: desc_ptr=%p, new_length=%lld, elem_size=%lld\n",
-            descriptor_ptr, (long long)new_length, (long long)element_size);
-    
     if (descriptor_ptr == NULL || element_size <= 0)
-    {
-        fprintf(stderr, "[dynarray_setlength] EARLY RETURN: desc_ptr=%p, elem_size=%lld\n",
-                descriptor_ptr, (long long)element_size);
         return;
-    }
 
     if (new_length < 0)
         new_length = 0;
 
     gpc_dynarray_descriptor_t *descriptor = (gpc_dynarray_descriptor_t *)descriptor_ptr;
-    fprintf(stderr, "[dynarray_setlength] BEFORE: data=%p, old_length=%lld\n",
-            descriptor->data, (long long)descriptor->length);
     size_t old_length = descriptor->length > 0 ? (size_t)descriptor->length : 0;
     size_t target_length = (size_t)new_length;
 
@@ -1124,8 +1110,6 @@ void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t el
 
     descriptor->data = new_data;
     descriptor->length = new_length;
-    fprintf(stderr, "[dynarray_setlength] AFTER: data=%p, new_length=%lld\n",
-            descriptor->data, (long long)descriptor->length);
 }
 
 void gpc_write_integer(GPCTextFile *file, int width, int64_t value)
