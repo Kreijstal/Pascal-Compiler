@@ -1862,9 +1862,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (sub_id != NULL && strstr(sub_id, "__Create") != NULL)
         is_constructor = 1;
     
-    fprintf(stderr, "DEBUG codegen_procedure: sub_id=%s, is_constructor=%d, num_args=%d\n",
-        sub_id ? sub_id : "NULL", is_constructor, num_args);
-    
     if (is_constructor && num_args > 0)
     {
         /* Self is the first parameter. For class methods, it's in %rdi (or first stack slot).
@@ -1880,15 +1877,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 {
                     char *param_id = (char *)param_var->ids->cur;
                     StackNode_t *self_var = find_label(param_id);
-                    fprintf(stderr, "DEBUG: Constructor %s: param_id=%s, self_var=%p\n",
-                        sub_id, param_id ? param_id : "NULL", (void*)self_var);
                     if (self_var != NULL)
                     {
                         /* Self parameter is on the stack - load it into %rax for return */
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", self_var->offset);
                         inst_list = add_inst(inst_list, buffer);
-                        fprintf(stderr, "DEBUG: Added return-self instruction for constructor %s\n", sub_id);
                     }
                 }
             }

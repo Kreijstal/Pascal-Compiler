@@ -3467,20 +3467,44 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
                 
-                /* BUGFIX: For var parameters, we pass the ADDRESS of the variable itself,
-                 * not the value it contains. This is true even for class types.
+                /* BUGFIX: For TRUE var parameters of class types, we pass the ADDRESS of the variable itself,
+                 * not the value it contains. This allows the callee to update the variable (e.g., FreeAndNil).
                  * 
-                 * For class types where the variable holds a pointer to the instance,
-                 * a var parameter receives the address of that pointer variable, so the
-                 * callee can both read the current pointer value and update it (e.g., set to nil).
-                 * 
-                 * Previously, this code incorrectly dereferenced class variables for var parameters,
-                 * passing the instance pointer instead of the address of the variable holding it.
-                 * This caused bugs like FreeAndNil corrupting memory instead of setting the variable to nil.
-                 * 
-                 * NOTE: For non-var parameters (by-value), class types ARE dereferenced elsewhere
-                 * because we want to pass the instance pointer value, not the address of the variable.
-                 * But that's handled in a different code path, not here. */
+                 * However, for class methods, Self (first parameter) needs to be dereferenced to pass the
+                 * instance pointer, even though it's technically a var parameter internally. */
+                if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
+                    arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
+                {
+                    int is_class_method = 0;
+                    const char *mangled_name_hint = (procedure_name != NULL) ? procedure_name : "";
+                    
+                    /* Detect if this is a class method by checking for __ in the mangled name.
+                     * Class methods have mangled names like TClassName__MethodName. */
+                    if (strstr(mangled_name_hint, "__") != NULL)
+                        is_class_method = 1;
+                    
+                    /* For class methods, always dereference the first argument (Self).
+                     * For non-methods with var parameters, don't dereference. */
+                    int should_dereference = 0;
+                    if (is_class_method && arg_num == 0)
+                    {
+                        /* Class method Self: dereference to get instance pointer */
+                        should_dereference = 1;
+                    }
+                    else if (!is_var_param)
+                    {
+                        /* Non-var class parameter: dereference to get instance pointer */
+                        should_dereference = 1;
+                    }
+                    /* else: var parameter of class type: pass address of variable (no dereference) */
+                    
+                    if (should_dereference)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                            addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
             }
             if (codegen_had_error(ctx) || addr_reg == NULL)
                 return inst_list;
