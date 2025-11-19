@@ -1749,6 +1749,13 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
+        /* Skip unused subprograms (from stdlib optimization) */
+        if (!sub->tree_data.subprogram_data.is_used)
+        {
+            sub_list = sub_list->next;
+            continue;
+        }
+
         switch(sub->tree_data.subprogram_data.sub_type)
         {
             case TREE_SUBPROGRAM_PROC:
