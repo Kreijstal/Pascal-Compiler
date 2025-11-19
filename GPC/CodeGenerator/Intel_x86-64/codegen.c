@@ -2960,68 +2960,25 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     if (var_node == NULL || type_name == NULL || type_name[0] == '\0' || var_node->is_reference)
         return inst_list;
 
-    char typeinfo_label[512];
-    snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_TYPEINFO", type_name);
-
-    /* Class variables are pointers to instances. We need to:
-     * 1. Allocate memory for the instance (size determined from type)
-     * 2. Store the typeinfo pointer in the first field
-     * 3. Store the instance pointer in the variable
+    /* Class variables should start as nil (null pointers) in Pascal/Delphi semantics.
+     * They should NOT be auto-allocated at declaration time.
+     * The constructor call will allocate and initialize the instance later.
      * 
-     * For now, we use a simplified approach: allocate a fixed size (64 bytes should be enough for most classes)
-     * and zero-initialize with calloc. A better approach would compute the actual size from the RecordType.
+     * We simply initialize the variable to 0 (nil).
      */
     
-    /* Call calloc to allocate and zero-initialize the instance */
     char buffer[1024];
-    const char *size_reg = current_arg_reg64(0);  /* RDI on Linux, RCX on Windows */
-    const char *count_reg = current_arg_reg64(1); /* RSI on Linux, RDX on Windows */
     
-    if (size_reg != NULL && count_reg != NULL)
+    /* Store nil (0) in the class variable */
+    if (var_node->is_static)
     {
-        /* calloc(1, 64) - allocate one 64-byte block */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_reg);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$64, %s\n", count_reg);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
-        
-        /* RAX now contains the pointer to the allocated instance */
-        /* Store the typeinfo pointer in the first field */
-        inst_list = add_inst(inst_list, "\tpushq\t%rax\n");  /* Save instance pointer */
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%r10\n", typeinfo_label);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = add_inst(inst_list, "\tmovq\t%r10, (%rax)\n");  /* Store typeinfo in first field */
-        inst_list = add_inst(inst_list, "\tpopq\t%rax\n");   /* Restore instance pointer */
-        
-        /* Store the instance pointer in the class variable */
-        if (var_node->is_static)
-        {
-            const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s(%%rip)\n", label);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", var_node->offset);
-        }
+        const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, %s(%%rip)\n", label);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        /* Fallback if we can't determine arg registers - just store NULL for now */
-        if (ctx != NULL)
-        {
-            codegen_report_error(ctx, "ERROR: Unable to allocate class instance - register allocation failed");
-        }
-        if (var_node->is_static)
-        {
-            const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, %s(%%rip)\n", label);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", var_node->offset);
-        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", var_node->offset);
         inst_list = add_inst(inst_list, buffer);
     }
     

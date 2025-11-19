@@ -1026,15 +1026,41 @@ typedef struct {
     int64_t length;
 } gpc_dynarray_descriptor_t;
 
+int64_t __gpc_dynarray_length(void *descriptor_ptr)
+{
+    if (descriptor_ptr == NULL)
+        return 0;
+    
+    gpc_dynarray_descriptor_t *descriptor = (gpc_dynarray_descriptor_t *)descriptor_ptr;
+    
+    /* Debug: check if descriptor looks valid */
+    if ((uintptr_t)descriptor < 4096) {
+        return 0; /* Probably invalid pointer */
+    }
+    
+    return descriptor->length;
+}
+
 void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t element_size)
 {
-    if (descriptor_ptr == NULL || element_size <= 0)
+    if (element_size <= 0)
         return;
 
     if (new_length < 0)
         new_length = 0;
 
     gpc_dynarray_descriptor_t *descriptor = (gpc_dynarray_descriptor_t *)descriptor_ptr;
+    
+    /* If descriptor is NULL, allocate a new one */
+    if (descriptor == NULL)
+    {
+        descriptor = (gpc_dynarray_descriptor_t *)calloc(1, sizeof(gpc_dynarray_descriptor_t));
+        if (descriptor == NULL)
+            return;
+        /* Store the new descriptor back to the pointer */
+        *((gpc_dynarray_descriptor_t **)descriptor_ptr) = descriptor;
+    }
+    
     size_t old_length = descriptor->length > 0 ? (size_t)descriptor->length : 0;
     size_t target_length = (size_t)new_length;
 
