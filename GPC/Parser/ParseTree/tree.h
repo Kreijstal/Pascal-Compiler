@@ -107,6 +107,7 @@ typedef struct Tree
             ListNode_t *declarations;
             ListNode_t *subprograms;
             struct Statement *statement_list;
+            int is_used;
         } subprogram_data;
 
         /* A variable declaration */

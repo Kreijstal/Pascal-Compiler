@@ -1402,7 +1402,18 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         return 1;
     }
 
-    return codegen_sizeof_record_members(ctx, record->fields, size_out, depth);
+    long long members_size = 0;
+    int result = codegen_sizeof_record_members(ctx, record->fields, &members_size, depth);
+    if (result != 0)
+        return result;
+    
+    /* For classes, add 8 bytes for the VMT pointer at the beginning */
+    if (record_type_is_class(record))
+        *size_out = 8 + members_size;
+    else
+        *size_out = members_size;
+    
+    return 0;
 }
 
 int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,

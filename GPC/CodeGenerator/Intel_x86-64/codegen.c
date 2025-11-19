@@ -172,6 +172,14 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
         else if (node->type->kind == TYPE_KIND_RECORD || node->type->kind == TYPE_KIND_ARRAY)
         {
+            /* For classes, allocate only pointer size since instances are heap-allocated */
+            if (node->type->kind == TYPE_KIND_RECORD && 
+                node->type->info.record_info != NULL &&
+                record_type_is_class(node->type->info.record_info))
+            {
+                return 8;  /* Class variables are pointers */
+            }
+            
             long long size = gpc_type_sizeof(node->type);
             if (size > 0)
                 return (int)size;
@@ -1494,14 +1502,27 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         }
                         else if (node_is_record_type(size_node))
                         {
-                            /* For records, get the full struct size */
-                            struct RecordType *record_desc = get_record_type_from_node(size_node);
-                            long long record_size = 0;
-                            if (record_desc != NULL &&
-                                codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
-                                record_size > 0)
+                            /* For classes, allocate only pointer size (8 bytes)
+                             * For records/objects, allocate the full struct size */
+                            if (node_is_class_type(size_node))
                             {
-                                alloc_size = (int)record_size;
+                                fprintf(stderr, "DEBUG ALLOC: Detected class type for '%s', allocating 8 bytes\n",
+                                    (char *)id_list->cur);
+                                alloc_size = 8;  /* Classes are heap-allocated; variable holds pointer */
+                            }
+                            else
+                            {
+                                fprintf(stderr, "DEBUG ALLOC: Detected record type for '%s', allocating full size\n",
+                                    (char *)id_list->cur);
+                                /* For records/objects, get the full struct size */
+                                struct RecordType *record_desc = get_record_type_from_node(size_node);
+                                long long record_size = 0;
+                                if (record_desc != NULL &&
+                                    codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
+                                    record_size > 0)
+                                {
+                                    alloc_size = (int)record_size;
+                                }
                             }
                         }
                     }
