@@ -37,7 +37,6 @@
 #include "Parser/pascal_frontend.h"
 #include "Parser/SemanticCheck/SemCheck.h"
 #include "CodeGenerator/Intel_x86-64/codegen.h"
-#include "Optimizer/mark_used.h"
 #include "stacktrace.h"
 #include "unit_paths.h"
 
@@ -971,9 +970,9 @@ int main(int argc, char **argv)
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
 
-        /* FIXME: Temporarily disabled due to segfaults in some test cases
-         * Mark used functions before code generation to eliminate unused stdlib functions */
-        /* mark_used_functions(user_tree, symtab); */
+        /* Mark which functions are actually used (dead code elimination) */
+        extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+        mark_used_functions(user_tree, symtab);
 
         double codegen_start = track_time ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);

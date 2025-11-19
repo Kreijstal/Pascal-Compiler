@@ -1749,7 +1749,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
-        /* Skip unused subprograms (from stdlib optimization) */
+        /* Skip unused functions (dead code elimination) */
         if (!sub->tree_data.subprogram_data.is_used)
         {
             sub_list = sub_list->next;
