@@ -5128,11 +5128,23 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", obj_ptr_slot->offset, obj_reload_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        // Load FItems.data pointer from object
-        // FItems descriptor is at offset 8, and data field is at offset 0 within the descriptor
-        // So FItems.data is at offset 8+0 = 8
-        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n", obj_reload_reg->bit_64, fitems_reg->bit_64);
+        // Load FItems.data pointer from object using two-step approach
+        // Step 1: Get address of FItems descriptor (at Self+8)  
+        // Step 2: Load data pointer from descriptor[0]
+        Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (desc_addr_reg == NULL) {
+            free_reg(get_reg_stack(), obj_reload_reg);
+            free_reg(get_reg_stack(), fitems_reg);
+            codegen_pop_loop_exit(ctx);
+            free_reg(get_reg_stack(), count_reg);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for descriptor address");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tleaq\t8(%s), %s\n", obj_reload_reg->bit_64, desc_addr_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", desc_addr_reg->bit_64, fitems_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), desc_addr_reg);
         free_reg(get_reg_stack(), obj_reload_reg);
 
         // Load index into register
