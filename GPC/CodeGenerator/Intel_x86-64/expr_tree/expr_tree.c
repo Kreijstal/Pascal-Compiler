@@ -1075,8 +1075,97 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
+        /* Check if this is a constructor call (e.g., TMyClass.Create)
+         * Constructors need special handling: allocate memory and initialize VMT */
+        int is_constructor = 0;
+        Register_t *constructor_instance_reg = NULL;
+        
+        if (func_mangled_name != NULL)
+        {
+            /* Check if name contains __Create (may be followed by type suffix like __Create_u) */
+            const char *create_pos = strstr(func_mangled_name, "__Create");
+            if (create_pos != NULL)
+                is_constructor = 1;
+            else if (strcmp(func_mangled_name, "Create") == 0)
+                is_constructor = 1;
+        }
+        
+        /* For constructors, allocate memory for the instance */
+        if (is_constructor)
+        {
+            /* Try to get class size from expression's record_type first */
+            struct RecordType *class_record = expr->record_type;
+            
+            /* If not available, try to get it from the first argument (class type) */
+            if (class_record == NULL)
+            {
+                ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
+                if (first_arg != NULL && first_arg->cur != NULL)
+                {
+                    struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                    if (class_expr != NULL)
+                        class_record = class_expr->record_type;
+                }
+            }
+            
+            if (class_record != NULL && record_type_is_class(class_record))
+            {
+                /* Get the size of the class instance */
+                long long instance_size = 0;
+                if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
+                    instance_size > 0)
+                {
+                    /* Allocate memory using malloc */
+                    const char *malloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                        instance_size, malloc_arg_reg);
+                    inst_list = add_inst(inst_list, buffer);
+                    
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = add_inst(inst_list, "\tcall\tmalloc\n");
+                    free_arg_regs();
+                    
+                    /* Save the allocated instance pointer */
+                    constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (constructor_instance_reg == NULL)
+                    {
+                        codegen_report_error(ctx, 
+                            "ERROR: Unable to allocate register for constructor instance.");
+                        goto cleanup_constructor;
+                    }
+                    
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
+                        constructor_instance_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    
+                    /* Get VMT pointer from first argument (if exists) */
+                    ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
+                    if (first_arg != NULL && first_arg->cur != NULL)
+                    {
+                        struct Expression *vmt_expr = (struct Expression *)first_arg->cur;
+                        Register_t *vmt_reg = NULL;
+                        
+                        inst_list = codegen_expr_with_result(vmt_expr, inst_list, ctx, &vmt_reg);
+                        if (vmt_reg != NULL)
+                        {
+                            /* Initialize VMT pointer in the allocated instance */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), vmt_reg);
+                        }
+                    }
+                }
+            }
+        }
+        
         /* Pass arguments, shifted by 1 if static link is passed */
         int arg_start_index = should_pass_static_link ? 1 : 0;
+        
+        /* For constructors, skip the first argument (class type) and pass instance instead */
+        if (is_constructor && constructor_instance_reg != NULL)
+            arg_start_index += 1;
+        
         const char *proc_name_hint = expr->expr_data.function_call_data.id;
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
@@ -1136,6 +1225,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     break;
             }
         }
+        
+        /* For constructors, pass the allocated instance as the first argument (Self) */
+        if (is_constructor && constructor_instance_reg != NULL)
+        {
+            const char *self_arg_reg = should_pass_static_link ? 
+                current_arg_reg64(1) : current_arg_reg64(0);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                constructor_instance_reg->bit_64, self_arg_reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         if (static_link_expr_active)
             codegen_end_expression(ctx);
@@ -1158,13 +1257,31 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         codegen_release_function_call_mangled_id(expr);
-        if (expr_has_type_tag(expr, REAL_TYPE))
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
-        else if (expr_uses_qword_gpctype(expr))
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+        
+        /* For constructors, return the instance pointer instead of constructor return value */
+        if (is_constructor && constructor_instance_reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                constructor_instance_reg->bit_64, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), constructor_instance_reg);
+        }
         else
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            /* Normal function return value */
+            if (expr_has_type_tag(expr, REAL_TYPE))
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+            else if (expr_uses_qword_gpctype(expr))
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        return inst_list;
+        
+cleanup_constructor:
+        if (constructor_instance_reg != NULL)
+            free_reg(get_reg_stack(), constructor_instance_reg);
         return inst_list;
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)
