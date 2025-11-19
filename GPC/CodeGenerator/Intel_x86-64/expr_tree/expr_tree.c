@@ -10,11 +10,6 @@
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
-#ifndef _WIN32
-#include <strings.h>
-#else
-#define strncasecmp _strnicmp
-#endif
 #include "../codegen.h"
 #include "expr_tree.h"
 #include "../register_types.h"
@@ -56,26 +51,8 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
         return inst_list;
 
     char buffer[128];
-    
-    /* For dynamic array fields, the address computation already gives us the address
-     * of the field within the record/class. The field contains a pointer to the 
-     * dynamic array descriptor, so we need to load that pointer first.
-     * 
-     * However, note that codegen_address_for_expr for EXPR_RECORD_ACCESS already
-     * handles the dereference for class fields, so we always need to load the
-     * descriptor pointer regardless of whether it's a record or class field.
-     */
-    /* For dynamic arrays, we need to pass the address of the descriptor pointer field
-     * to __gpc_dynarray_length, which expects a void** (pointer to descriptor pointer).
-     * The descriptor pointer field is already in desc_reg, so we just pass it directly.
-     */
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", desc_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
-    
-    snprintf(buffer, sizeof(buffer), "\tcall\t__gpc_dynarray_length\n");
-    inst_list = add_inst(inst_list, buffer);
-    
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+        desc_reg->bit_64, target_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), desc_reg);
@@ -1158,25 +1135,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
                     instance_size > 0)
                 {
-                    /* Special handling for TFPGList: it needs 40 bytes (not 32) */
-                    if (class_record->type_id != NULL && 
-                        strncasecmp(class_record->type_id, "TFPGList$", strlen("TFPGList$")) == 0)
-                    {
-                        fprintf(stderr, "DEBUG: Overriding TFPGList size from %lld to 40\n", instance_size);
-                        instance_size = 40;
-                    }
-                    
-                    /* Allocate memory using calloc to ensure zero-initialization */
-                    const char *count_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
-                    const char *size_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", count_reg);
-                    inst_list = add_inst(inst_list, buffer);
+                    /* Allocate memory using malloc */
+                    const char *malloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
                     snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                        instance_size, size_reg);
+                        instance_size, malloc_arg_reg);
                     inst_list = add_inst(inst_list, buffer);
                     
                     inst_list = codegen_vect_reg(inst_list, 0);
-                    inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
+                    inst_list = add_inst(inst_list, "\tcall\tmalloc\n");
                     free_arg_regs();
                     
                     /* Save the allocated instance pointer */

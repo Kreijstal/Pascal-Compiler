@@ -2206,10 +2206,6 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
                     self_reg->bit_64, descriptor_reg->bit_64);
             }
             inst_list = add_inst(inst_list, buffer);
-            
-            /* For dynamic array fields, the field contains the descriptor pointer directly */
-            /* No need for additional dereference - descriptor_reg already contains the descriptor pointer */
-            
             free_reg(get_reg_stack(), self_reg);
         }
         else
@@ -2224,20 +2220,13 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             array_node->static_label : array_node->label;
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
             label, descriptor_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        
-        /* For dynamic arrays, the variable contains the descriptor pointer directly */
-        /* No need for additional dereference - descriptor_reg already contains the descriptor pointer */
     }
     else
     {
         snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
             array_node->offset, descriptor_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        
-        /* For dynamic arrays, the variable contains the descriptor pointer directly */
-        /* No need for additional dereference - descriptor_reg already contains the descriptor pointer */
     }
+    inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
 
