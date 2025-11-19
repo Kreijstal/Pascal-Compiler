@@ -3466,6 +3466,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     return inst_list;
                 }
                 inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+                
+                /* For class types, addr_reg contains the address of the variable holding the pointer.
+                 * We need to load the pointer value to pass the instance address.
+                 * However, AS expressions already return the instance pointer, so skip them. */
+                if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
+                    arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             if (codegen_had_error(ctx) || addr_reg == NULL)
                 return inst_list;
