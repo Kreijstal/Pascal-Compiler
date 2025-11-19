@@ -66,6 +66,7 @@ gpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
   'Optimizer/pass_manager.c',
+  'Optimizer/mark_used.c',
   'stacktrace.c',
   'unit_paths.c',
 ]
