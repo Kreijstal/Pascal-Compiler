@@ -4551,7 +4551,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             codegen_end_expression(ctx);
         }
 
-        inst_list = codegen_vect_reg(inst_list, 0);
+     inst_list = codegen_vect_reg(inst_list, 0);
+        fprintf(stderr, "DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
