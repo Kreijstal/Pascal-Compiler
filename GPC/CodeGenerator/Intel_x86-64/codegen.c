@@ -1854,6 +1854,41 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
+    
+    /* For constructors (methods with __Create in name), return Self in %rax.
+     * Constructors receive Self in the first parameter and should return it
+     * to allow constructor chaining and assignment. */
+    int is_constructor = 0;
+    if (sub_id != NULL && strstr(sub_id, "__Create") != NULL)
+        is_constructor = 1;
+    
+    if (is_constructor && num_args > 0)
+    {
+        /* Self is the first parameter. For class methods, it's in %rdi (or first stack slot).
+         * Retrieve it and place in %rax for the return value. */
+        ListNode_t *first_arg = (proc->args_var != NULL) ? proc->args_var : NULL;
+        if (first_arg != NULL && first_arg->cur != NULL)
+        {
+            Tree_t *first_param = (Tree_t *)first_arg->cur;
+            if (first_param != NULL && first_param->type == TREE_VAR_DECL)
+            {
+                struct Var *param_var = &first_param->tree_data.var_decl_data;
+                if (param_var->ids != NULL && param_var->ids->cur != NULL)
+                {
+                    char *param_id = (char *)param_var->ids->cur;
+                    StackNode_t *self_var = find_label(param_id);
+                    if (self_var != NULL)
+                    {
+                        /* Self parameter is on the stack - load it into %rax for return */
+                        char buffer[128];
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", self_var->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+            }
+        }
+    }
+    
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
