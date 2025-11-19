@@ -112,6 +112,15 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
         return inst_list;
     }
 
+    /* For class variables (which are pointers), we need to:
+     * 1. Load the pointer value from the variable
+     * 2. Dereference the pointer to get the typeinfo (first field of the instance)
+     *
+     * For non-class types, we only need:
+     * 1. Get address and dereference to get typeinfo
+     */
+    int is_class_var = (expr->record_type != NULL && record_type_is_class(expr->record_type));
+
     Register_t *addr_reg = NULL;
     inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
     if (codegen_had_error(ctx) || addr_reg == NULL)
@@ -124,9 +133,22 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
         return inst_list;
     }
 
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
-    inst_list = add_inst(inst_list, buffer);
+    char buffer[128];
+    if (is_class_var)
+    {
+        /* Class variables are pointers: first load the pointer, then dereference it */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        /* Now typeinfo_reg contains the pointer to the instance, dereference to get typeinfo */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* Non-class: addr_reg already points to the instance, just load typeinfo */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
     free_reg(get_reg_stack(), addr_reg);
 
     if (out_reg != NULL)
@@ -399,17 +421,34 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
         return inst_list;
     }
 
+    /* Check if the source expression is a class variable (pointer) */
+    struct Expression *source_expr = expr->expr_data.as_data.expr;
+    int is_class_var = (source_expr != NULL && source_expr->record_type != NULL && 
+                        record_type_is_class(source_expr->record_type));
+
+    Register_t *instance_ptr_reg = addr_reg;
+    
+    /* For class variables, addr_reg points to the variable holding the pointer.
+     * We need to load the pointer value to get the address of the instance. */
+    if (is_class_var)
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        /* Now addr_reg contains the pointer to the instance */
+    }
+
     Register_t *typeinfo_reg = codegen_try_get_reg(&inst_list, ctx, "class RTTI");
     if (typeinfo_reg == NULL)
         return inst_list;
 
     char buffer[64];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", instance_ptr_reg->bit_64, typeinfo_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
-    /* Preserve the address across the runtime call (caller-saved registers may be clobbered). */
+    /* Preserve the instance pointer across the runtime call (caller-saved registers may be clobbered). */
     inst_list = add_inst(inst_list, "\tsubq\t$16, %rsp\n");
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%%rsp)\n", addr_reg->bit_64);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%%rsp)\n", instance_ptr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
     codegen_move_rtti_args(&inst_list, typeinfo_reg, target_label);
@@ -419,7 +458,7 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
     inst_list = add_inst(inst_list, "\tcall\tgpc_rtti_check_cast\n");
     free_arg_regs();
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%%rsp), %s\n", addr_reg->bit_64);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%%rsp), %s\n", instance_ptr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\taddq\t$16, %rsp\n");
     return inst_list;
@@ -1927,10 +1966,43 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     if (record_expr == NULL)
         return inst_list;
 
+    /* Check if this is a class field access. Classes are pointers, so we need an extra dereference.
+     * However, parameters are already passed as pointers, so we shouldn't dereference them. */
+    int is_class_field = (record_expr->record_type != NULL && 
+                          record_type_is_class(record_expr->record_type));
+    
+    /* Check if the record expression is a parameter (already a pointer) */
+    int is_parameter = 0;
+    if (is_class_field && record_expr->type == EXPR_VAR_ID)
+    {
+        StackNode_t *var_node = find_label(record_expr->expr_data.id);
+        if (var_node != NULL && var_node->is_reference)
+            is_parameter = 1;
+        
+        /* Also check symbol table */
+        if (!is_parameter && ctx->symtab != NULL)
+        {
+            HashNode_t *symbol = NULL;
+            if (FindIdent(&symbol, ctx->symtab, record_expr->expr_data.id) >= 0 && 
+                symbol != NULL && symbol->is_var_parameter)
+                is_parameter = 1;
+        }
+    }
+
     Register_t *addr_reg = NULL;
     inst_list = codegen_address_for_expr(record_expr, inst_list, ctx, &addr_reg);
     if (addr_reg == NULL)
         return inst_list;
+
+    /* For class types that are NOT parameters, addr_reg points to the variable holding the pointer.
+     * We need to load the pointer value to get the address of the instance.
+     * Parameters are already pointers, so we don't need the extra dereference. */
+    if (is_class_field && !is_parameter)
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
 
     long long offset = expr->expr_data.record_access_data.field_offset;
     if (offset != 0)
@@ -3394,6 +3466,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     return inst_list;
                 }
                 inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+                
+                /* For class types, addr_reg contains the address of the variable holding the pointer.
+                 * We need to load the pointer value to pass the instance address.
+                 * However, AS expressions already return the instance pointer, so skip them. */
+                if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
+                    arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             if (codegen_had_error(ctx) || addr_reg == NULL)
                 return inst_list;

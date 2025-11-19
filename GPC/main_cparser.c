@@ -970,6 +970,10 @@ int main(int argc, char **argv)
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
 
+        /* Mark which functions are actually used (dead code elimination) */
+        extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+        mark_used_functions(user_tree, symtab);
+
         double codegen_start = track_time ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);
         if (track_time)

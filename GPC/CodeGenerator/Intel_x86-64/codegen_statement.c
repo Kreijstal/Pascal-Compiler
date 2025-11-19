@@ -1289,6 +1289,58 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
         return inst_list;
 
+    /* Check if this is a class assignment. Classes are represented as pointers,
+     * so we should just copy the pointer value, not the entire instance. */
+    int is_class_assignment = 0;
+    if (dest_expr->record_type != NULL && record_type_is_class(dest_expr->record_type))
+        is_class_assignment = 1;
+    else if (src_expr->record_type != NULL && record_type_is_class(src_expr->record_type))
+        is_class_assignment = 1;
+
+    if (is_class_assignment)
+    {
+        /* For class variables, just copy the pointer (8 bytes) */
+        Register_t *dest_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        Register_t *src_reg = NULL;
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        /* Load the pointer value from source and store it to destination */
+        Register_t *ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (ptr_reg == NULL)
+        {
+            free_reg(get_reg_stack(), dest_reg);
+            free_reg(get_reg_stack(), src_reg);
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for class pointer copy.");
+        }
+
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", src_reg->bit_64, ptr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", ptr_reg->bit_64, dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), ptr_reg);
+        free_reg(get_reg_stack(), src_reg);
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
     long long record_size = 0;
     int size_status = codegen_get_record_size(ctx, dest_expr, &record_size);
     if (size_status != 0)
