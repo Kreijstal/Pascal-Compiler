@@ -2600,6 +2600,110 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     return 0;
 }
 
+/* Align offset to the specified alignment boundary */
+static long long align_offset(long long offset, int alignment)
+{
+    if (alignment <= 0)
+        return offset;
+    
+    long long remainder = offset % alignment;
+    if (remainder == 0)
+        return offset;
+    
+    return offset + (alignment - remainder);
+}
+
+/* Get alignment requirement for a field type (64-bit ABI) */
+static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int depth, int line_num)
+{
+    if (field == NULL)
+        return 1;  /* Minimum alignment */
+    
+    /* Prevent infinite recursion */
+    if (depth > SIZEOF_RECURSION_LIMIT)
+        return 1;
+    
+    /* Dynamic arrays are descriptors (pointer + int64), aligned to 8 */
+    if (field->is_array && field->array_is_open)
+        return POINTER_SIZE_BYTES;
+    
+    /* Nested record - get its alignment */
+    if (field->nested_record != NULL)
+    {
+        int max_align = 1;
+        ListNode_t *cur = field->nested_record->fields;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+            {
+                struct RecordField *nested_field = (struct RecordField *)cur->cur;
+                int nested_align = get_field_alignment(symtab, nested_field, depth + 1, line_num);
+                if (nested_align > max_align)
+                    max_align = nested_align;
+            }
+            cur = cur->next;
+        }
+        return max_align;
+    }
+    
+    /* Get alignment based on type */
+    int type_tag = field->type;
+    
+    /* Resolve type_id if needed */
+    if (type_tag == UNKNOWN_TYPE && field->type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, (char *)field->type_id) != -1 && type_node != NULL)
+        {
+            if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PRIMITIVE)
+                type_tag = type_node->type->info.primitive_type_tag;
+            else if (hashnode_is_record(type_node))
+            {
+                /* Record type - recursively get its alignment */
+                struct RecordType *rec = hashnode_get_record_type(type_node);
+                if (rec != NULL)
+                {
+                    int max_align = 1;
+                    ListNode_t *cur = rec->fields;
+                    while (cur != NULL)
+                    {
+                        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+                        {
+                            struct RecordField *rec_field = (struct RecordField *)cur->cur;
+                            int rec_align = get_field_alignment(symtab, rec_field, depth + 1, line_num);
+                            if (rec_align > max_align)
+                                max_align = rec_align;
+                        }
+                        cur = cur->next;
+                    }
+                    return max_align;
+                }
+            }
+        }
+    }
+    
+    /* Type-specific alignment rules for 64-bit */
+    switch (type_tag)
+    {
+        case POINTER_TYPE:
+        case RECORD_TYPE:  /* Classes are records with is_class flag */
+        case LONGINT_TYPE:
+        case REAL_TYPE:
+            return POINTER_SIZE_BYTES;  /* 8 bytes */
+        
+        case INT_TYPE:
+        case CHAR_TYPE:
+        case BOOL:  /* Boolean is BOOL, not BOOL_TYPE */
+        case ENUM_TYPE:
+        case SET_TYPE:
+            return 4;  /* 4 bytes for 32-bit integers and smaller */
+        
+        default:
+            /* For unknown types, use conservative alignment */
+            return 4;
+    }
+}
+
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num)
 {
@@ -2681,12 +2785,23 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         return 1;
 
     long long total = 0;
+    int max_alignment = 1;  /* Track maximum alignment for struct padding */
+    
     ListNode_t *cur = members;
     while (cur != NULL)
     {
         if (cur->type == LIST_RECORD_FIELD)
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
+            
+            /* Get field alignment and align current offset */
+            int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
+            if (field_alignment > max_alignment)
+                max_alignment = field_alignment;
+            
+            total = align_offset(total, field_alignment);
+            
+            /* Add field size */
             long long field_size = 0;
             if (compute_field_size(symtab, field, &field_size, depth + 1, line_num) != 0)
                 return 1;
@@ -2703,6 +2818,9 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         cur = cur->next;
     }
 
+    /* Align total size to the maximum alignment (struct padding at end) */
+    total = align_offset(total, max_alignment);
+    
     *size_out = total;
     return 0;
 }
@@ -2805,17 +2923,24 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
         if (cur->type == LIST_RECORD_FIELD)
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field != NULL && !record_field_is_hidden(field) &&
-                field->name != NULL &&
-                pascal_identifier_equals(field->name, field_name))
+            if (field != NULL && !record_field_is_hidden(field))
             {
-                if (out_field != NULL)
-                    *out_field = field;
-                if (offset_out != NULL)
-                    *offset_out = offset;
-                if (found != NULL)
-                    *found = 1;
-                return 0;
+                /* Align offset to field's alignment requirement */
+                int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
+                offset = align_offset(offset, field_alignment);
+                
+                /* Check if this is the target field */
+                if (field->name != NULL &&
+                    pascal_identifier_equals(field->name, field_name))
+                {
+                    if (out_field != NULL)
+                        *out_field = field;
+                    if (offset_out != NULL)
+                        *offset_out = offset;
+                    if (found != NULL)
+                        *found = 1;
+                    return 0;
+                }
             }
 
             long long field_size = 0;

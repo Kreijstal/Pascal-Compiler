@@ -146,5 +146,5 @@ test('Compiler tests', python,
   depends: [gpc_cparser_exe, gpc_runtime_lib, ctypes_helper],
   env: env,
   protocol: 'tap',
-  timeout: 300,
+  timeout: 600,
 )

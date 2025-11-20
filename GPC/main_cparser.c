@@ -57,7 +57,6 @@ int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
-
 static UnitSearchPaths g_unit_paths;
 
 static void print_usage(const char *prog_name)
