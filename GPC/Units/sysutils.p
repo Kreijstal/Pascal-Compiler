@@ -13,6 +13,12 @@ type
     NativeUInt = cuint64;
     Uint64 = cuint64;
 
+    // Added for Unix support
+    AnsiChar = cchar;
+    PAnsiChar = pcchar;
+    Word = cuint16;
+    Byte = cuint8;
+
 const
     PathDelim = '/';
     AltPathDelim = '\';

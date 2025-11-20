@@ -3251,7 +3251,19 @@ next_identifier:
                         else
                         {
                             enum VarType current_var_type = get_var_type_from_node(var_node);
-                            if (inferred_var_type != current_var_type)
+                            int compatible = (inferred_var_type == current_var_type);
+                            
+                            /* Allow mixing Integer and LongInt for initializers */
+                            if (!compatible)
+                            {
+                                if ((inferred_var_type == HASHVAR_INTEGER || inferred_var_type == HASHVAR_LONGINT) &&
+                                    (current_var_type == HASHVAR_INTEGER || current_var_type == HASHVAR_LONGINT))
+                                {
+                                    compatible = 1;
+                                }
+                            }
+
+                            if (!compatible)
                             {
                                 fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
                                     tree->line_num, var_name);

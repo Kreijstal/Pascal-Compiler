@@ -1729,7 +1729,11 @@ void init_pascal_procedure_parser(combinator_t** p) {
             token(pascal_string(PASCAL_T_STRING)),
             NULL
         )),
-        optional(token(pascal_string(PASCAL_T_STRING))),
+        optional(multi(new_combinator(), PASCAL_T_NONE,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        )),
         token(match(";")),
         NULL
     );

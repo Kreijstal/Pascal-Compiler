@@ -5968,11 +5968,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
-        if (debug_external_nodes &&
-            (cur->typ == PASCAL_T_EXTERNAL_NAME || cur->typ == PASCAL_T_STRING || cur->typ == PASCAL_T_IDENTIFIER)) {
-            fprintf(stderr, "[convert_procedure] node typ=%d line=%d sym=%s\n",
-                cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)");
-        }
+        fprintf(stderr, "[convert_procedure] node typ=%d line=%d sym=%s child_typ=%d child_sym=%s\n",
+            cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)",
+            cur->child ? cur->child->typ : -1,
+            (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs);
@@ -6053,6 +6052,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 }
 
 static Tree_t *convert_function(ast_t *func_node) {
+    fprintf(stderr, "[convert_function] ENTRY line=%d\n", func_node->line);
     ast_t *cur = func_node->child;
     char *id = NULL;
     static int debug_external_nodes = -1;
@@ -6062,20 +6062,24 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER)
         id = dup_symbol(cur);
 
-    if (cur != NULL)
+    if (cur != NULL) {
         cur = cur->next;
+        fprintf(stderr, "[convert_function] after id, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
+    }
 
     ListNode_t *params = NULL;
     if (cur != NULL && cur->typ == PASCAL_T_PARAM_LIST) {
         ast_t *param_cursor = cur->child;
         params = convert_param_list(&param_cursor);
         cur = cur->next;
+        fprintf(stderr, "[convert_function] after param_list, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     } else {
         while (cur != NULL && cur->typ == PASCAL_T_PARAM) {
             ListNode_t *param_nodes = convert_param(cur);
             extend_list(&params, param_nodes);
             cur = cur->next;
         }
+        fprintf(stderr, "[convert_function] after params loop, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     }
 
     char *return_type_id = NULL;
@@ -6135,6 +6139,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         }
         
         cur = cur->next;
+        fprintf(stderr, "[convert_function] after return_type, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     }
 
     ListNode_t *const_decls = NULL;
@@ -6150,13 +6155,10 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
-        if (debug_external_nodes &&
-            (cur->typ == PASCAL_T_EXTERNAL_NAME || cur->typ == PASCAL_T_STRING || cur->typ == PASCAL_T_IDENTIFIER)) {
-            fprintf(stderr, "[convert_function] node typ=%d line=%d sym=%s child_typ=%d child_sym=%s\n",
-                cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)",
-                cur->child ? cur->child->typ : -1,
-                (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
-        }
+        fprintf(stderr, "[convert_function] node typ=%d line=%d sym=%s child_typ=%d child_sym=%s\n",
+            cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)",
+            cur->child ? cur->child->typ : -1,
+            (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs);
@@ -6305,6 +6307,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         /* Start iterating from the first child, or the node after the program header */
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
+            fprintf(stderr, "[tree_from_pascal_ast] section typ=%d line=%d\n", section->typ, section->line);
             /* Check for circular reference before processing */
             if (!is_safe_to_continue(visited, section)) {
                 fprintf(stderr, "ERROR: Circular reference detected in program sections, stopping traversal\n");
