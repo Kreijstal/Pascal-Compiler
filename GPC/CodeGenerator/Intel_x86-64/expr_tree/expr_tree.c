@@ -1005,12 +1005,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     expr = node->expr;
     assert(target_reg != NULL);
     
-    fprintf(stderr, "DEBUG gencode_case0: expr->type=%d\n", expr->type);
+    CODEGEN_DEBUG("DEBUG gencode_case0: expr->type=%d\n", expr->type);
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
-        fprintf(stderr, "DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
+        CODEGEN_DEBUG("DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
             func_mangled_name ? func_mangled_name : "NULL",
             expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "NULL");
         
@@ -1095,7 +1095,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             else if (strcmp(func_mangled_name, "Create") == 0)
                 is_constructor = 1;
             
-            fprintf(stderr, "DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 
+            CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 
                 func_mangled_name, is_constructor);
         }
         
@@ -1105,7 +1105,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             /* Try to get class size from expression's record_type first */
             struct RecordType *class_record = expr->record_type;
             
-            fprintf(stderr, "DEBUG Constructor: expr->record_type=%p\n", (void *)class_record);
+            CODEGEN_DEBUG("DEBUG Constructor: expr->record_type=%p\n", (void *)class_record);
             
             /* If not available, try to get it from the first argument (class type) */
             if (class_record == NULL)
@@ -1117,14 +1117,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     if (class_expr != NULL)
                         class_record = class_expr->record_type;
                     
-                    fprintf(stderr, "DEBUG Constructor: first_arg class_expr=%p, class_record=%p\n", 
+                    CODEGEN_DEBUG("DEBUG Constructor: first_arg class_expr=%p, class_record=%p\n", 
                         (void *)class_expr, (void *)class_record);
                 }
             }
             
             if (class_record != NULL)
             {
-                fprintf(stderr, "DEBUG Constructor: class_record=%p, is_class=%d, properties=%p\n",
+                CODEGEN_DEBUG("DEBUG Constructor: class_record=%p, is_class=%d, properties=%p\n",
                     (void *)class_record, class_record->is_class, (void *)class_record->properties);
             }
             

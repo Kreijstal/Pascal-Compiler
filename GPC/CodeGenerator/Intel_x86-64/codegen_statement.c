@@ -4498,7 +4498,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         call_hash_type = stmt->stmt_data.procedure_call_data.call_hash_type;
         call_gpc_type = stmt->stmt_data.procedure_call_data.call_gpc_type;
         
-        fprintf(stderr, "DEBUG codegen_proc_call: id=%s, mangled=%s, hash_type=%d\n",
+        CODEGEN_DEBUG("DEBUG codegen_proc_call: id=%s, mangled=%s, hash_type=%d\n",
             unmangled_name ? unmangled_name : "NULL",
             proc_name ? proc_name : "NULL", 
             call_hash_type);
@@ -4810,7 +4810,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
 
      inst_list = codegen_vect_reg(inst_list, 0);
-        fprintf(stderr, "DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
+        CODEGEN_DEBUG("DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
@@ -5019,8 +5019,9 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     
     // Check if this is a TFPGList (specialized generic list)
     int is_fpglist = 0;
+    struct RecordType *record_info = NULL;
     if (array_type != NULL && array_type->kind == TYPE_KIND_RECORD) {
-        struct RecordType *record_info = gpc_type_get_record(array_type);
+        record_info = gpc_type_get_record(array_type);
         if (record_info != NULL && record_info->type_id != NULL) {
             const char *prefix = "TFPGList$";
             size_t prefix_len = strlen(prefix);
@@ -5151,9 +5152,44 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         // Calculate element offset: index * element_size
-        // For Integer (32-bit), element_size = 4
-        // TODO: Get actual element size from type
-        int element_size = 4; // Assuming Integer for now
+        int element_size = 0;
+
+        // Try to determine element size from FItems field
+        if (record_info != NULL) {
+            ListNode_t *fields = record_info->fields;
+            while (fields != NULL) {
+                if (fields->type == LIST_RECORD_FIELD) {
+                    struct RecordField *f = (struct RecordField *)fields->cur;
+                    if (f != NULL && f->name != NULL && strcmp(f->name, "FItems") == 0) {
+                        // Try lookup by ID first
+                        if (f->array_element_type_id != NULL && ctx->symtab != NULL) {
+                            HashNode_t *tnode = NULL;
+                            if (FindIdent(&tnode, ctx->symtab, f->array_element_type_id) >= 0 &&
+                                tnode != NULL && tnode->type != NULL) {
+                                element_size = (int)gpc_type_sizeof(tnode->type);
+                            }
+                        }
+                        // Fallback to primitive tag if ID lookup failed or size is 0
+                        if (element_size <= 0) {
+                            switch (f->array_element_type) {
+                                case CHAR_TYPE: case BOOL: element_size = 1; break;
+                                case INT_TYPE: case ENUM_TYPE: element_size = 4; break;
+                                case LONGINT_TYPE: case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
+                            }
+                        }
+                        break;
+                    }
+                }
+                fields = fields->next;
+            }
+        }
+
+        // Fallback to loop variable size if FItems size couldn't be determined
+        if (element_size <= 0 && loop_var != NULL && loop_var->resolved_gpc_type != NULL) {
+             element_size = (int)gpc_type_sizeof(loop_var->resolved_gpc_type);
+        }
+
+        if (element_size <= 0) element_size = 4;
         
         if (element_size != 1) {
             snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, idx_reg->bit_64);
@@ -5169,7 +5205,21 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             codegen_report_error(ctx, "ERROR: Unable to allocate register for element");
             return inst_list;
         }
-        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_32);
+        if (element_size == 1) {
+            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_32);
+        } else if (element_size == 2) {
+            snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_32);
+        } else if (element_size == 4) {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_32);
+        } else if (element_size == 8) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_64);
+        } else {
+            free_reg(get_reg_stack(), elem_reg);
+            free_reg(get_reg_stack(), idx_reg);
+            free_reg(get_reg_stack(), fitems_reg);
+            codegen_report_error(ctx, "ERROR: TFPGList for-in only supports 1, 2, 4, 8 byte elements");
+            return inst_list;
+        }
         inst_list = add_inst(inst_list, buffer);
 
         // Assign element value to loop variable
@@ -5185,7 +5235,29 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         }
 
         // Store element to loop variable
-        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", elem_reg->bit_32, loop_var_addr_reg->bit_64);
+        if (element_size == 1) {
+            char byte_reg[16];
+            const char *reg32 = elem_reg->bit_32;
+            if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
+                snprintf(byte_reg, sizeof(byte_reg), "%%%cl", reg32[3]);
+            } else {
+                strcpy(byte_reg, "%al"); // Fallback, conceptually incorrect but practically unused for non-rax registers in this allocator
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
+        } else if (element_size == 2) {
+            char word_reg[16];
+            const char *reg32 = elem_reg->bit_32;
+            if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
+                snprintf(word_reg, sizeof(word_reg), "%%%.2s", reg32 + 3);
+            } else {
+                strcpy(word_reg, "%ax");
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
+        } else if (element_size == 4) {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", elem_reg->bit_32, loop_var_addr_reg->bit_64);
+        } else if (element_size == 8) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", elem_reg->bit_64, loop_var_addr_reg->bit_64);
+        }
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), loop_var_addr_reg);

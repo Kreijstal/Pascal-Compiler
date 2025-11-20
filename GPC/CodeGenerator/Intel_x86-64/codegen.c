@@ -1506,13 +1506,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                              * For records/objects, allocate the full struct size */
                             if (node_is_class_type(size_node))
                             {
-                                fprintf(stderr, "DEBUG ALLOC: Detected class type for '%s', allocating 8 bytes\n",
+                                CODEGEN_DEBUG("DEBUG ALLOC: Detected class type for '%s', allocating 8 bytes\n",
                                     (char *)id_list->cur);
                                 alloc_size = 8;  /* Classes are heap-allocated; variable holds pointer */
                             }
                             else
                             {
-                                fprintf(stderr, "DEBUG ALLOC: Detected record type for '%s', allocating full size\n",
+                                CODEGEN_DEBUG("DEBUG ALLOC: Detected record type for '%s', allocating full size\n",
                                     (char *)id_list->cur);
                                 /* For records/objects, get the full struct size */
                                 struct RecordType *record_desc = get_record_type_from_node(size_node);
@@ -2052,34 +2052,34 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * that weren't looked up in symbol table correctly (e.g., class operators) */
     if (!has_record_return && func->return_type_id != NULL && symtab != NULL)
     {
-        fprintf(stderr, "DEBUG: Checking return_type_id='%s' for function '%s'\n", 
+        CODEGEN_DEBUG("DEBUG: Checking return_type_id='%s' for function '%s'\n", 
                 func->return_type_id, func->id);
         HashNode_t *return_type_node = NULL;
         FindIdent(&return_type_node, symtab, func->return_type_id);
         if (return_type_node != NULL)
         {
-            fprintf(stderr, "DEBUG: Found return type node\n");
+            CODEGEN_DEBUG("DEBUG: Found return type node\n");
             struct RecordType *record_type = hashnode_get_record_type(return_type_node);
             if (record_type != NULL)
             {
-                fprintf(stderr, "DEBUG: It's a record type!\n");
+                CODEGEN_DEBUG("DEBUG: It's a record type!\n");
                 if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
                         record_type, &record_return_size) == 0 &&
                     record_return_size > 0 && record_return_size <= INT_MAX)
                 {
-                    fprintf(stderr, "DEBUG: Setting has_record_return=1, size=%lld\n", record_return_size);
+                    CODEGEN_DEBUG("DEBUG: Setting has_record_return=1, size=%lld\n", record_return_size);
                     has_record_return = 1;
                 }
             }
         }
         else
         {
-            fprintf(stderr, "DEBUG: return_type_node is NULL\n");
+            CODEGEN_DEBUG("DEBUG: return_type_node is NULL\n");
         }
     }
     else
     {
-        fprintf(stderr, "DEBUG: Skipped return_type_id check: has_record_return=%d, return_type_id=%s, symtab=%p\n",
+        CODEGEN_DEBUG("DEBUG: Skipped return_type_id check: has_record_return=%d, return_type_id=%s, symtab=%p\n",
                 has_record_return, func->return_type_id ? func->return_type_id : "NULL", (void*)symtab);
     }
     
