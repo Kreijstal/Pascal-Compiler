@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <limits.h>
 #include <string.h>
+#include <stdint.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -457,6 +458,8 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
 
     struct Expression *array_expr = (struct Expression *)args->cur;
     struct Expression *length_expr = (struct Expression *)args->next->cur;
+    
+    fprintf(stderr, "DEBUG: semcheck_builtin_setlength length_expr=%p\n", length_expr);
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
@@ -1100,6 +1103,7 @@ static int semcheck_break_stmt(struct Statement *stmt)
 }
 
 /* Main semantic checking */
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val;
@@ -1107,6 +1111,35 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     assert(symtab != NULL);
     if (stmt == NULL)
         return 0;
+    
+    // In semcheck_for:
+    // semcheck_loop_depth++;
+    // 
+    // fprintf(stderr, "DEBUG: semcheck_for stmt=%p line=%d to_expr=%p current_to=%p\n", 
+    //         stmt, stmt->line_num, to_expr, stmt->stmt_data.for_data.to);
+    // 
+    // if (stmt->line_num == 42) {
+    //     watch_stmt = stmt;
+    //     watch_to_expr = stmt->stmt_data.for_data.to;
+    //     fprintf(stderr, "DEBUG: Watching stmt at line 42\n");
+    // }
+    // 
+    // if (to_expr != NULL && ((uintptr_t)to_expr == 0x686374616d || (uintptr_t)to_expr == 0x1db2)) {
+    //     fprintf(stderr, "CRITICAL: to_expr is corrupted in semcheck_for!\n");
+    // }
+    // 
+    // return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev);
+    // semcheck_loop_depth--;
+    // 
+    // if (stmt->stmt_data.for_data.to != to_expr) {
+    //     fprintf(stderr, "CRITICAL: stmt->stmt_data.for_data.to changed from %p to %p during body processing!\n",
+    //             to_expr, stmt->stmt_data.for_data.to);
+    // }
+    // 
+    // if (watch_stmt == stmt) {
+    //     // We are returning from the watched statement.
+    //     // It might be checked again in outer loops, but that's fine.
+    // }
 
     return_val = 0;
     switch(stmt->type)
@@ -2396,6 +2429,14 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
         stmt_list = stmt_list->next;
     }
 
+    if (g_debug_watch_stmt != NULL) {
+        if (g_debug_watch_stmt->stmt_data.for_data.to != g_debug_watch_to_expr) {
+            fprintf(stderr, "CRITICAL: g_debug_watch_stmt corrupted at end of compoundstmt! Changed from %p to %p\n",
+                    g_debug_watch_to_expr, g_debug_watch_stmt->stmt_data.for_data.to);
+        } else {
+            fprintf(stderr, "DEBUG: g_debug_watch_stmt OK at end of compoundstmt. to=%p\n", g_debug_watch_stmt->stmt_data.for_data.to);
+        }
+    }
 
     return return_val;
 }
@@ -2617,8 +2658,27 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     }
 
     semcheck_loop_depth++;
+    
+    fprintf(stderr, "DEBUG: semcheck_for stmt=%p line=%d to_expr=%p current_to=%p\n", 
+            stmt, stmt->line_num, to_expr, stmt->stmt_data.for_data.to);
+
+    if (stmt->line_num == 42) {
+        g_debug_watch_stmt = stmt;
+        g_debug_watch_to_expr = stmt->stmt_data.for_data.to;
+        fprintf(stderr, "DEBUG: Watching stmt at line 42\n");
+    }
+
+    if (to_expr != NULL && ((uintptr_t)to_expr == 0x686374616d || (uintptr_t)to_expr == 0x1db2)) {
+        fprintf(stderr, "CRITICAL: to_expr is corrupted in semcheck_for!\n");
+    }
+    
     return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev);
     semcheck_loop_depth--;
+
+    if (stmt->stmt_data.for_data.to != to_expr) {
+        fprintf(stderr, "CRITICAL: stmt->stmt_data.for_data.to changed from %p to %p during body processing!\n",
+                to_expr, stmt->stmt_data.for_data.to);
+    }
 
     if (for_type_owned && for_gpc_type != NULL)
         destroy_gpc_type(for_gpc_type);
