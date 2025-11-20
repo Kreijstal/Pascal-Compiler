@@ -119,7 +119,14 @@ static int is_valid_pointer(void *ptr) {
 static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
     if (expr == NULL) return;
     
+    if (!is_valid_pointer(expr)) {
+        return;
+    }
+
     /* Early return for leaf expression types that don't contain function calls */
+    /* We need to be careful accessing expr->type if expr is garbage but passes is_valid_pointer */
+    /* But we can't easily check validity without OS-specific calls (IsBadReadPtr etc) */
+    
     switch (expr->type) {
         case EXPR_VAR_ID:
         case EXPR_INUM:
@@ -274,6 +281,7 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
 static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
     if (stmt == NULL) return;
     
+    
     switch (stmt->type) {
         case STMT_PROCEDURE_CALL: {
             char *mangled_id = stmt->stmt_data.procedure_call_data.mangled_id;
@@ -336,15 +344,21 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
         case STMT_FOR:
         case STMT_FOR_VAR:
         case STMT_FOR_ASSIGN_VAR:
-            if (stmt->stmt_data.for_data.for_assign_type == STMT_VAR_ASSIGN) {
-                if (stmt->stmt_data.for_data.for_assign_data.var_assign != NULL)
+
+            if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_ASSIGN_VAR) {
+                if (stmt->stmt_data.for_data.for_assign_data.var_assign != NULL) {
                     mark_stmt_calls(stmt->stmt_data.for_data.for_assign_data.var_assign, map);
-            } else {
+                }
+            } else if (stmt->stmt_data.for_data.for_assign_type == STMT_FOR_VAR) {
+
                 if (stmt->stmt_data.for_data.for_assign_data.var != NULL)
                     mark_expr_calls(stmt->stmt_data.for_data.for_assign_data.var, map);
             }
-            if (stmt->stmt_data.for_data.to != NULL)
+
+            if (stmt->stmt_data.for_data.to != NULL) {
+
                 mark_expr_calls(stmt->stmt_data.for_data.to, map);
+            }
             if (stmt->stmt_data.for_data.do_for != NULL)
                 mark_stmt_calls(stmt->stmt_data.for_data.do_for, map);
             break;
@@ -480,7 +494,7 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
 }
 
 void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
-    if (program == NULL || program->type != TREE_PROGRAM_TYPE) return;
+    if (program == NULL || symtab == NULL || program->type != TREE_PROGRAM_TYPE) return;
     
     SubprogramMap map;
     map_init(&map);

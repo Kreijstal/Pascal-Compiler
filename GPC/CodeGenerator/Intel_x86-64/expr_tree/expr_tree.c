@@ -1135,14 +1135,19 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
                     instance_size > 0)
                 {
-                    /* Allocate memory using malloc */
-                    const char *malloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    /* Allocate memory using calloc to zero-initialize all fields */
+                    const char *calloc_arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    const char *calloc_arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+                    
+                    /* calloc(1, size) - allocate 1 element of instance_size bytes, zeroed */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", calloc_arg1_reg);
+                    inst_list = add_inst(inst_list, buffer);
                     snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                        instance_size, malloc_arg_reg);
+                        instance_size, calloc_arg2_reg);
                     inst_list = add_inst(inst_list, buffer);
                     
                     inst_list = codegen_vect_reg(inst_list, 0);
-                    inst_list = add_inst(inst_list, "\tcall\tmalloc\n");
+                    inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
                     free_arg_regs();
                     
                     /* Save the allocated instance pointer */
