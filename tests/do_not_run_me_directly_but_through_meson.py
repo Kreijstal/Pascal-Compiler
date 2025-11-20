@@ -804,14 +804,11 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, unoptimized_output_file)
         unoptimized_asm = read_file_content(unoptimized_output_file)
 
-        # In the unoptimized version, we expect space for two integers (x and y).
-        # The stack allocation depends on the active ABI: System V uses 16 bytes,
-        # while the Windows x64 ABI reserves a 32-byte home space in addition to
-        # the locals (48 bytes total in this case).
-        if ".set\tGPC_TARGET_WINDOWS, 1" in unoptimized_asm:
-            self.assertIn("subq\t$48", unoptimized_asm)
-        else:
-            self.assertIn("subq\t$16", unoptimized_asm)
+        # In the unoptimized version, we expect the variables x and y to be allocated.
+        # Global variables are allocated in the BSS section, not on the stack.
+        # We should see .comm directives for both variables.
+        self.assertIn(".comm\t__gpc_program_var_x_1", unoptimized_asm)
+        self.assertIn(".comm\t__gpc_program_var_y_2", unoptimized_asm)
 
         # --- Run with -O2 optimization ---
         optimized_output_file = os.path.join(
@@ -820,12 +817,13 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, optimized_output_file, flags=["-O2"])
         optimized_asm = read_file_content(optimized_output_file)
 
-        # In the optimized version, the variable `y` is removed.
-        # The variable `x` is also removed because it is assigned to but never used.
-        # So, no local variables are needed from the user's code.
-        # The prelude functions still exist, so we can't just check for no stack allocation.
-        # Instead, we will check that the stack allocation is smaller than the unoptimized one.
+        # In the optimized version, the variable `y` should be removed (dead code elimination).
+        # The variable `x` might also be removed because it is assigned to but never used.
+        # We check that the optimized assembly is smaller than the unoptimized one.
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
+        
+        # Additionally, we should not see the unused variable y in the optimized version
+        self.assertNotIn(".comm\t__gpc_program_var_y_2", optimized_asm)
 
     def test_parser_ast_dump_matches_golden(self):
         """Ensures the AST dump matches the golden files for representative programs."""
@@ -2148,6 +2146,7 @@ def main():
         runner = TAPTestRunner()
         result = runner.run(suite)
         sys.exit(0 if result.wasSuccessful() else 1)
+    print(f"DEBUG: argv={[sys.argv[0]] + remaining}")
 
     unittest.main(argv=[sys.argv[0]] + remaining)
 

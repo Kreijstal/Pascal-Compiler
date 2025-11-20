@@ -57,7 +57,6 @@ int num_args_alloced = 0;
 int line_num = 1;
 int col_num = 1;
 char *file_to_parse = NULL;
-
 static UnitSearchPaths g_unit_paths;
 
 static void print_usage(const char *prog_name)
@@ -607,6 +606,23 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
         return;
 
     mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1);
+    if (getenv("GPC_DEBUG_TFPG") != NULL) {
+        ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_type_decls;
+        while (dbg != NULL) {
+            if (dbg->type == LIST_TREE) {
+                Tree_t *decl = (Tree_t *)dbg->cur;
+                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                    decl->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[GPC] merging interface type %s from unit %s\n",
+                            decl->tree_data.type_decl_data.id,
+                            unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                }
+            }
+            dbg = dbg->next;
+        }
+    }
     program->tree_data.program_data.type_declaration =
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.interface_type_decls);
@@ -625,6 +641,23 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
     mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
+    if (getenv("GPC_DEBUG_TFPG") != NULL) {
+        ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+        while (dbg != NULL) {
+            if (dbg->type == LIST_TREE) {
+                Tree_t *decl = (Tree_t *)dbg->cur;
+                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                    decl->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[GPC] merging impl type %s from unit %s\n",
+                            decl->tree_data.type_decl_data.id,
+                            unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                }
+            }
+            dbg = dbg->next;
+        }
+    }
     program->tree_data.program_data.type_declaration =
         ConcatList(program->tree_data.program_data.type_declaration,
                    unit_tree->tree_data.unit_data.implementation_type_decls);
@@ -790,7 +823,9 @@ int main(int argc, char **argv)
 
     Tree_t *user_tree = NULL;
     double user_start = track_time ? current_time_seconds() : 0.0;
+    from_cparser_enable_pending_specializations();
     bool parsed_user = parse_pascal_file(input_file, &user_tree, convert_to_tree);
+    from_cparser_disable_pending_specializations();
     if (track_time)
     {
         g_time_parse_user += current_time_seconds() - user_start;
@@ -897,6 +932,7 @@ int main(int argc, char **argv)
 
     load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    resolve_pending_generic_aliases(user_tree);
 
     unit_set_destroy(&visited_units);
 
@@ -932,6 +968,10 @@ int main(int argc, char **argv)
         ctx.loop_exit_labels = NULL;
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
+
+        /* Mark which functions are actually used (dead code elimination) */
+        extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+        mark_used_functions(user_tree, symtab);
 
         double codegen_start = track_time ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);

@@ -13,6 +13,12 @@
 #include <assert.h>
 #include <limits.h>
 #include <string.h>
+#include <stdint.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strncasecmp _strnicmp
+#endif
 #include "SemCheck_stmt.h"
 #include "SemCheck_expr.h"
 #include "../SemCheck.h"
@@ -27,12 +33,213 @@
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
+/* Debug helpers used for corruption watchdog logging. */
+static struct Statement *g_debug_watch_stmt = NULL;
+static struct Expression *g_debug_watch_to_expr = NULL;
+
+/* Resolve the RecordType for a TFPGList specialization from a LHS expression.
+ * This bypasses incomplete gpc_type inference and looks directly at the symbol
+ * table entry for the variable or type identifier. */
+static int is_tfpglist_type_id(const char *type_id)
+{
+    return (type_id != NULL &&
+            strncasecmp(type_id, "TFPGList$", strlen("TFPGList$")) == 0);
+}
+
+/* Resolve the RecordType for a TFPGList specialization from a LHS expression.
+ * This bypasses incomplete gpc_type inference and looks directly at the symbol
+ * table entry for the variable or type identifier. */
+static struct RecordType *resolve_tfpglist_record_from_lhs(SymTab_t *symtab,
+    struct Expression *lhs)
+{
+    if (symtab == NULL || lhs == NULL)
+        return NULL;
+
+    if (lhs->type != EXPR_VAR_ID || lhs->expr_data.id == NULL)
+        return NULL;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, lhs->expr_data.id) < 0 || node == NULL)
+        return NULL;
+
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record == NULL || record->type_id == NULL)
+        return NULL;
+
+    if (!is_tfpglist_type_id(record->type_id))
+        return NULL;
+
+    return record;
+}
 
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
     return hashnode_get_type_alias(node);
 }
 
+static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
+{
+    if (symtab == NULL || id == NULL)
+        return NULL;
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, (char *)id) >= 0 && node != NULL)
+        return node;
+    return NULL;
+}
+
+static const char *resolve_tfpglist_specialized_id_from_typename(SymTab_t *symtab, const char *type_name)
+{
+    HashNode_t *type_node = lookup_hashnode(symtab, type_name);
+    if (type_node == NULL)
+        return NULL;
+
+    struct RecordType *record = hashnode_get_record_type(type_node);
+    if (record != NULL && is_tfpglist_type_id(record->type_id))
+        return record->type_id;
+
+    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL && alias->target_type_id != NULL &&
+        is_tfpglist_type_id(alias->target_type_id))
+        return alias->target_type_id;
+
+    return NULL;
+}
+
+static const char *resolve_tfpglist_specialized_id_from_expr(SymTab_t *symtab, struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return resolve_tfpglist_specialized_id_from_typename(symtab, expr->expr_data.id);
+    return NULL;
+}
+
+static struct Expression *make_tfpglist_ctor_expr(struct RecordType *record, int line_num)
+{
+    if (record == NULL || record->type_id == NULL)
+        return NULL;
+
+    const char *type_id = record->type_id;
+    const char *prefix = "__tfpg_ctor$";
+    size_t len = strlen(prefix) + strlen(type_id) + 1;
+    char *ctor_name = (char *)malloc(len);
+    if (ctor_name == NULL)
+        return NULL;
+    strcpy(ctor_name, prefix);
+    strcat(ctor_name, type_id);
+
+    struct Expression *call = mk_functioncall(line_num, ctor_name, NULL);
+    if (call == NULL)
+        return NULL;
+
+    /* Set the mangled_id to the actual Create constructor method name */
+    /* Format: ClassName__Create_u */
+    size_t mangled_len = strlen(type_id) + strlen("__Create_u") + 1;
+    char *mangled_name = (char *)malloc(mangled_len);
+    if (mangled_name != NULL)
+    {
+        strcpy(mangled_name, type_id);
+        strcat(mangled_name, "__Create_u");
+        call->expr_data.function_call_data.mangled_id = mangled_name;
+        
+        if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
+        {
+            fprintf(stderr, "[GPC] TFPG ctor: set mangled_id to %s\n", mangled_name);
+        }
+    }
+
+    call->record_type = record;
+    call->resolved_type = RECORD_TYPE;
+    if (call->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(call->resolved_gpc_type);
+        call->resolved_gpc_type = NULL;
+    }
+    call->resolved_gpc_type = create_record_type(record);
+    return call;
+}
+
+static int rewrite_tfpglist_constructor_if_needed(SymTab_t *symtab,
+    int max_scope_lev, struct Expression *lhs, struct Expression **rhs_ptr)
+{
+    if (symtab == NULL || lhs == NULL || rhs_ptr == NULL || *rhs_ptr == NULL)
+        return 0;
+    const char *debug_env = getenv("GPC_DEBUG_GENERIC_CLONES");
+
+    struct RecordType *lhs_record = resolve_tfpglist_record_from_lhs(symtab, lhs);
+    if (lhs_record == NULL || lhs_record->type_id == NULL)
+    {
+        if (debug_env)
+        {
+            fprintf(stderr,
+                "[GPC] TFPG ctor: lhs %s is not TFPGList specialization\n",
+                (lhs->expr_data.id != NULL) ? lhs->expr_data.id : "<expr>");
+        }
+        return 0;
+    }
+
+    const char *expected_specialized_id = lhs_record->type_id;
+    struct Expression *rhs = *rhs_ptr;
+
+    int matches_pattern = 0;
+    if (rhs->type == EXPR_RECORD_ACCESS &&
+        rhs->expr_data.record_access_data.field_id != NULL &&
+        strcasecmp(rhs->expr_data.record_access_data.field_id, "Create") == 0)
+    {
+        const char *candidate = resolve_tfpglist_specialized_id_from_expr(symtab,
+            rhs->expr_data.record_access_data.record_expr);
+        if (candidate != NULL &&
+            strcasecmp(candidate, expected_specialized_id) == 0)
+            matches_pattern = 1;
+    }
+    else if (rhs->type == EXPR_FUNCTION_CALL &&
+             rhs->expr_data.function_call_data.id != NULL)
+    {
+        const char *candidate = resolve_tfpglist_specialized_id_from_typename(
+            symtab, rhs->expr_data.function_call_data.id);
+        if (candidate != NULL &&
+            strcasecmp(candidate, expected_specialized_id) == 0)
+        {
+            /* Legacy lowering produced a dummy argument referencing the type */
+            ListNode_t *args = rhs->expr_data.function_call_data.args_expr;
+            if (args == NULL)
+                matches_pattern = 1;
+            else if (args->next == NULL)
+            {
+                struct Expression *arg_expr = (struct Expression *)args->cur;
+                if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID &&
+                    arg_expr->expr_data.id != NULL &&
+                    pascal_identifier_equals(arg_expr->expr_data.id,
+                        rhs->expr_data.function_call_data.id))
+                    matches_pattern = 1;
+            }
+        }
+    }
+
+    if (!matches_pattern)
+    {
+        if (debug_env)
+            fprintf(stderr, "[GPC] TFPG ctor: rhs did not match constructor pattern\n");
+        return 0;
+    }
+
+    struct Expression *ctor_expr =
+        make_tfpglist_ctor_expr(lhs_record, rhs->line_num);
+    if (ctor_expr == NULL)
+    {
+        if (debug_env)
+            fprintf(stderr, "[GPC] TFPG ctor: failed to build ctor expression\n");
+        return 0;
+    }
+
+    if (debug_env)
+        fprintf(stderr, "[GPC] TFPG ctor: rewriting ctor for %s\n",
+            expected_specialized_id);
+
+    destroy_expr(rhs);
+    *rhs_ptr = ctor_expr;
+    return 1;
+}
 static void semcheck_stmt_set_call_gpc_type(struct Statement *stmt, GpcType *type,
     int owns_existing)
 {
@@ -88,6 +295,7 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_scope_lev);
 
 static int semcheck_statement_list_nodes(SymTab_t *symtab, ListNode_t *stmts, int max_scope_lev);
@@ -253,6 +461,8 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
 
     struct Expression *array_expr = (struct Expression *)args->cur;
     struct Expression *length_expr = (struct Expression *)args->next->cur;
+    
+    fprintf(stderr, "DEBUG: semcheck_builtin_setlength length_expr=%p\n", length_expr);
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
@@ -275,20 +485,15 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     }
     else
     {
-        if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+        /* After semantic checking, check if the expression resolved to a dynamic array */
+        /* The expression could be EXPR_VAR_ID, EXPR_RECORD_ACCESS, etc. */
+        int is_valid_array = 0;
+        
+        if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
         {
-            fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
-            ++return_val;
-        }
-        else
-        {
+            /* Simple variable reference */
             HashNode_t *array_node = NULL;
-            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1 || array_node == NULL)
-            {
-                fprintf(stderr, "Error on line %d, undeclared identifier \"%s\" in SetLength.\n", stmt->line_num, array_expr->expr_data.id);
-                ++return_val;
-            }
-            else
+            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) != -1 && array_node != NULL)
             {
                 set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
                 
@@ -303,12 +508,23 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
                     is_dynamic = hashnode_is_dynamic_array(array_node);
                 }
                 
-                if (array_node->hash_type != HASHTYPE_ARRAY || !is_dynamic)
+                if (array_node->hash_type == HASHTYPE_ARRAY && is_dynamic)
                 {
-                    fprintf(stderr, "Error on line %d, SetLength expects a dynamic array variable.\n", stmt->line_num);
-                    ++return_val;
+                    is_valid_array = 1;
                 }
             }
+        }
+        else if (array_expr != NULL && array_expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* Record field access - if semantic check passed, assume it's valid
+             * TODO: Could enhance this to verify the field is actually a dynamic array */
+            is_valid_array = 1;
+        }
+        
+        if (!is_valid_array)
+        {
+            fprintf(stderr, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
+            ++return_val;
         }
     }
 
@@ -890,6 +1106,7 @@ static int semcheck_break_stmt(struct Statement *stmt)
 }
 
 /* Main semantic checking */
+
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val;
@@ -897,6 +1114,35 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     assert(symtab != NULL);
     if (stmt == NULL)
         return 0;
+    
+    // In semcheck_for:
+    // semcheck_loop_depth++;
+    // 
+    // fprintf(stderr, "DEBUG: semcheck_for stmt=%p line=%d to_expr=%p current_to=%p\n", 
+    //         stmt, stmt->line_num, to_expr, stmt->stmt_data.for_data.to);
+    // 
+    // if (stmt->line_num == 42) {
+    //     watch_stmt = stmt;
+    //     watch_to_expr = stmt->stmt_data.for_data.to;
+    //     fprintf(stderr, "DEBUG: Watching stmt at line 42\n");
+    // }
+    // 
+    // if (to_expr != NULL && ((uintptr_t)to_expr == 0x686374616d || (uintptr_t)to_expr == 0x1db2)) {
+    //     fprintf(stderr, "CRITICAL: to_expr is corrupted in semcheck_for!\n");
+    // }
+    // 
+    // return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev);
+    // semcheck_loop_depth--;
+    // 
+    // if (stmt->stmt_data.for_data.to != to_expr) {
+    //     fprintf(stderr, "CRITICAL: stmt->stmt_data.for_data.to changed from %p to %p during body processing!\n",
+    //             to_expr, stmt->stmt_data.for_data.to);
+    // }
+    // 
+    // if (watch_stmt == stmt) {
+    //     // We are returning from the watched statement.
+    //     // It might be checked again in outer loops, but that's fine.
+    // }
 
     return_val = 0;
     switch(stmt->type)
@@ -936,6 +1182,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_FOR:
             return_val += semcheck_for(symtab, stmt, max_scope_lev);
+            break;
+
+        case STMT_FOR_IN:
+            return_val += semcheck_for_in(symtab, stmt, max_scope_lev);
             break;
 
         case STMT_BREAK:
@@ -1067,61 +1317,115 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (stmt->stmt_data.inherited_data.call_expr != NULL)
             {
                 struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
-                HashNode_t *target_symbol = NULL;
-                const char *call_id = call_expr->expr_data.function_call_data.id;
-                if (call_id != NULL)
-                    FindIdent(&target_symbol, symtab, (char *)call_id);
-
-                int is_function_symbol = (target_symbol != NULL) &&
-                    (target_symbol->hash_type == HASHTYPE_FUNCTION ||
-                     target_symbol->hash_type == HASHTYPE_FUNCTION_RETURN);
-
-                if (call_expr->type == EXPR_FUNCTION_CALL && !is_function_symbol)
+                
+                /* Handle EXPR_VAR_ID by converting to EXPR_FUNCTION_CALL */
+                if (call_expr->type == EXPR_VAR_ID)
                 {
-                    struct Statement temp_call;
-                    memset(&temp_call, 0, sizeof(temp_call));
-                    temp_call.type = STMT_PROCEDURE_CALL;
-                    temp_call.line_num = stmt->line_num;
-                    temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
-                    temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
-                    temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
-                    temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
+                    /* Save the id from the VAR_ID before converting */
+                    char *var_id = call_expr->expr_data.id;
+                    
+                    /* Convert to EXPR_FUNCTION_CALL */
+                    call_expr->type = EXPR_FUNCTION_CALL;
+                    call_expr->expr_data.function_call_data.id = var_id;
+                    call_expr->expr_data.function_call_data.args_expr = NULL;
+                    call_expr->expr_data.function_call_data.mangled_id = NULL;
+                    call_expr->expr_data.function_call_data.resolved_func = NULL;
+                    call_expr->expr_data.function_call_data.call_hash_type = 0;
+                    call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                    call_expr->expr_data.function_call_data.is_call_info_valid = 0;
+                }
+                
+                if (call_expr->type == EXPR_FUNCTION_CALL)
+                {
+                    HashNode_t *target_symbol = NULL;
+                    const char *call_id = call_expr->expr_data.function_call_data.id;
+                    if (call_id != NULL)
+                        FindIdent(&target_symbol, symtab, (char *)call_id);
 
-                    return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
+                    int is_function_symbol = (target_symbol != NULL) &&
+                        (target_symbol->hash_type == HASHTYPE_FUNCTION ||
+                         target_symbol->hash_type == HASHTYPE_FUNCTION_RETURN);
 
-                    if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
+                    if (!is_function_symbol)
                     {
-                        if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                        /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
+                        const char *method_name = call_expr->expr_data.function_call_data.id;
+                        HashNode_t *self_node = NULL;
+                        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
+                            self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
+                            self_node->type->info.record_info != NULL)
                         {
-                            free(call_expr->expr_data.function_call_data.mangled_id);
-                            call_expr->expr_data.function_call_data.mangled_id = NULL;
+                            struct RecordType *current_class = self_node->type->info.record_info;
+                            
+                            /* Check if there's no parent class and this is Create or Destroy */
+                            if (current_class->parent_class_name == NULL && method_name != NULL &&
+                                (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
+                            {
+                                /* No parent class - convert to empty compound statement (no-op) */
+                                if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                                {
+                                    fprintf(stderr, "[GPC] Inherited %s with no parent class - converting to no-op\n",
+                                            method_name);
+                                }
+                                /* Convert this inherited statement to an empty compound statement */
+                                stmt->type = STMT_COMPOUND_STATEMENT;
+                                stmt->stmt_data.compound_statement = NULL;
+                                /* No errors */
+                                break;
+                            }
                         }
-                        call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
+                        
+                        struct Statement temp_call;
+                        memset(&temp_call, 0, sizeof(temp_call));
+                        temp_call.type = STMT_PROCEDURE_CALL;
+                        temp_call.line_num = stmt->line_num;
+                        temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                        temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
                         temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
+
+                        return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
+
+                        if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
+                        {
+                            if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                            {
+                                free(call_expr->expr_data.function_call_data.mangled_id);
+                                call_expr->expr_data.function_call_data.mangled_id = NULL;
+                            }
+                            call_expr->expr_data.function_call_data.mangled_id = temp_call.stmt_data.procedure_call_data.mangled_id;
+                            temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        }
+                        call_expr->expr_data.function_call_data.call_hash_type =
+                            temp_call.stmt_data.procedure_call_data.call_hash_type;
+                        if (call_expr->expr_data.function_call_data.call_gpc_type != NULL)
+                        {
+                            destroy_gpc_type(call_expr->expr_data.function_call_data.call_gpc_type);
+                            call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                        }
+                        if (temp_call.stmt_data.procedure_call_data.call_gpc_type != NULL)
+                        {
+                            gpc_type_retain(temp_call.stmt_data.procedure_call_data.call_gpc_type);
+                            call_expr->expr_data.function_call_data.call_gpc_type =
+                                temp_call.stmt_data.procedure_call_data.call_gpc_type;
+                        }
+                        call_expr->expr_data.function_call_data.is_call_info_valid =
+                            temp_call.stmt_data.procedure_call_data.is_call_info_valid;
+                        semcheck_stmt_set_call_gpc_type(&temp_call, NULL,
+                            temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
+                        temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
                     }
-                    call_expr->expr_data.function_call_data.call_hash_type =
-                        temp_call.stmt_data.procedure_call_data.call_hash_type;
-                    if (call_expr->expr_data.function_call_data.call_gpc_type != NULL)
+                    else
                     {
-                        destroy_gpc_type(call_expr->expr_data.function_call_data.call_gpc_type);
-                        call_expr->expr_data.function_call_data.call_gpc_type = NULL;
+                        int inherited_type = UNKNOWN_TYPE;
+                        return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                     }
-                    if (temp_call.stmt_data.procedure_call_data.call_gpc_type != NULL)
-                    {
-                        gpc_type_retain(temp_call.stmt_data.procedure_call_data.call_gpc_type);
-                        call_expr->expr_data.function_call_data.call_gpc_type =
-                            temp_call.stmt_data.procedure_call_data.call_gpc_type;
-                    }
-                    call_expr->expr_data.function_call_data.is_call_info_valid =
-                        temp_call.stmt_data.procedure_call_data.is_call_info_valid;
-                    semcheck_stmt_set_call_gpc_type(&temp_call, NULL,
-                        temp_call.stmt_data.procedure_call_data.is_call_info_valid == 1);
-                    temp_call.stmt_data.procedure_call_data.is_call_info_valid = 0;
                 }
                 else
                 {
-                    int inherited_type = UNKNOWN_TYPE;
-                    return_val += semcheck_funccall(&inherited_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
+                    /* For other expression types, use general expression checking */
+                    int expr_type = UNKNOWN_TYPE;
+                    return_val += semcheck_expr_main(&expr_type, symtab, call_expr, max_scope_lev, NO_MUTATE);
                 }
             }
             break;
@@ -1182,6 +1486,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val = 0;
 
     var = stmt->stmt_data.var_assign_data.var;
+    expr = stmt->stmt_data.var_assign_data.expr;
+
+    rewrite_tfpglist_constructor_if_needed(symtab, max_scope_lev, var,
+        &stmt->stmt_data.var_assign_data.expr);
     expr = stmt->stmt_data.var_assign_data.expr;
 
     /* NOTE: Grammar will make sure the left side is a variable */
@@ -1717,6 +2025,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             char *method_name = strdup(double_underscore + 2);
             
             if (class_name != NULL && method_name != NULL) {
+                if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                {
+                    fprintf(stderr, "[GPC] Trying to resolve inherited call: class=%s method=%s\n",
+                            class_name, method_name);
+                }
                 /* Look up the class to find its parent */
                 HashNode_t *class_node = NULL;
                 if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL && 
@@ -1726,8 +2039,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     struct RecordType *record_info = class_node->type->info.record_info;
                     char *parent_class_name = record_info->parent_class_name;
                     
+                    if (getenv("GPC_DEBUG_INHERITED") != NULL)
+                    {
+                        fprintf(stderr, "[GPC]   Found class %s, parent_class_name=%s\n",
+                                class_name, parent_class_name ? parent_class_name : "<NULL>");
+                    }
+                    
                     /* Walk up the inheritance chain */
-                    while (parent_class_name != NULL) {
+                    while (parent_class_name != NULL && resolved_proc == NULL) {
                         /* Try to find the method in the parent class */
                         char *parent_method_name = (char *)malloc(strlen(parent_class_name) + 2 + strlen(method_name) + 1);
                         if (parent_method_name != NULL) {
@@ -2113,6 +2432,14 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
         stmt_list = stmt_list->next;
     }
 
+    if (g_debug_watch_stmt != NULL) {
+        if (g_debug_watch_stmt->stmt_data.for_data.to != g_debug_watch_to_expr) {
+            fprintf(stderr, "CRITICAL: g_debug_watch_stmt corrupted at end of compoundstmt! Changed from %p to %p\n",
+                    g_debug_watch_to_expr, g_debug_watch_stmt->stmt_data.for_data.to);
+        } else {
+            fprintf(stderr, "DEBUG: g_debug_watch_stmt OK at end of compoundstmt. to=%p\n", g_debug_watch_stmt->stmt_data.for_data.to);
+        }
+    }
 
     return return_val;
 }
@@ -2334,14 +2661,111 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     }
 
     semcheck_loop_depth++;
+    
+    fprintf(stderr, "DEBUG: semcheck_for stmt=%p line=%d to_expr=%p current_to=%p\n", 
+            stmt, stmt->line_num, to_expr, stmt->stmt_data.for_data.to);
+
+    if (stmt->line_num == 42) {
+        g_debug_watch_stmt = stmt;
+        g_debug_watch_to_expr = stmt->stmt_data.for_data.to;
+        fprintf(stderr, "DEBUG: Watching stmt at line 42\n");
+    }
+
+    if (to_expr != NULL && ((uintptr_t)to_expr == 0x686374616d || (uintptr_t)to_expr == 0x1db2)) {
+        fprintf(stderr, "CRITICAL: to_expr is corrupted in semcheck_for!\n");
+    }
+    
     return_val += semcheck_stmt_main(symtab, do_for, max_scope_lev);
     semcheck_loop_depth--;
+
+    if (stmt->stmt_data.for_data.to != to_expr) {
+        fprintf(stderr, "CRITICAL: stmt->stmt_data.for_data.to changed from %p to %p during body processing!\n",
+                to_expr, stmt->stmt_data.for_data.to);
+    }
 
     if (for_type_owned && for_gpc_type != NULL)
         destroy_gpc_type(for_gpc_type);
     if (to_type_owned && to_gpc_type != NULL)
         destroy_gpc_type(to_gpc_type);
 
+    return return_val;
+}
+
+/** FOR-IN **/
+int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    int return_val = 0;
+    int loop_var_type, collection_type;
+    int loop_var_nonordinal = 0;
+    
+    assert(symtab != NULL);
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_FOR_IN);
+    
+    struct Expression *loop_var = stmt->stmt_data.for_in_data.loop_var;
+    struct Expression *collection = stmt->stmt_data.for_in_data.collection;
+    struct Statement *do_stmt = stmt->stmt_data.for_in_data.do_stmt;
+    
+    /* Check loop variable (must be a lvalue) */
+    if (loop_var != NULL) {
+        return_val += semcheck_expr_main(&loop_var_type, symtab, loop_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
+        
+        if (!is_ordinal_type(loop_var_type) && loop_var_type != UNKNOWN_TYPE) {
+            loop_var_nonordinal = 1;
+        }
+    } else {
+        loop_var_type = UNKNOWN_TYPE;
+    }
+    
+    /* Check collection expression */
+    if (collection != NULL) {
+        int collection_type_owned = 0;
+        int collection_is_array = 0;
+        int collection_is_list = 0;
+        const char *list_element_id = NULL;
+
+        return_val += semcheck_expr_main(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
+        
+        GpcType *collection_gpc_type = semcheck_resolve_expression_gpc_type(symtab, collection, 
+                                                                            INT_MAX, NO_MUTATE, &collection_type_owned);
+        if (collection_gpc_type != NULL) {
+            if (gpc_type_is_array(collection_gpc_type)) {
+                collection_is_array = 1;
+            } else if (gpc_type_is_record(collection_gpc_type)) {
+                struct RecordType *record_info = gpc_type_get_record(collection_gpc_type);
+                if (record_info != NULL && record_info->type_id != NULL) {
+                    const char *prefix = "TFPGList$";
+                    size_t prefix_len = strlen(prefix);
+                    if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+                        collection_is_list = 1;
+                        list_element_id = record_info->type_id + prefix_len;
+                    }
+                }
+            }
+        }
+
+        if (!collection_is_array && !collection_is_list) {
+            fprintf(stderr, "Error on line %d: for-in loop requires an array expression!\n\n",
+                    stmt->line_num);
+            ++return_val;
+        } else if (!collection_is_list && loop_var_nonordinal) {
+            fprintf(stderr, "Error on line %d: for-in loop variable must be an ordinal type!\n\n",
+                    stmt->line_num);
+            ++return_val;
+        }
+
+        if (collection_type_owned && collection_gpc_type != NULL)
+            destroy_gpc_type(collection_gpc_type);
+        (void)list_element_id;
+    } else {
+        collection_type = UNKNOWN_TYPE;
+    }
+    
+    /* Check body statement */
+    if (do_stmt != NULL) {
+        return_val += semcheck_stmt(symtab, do_stmt, max_scope_lev);
+    }
+    
     return return_val;
 }
 

@@ -20,6 +20,7 @@
 #include "type_tags.h"
 #include "pascal_parser.h"
 #include "GpcType.h"
+#include "generic_types.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 
 /* ============================================================================
@@ -168,11 +169,24 @@ typedef struct {
     char *file_type_id;
     int is_record;
     struct RecordType *record_type;
+    int is_generic_specialization;
+    char *generic_base_name;
+    ListNode_t *generic_type_args;
     int is_range;
     int range_known;
     long long range_start;
     long long range_end;
 } TypeInfo;
+
+typedef struct PendingGenericAlias {
+    Tree_t *decl;
+    char *base_name;
+    ListNode_t *type_args;
+    struct PendingGenericAlias *next;
+} PendingGenericAlias;
+
+static PendingGenericAlias *g_pending_generic_aliases = NULL;
+static int g_allow_pending_specializations = 0;
 
 static void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
@@ -194,6 +208,14 @@ static void destroy_type_info_contents(TypeInfo *info) {
         free(info->file_type_id);
         info->file_type_id = NULL;
     }
+    if (info->generic_base_name != NULL) {
+        free(info->generic_base_name);
+        info->generic_base_name = NULL;
+    }
+    if (info->generic_type_args != NULL) {
+        destroy_list(info->generic_type_args);
+        info->generic_type_args = NULL;
+    }
     if (info->enum_literals != NULL) {
         destroy_list(info->enum_literals);
         info->enum_literals = NULL;
@@ -208,11 +230,49 @@ static void destroy_type_info_contents(TypeInfo *info) {
     }
 }
 
+static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
+    if (!g_allow_pending_specializations || decl == NULL || type_info == NULL)
+        return;
+    if (type_info->generic_base_name == NULL || type_info->generic_type_args == NULL)
+        return;
+
+    PendingGenericAlias *entry = (PendingGenericAlias *)calloc(1, sizeof(PendingGenericAlias));
+    if (entry == NULL)
+        return;
+
+    entry->decl = decl;
+    entry->base_name = type_info->generic_base_name;
+    entry->type_args = type_info->generic_type_args;
+    entry->next = g_pending_generic_aliases;
+    g_pending_generic_aliases = entry;
+    if (getenv("GPC_DEBUG_TFPG") != NULL &&
+        decl->tree_data.type_decl_data.id != NULL &&
+        entry->base_name != NULL)
+    {
+        fprintf(stderr, "[GPC] deferred generic alias %s base %s\n",
+                decl->tree_data.type_decl_data.id, entry->base_name);
+    }
+
+    type_info->generic_base_name = NULL;
+    type_info->generic_type_args = NULL;
+}
+
+void from_cparser_enable_pending_specializations(void) {
+    g_allow_pending_specializations = 1;
+}
+
+void from_cparser_disable_pending_specializations(void) {
+    g_allow_pending_specializations = 0;
+}
+
+static ast_t *unwrap_pascal_node(ast_t *node);
+static struct Expression *convert_expression(ast_t *expr_node);
 static int extract_constant_int(struct Expression *expr, long long *out_value);
 static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
 static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
+
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
 
@@ -279,21 +339,63 @@ static const char *find_class_for_method(const char *method_name) {
 
 static int typed_const_counter = 0;
 
+/* Encode operator symbols into valid identifier names for assembly */
+static char *encode_operator_name(const char *op_name) {
+    if (op_name == NULL)
+        return NULL;
+    
+    /* Map common operator symbols to readable names */
+    if (strcmp(op_name, "+") == 0) return strdup("op_add");
+    if (strcmp(op_name, "-") == 0) return strdup("op_sub");
+    if (strcmp(op_name, "*") == 0) return strdup("op_mul");
+    if (strcmp(op_name, "/") == 0) return strdup("op_div");
+    if (strcmp(op_name, "=") == 0) return strdup("op_eq");
+    if (strcmp(op_name, "<>") == 0) return strdup("op_ne");
+    if (strcmp(op_name, "<") == 0) return strdup("op_lt");
+    if (strcmp(op_name, ">") == 0) return strdup("op_gt");
+    if (strcmp(op_name, "<=") == 0) return strdup("op_le");
+    if (strcmp(op_name, ">=") == 0) return strdup("op_ge");
+    if (strcmp(op_name, "**") == 0) return strdup("op_pow");
+    if (strcmp(op_name, "div") == 0 || strcmp(op_name, "DIV") == 0) return strdup("op_intdiv");
+    if (strcmp(op_name, "mod") == 0 || strcmp(op_name, "MOD") == 0) return strdup("op_mod");
+    if (strcmp(op_name, "and") == 0 || strcmp(op_name, "AND") == 0) return strdup("op_and");
+    if (strcmp(op_name, "or") == 0 || strcmp(op_name, "OR") == 0) return strdup("op_or");
+    if (strcmp(op_name, "not") == 0 || strcmp(op_name, "NOT") == 0) return strdup("op_not");
+    if (strcmp(op_name, "xor") == 0 || strcmp(op_name, "XOR") == 0) return strdup("op_xor");
+    if (strcmp(op_name, "shl") == 0 || strcmp(op_name, "SHL") == 0) return strdup("op_shl");
+    if (strcmp(op_name, "shr") == 0 || strcmp(op_name, "SHR") == 0) return strdup("op_shr");
+    if (strcmp(op_name, "in") == 0 || strcmp(op_name, "IN") == 0) return strdup("op_in");
+    if (strcmp(op_name, "is") == 0 || strcmp(op_name, "IS") == 0) return strdup("op_is");
+    if (strcmp(op_name, "as") == 0 || strcmp(op_name, "AS") == 0) return strdup("op_as");
+    if (strcmp(op_name, ":=") == 0) return strdup("op_assign");
+    
+    /* For other operators or named operators, use the name as-is */
+    return strdup(op_name);
+}
+
 static char *mangle_method_name(const char *class_name, const char *method_name) {
     if (method_name == NULL)
         return NULL;
 
     if (class_name == NULL || class_name[0] == '\0')
-        return strdup(method_name);
+        return encode_operator_name(method_name);
 
-    size_t class_len = strlen(class_name);
-    size_t method_len = strlen(method_name);
-    size_t total = class_len + 2 + method_len + 1;
-    char *result = (char *)malloc(total);
-    if (result == NULL)
+    /* Encode operator names to valid identifiers */
+    char *encoded_method = encode_operator_name(method_name);
+    if (encoded_method == NULL)
         return NULL;
 
-    snprintf(result, total, "%s__%s", class_name, method_name);
+    size_t class_len = strlen(class_name);
+    size_t method_len = strlen(encoded_method);
+    size_t total = class_len + 2 + method_len + 1;
+    char *result = (char *)malloc(total);
+    if (result == NULL) {
+        free(encoded_method);
+        return NULL;
+    }
+
+    snprintf(result, total, "%s__%s", class_name, encoded_method);
+    free(encoded_method);
     return result;
 }
 
@@ -380,8 +482,642 @@ static void list_builder_extend(ListBuilder *builder, ListNode_t *nodes) {
         builder->tail_next = &(*builder->tail_next)->next;
 }
 
-static ast_t *unwrap_pascal_node(ast_t *node);
-static struct Expression *convert_expression(ast_t *expr_node);
+static char *dup_first_identifier_in_node(ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    node = unwrap_pascal_node(node);
+    if (node == NULL)
+        return NULL;
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] inspect node typ=%d (%s) sym=%s\n",
+            node->typ, pascal_tag_to_string(node->typ),
+            (node->sym != NULL && node->sym->name != NULL) ? node->sym->name : "<null>");
+    if ((node->typ == PASCAL_T_IDENTIFIER ||
+         node->typ == PASCAL_T_TYPE_ARG) &&
+        node->sym != NULL && node->sym->name != NULL)
+        return dup_symbol(node);
+    ast_t *child = node->child;
+    while (child != NULL)
+    {
+        char *dup = dup_first_identifier_in_node(child);
+        if (dup != NULL)
+            return dup;
+        child = child->next;
+    }
+    return NULL;
+}
+
+static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] collect_constructed_type_args start node=%p typ=%d (%s)\n",
+            (void *)args_node,
+            args_node != NULL ? args_node->typ : -1,
+            args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
+    if (args_node == NULL)
+        return NULL;
+
+    ListBuilder builder;
+    list_builder_init(&builder);
+
+    ast_t *cursor = args_node;
+    if (cursor->typ == PASCAL_T_TYPE_ARG_LIST)
+        cursor = cursor->child;
+
+    while (cursor != NULL) {
+        ast_t *node = unwrap_pascal_node(cursor);
+        if (node == NULL)
+            node = cursor;
+
+        if (node != NULL && node->typ == PASCAL_T_TYPE_ARG)
+        {
+            char *dup = dup_first_identifier_in_node(node);
+            if (getenv("GPC_DEBUG_TFPG") != NULL)
+                fprintf(stderr, "[GPC] collect args extracted=%s\n", dup != NULL ? dup : "<null>");
+            if (dup != NULL)
+            {
+                ListNode_t *append_node = list_builder_append(&builder, dup, LIST_STRING);
+                if (getenv("GPC_DEBUG_TFPG") != NULL)
+                    fprintf(stderr, "[GPC] appended type_arg node=%p type=%d\n",
+                        (void *)append_node, append_node != NULL ? append_node->type : -1);
+            }
+        }
+
+        cursor = cursor->next;
+    }
+    return list_builder_finish(&builder);
+}
+
+static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out) {
+    if (base_name_out != NULL)
+        *base_name_out = NULL;
+    if (type_args_out != NULL)
+        *type_args_out = NULL;
+
+    if (spec_node == NULL)
+        return 0;
+
+    ast_t *node = spec_node;
+    if (node->typ == PASCAL_T_TYPE_SPEC && node->child != NULL)
+        node = node->child;
+    node = unwrap_pascal_node(node);
+    if (node == NULL || node->typ != PASCAL_T_CONSTRUCTED_TYPE)
+        return 0;
+
+    ast_t *name_node = node->child;
+    while (name_node != NULL && name_node->typ == PASCAL_T_NONE)
+        name_node = name_node->child;
+    if (name_node == NULL)
+        return 0;
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+    {
+        fprintf(stderr, "[GPC] constructed type base node typ=%d (%s) sym=%s next_typ=%d (%s)\n",
+            name_node->typ,
+            pascal_tag_to_string(name_node->typ),
+            (name_node->sym != NULL && name_node->sym->name != NULL) ? name_node->sym->name : "<null>",
+            name_node->next != NULL ? name_node->next->typ : -1,
+            name_node->next != NULL ? pascal_tag_to_string(name_node->next->typ) : "<null>");
+    }
+
+    char *base_name = dup_symbol(name_node);
+    if (base_name == NULL)
+        return 0;
+
+    ListNode_t *type_args = collect_constructed_type_args(name_node->next);
+    if (type_args == NULL) {
+        free(base_name);
+        return 0;
+    }
+
+    if (base_name_out != NULL)
+        *base_name_out = base_name;
+    else
+        free(base_name);
+
+    if (type_args_out != NULL)
+        *type_args_out = type_args;
+    else
+        destroy_list(type_args);
+
+    return 1;
+}
+
+static char *mangle_specialized_type_name(const char *base_name, char **type_ids, int num_types) {
+    if (base_name == NULL)
+        return NULL;
+    size_t length = strlen(base_name) + 1;
+    for (int i = 0; i < num_types; ++i) {
+        if (type_ids[i] != NULL)
+            length += 1 + strlen(type_ids[i]);
+    }
+    char *result = (char *)malloc(length);
+    if (result == NULL)
+        return NULL;
+    strcpy(result, base_name);
+    for (int i = 0; i < num_types; ++i) {
+        strcat(result, "$");
+        if (type_ids[i] != NULL)
+            strcat(result, type_ids[i]);
+    }
+    return result;
+}
+
+static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args) {
+    if (base_name == NULL)
+        return NULL;
+    int count = ListLength(type_args);
+    if (count <= 0)
+        return strdup(base_name);
+    char **arg_ids = (char **)calloc((size_t)count, sizeof(char *));
+    if (arg_ids == NULL)
+        return NULL;
+    int idx = 0;
+    for (ListNode_t *cur = type_args; cur != NULL && idx < count; cur = cur->next, ++idx) {
+        arg_ids[idx] = (char *)(cur->cur);
+    }
+    char *result = mangle_specialized_type_name(base_name, arg_ids, count);
+    free(arg_ids);
+    return result;
+}
+
+static void substitute_identifier(char **type_id, GenericTypeDecl *generic_decl, char **arg_types) {
+    if (type_id == NULL || *type_id == NULL || generic_decl == NULL || arg_types == NULL)
+        return;
+
+    for (int i = 0; i < generic_decl->num_type_params; ++i) {
+        if (generic_decl->type_parameters[i] != NULL &&
+            strcasecmp(*type_id, generic_decl->type_parameters[i]) == 0) {
+            char *replacement = NULL;
+            if (arg_types[i] != NULL)
+                replacement = strdup(arg_types[i]);
+            free(*type_id);
+            *type_id = replacement;
+            return;
+        }
+    }
+}
+
+static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types);
+
+static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types) {
+    if (field == NULL)
+        return;
+    
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && field->name != NULL)
+    {
+        fprintf(stderr, "[GPC] substitute_record_field BEFORE: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
+            field->name, field->is_array,
+            field->type_id ? field->type_id : "<null>",
+            field->array_element_type_id ? field->array_element_type_id : "<null>");
+    }
+    
+    substitute_identifier(&field->type_id, generic_decl, arg_types);
+    if (field->array_element_type_id != NULL)
+        substitute_identifier(&field->array_element_type_id, generic_decl, arg_types);
+    if (field->nested_record != NULL)
+        substitute_record_type_parameters(field->nested_record, generic_decl, arg_types);
+    
+    if (debug_env != NULL && field->name != NULL)
+    {
+        fprintf(stderr, "[GPC] substitute_record_field AFTER: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
+            field->name, field->is_array,
+            field->type_id ? field->type_id : "<null>",
+            field->array_element_type_id ? field->array_element_type_id : "<null>");
+    }
+}
+
+static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types) {
+    if (record == NULL || generic_decl == NULL || arg_types == NULL)
+        return;
+
+    ListNode_t *field_node = record->fields;
+    while (field_node != NULL) {
+        if (field_node->type == LIST_RECORD_FIELD)
+            substitute_record_field((struct RecordField *)field_node->cur, generic_decl, arg_types);
+        field_node = field_node->next;
+    }
+
+    ListNode_t *prop_node = record->properties;
+    while (prop_node != NULL) {
+        if (prop_node->type == LIST_CLASS_PROPERTY) {
+            struct ClassProperty *property = (struct ClassProperty *)prop_node->cur;
+            substitute_identifier(&property->type_id, generic_decl, arg_types);
+        }
+        prop_node = prop_node->next;
+    }
+}
+
+static struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out) {
+    if (specialized_name_out != NULL)
+        *specialized_name_out = NULL;
+    if (base_name == NULL)
+        return NULL;
+
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    GenericTypeDecl *generic = generic_registry_find_decl(base_name);
+    if (generic == NULL || generic->record_template == NULL) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record missing decl for %s\n", base_name);
+        return NULL;
+    }
+
+    int arg_count = ListLength(type_args);
+    if (arg_count != generic->num_type_params || arg_count <= 0) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record wrong arg count for %s: got %d expected %d\n",
+                    base_name, arg_count, generic->num_type_params);
+        destroy_list(type_args);
+        return NULL;
+    }
+
+    char **arg_types = (char **)calloc((size_t)arg_count, sizeof(char *));
+    if (arg_types == NULL) {
+        return NULL;
+    }
+
+    int idx = 0;
+    ListNode_t *cur = type_args;
+    while (cur != NULL && idx < arg_count) {
+        if (cur->type == LIST_STRING && cur->cur != NULL) {
+            arg_types[idx] = strdup((char *)cur->cur);
+            if (arg_types[idx] == NULL)
+                break;
+            idx++;
+        }
+        cur = cur->next;
+    }
+
+    if (idx != arg_count) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record failed to copy args for %s\n", base_name);
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return NULL;
+    }
+
+    char *specialized_name = mangle_specialized_type_name(base_name, arg_types, arg_count);
+    if (specialized_name == NULL) {
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return NULL;
+    }
+
+    struct RecordType *record = clone_record_type(generic->record_template);
+    if (record == NULL) {
+        if (debug_env != NULL)
+            fprintf(stderr, "[GPC] instantiate_generic_record failed to clone template for %s\n", base_name);
+        free(specialized_name);
+        for (int i = 0; i < arg_count; ++i)
+            free(arg_types[i]);
+        free(arg_types);
+        return NULL;
+    }
+
+    if (record->type_id != NULL)
+        free(record->type_id);
+    record->type_id = strdup(specialized_name);
+    record->generic_decl = generic;
+    record->num_generic_args = arg_count;
+    record->generic_args = arg_types;
+    arg_types = NULL;
+
+    substitute_record_type_parameters(record, generic, record->generic_args);
+    generic_registry_add_specialization(base_name, record->generic_args, arg_count);
+
+    if (specialized_name_out != NULL)
+        *specialized_name_out = specialized_name;
+    else
+        free(specialized_name);
+
+    if (debug_env != NULL && record->type_id != NULL)
+        fprintf(stderr, "[GPC] instantiated generic record %s\n", record->type_id);
+    return record;
+}
+
+static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast)
+{
+    if (class_name == NULL || method_name == NULL || method_ast == NULL)
+        return;
+
+    GenericTypeDecl *generic = generic_registry_find_decl(class_name);
+    if (generic == NULL || generic->record_template == NULL) {
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && class_name != NULL)
+            fprintf(stderr, "[GPC] record_generic_method_impl: no generic decl for %s\n", class_name);
+        return;
+    }
+
+    ListNode_t *cur = generic->record_template->method_templates;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_METHOD_TEMPLATE)
+        {
+            struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
+            if (template != NULL && template->method_impl_ast == NULL &&
+                strcasecmp(template->name, method_name) == 0)
+            {
+                template->method_impl_ast = copy_ast(method_ast);
+                if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL)
+                    fprintf(stderr, "[GPC] recorded method implementation for %s.%s\n", class_name, method_name);
+                break;
+            }
+        }
+        cur = cur->next;
+    }
+}
+
+static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record)
+{
+    if (node == NULL || record == NULL || record->generic_decl == NULL ||
+        record->generic_args == NULL || record->num_generic_args <= 0)
+        return;
+
+    ast_t *cursor = node;
+    while (cursor != NULL)
+    {
+        if (cursor->sym != NULL && cursor->sym->name != NULL)
+        {
+            for (int i = 0; i < record->generic_decl->num_type_params && i < record->num_generic_args; ++i)
+            {
+                const char *param_name = record->generic_decl->type_parameters[i];
+                const char *arg_name = record->generic_args[i];
+                if (param_name != NULL && arg_name != NULL &&
+                    strcasecmp(cursor->sym->name, param_name) == 0)
+                {
+                    free(cursor->sym->name);
+                    cursor->sym->name = strdup(arg_name);
+                    break;
+                }
+            }
+        }
+        if (cursor->child != NULL)
+            substitute_generic_identifier_nodes(cursor->child, record);
+        cursor = cursor->next;
+    }
+}
+
+static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record)
+{
+    if (method_ast == NULL || record == NULL)
+        return;
+
+    ast_t *qualified = unwrap_pascal_node(method_ast->child);
+    if (qualified != NULL && qualified->typ == PASCAL_T_QUALIFIED_IDENTIFIER)
+    {
+        ast_t *class_node = qualified->child;
+        while (class_node != NULL && class_node->typ != PASCAL_T_IDENTIFIER)
+            class_node = class_node->next;
+        if (class_node != NULL && class_node->sym != NULL && record->type_id != NULL)
+        {
+            free(class_node->sym->name);
+            class_node->sym->name = strdup(record->type_id);
+        }
+    }
+
+    substitute_generic_identifier_nodes(method_ast, record);
+}
+
+static Tree_t *convert_method_impl(ast_t *method_node);
+
+static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record)
+{
+    if (method_template == NULL || method_template->method_impl_ast == NULL || record == NULL)
+        return NULL;
+
+    ast_t *method_copy = copy_ast(method_template->method_impl_ast);
+    if (method_copy == NULL)
+        return NULL;
+
+    rewrite_method_impl_ast(method_copy, record);
+    Tree_t *method_tree = convert_method_impl(method_copy);
+    free_ast(method_copy);
+    return method_tree;
+}
+
+static void append_subprogram_node(ListNode_t **dest, Tree_t *tree)
+{
+    if (dest == NULL || tree == NULL)
+        return;
+
+    ListNode_t *node = CreateListNode(tree, LIST_TREE);
+    if (node == NULL)
+        return;
+
+    ListNode_t **tail = dest;
+    while (*tail != NULL)
+        tail = &(*tail)->next;
+    *tail = node;
+}
+
+static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms)
+{
+    if (decl == NULL || subprograms == NULL)
+        return;
+    if (decl->type != TREE_TYPE_DECL)
+        return;
+    
+    struct RecordType *record = NULL;
+    
+    // Get the record from either TYPE_DECL_RECORD or TYPE_DECL_ALIAS
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
+        record = decl->tree_data.type_decl_data.info.record;
+    } else if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+        record = decl->tree_data.type_decl_data.info.alias.inline_record_type;
+    } else {
+        return;
+    }
+
+    if (record == NULL || record->method_templates == NULL ||
+        record->generic_decl == NULL || record->generic_args == NULL ||
+        record->num_generic_args <= 0)
+    {
+        if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL &&
+            record != NULL && record->type_id != NULL)
+            fprintf(stderr, "[GPC] skipping clone for %s (missing templates)\n", record->type_id);
+        return;
+    }
+
+    const char *debug_env = getenv("GPC_DEBUG_GENERIC_CLONES");
+    ListNode_t *cur = record->method_templates;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_METHOD_TEMPLATE)
+        {
+            struct MethodTemplate *template = (struct MethodTemplate *)cur->cur;
+            if (template != NULL)
+            {
+                Tree_t *method_tree = instantiate_method_template(template, record);
+                if (method_tree != NULL) {
+                    append_subprogram_node(subprograms, method_tree);
+                    if (debug_env != NULL && record->type_id != NULL && template->name != NULL)
+                        fprintf(stderr, "[GPC] cloned method %s.%s\n", record->type_id, template->name);
+                } else if (debug_env != NULL && record->type_id != NULL && template->name != NULL) {
+                    fprintf(stderr, "[GPC] failed to clone method %s.%s (missing implementation)\n",
+                            record->type_id, template->name);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
+void resolve_pending_generic_aliases(Tree_t *program_tree)
+{
+    PendingGenericAlias *cur = g_pending_generic_aliases;
+    g_pending_generic_aliases = NULL;
+    ListNode_t **clone_dest = NULL;
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE)
+        clone_dest = &program_tree->tree_data.program_data.subprograms;
+
+    while (cur != NULL) {
+        PendingGenericAlias *next = cur->next;
+        char *specialized_name = NULL;
+        struct RecordType *record = instantiate_generic_record(cur->base_name, cur->type_args, &specialized_name);
+        if (record != NULL && cur->decl != NULL &&
+            cur->decl->type == TREE_TYPE_DECL &&
+            cur->decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        {
+            struct TypeAlias *alias = &cur->decl->tree_data.type_decl_data.info.alias;
+            if (alias->inline_record_type != NULL)
+                destroy_record_type(alias->inline_record_type);
+            alias->inline_record_type = record;
+            alias->base_type = RECORD_TYPE;
+            if (cur->decl->tree_data.type_decl_data.gpc_type == NULL)
+                cur->decl->tree_data.type_decl_data.gpc_type = create_record_type(record);
+            if (clone_dest != NULL)
+                append_specialized_method_clones(cur->decl, clone_dest);
+            if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
+                cur->base_name != NULL)
+            {
+                fprintf(stderr, "[GPC] resolved generic alias %s for %s\n",
+                        cur->decl->tree_data.type_decl_data.id, cur->base_name);
+            }
+        } else {
+            fprintf(stderr, "ERROR: Failed to instantiate generic record %s for deferred alias.\n",
+                    cur->base_name != NULL ? cur->base_name : "<unknown>");
+            if (record != NULL)
+                destroy_record_type(record);
+        }
+        if (specialized_name != NULL)
+            free(specialized_name);
+        if (cur->base_name != NULL)
+            free(cur->base_name);
+        if (cur->type_args != NULL)
+            destroy_list(cur->type_args);
+        free(cur);
+        cur = next;
+    }
+}
+
+static ListNode_t *collect_constructed_type_args(ast_t *args_node);
+static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out);
+static struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out);
+static char *mangle_specialized_type_name(const char *base_name, char **type_ids, int num_types);
+static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args);
+static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types);
+static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types);
+static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast);
+static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record);
+static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms);
+static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record);
+static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record);
+static void append_subprogram_node(ListNode_t **dest, Tree_t *tree);
+static char *dup_first_identifier_in_node(ast_t *node);
+static char *dup_first_identifier_in_node(ast_t *node);
+
+
+
+/* Collect type argument identifiers from a \"specialize\" type argument list.
+ * The argument subtree is simpler than CONSTRUCTED_TYPE: it consists of identifiers
+ * separated by punctuation inside a PASCAL_T_NONE wrapper created by specialize_args. */
+static ListNode_t *collect_specialize_type_args(ast_t *args_node) {
+    if (args_node == NULL)
+        return NULL;
+
+    ListBuilder builder;
+    list_builder_init(&builder);
+
+    ast_t *cursor = args_node;
+    while (cursor != NULL) {
+        ast_t *node = unwrap_pascal_node(cursor);
+        if (node == NULL)
+            node = cursor;
+        if (node != NULL && node->typ == PASCAL_T_IDENTIFIER) {
+            char *dup = dup_symbol(node);
+            if (dup != NULL)
+                list_builder_append(&builder, dup, LIST_STRING);
+        }
+        cursor = cursor->next;
+    }
+
+    ListNode_t *result = list_builder_finish(&builder);
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] collect_constructed_type_args result=%p\n", (void *)result);
+    return result;
+}
+
+/* Extract generic base name and type arguments from a \"specialize\" type
+ * specification, such as:
+ *   specialize TFPGList<TMyRecord>
+ * The input node may be either the PASCAL_T_TYPE_SPEC wrapper or its child. */
+static int extract_specialize_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out) {
+    if (base_name_out != NULL)
+        *base_name_out = NULL;
+    if (type_args_out != NULL)
+        *type_args_out = NULL;
+
+    if (spec_node == NULL)
+        return 0;
+
+    ast_t *node = spec_node;
+    if (node->typ == PASCAL_T_TYPE_SPEC && node->child != NULL)
+        node = node->child;
+    node = unwrap_pascal_node(node);
+    if (node == NULL)
+        return 0;
+
+    /* Expect first child to be the "specialize" keyword */
+    if (node->sym == NULL || node->sym->name == NULL ||
+        strcasecmp(node->sym->name, "specialize") != 0)
+        return 0;
+
+    /* Next sibling should be the generic type identifier (possibly qualified) */
+    ast_t *base_node = node->next;
+    while (base_node != NULL && base_node->typ == PASCAL_T_NONE)
+        base_node = base_node->child;
+    if (base_node == NULL)
+        return 0;
+
+    char *base_name = dup_symbol(base_node);
+    if (base_name == NULL)
+        return 0;
+
+    /* Optional argument list node (created by specialize_args) */
+    ListNode_t *type_args = NULL;
+    ast_t *args_node = base_node->next;
+    if (args_node != NULL) {
+        type_args = collect_specialize_type_args(args_node);
+        if (type_args == NULL) {
+            free(base_name);
+            return 0;
+        }
+    }
+
+    if (base_name_out != NULL)
+        *base_name_out = base_name;
+    else
+        free(base_name);
+
+    if (type_args_out != NULL)
+        *type_args_out = type_args;
+    else
+        destroy_list(type_args);
+
+    return 1;
+}
 
 static struct Expression *convert_case_label_expression(ast_t *node) {
     struct Expression *expr = convert_expression(node);
@@ -521,6 +1257,16 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("boolean");
         return BOOL;
     }
+    if (strcasecmp(name, "NativeInt") == 0 || strcasecmp(name, "cint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");
+        return LONGINT_TYPE;
+    }
+    if (strcasecmp(name, "NativeUInt") == 0 || strcasecmp(name, "cuint64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("longint");  // Treat unsigned as signed for size purposes
+        return LONGINT_TYPE;
+    }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
     }
@@ -536,7 +1282,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
 static struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt);
-static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest);
+static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest, ListNode_t **subprograms);
 
 /* Helper function to resolve enum literal identifier to its ordinal value
  * by searching through AST type section.
@@ -717,6 +1463,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->file_type_id = NULL;
         type_info->is_record = 0;
         type_info->record_type = NULL;
+        type_info->is_generic_specialization = 0;
+        type_info->generic_base_name = NULL;
+        type_info->generic_type_args = NULL;
         type_info->is_range = 0;
         type_info->range_known = 0;
         type_info->range_start = 0;
@@ -729,9 +1478,16 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     ast_t *spec_node = type_spec;
     if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
         spec_node = spec_node->child;
+    spec_node = unwrap_pascal_node(spec_node);
 
     if (spec_node == NULL)
         return UNKNOWN_TYPE;
+
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] convert_type_spec node typ=%d (%s) sym=%s\n",
+            spec_node->typ,
+            pascal_tag_to_string(spec_node->typ),
+            (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
 
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
         char *dup = dup_symbol(spec_node);
@@ -748,6 +1504,80 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             free(dup);
         }
         return result;
+    }
+    /* Generic type specializations: either constructed syntax TFoo<T> or
+     * FPC-style \"specialize TFoo<T>\". Both map to generic instantiation
+     * using the same mangling and RecordType template. */
+    {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        int is_generic = 0;
+
+        if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+            is_generic = extract_constructed_type_info(type_spec, &base_name, &type_args);
+        } else {
+            is_generic = extract_specialize_type_info(type_spec, &base_name, &type_args);
+        }
+
+        if (is_generic) {
+            char *specialized_name = NULL;
+            struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
+
+            if (record != NULL) {
+                if (getenv("GPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
+                {
+                    fprintf(stderr, "[GPC] convert_type_spec generic %s -> record=%p type_info_ptr=%p record_out_ptr=%p\n",
+                        specialized_name, (void *)record, (void *)type_info, (void *)record_out);
+                }
+                if (type_info != NULL) {
+                    type_info->is_record = 1;
+                    type_info->record_type = record;
+                    type_info->is_generic_specialization = 1;
+                    record = NULL;
+                } else if (record_out != NULL) {
+                    *record_out = record;
+                    record = NULL;
+                }
+                if (record != NULL)
+                    destroy_record_type(record);
+                if (type_id_out != NULL && specialized_name != NULL)
+                    *type_id_out = specialized_name;
+                else
+                    free(specialized_name);
+                free(base_name);
+                if (type_args != NULL)
+                    destroy_list(type_args);
+                return RECORD_TYPE;
+            }
+
+            int can_defer = (g_allow_pending_specializations && type_info != NULL);
+            if (can_defer) {
+                if (type_info != NULL) {
+                    type_info->is_record = 1;
+                    type_info->is_generic_specialization = 1;
+                    type_info->generic_base_name = base_name;
+                    type_info->generic_type_args = type_args;
+                }
+                if (type_id_out != NULL) {
+                    if (*type_id_out != NULL) {
+                        free(*type_id_out);
+                    }
+                    if (specialized_name == NULL)
+                        specialized_name = mangle_specialized_name_from_list(base_name, type_args);
+                    *type_id_out = specialized_name;
+                    specialized_name = NULL;
+                }
+                if (specialized_name != NULL)
+                    free(specialized_name);
+                return RECORD_TYPE;
+            }
+
+            if (specialized_name != NULL)
+                free(specialized_name);
+            free(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+        }
     }
     if (spec_node->typ == PASCAL_T_RANGE_TYPE) {
         ast_t *lower = unwrap_pascal_node(spec_node->child);
@@ -1022,8 +1852,9 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         struct RecordType *record = convert_record_type(spec_node);
         if (type_info != NULL) {
             type_info->is_record = 1;
-            type_info->record_type = record;
-        } else if (record_out != NULL) {
+            type_info->record_type = clone_record_type(record);
+        }
+        if (record_out != NULL) {
             *record_out = record;
         } else {
             destroy_record_type(record);
@@ -1049,9 +1880,40 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
     ast_t *spec_node = type_spec;
     if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
         spec_node = spec_node->child;
+    spec_node = unwrap_pascal_node(spec_node);
 
     if (spec_node == NULL)
         return NULL;
+
+    if (getenv("GPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[GPC] convert_type_spec_to_gpctype node typ=%d sym=%s\n",
+            spec_node->typ,
+            (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
+    /* Generic type specializations: constructed TFoo<T> or \"specialize TFoo<T>\" */
+    {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        int is_generic = 0;
+
+        if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+            is_generic = extract_constructed_type_info(type_spec, &base_name, &type_args);
+        } else {
+            is_generic = extract_specialize_type_info(type_spec, &base_name, &type_args);
+        }
+
+        if (is_generic) {
+            char *specialized_name = NULL;
+            struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
+            free(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+            if (specialized_name != NULL)
+                free(specialized_name);
+            if (record != NULL) {
+                return create_record_type(record);
+            }
+        }
+    }
 
     /* Handle primitive types by identifier */
     if (spec_node->typ == PASCAL_T_IDENTIFIER) {
@@ -1076,6 +1938,21 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
         }
 
         return NULL;
+    }
+    if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        if (extract_constructed_type_info(spec_node, &base_name, &type_args)) {
+            char *specialized_name = NULL;
+            struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
+            free(base_name);
+            if (record != NULL) {
+                free(specialized_name);
+                return create_record_type(record);
+            }
+            if (specialized_name != NULL)
+                free(specialized_name);
+        }
     }
 
     /* Handle array types */
@@ -1358,76 +2235,96 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
         return NULL;
 
-    ListNode_t *names_head = NULL;
-    ListNode_t **names_tail = &names_head;
     ast_t *cursor = field_decl_node->child;
-    char *type_id = NULL;
-    int field_type = UNKNOWN_TYPE;
+    ListNode_t *names = convert_identifier_list(&cursor);
+    if (names == NULL) {
+        return NULL;
+    }
 
-    while (cursor != NULL) {
-        ast_t *unwrapped = unwrap_pascal_node(cursor);
-        if (unwrapped != NULL)
-            cursor = unwrapped;
-
-        if (cursor->typ == PASCAL_T_IDENTIFIER) {
-            if (cursor->next == NULL) {
-                char *candidate = dup_symbol(cursor);
-                if (candidate != NULL) {
-                    char *mapped_id = NULL;
-                    int mapped_type = map_type_name(candidate, &mapped_id);
-                    if (mapped_type != UNKNOWN_TYPE) {
-                        field_type = mapped_type;
-                        free(candidate);
-                        type_id = mapped_id;
-                    } else {
-                        type_id = candidate;
-                    }
-                }
-            } else {
-                char *name = dup_symbol(cursor);
-                if (name != NULL) {
-                    ListNode_t *name_node = CreateListNode(name, LIST_STRING);
-                    *names_tail = name_node;
-                    names_tail = &name_node->next;
-                }
-            }
-        }
-
+    /* Skip to the type specification */
+    while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
+           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_ARRAY_TYPE) {
         cursor = cursor->next;
     }
 
-    if (names_head == NULL)
-        return NULL;
+    char *field_type_id = NULL;
+    struct RecordType *nested_record = NULL;
+    TypeInfo field_info;
+    memset(&field_info, 0, sizeof(TypeInfo));
+    int field_type = UNKNOWN_TYPE;
+
+    if (cursor != NULL) {
+        /* Use convert_type_spec to properly handle all type forms including arrays */
+        field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+    } else if (names != NULL) {
+        /* Fallback: if no type spec, try to parse last name as type */
+        char *candidate = pop_last_identifier(&names);
+        if (candidate != NULL) {
+            char *mapped_id = NULL;
+            int mapped_type = map_type_name(candidate, &mapped_id);
+            if (mapped_type != UNKNOWN_TYPE) {
+                field_type = mapped_type;
+                field_type_id = mapped_id;
+                free(candidate);
+            } else {
+                field_type_id = candidate;
+            }
+        }
+    }
 
     ListBuilder result;
     list_builder_init(&result);
-    ListNode_t *name_node = names_head;
+
+    ListNode_t *name_node = names;
     while (name_node != NULL) {
         char *field_name = (char *)name_node->cur;
+        char *type_id_copy = NULL;
+        if (field_type_id != NULL)
+            type_id_copy = strdup(field_type_id);
+
+        struct RecordType *nested_copy = NULL;
+        if (nested_record != NULL) {
+            if (name_node->next == NULL) {
+                nested_copy = nested_record;
+                nested_record = NULL;
+            } else {
+                nested_copy = clone_record_type(nested_record);
+            }
+        }
+
         struct RecordField *field_desc = (struct RecordField *)calloc(1, sizeof(struct RecordField));
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
-            field_desc->type_id = type_id != NULL ? strdup(type_id) : NULL;
-            field_desc->nested_record = NULL;
-            field_desc->is_array = 0;
-            field_desc->array_start = 0;
-            field_desc->array_end = 0;
-            field_desc->array_element_type = UNKNOWN_TYPE;
-            field_desc->array_element_type_id = NULL;
-            field_desc->array_is_open = 0;
+            field_desc->type_id = type_id_copy;
+            field_desc->nested_record = nested_copy;
+            field_desc->is_array = field_info.is_array;
+            field_desc->array_start = field_info.start;
+            field_desc->array_end = field_info.end;
+            field_desc->array_element_type = field_info.element_type;
+            field_desc->array_element_type_id = field_info.element_type_id;
+            field_desc->array_is_open = field_info.is_open_array;
+            field_info.element_type_id = NULL;  /* Ownership transferred */
+            field_desc->is_hidden = 0;
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
-            free(field_name);
+            if (field_name != NULL)
+                free(field_name);
+            if (type_id_copy != NULL)
+                free(type_id_copy);
+            destroy_record_type(nested_copy);
         }
 
-        ListNode_t *next = name_node->next;
+        ListNode_t *next_name = name_node->next;
         free(name_node);
-        name_node = next;
+        name_node = next_name;
     }
 
-    if (type_id != NULL)
-        free(type_id);
+    if (field_type_id != NULL)
+        free(field_type_id);
+    if (nested_record != NULL)
+        destroy_record_type(nested_record);
 
     return list_builder_finish(&result);
 }
@@ -1533,8 +2430,125 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     return property;
 }
 
+static void annotate_method_template(struct MethodTemplate *method_template, ast_t *method_ast)
+{
+    if (method_template == NULL || method_ast == NULL)
+        return;
+
+    method_template->kind = METHOD_TEMPLATE_UNKNOWN;
+    ast_t *cursor = method_ast->child;
+    while (cursor != NULL)
+    {
+        ast_t *node = unwrap_pascal_node(cursor);
+        if (node == NULL)
+            node = cursor;
+
+        const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
+        switch (node->typ)
+        {
+            case PASCAL_T_PARAM_LIST:
+            case PASCAL_T_PARAM:
+                if (method_template->params_ast == NULL)
+                    method_template->params_ast = node;
+                break;
+            case PASCAL_T_METHOD_DIRECTIVE:
+                method_template->directives_ast = node;
+                if (sym_name != NULL)
+                {
+                    if (strcasecmp(sym_name, "virtual") == 0)
+                        method_template->is_virtual = 1;
+                    else if (strcasecmp(sym_name, "override") == 0)
+                    {
+                        method_template->is_override = 1;
+                        method_template->is_virtual = 1;
+                    }
+                }
+                break;
+            case PASCAL_T_RETURN_TYPE:
+                method_template->return_type_ast = node;
+                method_template->has_return_type = 1;
+                break;
+            default:
+                if (sym_name != NULL)
+                {
+                    if (strcasecmp(sym_name, "class") == 0)
+                        method_template->is_class_method = 1;
+                    else if (strcasecmp(sym_name, "constructor") == 0)
+                        method_template->kind = METHOD_TEMPLATE_CONSTRUCTOR;
+                    else if (strcasecmp(sym_name, "destructor") == 0)
+                        method_template->kind = METHOD_TEMPLATE_DESTRUCTOR;
+                    else if (strcasecmp(sym_name, "function") == 0)
+                        method_template->kind = METHOD_TEMPLATE_FUNCTION;
+                    else if (strcasecmp(sym_name, "procedure") == 0)
+                        method_template->kind = METHOD_TEMPLATE_PROCEDURE;
+                    else if (strcasecmp(sym_name, "operator") == 0)
+                        method_template->kind = METHOD_TEMPLATE_OPERATOR;
+                }
+                break;
+        }
+        cursor = cursor->next;
+    }
+
+    if (method_template->kind == METHOD_TEMPLATE_UNKNOWN)
+    {
+        method_template->kind = method_template->has_return_type ?
+            METHOD_TEMPLATE_FUNCTION : METHOD_TEMPLATE_PROCEDURE;
+    }
+}
+
+static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
+{
+    if (method_decl_node == NULL)
+        return NULL;
+
+    ast_t *name_node = method_decl_node->child;
+    while (name_node != NULL && name_node->typ != PASCAL_T_IDENTIFIER)
+        name_node = name_node->next;
+    if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
+        return NULL;
+
+    struct MethodTemplate *template = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
+    if (template == NULL)
+        return NULL;
+
+    template->name = strdup(name_node->sym->name);
+    if (template->name == NULL)
+    {
+        free(template);
+        return NULL;
+    }
+
+    template->method_ast = copy_ast(method_decl_node);
+    if (template->method_ast == NULL)
+    {
+        free(template->name);
+        free(template);
+        return NULL;
+    }
+
+    annotate_method_template(template, template->method_ast);
+    template->method_impl_ast = NULL;
+    return template;
+}
+
+static void destroy_method_template_instance(struct MethodTemplate *template)
+{
+    if (template == NULL)
+        return;
+    if (template->name != NULL)
+        free(template->name);
+    if (template->method_ast != NULL)
+        free_ast(template->method_ast);
+    if (template->method_impl_ast != NULL)
+        free_ast(template->method_impl_ast);
+    if (template->method_tree != NULL)
+        destroy_tree(template->method_tree);
+    free(template);
+}
+
 static void collect_class_members(ast_t *node, const char *class_name,
-    ListBuilder *field_builder, ListBuilder *property_builder) {
+    ListBuilder *field_builder, ListBuilder *property_builder,
+    ListBuilder *method_builder) {
     if (node == NULL)
         return;
 
@@ -1544,40 +2558,31 @@ static void collect_class_members(ast_t *node, const char *class_name,
         if (unwrapped != NULL) {
             switch (unwrapped->typ) {
             case PASCAL_T_CLASS_MEMBER:
-                collect_class_members(unwrapped->child, class_name, field_builder, property_builder);
+                collect_class_members(unwrapped->child, class_name, field_builder, property_builder, method_builder);
                 break;
             case PASCAL_T_FIELD_DECL: {
                 ListNode_t *fields = convert_class_field_decl(unwrapped);
                 list_builder_extend(field_builder, fields);
                 break;
             }
-            case PASCAL_T_METHOD_DECL: {
-                /* Extract method name */
-                ast_t *name_node = unwrapped->child;
-                while (name_node != NULL && name_node->typ != PASCAL_T_IDENTIFIER)
-                    name_node = name_node->next;
-                
-                if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
+            case PASCAL_T_METHOD_DECL:
+            case PASCAL_T_CONSTRUCTOR_DECL:
+            case PASCAL_T_DESTRUCTOR_DECL: {
+                struct MethodTemplate *template = create_method_template(unwrapped);
+                if (template == NULL)
                     break;
-                
-                /* Look for virtual/override directive after the method declaration */
-                int is_virtual = 0;
-                int is_override = 0;
-                
-                ast_t *directive_node = unwrapped->child;
-                while (directive_node != NULL) {
-                    if (directive_node->typ == PASCAL_T_METHOD_DIRECTIVE) {
-                        /* METHOD_DIRECTIVE node found - mark as virtual.
-                         * The actual determination of whether this is an override 
-                         * is done during semantic checking in build_class_vmt() 
-                         * by checking if a method with the same name exists in the parent VMT. */
-                        is_virtual = 1;
-                        break;
-                    }
-                    directive_node = directive_node->next;
-                }
-                
-                register_class_method_ex(class_name, name_node->sym->name, is_virtual, is_override);
+
+                if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL && template->name != NULL)
+                    fprintf(stderr, "[GPC] captured template %s.%s\n",
+                        class_name != NULL ? class_name : "<unknown>", template->name);
+
+                register_class_method_ex(class_name, template->name,
+                    template->is_virtual, template->is_override);
+
+                if (method_builder != NULL)
+                    list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
+                else
+                    destroy_method_template_instance(template);
                 break;
             }
             case PASCAL_T_PROPERTY_DECL: {
@@ -1598,10 +2603,15 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
     if (class_node == NULL)
         return NULL;
 
+    if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL && class_name != NULL)
+        fprintf(stderr, "[GPC] convert_class_type %s\n", class_name);
+
     ListBuilder field_builder;
     ListBuilder property_builder;
+    ListBuilder method_template_builder;
     list_builder_init(&field_builder);
     list_builder_init(&property_builder);
+    list_builder_init(&method_template_builder);
     
     // Check if first child is a parent class identifier
     char *parent_class_name = NULL;
@@ -1616,22 +2626,29 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
         body_start = body_start->next;
     }
     
-    collect_class_members(body_start, class_name, &field_builder, &property_builder);
+    collect_class_members(body_start, class_name, &field_builder, &property_builder, &method_template_builder);
 
     struct RecordType *record = (struct RecordType *)malloc(sizeof(struct RecordType));
     if (record == NULL) {
+        destroy_list(field_builder.head);
+        destroy_list(property_builder.head);
+        destroy_list(method_template_builder.head);
         free(parent_class_name);
         return NULL;
     }
 
     record->fields = list_builder_finish(&field_builder);
     record->properties = list_builder_finish(&property_builder);
+    record->method_templates = list_builder_finish(&method_template_builder);
     record->parent_class_name = parent_class_name;
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
     record->type_id = class_name != NULL ? strdup(class_name) : NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
+    record->generic_decl = NULL;
+    record->generic_args = NULL;
+    record->num_generic_args = 0;
 
     if (parent_class_name == NULL)
     {
@@ -1897,6 +2914,10 @@ static void convert_record_members(ast_t *node, ListBuilder *builder) {
             list_builder_extend(builder, tag_fields);
             if (variant != NULL)
                 list_builder_append(builder, variant, LIST_VARIANT_PART);
+        } else if (cur->typ == PASCAL_T_METHOD_DECL) {
+            /* Store method declaration as a special marker node for operator overloading */
+            /* We'll handle this during semantic check when we know the record type name */
+            list_builder_append(builder, cur, LIST_UNSPECIFIED);
         }
     }
 }
@@ -1918,10 +2939,14 @@ static struct RecordType *convert_record_type(ast_t *record_node) {
     record->properties = NULL;
     record->parent_class_name = NULL;  /* Regular records don't have parent classes */
     record->methods = NULL;  /* Regular records don't have methods */
+    record->method_templates = NULL;
     record->is_class = 0;
     record->type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
+    record->generic_decl = NULL;
+    record->generic_args = NULL;
+    record->num_generic_args = 0;
     return record;
 }
 
@@ -2701,11 +3726,17 @@ static int select_range_primitive_tag(const TypeInfo *info)
     return LONGINT_TYPE;
 }
 
-static Tree_t *convert_type_decl(ast_t *type_decl_node) {
+static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clones) {
+    if (type_decl_node == NULL)
+        return NULL;
+
+    type_decl_node = unwrap_pascal_node(type_decl_node);
     if (type_decl_node == NULL)
         return NULL;
 
     ast_t *id_node = type_decl_node->child;
+    while (id_node != NULL && id_node->typ != PASCAL_T_IDENTIFIER)
+        id_node = id_node->next;
     if (id_node == NULL)
         return NULL;
 
@@ -2725,6 +3756,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     int mapped_type = UNKNOWN_TYPE;
     ast_t *class_spec = NULL;
     if (spec_node != NULL) {
+        if (getenv("GPC_DEBUG_TFPG") != NULL)
+            fprintf(stderr, "[GPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
+                spec_node->typ,
+                (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>",
+                id != NULL ? id : "<null>");
         if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
             class_spec = spec_node;
         } else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
@@ -2736,6 +3772,11 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
             record_type = convert_class_type(id, class_spec);
         } else {
             mapped_type = convert_type_spec(spec_node, &type_id, &record_type, &type_info);
+            if (getenv("GPC_DEBUG_TFPG") != NULL)
+                fprintf(stderr, "[GPC] convert_type_decl after convert_type_spec id=%s mapped=%d type_id=%s record_type=%p type_info.record=%p\n",
+                    id, mapped_type,
+                    type_id != NULL ? type_id : "<null>",
+                    (void *)record_type, (void *)type_info.record_type);
         }
     }
 
@@ -2745,11 +3786,16 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
 
     Tree_t *decl = NULL;
     if (record_type != NULL) {
+        /* Direct record/class type declaration */
         decl = mk_record_type(type_decl_node->line, id, record_type);
     } else if (type_info.is_array) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
                                  type_info.element_type_id, type_info.start, type_info.end);
         type_info.element_type_id = NULL;
+    } else if (type_info.is_record && type_id != NULL) {
+        /* Alias to a record type (including generic specializations) */
+        decl = mk_typealiasdecl(type_decl_node->line, id, 0, RECORD_TYPE, type_id, 0, 0);
+        type_id = NULL;
     } else if (mapped_type != UNKNOWN_TYPE || type_id != NULL) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 0, mapped_type, type_id, 0, 0);
         type_id = NULL;
@@ -2761,7 +3807,27 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
     }
 
     if (decl != NULL)
+    {
         decl->tree_data.type_decl_data.gpc_type = gpc_type;
+        if (method_clones != NULL)
+            append_specialized_method_clones(decl, method_clones);
+        if (getenv("GPC_DEBUG_TFPG") != NULL &&
+            decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+            decl->tree_data.type_decl_data.id != NULL)
+        {
+            fprintf(stderr, "[GPC] convert_type_decl alias %s: base=%d target=%s gpc=%p kind=%d type_info.is_record=%d record=%p generic=%d\n",
+                decl->tree_data.type_decl_data.id,
+                decl->tree_data.type_decl_data.info.alias.base_type,
+                decl->tree_data.type_decl_data.info.alias.target_type_id ?
+                    decl->tree_data.type_decl_data.info.alias.target_type_id : "<null>",
+                (void *)decl->tree_data.type_decl_data.gpc_type,
+                decl->tree_data.type_decl_data.gpc_type ?
+                    decl->tree_data.type_decl_data.gpc_type->kind : -1,
+                type_info.is_record,
+                (void *)type_info.record_type,
+                type_info.is_generic_specialization);
+        }
+    }
     else if (gpc_type != NULL)
         destroy_gpc_type(gpc_type);
 
@@ -2795,6 +3861,17 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
             alias->file_type_id = type_info.file_type_id;
             type_info.file_type_id = NULL;
         }
+        if (type_info.is_record && type_info.record_type != NULL) {
+            alias->inline_record_type = type_info.record_type;
+            type_info.record_type = NULL;
+            if (decl->tree_data.type_decl_data.gpc_type == NULL) {
+                decl->tree_data.type_decl_data.gpc_type =
+                    create_record_type(alias->inline_record_type);
+            }
+        }
+        if (type_info.is_generic_specialization && type_info.record_type == NULL) {
+            register_pending_generic_alias(decl, &type_info);
+        }
     }
 
     if (type_id != NULL)
@@ -2805,6 +3882,118 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node) {
         free(id);
         destroy_record_type(record_type);
     }
+
+    return decl;
+}
+
+static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
+    if (type_decl_node == NULL)
+        return NULL;
+
+    type_decl_node = unwrap_pascal_node(type_decl_node);
+    if (type_decl_node == NULL)
+        return NULL;
+
+    ast_t *id_node = type_decl_node->child;
+    if (id_node == NULL)
+        return NULL;
+
+    char *id = dup_symbol(id_node);
+    if (id == NULL)
+        return NULL;
+
+    ast_t *param_list = id_node->next;
+    ast_t *type_spec_node = param_list != NULL ? param_list->next : NULL;
+    if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
+        fprintf(stderr, "[GPC] convert_generic_type_decl %s (type_spec_node=%p typ=%d)\n",
+            id, (void *)type_spec_node, type_spec_node != NULL ? type_spec_node->typ : -1);
+    struct RecordType *record_template = NULL;
+
+    int param_count = 0;
+    char **param_names = NULL;
+    if (param_list != NULL && param_list->typ == PASCAL_T_TYPE_PARAM_LIST) {
+        /* First pass: count parameters */
+        for (ast_t *param = param_list->child; param != NULL; param = param->next) {
+            ast_t *name_node = param;
+            if (name_node->typ == PASCAL_T_TYPE_PARAM && name_node->child != NULL)
+                name_node = name_node->child;
+            while (name_node != NULL && name_node->typ != PASCAL_T_IDENTIFIER)
+                name_node = name_node->next;
+            if (name_node != NULL && name_node->sym != NULL)
+                param_count++;
+        }
+
+        if (param_count > 0) {
+            param_names = (char **)calloc((size_t)param_count, sizeof(char *));
+            if (param_names == NULL) {
+                free(id);
+                return NULL;
+            }
+
+            int index = 0;
+            for (ast_t *param = param_list->child; param != NULL && index < param_count; param = param->next) {
+                ast_t *name_node = param;
+                if (name_node->typ == PASCAL_T_TYPE_PARAM && name_node->child != NULL)
+                    name_node = name_node->child;
+                while (name_node != NULL && name_node->typ != PASCAL_T_IDENTIFIER)
+                    name_node = name_node->next;
+                if (name_node != NULL && name_node->sym != NULL) {
+                    param_names[index] = strdup(name_node->sym->name);
+                    if (param_names[index] == NULL) {
+                        /* Cleanup previously allocated names */
+                        for (int i = 0; i < index; ++i)
+                            free(param_names[i]);
+                        free(param_names);
+                        free(id);
+                        return NULL;
+                    }
+                    index++;
+                }
+            }
+            param_count = index;
+        }
+    }
+
+    if (type_spec_node != NULL) {
+        ast_t *spec_body = type_spec_node;
+        if (spec_body->typ == PASCAL_T_TYPE_SPEC && spec_body->child != NULL)
+            spec_body = spec_body->child;
+        if (spec_body != NULL) {
+            if (spec_body->typ == PASCAL_T_CLASS_TYPE)
+            {
+                if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
+                    fprintf(stderr, "[GPC] generic class decl %s\n", id);
+                record_template = convert_class_type(id, spec_body);
+            }
+            else if (spec_body->typ == PASCAL_T_RECORD_TYPE)
+                record_template = convert_record_type(spec_body);
+        }
+    }
+
+    Tree_t *decl = mk_typedecl(type_decl_node->line, id, 0, 0);
+    if (decl == NULL) {
+        if (param_names != NULL) {
+            for (int i = 0; i < param_count; ++i)
+                free(param_names[i]);
+            free(param_names);
+        }
+        free(id);
+        destroy_record_type(record_template);
+        return NULL;
+    }
+
+    decl->tree_data.type_decl_data.kind = TYPE_DECL_GENERIC;
+    decl->tree_data.type_decl_data.info.generic.type_parameters = param_names;
+    decl->tree_data.type_decl_data.info.generic.num_type_params = param_count;
+    decl->tree_data.type_decl_data.info.generic.original_ast = NULL;
+    if (type_spec_node != NULL)
+        decl->tree_data.type_decl_data.info.generic.original_ast = copy_ast(type_spec_node);
+    decl->tree_data.type_decl_data.info.generic.record_template = record_template;
+
+    /* Register the generic declaration for future specialization */
+    generic_registry_add_decl(id, param_names, param_count, decl);
+
+    (void)type_spec_node; /* Placeholder for future template storage */
 
     return decl;
 }
@@ -2827,12 +4016,6 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
     if (body_node == NULL)
         return;
 
-    ListNode_t **nested_tail = NULL;
-    if (nested_subs != NULL) {
-        nested_tail = nested_subs;
-        while (*nested_tail != NULL)
-            nested_tail = &(*nested_tail)->next;
-    }
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     
     ast_t *cursor = body_node->child;
@@ -2842,7 +4025,7 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
             switch (node->typ) {
             case PASCAL_T_TYPE_SECTION:
                 if (type_decl_list != NULL)
-                    append_type_decls_from_section(node, type_decl_list);
+                    append_type_decls_from_section(node, type_decl_list, nested_subs);
                 type_section_ast = node;  /* Save for const array enum resolution */
                 break;
             case PASCAL_T_CONST_SECTION:
@@ -2855,35 +4038,23 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                 append_labels_from_section(node, label_builder);
                 break;
             case PASCAL_T_PROCEDURE_DECL: {
-                if (nested_tail != NULL) {
+                if (nested_subs != NULL) {
                     Tree_t *proc = convert_procedure(node);
-                    if (proc != NULL) {
-                        ListNode_t *list_node = CreateListNode(proc, LIST_TREE);
-                        *nested_tail = list_node;
-                        nested_tail = &list_node->next;
-                    }
+                    append_subprogram_node(nested_subs, proc);
                 }
                 break;
             }
             case PASCAL_T_FUNCTION_DECL: {
-                if (nested_tail != NULL) {
+                if (nested_subs != NULL) {
                     Tree_t *func = convert_function(node);
-                    if (func != NULL) {
-                        ListNode_t *list_node = CreateListNode(func, LIST_TREE);
-                        *nested_tail = list_node;
-                        nested_tail = &list_node->next;
-                    }
+                    append_subprogram_node(nested_subs, func);
                 }
                 break;
             }
             case PASCAL_T_METHOD_IMPL: {
-                if (nested_tail != NULL) {
+                if (nested_subs != NULL) {
                     Tree_t *method_tree = convert_method_impl(node);
-                    if (method_tree != NULL) {
-                        ListNode_t *list_node = CreateListNode(method_tree, LIST_TREE);
-                        *nested_tail = list_node;
-                        nested_tail = &list_node->next;
-                    }
+                    append_subprogram_node(nested_subs, method_tree);
                 }
                 break;
             }
@@ -2982,7 +4153,7 @@ static void append_labels_from_section(ast_t *label_node, ListBuilder *builder) 
     visited_set_destroy(visited);
 }
 
-static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest) {
+static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest, ListNode_t **subprograms) {
     if (type_section == NULL || dest == NULL)
         return;
 
@@ -2990,23 +4161,53 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
     while (*tail != NULL)
         tail = &(*tail)->next;
 
-    /* Create visited set to detect circular references */
-    VisitedSet *visited = visited_set_create();
-    if (visited == NULL) {
-        fprintf(stderr, "ERROR: Failed to allocate visited set for type traversal\n");
-        return;
-    }
-
     ast_t *type_decl = type_section->child;
     while (type_decl != NULL) {
-        /* Check for circular reference before processing */
-        if (!is_safe_to_continue(visited, type_decl)) {
-            fprintf(stderr, "ERROR: Circular reference detected in type section, stopping traversal\n");
-            break;
+        ast_t *unwrapped = unwrap_pascal_node(type_decl);
+        if (unwrapped == NULL)
+            unwrapped = type_decl;
+
+        if (getenv("GPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
+            char *name = dup_first_identifier_in_node(unwrapped);
+            fprintf(stderr, "[GPC] type-section decl tag=%d (%s) name=%s\n",
+                    unwrapped->typ,
+                    pascal_tag_to_string(unwrapped->typ),
+                    name != NULL ? name : "<none>");
+            if (name != NULL)
+                free(name);
         }
-        
-        if (type_decl->typ == PASCAL_T_TYPE_DECL) {
-            Tree_t *decl = convert_type_decl(type_decl);
+
+        int treat_as_generic = 0;
+        if (unwrapped != NULL) {
+            if (unwrapped->typ == PASCAL_T_GENERIC_TYPE_DECL) {
+                treat_as_generic = 1;
+            } else if (unwrapped->typ == PASCAL_T_TYPE_DECL) {
+                ast_t *id_node = unwrapped->child;
+                while (id_node != NULL && id_node->typ != PASCAL_T_IDENTIFIER)
+                    id_node = id_node->next;
+                ast_t *next = id_node != NULL ? id_node->next : NULL;
+                if (next != NULL && next->typ == PASCAL_T_TYPE_PARAM_LIST)
+                    treat_as_generic = 1;
+            }
+        }
+
+        if (treat_as_generic && unwrapped != NULL) {
+            if (getenv("GPC_DEBUG_TFPG") != NULL) {
+                char *type_name = dup_first_identifier_in_node(unwrapped);
+                if (type_name != NULL) {
+                    fprintf(stderr, "[GPC] append_type_decls_from_section saw generic-like %s (tag=%d)\n",
+                            type_name, unwrapped->typ);
+                    free(type_name);
+                }
+            }
+            Tree_t *decl = convert_generic_type_decl(unwrapped);
+            if (decl != NULL) {
+                ListNode_t *node = CreateListNode(decl, LIST_TREE);
+                *tail = node;
+                tail = &node->next;
+            }
+        } else if (unwrapped != NULL && unwrapped->typ == PASCAL_T_TYPE_DECL) {
+            Tree_t *decl = convert_type_decl(unwrapped, subprograms);
             if (decl != NULL) {
                 ListNode_t *node = CreateListNode(decl, LIST_TREE);
                 *tail = node;
@@ -3015,8 +4216,6 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         }
         type_decl = type_decl->next;
     }
-    
-    visited_set_destroy(visited);
 }
 
 static int map_relop_tag(int tag) {
@@ -3919,10 +5118,25 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (identifier_node == NULL)
         identifier_node = field_node;
 
-    if (identifier_node == NULL || identifier_node->typ != PASCAL_T_IDENTIFIER)
+    /* Handle the case where field_node is a FUNC_CALL: obj.method(args)
+     * In this case, we need to extract the method name from the FUNC_CALL node */
+    ast_t *method_name_node = identifier_node;
+    if (identifier_node != NULL && identifier_node->typ == PASCAL_T_FUNC_CALL) {
+        /* The function name is the first child of the FUNC_CALL node */
+        method_name_node = identifier_node->child;
+        if (method_name_node != NULL) {
+            method_name_node = unwrap_pascal_node(method_name_node);
+        }
+        /* args_start should be the second child (the arguments) if not already provided */
+        if (args_start == NULL && identifier_node->child != NULL) {
+            args_start = identifier_node->child->next;
+        }
+    }
+
+    if (method_name_node == NULL || method_name_node->typ != PASCAL_T_IDENTIFIER)
         return NULL;
 
-    char *method_name = dup_symbol(identifier_node);
+    char *method_name = dup_symbol(method_name_node);
     if (method_name == NULL)
         return NULL;
 
@@ -3945,8 +5159,14 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     if (class_name != NULL) {
         proc_name = mangle_method_name(class_name, method_name);
     } else {
-        /* No class found, just use the method name as-is */
-        proc_name = strdup(method_name);
+        /* No class found at parse time. Create a placeholder name that semantic checker
+         * will resolve based on the object's type. Use format "__methodname" to indicate
+         * this is a method call that needs type-based resolution. */
+        size_t len = strlen(method_name) + 3;  /* __ + name + \0 */
+        proc_name = (char *)malloc(len);
+        if (proc_name != NULL) {
+            snprintf(proc_name, len, "__%s", method_name);
+        }
     }
     
     free(method_name);
@@ -4048,6 +5268,12 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_FUNC_CALL:
         return convert_proc_call(stmt_node, true);
+    case PASCAL_T_MEMBER_ACCESS: {
+        struct Statement *method_stmt = convert_method_call_statement(stmt_node, NULL);
+        if (method_stmt != NULL)
+            return method_stmt;
+        return NULL;
+    }
     case PASCAL_T_ASM_BLOCK: {
         char *code = collect_asm_text(stmt_node->child);
         return mk_asmblock(stmt_node->line, code);
@@ -4112,6 +5338,65 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         if (var_expr == NULL)
             return NULL;
         return mk_forvar(stmt_node->line, var_expr, end_expr, body_stmt, is_downto);
+    }
+    case PASCAL_T_FOR_IN_STMT: {
+        // Pattern matches for_stmt: unwrap the nested NONE seq, then walk siblings
+        ast_t *id_node = unwrap_pascal_node(stmt_node->child);
+        ast_t *expr_wrapper = id_node != NULL ? id_node->next : NULL;
+        ast_t *expr_node = unwrap_pascal_node(expr_wrapper);
+        ast_t *body_wrapper = expr_wrapper != NULL ? expr_wrapper->next : NULL;
+        ast_t *body_node = unwrap_pascal_node(body_wrapper);
+        
+        fprintf(stderr, "DEBUG FOR_IN: id=%p typ=%d, expr=%p typ=%d, body=%p typ=%d\n",
+                (void*)id_node, id_node ? id_node->typ : -1,
+                (void*)expr_node, expr_node ? expr_node->typ : -1,
+                (void*)body_node, body_node ? body_node->typ : -1);
+        if (id_node && id_node->sym) {
+            fprintf(stderr, "  id.sym->name=%s\n", id_node->sym->name);
+        }
+        
+        if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER) {
+            fprintf(stderr, "ERROR: FOR_IN missing loop variable identifier\n");
+            return NULL;
+        }
+        
+        if (expr_node == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN missing collection expression\n");
+            return NULL;
+        }
+        
+        if (body_node == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN missing body statement\n");
+            return NULL;
+        }
+        
+        // Convert identifier to expression
+        struct Expression *var_expr = NULL;
+        if (id_node->sym != NULL) {
+            var_expr = mk_varid(id_node->line, strdup(id_node->sym->name));
+        } else {
+            fprintf(stderr, "ERROR: FOR_IN identifier has no symbol\n");
+            return NULL;
+        }
+        
+        // Convert collection expression
+        struct Expression *collection_expr = convert_expression(expr_node);
+        if (collection_expr == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN collection expression conversion failed\n");
+            destroy_expr(var_expr);
+            return NULL;
+        }
+        
+        // Convert body statement  
+        struct Statement *body_stmt = convert_statement(body_node);
+        if (body_stmt == NULL) {
+            fprintf(stderr, "ERROR: FOR_IN body statement conversion failed\n");
+            destroy_expr(var_expr);
+            destroy_expr(collection_expr);
+            return NULL;
+        }
+
+        return mk_for_in(stmt_node->line, var_expr, collection_expr, body_stmt);
     }
     case PASCAL_T_EXIT_STMT:
         return mk_exit(stmt_node->line);
@@ -4328,17 +5613,74 @@ static struct Statement *convert_block(ast_t *block_node) {
 }
 
 static Tree_t *convert_method_impl(ast_t *method_node) {
+    if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+        fprintf(stderr, "[GPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
+    }
+    
     if (method_node == NULL)
         return NULL;
 
     ast_t *cur = method_node->child;
     ast_t *qualified = unwrap_pascal_node(cur);
-    if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER)
+    if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+            fprintf(stderr, "[GPC] convert_method_impl: cur=%p typ=%d\n",
+                    (void*)cur, cur ? cur->typ : -1);
+            if (cur && cur->sym && cur->sym->name) {
+                fprintf(stderr, "[GPC]   cur->sym->name=%s\n", cur->sym->name);
+            }
+            fprintf(stderr, "[GPC] convert_method_impl: qualified=%p typ=%d\n",
+                    (void*)qualified, qualified ? qualified->typ : -1);
+            if (qualified && qualified->sym && qualified->sym->name) {
+                fprintf(stderr, "[GPC]   qualified->sym->name=%s\n", qualified->sym->name);
+            }
+            if (qualified && qualified->child) {
+                fprintf(stderr, "[GPC]   qualified->child->typ=%d\n", qualified->child->typ);
+            }
+            fprintf(stderr, "[GPC] convert_method_impl: no qualified identifier (typ=%d)\n",
+                    qualified ? qualified->typ : -1);
+        }
         return NULL;
+    }
 
     ast_t *class_node = qualified->child;
-    ast_t *method_id_node = class_node != NULL ? class_node->next : NULL;
-    if (class_node == NULL || method_id_node == NULL)
+    if (class_node == NULL)
+        return NULL;
+    
+    // Skip over the optional type parameter list (PASCAL_T_TYPE_PARAM_LIST) if present
+    // The structure is: class_node [type_params] . method_id_node
+    ast_t *cursor = class_node->next;
+    if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+        fprintf(stderr, "[GPC] convert_method_impl: class_node->typ=%d\n", class_node->typ);
+        if (class_node->sym && class_node->sym->name)
+            fprintf(stderr, "[GPC]   class_node->name=%s\n", class_node->sym->name);
+        if (cursor) {
+            fprintf(stderr, "[GPC]   cursor->typ=%d\n", cursor->typ);
+            if (cursor->sym && cursor->sym->name)
+                fprintf(stderr, "[GPC]   cursor->name=%s\n", cursor->sym->name);
+        }
+    }
+    
+    // Skip type parameter list if present
+    if (cursor != NULL && cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
+        cursor = cursor->next;
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
+            fprintf(stderr, "[GPC]   after type_params cursor->typ=%d\n", cursor->typ);
+            if (cursor->sym && cursor->sym->name)
+                fprintf(stderr, "[GPC]   after type_params cursor->name=%s\n", cursor->sym->name);
+        }
+    }
+    
+    // Skip the dot token if present (it may be wrapped)
+    while (cursor != NULL && cursor->typ != PASCAL_T_IDENTIFIER) {
+        cursor = cursor->next;
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && cursor) {
+            fprintf(stderr, "[GPC]   skipping non-identifier cursor->typ=%d\n", cursor->typ);
+        }
+    }
+    
+    ast_t *method_id_node = cursor;
+    if (method_id_node == NULL)
         return NULL;
 
     char *class_name = dup_symbol(class_node);
@@ -4347,11 +5689,27 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         return NULL;
     }
+    
+    // For generic classes, strip the type parameters from the class name
+    // e.g., "TFPGList<T>" -> "TFPGList"
+    char *cleaned_class_name = NULL;
+    if (class_name != NULL) {
+        char *bracket = strchr(class_name, '<');
+        if (bracket != NULL) {
+            size_t len = (size_t)(bracket - class_name);
+            cleaned_class_name = (char *)malloc(len + 1);
+            if (cleaned_class_name != NULL) {
+                memcpy(cleaned_class_name, class_name, len);
+                cleaned_class_name[len] = '\0';
+            }
+        }
+    }
 
     const char *registered_class = find_class_for_method(method_name);
     /* Prefer the explicitly specified class name from the qualified identifier,
      * falling back to the registered class if no explicit class was given */
-    const char *effective_class = class_name != NULL ? class_name : registered_class;
+    const char *effective_class = (cleaned_class_name != NULL) ? cleaned_class_name : 
+                                  (class_name != NULL) ? class_name : registered_class;
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
@@ -4360,6 +5718,26 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(class_name);
         free(method_name);
         return NULL;
+    }
+    
+    /* Check if this is a class operator (static method) by checking the method name */
+    int is_class_operator = 0;
+    if (method_name != NULL) {
+        /* Class operators have operator symbols as names */
+        if (strcmp(method_name, "+") == 0 || strcmp(method_name, "-") == 0 ||
+            strcmp(method_name, "*") == 0 || strcmp(method_name, "/") == 0 ||
+            strcmp(method_name, "=") == 0 || strcmp(method_name, "<>") == 0 ||
+            strcmp(method_name, "<") == 0 || strcmp(method_name, ">") == 0 ||
+            strcmp(method_name, "<=") == 0 || strcmp(method_name, ">=") == 0 ||
+            strcmp(method_name, "**") == 0 ||
+            strcasecmp(method_name, "div") == 0 || strcasecmp(method_name, "mod") == 0 ||
+            strcasecmp(method_name, "and") == 0 || strcasecmp(method_name, "or") == 0 ||
+            strcasecmp(method_name, "not") == 0 || strcasecmp(method_name, "xor") == 0 ||
+            strcasecmp(method_name, "shl") == 0 || strcasecmp(method_name, "shr") == 0 ||
+            strcasecmp(method_name, "in") == 0 || strcasecmp(method_name, "is") == 0 ||
+            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0) {
+            is_class_operator = 1;
+        }
     }
 
     ListBuilder params_builder;
@@ -4373,14 +5751,23 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     struct Statement *body = NULL;
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
+    
+    /* Return type information for methods that are functions (like class operators) */
+    char *return_type_id = NULL;
+    int return_type = UNKNOWN_TYPE;
+    struct TypeAlias *inline_return_type = NULL;
+    int has_return_type = 0;
 
-    ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
-    char *self_type_id = NULL;
-    if (effective_class != NULL)
-        self_type_id = strdup(effective_class);
-    Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
-        self_type_id, 1, 0, NULL, NULL, NULL);
-    list_builder_append(&params_builder, self_param, LIST_TREE);
+    /* Add Self parameter only for instance methods, not for class operators */
+    if (!is_class_operator) {
+        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+        char *self_type_id = NULL;
+        if (effective_class != NULL)
+            self_type_id = strdup(effective_class);
+        Tree_t *self_param = mk_vardecl(method_node->line, self_ids, UNKNOWN_TYPE,
+            self_type_id, 1, 0, NULL, NULL, NULL);
+        list_builder_append(&params_builder, self_param, LIST_TREE);
+    }
 
     cur = qualified->next;
     while (cur != NULL) {
@@ -4402,8 +5789,63 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                 list_builder_extend(&params_builder, extra_params);
             break;
         }
+        case PASCAL_T_RETURN_TYPE: {
+            /* Method has a return type - it's a function, not a procedure */
+            has_return_type = 1;
+            TypeInfo type_info;
+            return_type = convert_type_spec(node->child, &return_type_id, NULL, &type_info);
+
+            if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
+            {
+                return_type_id = strdup(node->sym->name);
+            }
+            
+            /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
+            if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
+                type_info.is_enum || type_info.is_file || type_info.is_record) {
+                inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
+                if (inline_return_type != NULL) {
+                    memset(inline_return_type, 0, sizeof(struct TypeAlias));
+                    inline_return_type->base_type = return_type;
+                    inline_return_type->target_type_id = return_type_id;
+                    
+                    if (type_info.is_array) {
+                        inline_return_type->is_array = 1;
+                        inline_return_type->array_start = type_info.start;
+                        inline_return_type->array_end = type_info.end;
+                        inline_return_type->array_element_type = type_info.element_type;
+                        inline_return_type->array_element_type_id = type_info.element_type_id;
+                        inline_return_type->is_open_array = type_info.is_open_array;
+                    }
+                    
+                    if (type_info.is_pointer) {
+                        inline_return_type->is_pointer = 1;
+                        inline_return_type->pointer_type = type_info.pointer_type;
+                        inline_return_type->pointer_type_id = type_info.pointer_type_id;
+                    }
+                    
+                    if (type_info.is_set) {
+                        inline_return_type->is_set = 1;
+                        inline_return_type->set_element_type = type_info.set_element_type;
+                        inline_return_type->set_element_type_id = type_info.set_element_type_id;
+                    }
+                    
+                    if (type_info.is_enum) {
+                        inline_return_type->is_enum = 1;
+                        inline_return_type->enum_literals = type_info.enum_literals;
+                    }
+                    
+                    if (type_info.is_file) {
+                        inline_return_type->is_file = 1;
+                        inline_return_type->file_type = type_info.file_type;
+                        inline_return_type->file_type_id = type_info.file_type_id;
+                    }
+                }
+            }
+            break;
+        }
         case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(node, &type_decls);
+            append_type_decls_from_section(node, &type_decls, &nested_subs);
             type_section_ast = node;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -4437,17 +5879,51 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         cur = cur->next;
     }
 
-    if (body != NULL) {
+    /* Wrap method body in WITH Self for instance methods, but not for class operators */
+    if (body != NULL && !is_class_operator) {
         struct Expression *self_expr = mk_varid(method_node->line, strdup("Self"));
         body = mk_with(method_node->line, self_expr, body);
     }
 
     ListNode_t *params = list_builder_finish(&params_builder);
     ListNode_t *label_decls = list_builder_finish(&label_builder);
-    Tree_t *tree = mk_procedure(method_node->line, proc_name, params, const_decls,
-                                label_decls, type_decls, list_builder_finish(&var_builder),
-                                nested_subs, body, 0, 0);
+    
+    /* Create function if method has return type, otherwise create procedure */
+    Tree_t *tree;
+    if (has_return_type) {
+        tree = mk_function(method_node->line, proc_name, params, const_decls,
+                          label_decls, type_decls, list_builder_finish(&var_builder),
+                          nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
+    } else {
+        tree = mk_procedure(method_node->line, proc_name, params, const_decls,
+                           label_decls, type_decls, list_builder_finish(&var_builder),
+                           nested_subs, body, 0, 0);
+    }
 
+    record_generic_method_impl(effective_class, method_name, method_node);
+    
+    /* Check if this method belongs to a generic type. If so, we've recorded the AST
+     * template above and should NOT generate a concrete implementation. Return NULL
+     * to prevent adding this to the subprograms list. */
+    GenericTypeDecl *generic_decl = generic_registry_find_decl(effective_class);
+    if (generic_decl != NULL && generic_decl->record_template != NULL) {
+        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+            fprintf(stderr, "[GPC] convert_method_impl: recorded template for %s.%s, not generating concrete impl\n", 
+                    effective_class, method_name);
+        }
+        if (cleaned_class_name != NULL)
+            free(cleaned_class_name);
+        free(class_name);
+        free(method_name);
+        return NULL;
+    }
+    
+    if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+        fprintf(stderr, "[GPC] convert_method_impl: class=%s method=%s\n", effective_class, method_name);
+    }
+
+    if (cleaned_class_name != NULL)
+        free(cleaned_class_name);
     free(class_name);
     free(method_name);
     return tree;
@@ -4485,7 +5961,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListBuilder label_decls_builder;
     list_builder_init(&label_decls_builder);
     ListNode_t *nested_subs = NULL;
-    ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
     int is_external = 0;
     char *external_alias = NULL;
@@ -4500,7 +5975,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(cur, &type_decls);
+            append_type_decls_from_section(cur, &type_decls, &nested_subs);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -4517,28 +5992,17 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
                               ? convert_procedure(cur)
                               : convert_function(cur);
-            if (sub != NULL) {
-                ListNode_t *node = CreateListNode(sub, LIST_TREE);
-                *nested_tail = node;
-                nested_tail = &node->next;
-            }
+            append_subprogram_node(&nested_subs, sub);
             break;
         }
         case PASCAL_T_METHOD_IMPL: {
             Tree_t *method_tree = convert_method_impl(cur);
-            if (method_tree != NULL) {
-                ListNode_t *node = CreateListNode(method_tree, LIST_TREE);
-                *nested_tail = node;
-                nested_tail = &node->next;
-            }
+            append_subprogram_node(&nested_subs, method_tree);
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
             convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
                                  &nested_subs, &body, &type_decls);
-            nested_tail = &nested_subs;
-            while (*nested_tail != NULL)
-                nested_tail = &(*nested_tail)->next;
             break;
         case PASCAL_T_BEGIN_BLOCK:
             body = convert_block(cur);
@@ -4679,7 +6143,6 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListBuilder label_decls_builder;
     list_builder_init(&label_decls_builder);
     ListNode_t *nested_subs = NULL;
-    ListNode_t **nested_tail = &nested_subs;
     struct Statement *body = NULL;
     int is_external = 0;
     char *external_alias = NULL;
@@ -4696,7 +6159,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         }
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(cur, &type_decls);
+            append_type_decls_from_section(cur, &type_decls, &nested_subs);
             type_section_ast = cur;  /* Save for const array enum resolution */
             break;
         case PASCAL_T_CONST_SECTION:
@@ -4713,28 +6176,17 @@ static Tree_t *convert_function(ast_t *func_node) {
             Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
                               ? convert_procedure(cur)
                               : convert_function(cur);
-            if (sub != NULL) {
-                ListNode_t *node = CreateListNode(sub, LIST_TREE);
-                *nested_tail = node;
-                nested_tail = &node->next;
-            }
+            append_subprogram_node(&nested_subs, sub);
             break;
         }
         case PASCAL_T_METHOD_IMPL: {
             Tree_t *method_tree = convert_method_impl(cur);
-            if (method_tree != NULL) {
-                ListNode_t *node = CreateListNode(method_tree, LIST_TREE);
-                *nested_tail = node;
-                nested_tail = &node->next;
-            }
+            append_subprogram_node(&nested_subs, method_tree);
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
             convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
                                  &nested_subs, &body, &type_decls);
-            nested_tail = &nested_subs;
-            while (*nested_tail != NULL)
-                nested_tail = &(*nested_tail)->next;
             break;
         case PASCAL_T_BEGIN_BLOCK:
             body = convert_block(cur);
@@ -4840,7 +6292,6 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ListNode_t *type_decls = NULL;
         ast_t *type_section_ast = NULL;  /* Keep AST for enum resolution */
         ListNode_t *subprograms = NULL;
-        ListNode_t **subprograms_tail = &subprograms;
         struct Statement *body = NULL;
 
         /* Create visited set to detect circular references in top-level sections */
@@ -4869,7 +6320,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             case PASCAL_T_TYPE_SECTION:
                 type_section_ast = section;  /* Save for enum resolution */
-                append_type_decls_from_section(section, &type_decls);
+                append_type_decls_from_section(section, &type_decls, &subprograms);
                 break;
             case PASCAL_T_USES_SECTION:
                 append_uses_from_section(section, &uses);
@@ -4882,20 +6333,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 Tree_t *sub = (section->typ == PASCAL_T_PROCEDURE_DECL)
                                   ? convert_procedure(section)
                                   : convert_function(section);
-                if (sub != NULL) {
-                    ListNode_t *node = CreateListNode(sub, LIST_TREE);
-                    *subprograms_tail = node;
-                    subprograms_tail = &node->next;
-                }
+                append_subprogram_node(&subprograms, sub);
                 break;
             }
             case PASCAL_T_METHOD_IMPL: {
                 Tree_t *method_tree = convert_method_impl(section);
-                if (method_tree != NULL) {
-                    ListNode_t *node = CreateListNode(method_tree, LIST_TREE);
-                    *subprograms_tail = node;
-                    subprograms_tail = &node->next;
-                }
+                append_subprogram_node(&subprograms, method_tree);
                 break;
             }
             case PASCAL_T_BEGIN_BLOCK:
@@ -4933,7 +6376,6 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         list_builder_init(&implementation_var_builder);
         ast_t *implementation_type_section_ast = NULL;  /* Track implementation types for enum resolution */
         ListNode_t *subprograms = NULL;
-        ListNode_t **subprograms_tail = &subprograms;
         struct Statement *initialization = NULL;
         struct Statement *finalization = NULL;
 
@@ -4995,7 +6437,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_TYPE_SECTION:
                             interface_type_section_ast = node;  /* Save for const array enum resolution */
-                            append_type_decls_from_section(node, &interface_type_decls);
+                            append_type_decls_from_section(node, &interface_type_decls, NULL);
                             break;
                         case PASCAL_T_CONST_SECTION:
                             append_const_decls_from_section(node, &interface_const_decls,
@@ -5030,13 +6472,16 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     
                     ast_t *node = unwrap_pascal_node(definition);
                     if (node != NULL) {
+                        if (getenv("GPC_DEBUG_GENERIC_METHODS") != NULL) {
+                            fprintf(stderr, "[GPC] implementation section node typ=%d\n", node->typ);
+                        }
                         switch (node->typ) {
                         case PASCAL_T_USES_SECTION:
                             append_uses_from_section(node, &implementation_uses);
                             break;
                         case PASCAL_T_TYPE_SECTION:
                             implementation_type_section_ast = node;  /* Save for const array enum resolution */
-                            append_type_decls_from_section(node, &implementation_type_decls);
+                            append_type_decls_from_section(node, &implementation_type_decls, &subprograms);
                             break;
                         case PASCAL_T_CONST_SECTION:
                             append_const_decls_from_section(node, &implementation_const_decls,
@@ -5047,29 +6492,17 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node);
-                            if (proc != NULL) {
-                                ListNode_t *list_node = CreateListNode(proc, LIST_TREE);
-                                *subprograms_tail = list_node;
-                                subprograms_tail = &list_node->next;
-                            }
+                            append_subprogram_node(&subprograms, proc);
                             break;
                         }
                         case PASCAL_T_FUNCTION_DECL: {
                             Tree_t *func = convert_function(node);
-                            if (func != NULL) {
-                                ListNode_t *list_node = CreateListNode(func, LIST_TREE);
-                                *subprograms_tail = list_node;
-                                subprograms_tail = &list_node->next;
-                            }
+                            append_subprogram_node(&subprograms, func);
                             break;
                         }
                         case PASCAL_T_METHOD_IMPL: {
                             Tree_t *method_tree = convert_method_impl(node);
-                            if (method_tree != NULL) {
-                                ListNode_t *list_node = CreateListNode(method_tree, LIST_TREE);
-                                *subprograms_tail = list_node;
-                                subprograms_tail = &list_node->next;
-                            }
+                            append_subprogram_node(&subprograms, method_tree);
                             break;
                         }
                         default:

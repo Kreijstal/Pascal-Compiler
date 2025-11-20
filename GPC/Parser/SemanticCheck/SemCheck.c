@@ -30,6 +30,8 @@
 #include "../ParseTree/type_tags.h"
 #include "../ParseTree/GpcType.h"
 #include "../ParseTree/from_cparser.h"
+#include "../ParseTree/operator_registry.h"
+#include "../ParseTree/generic_types.h"
 #include "../parser_error.h"
 #include "../ErrVars.h"
 #include "./SymTab/SymTab.h"
@@ -1466,6 +1468,30 @@ static void resolve_array_bounds_in_gpctype(SymTab_t *symtab, GpcType *gpc_type,
     }
 }
 
+/* Register operator overloads from a record type declaration
+ * This function is called when processing TYPE_DECL_RECORD to extract
+ * operator declarations and register them in the operator registry.
+ */
+static void register_record_operators(const char *type_name, struct RecordType *record_info)
+{
+    if (type_name == NULL || record_info == NULL || record_info->fields == NULL)
+        return;
+    
+    /* Iterate through the fields list looking for METHOD_DECL AST nodes (LIST_UNSPECIFIED) */
+    ListNode_t *cur = record_info->fields;
+    while (cur != NULL)
+    {
+        /* Check if this is an operator method declaration (stored as LIST_UNSPECIFIED with AST node) */
+        if (cur->type == LIST_UNSPECIFIED && cur->cur != NULL)
+        {
+            /* This is likely an AST node - we need to extract operator info from it
+             * For now, we skip this since we need access to the full AST structure
+             * and the from_cparser conversion. This will be handled in a second pass. */
+        }
+        cur = cur->next;
+    }
+}
+
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -1479,10 +1505,22 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     cur = type_decls;
     while(cur != NULL)
     {
+        int loop_start_errors = return_val;
+        
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
+
+        const char *debug_env_check = getenv("GPC_DEBUG_TFPG");
+        if (debug_env_check != NULL)
+        {
+            fprintf(stderr, "[GPC] semcheck_type_decls processing: id=%s kind=%d return_val=%d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                tree->tree_data.type_decl_data.kind, loop_start_errors);
+        }
+
+        int before_switch_errors = return_val;
 
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
@@ -1492,6 +1530,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
                 record_info = tree->tree_data.type_decl_data.info.record;
+                
+                /* Set the type_id on the RecordType so operator overloading can find it */
+                if (record_info != NULL && record_info->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
+                {
+                    record_info->type_id = strdup(tree->tree_data.type_decl_data.id);
+                }
                 
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
@@ -1517,11 +1561,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         return_val += vmt_result;
                     }
 
-                    long long record_size = 0;
-                    if (semcheck_compute_record_size(symtab, record_info, &record_size,
-                            tree->line_num) != 0)
+                    /* Skip size computation for generic templates (not yet specialized)
+                     * Size can only be computed after type parameters are substituted */
+                    int is_unspecialized_generic = (record_info->generic_decl != NULL && 
+                                                     record_info->num_generic_args == 0);
+                    
+                    if (!is_unspecialized_generic)
                     {
-                        return_val += 1;
+                        long long record_size = 0;
+                        if (semcheck_compute_record_size(symtab, record_info, &record_size,
+                                tree->line_num) != 0)
+                        {
+                            return_val += 1;
+                        }
                     }
                 }
                 break;
@@ -1611,15 +1663,111 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         gpc_type_get_record(tree->tree_data.type_decl_data.gpc_type);
                     if (alias_record != NULL)
                     {
-                        long long record_size = 0;
-                        if (semcheck_compute_record_size(symtab, alias_record, &record_size,
-                                tree->line_num) != 0)
+                        /* Set the type_id on the RecordType for operator overloading */
+                        if (alias_record->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
                         {
-                            return_val += 1;
+                            alias_record->type_id = strdup(tree->tree_data.type_decl_data.id);
+                        }
+                        
+                        /* Skip size computation for generic templates (not yet specialized)
+                         * Size can only be computed after type parameters are substituted */
+                        int is_unspecialized_generic = (alias_record->generic_decl != NULL && 
+                                                         alias_record->num_generic_args == 0);
+                        
+                        if (!is_unspecialized_generic)
+                        {
+                            const char *debug_env3 = getenv("GPC_DEBUG_TFPG");
+                            if (debug_env3 != NULL)
+                            {
+                                fprintf(stderr, "[GPC] Computing size for alias %s, generic_decl=%p num_args=%d\n",
+                                    tree->tree_data.type_decl_data.id,
+                                    (void*)alias_record->generic_decl,
+                                    alias_record->num_generic_args);
+                            }
+                            
+                            long long record_size = 0;
+                            if (semcheck_compute_record_size(symtab, alias_record, &record_size,
+                                    tree->line_num) != 0)
+                            {
+                                if (debug_env3 != NULL)
+                                {
+                                    fprintf(stderr, "[GPC] Size computation FAILED for %s\n",
+                                        tree->tree_data.type_decl_data.id);
+                                }
+                                return_val += 1;
+                            }
+                            else if (debug_env3 != NULL)
+                            {
+                                fprintf(stderr, "[GPC] Size computation succeeded for %s: %lld bytes\n",
+                                    tree->tree_data.type_decl_data.id, record_size);
+                            }
                         }
                     }
                 }
 
+                const char *debug_alias = getenv("GPC_DEBUG_GENERIC_CLONES");
+                if (debug_alias != NULL && tree->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[GPC] semcheck alias %s: base_type=%d target=%s gpc_type=%p kind=%d\n",
+                        tree->tree_data.type_decl_data.id,
+                        alias_info->base_type,
+                        alias_info->target_type_id != NULL ? alias_info->target_type_id : "<null>",
+                        (void *)tree->tree_data.type_decl_data.gpc_type,
+                        tree->tree_data.type_decl_data.gpc_type != NULL ?
+                            tree->tree_data.type_decl_data.gpc_type->kind : -1);
+                }
+
+                break;
+            }
+            case TYPE_DECL_GENERIC:
+            {
+                /* Register generic type declaration in the generic registry */
+                struct GenericDecl *generic_info = &tree->tree_data.type_decl_data.info.generic;
+                
+                const char *debug_env = getenv("GPC_DEBUG_TFPG");
+                if (debug_env != NULL)
+                {
+                    fprintf(stderr, "[GPC] semcheck TYPE_DECL_GENERIC: id=%s num_params=%d\n",
+                        tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                        generic_info ? generic_info->num_type_params : -1);
+                }
+                
+                if (generic_info != NULL && generic_info->num_type_params > 0 && 
+                    generic_info->type_parameters != NULL)
+                {
+                    /* Register the generic declaration */
+                    GenericTypeDecl *generic_decl = generic_registry_add_decl(
+                        tree->tree_data.type_decl_data.id,
+                        generic_info->type_parameters,
+                        generic_info->num_type_params,
+                        tree
+                    );
+                    
+                    if (generic_decl != NULL)
+                    {
+                        /* Store reference to record template if this is a class/record */
+                        if (generic_info->record_template != NULL)
+                        {
+                            generic_decl->record_template = generic_info->record_template;
+                        }
+                        
+                        if (debug_env != NULL)
+                        {
+                            fprintf(stderr, "[GPC] Registered generic type %s with %d parameters\n",
+                                tree->tree_data.type_decl_data.id, generic_info->num_type_params);
+                        }
+                    }
+                    else if (debug_env != NULL)
+                    {
+                        fprintf(stderr, "[GPC] Failed to register generic type %s\n",
+                            tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>");
+                    }
+                }
+                
+                /* Generics don't go in symbol table directly, only specialized instances do */
+                var_type = HASHVAR_INTEGER;  /* Placeholder */
+                /* Skip the normal PushTypeOntoScope for generics */
+                func_return = 0;
                 break;
             }
             default:
@@ -1627,11 +1775,31 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 break;
         }
 
+        if (debug_env_check != NULL && return_val > before_switch_errors)
+        {
+            fprintf(stderr, "[GPC] Error in switch for type %s (kind=%d), was %d now %d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                tree->tree_data.type_decl_data.kind, before_switch_errors, return_val);
+        }
+
+        const char *debug_env2 = getenv("GPC_DEBUG_TFPG");
+        int before_symtab_errors = return_val;
+
         GpcType *gpc_type = tree->tree_data.type_decl_data.gpc_type;
 
 
 
-        if (gpc_type != NULL) {
+        /* Skip symbol table registration for generic declarations - they're only in the registry */
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
+        {
+            /* Generic declarations are already registered in generic_registry */
+            /* Skip the rest of symbol table handling */
+            if (func_return == 0)
+            {
+                /* Continue to next type declaration */
+            }
+        }
+        else if (gpc_type != NULL) {
             /* Set type_alias on GpcType before pushing */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL)
             {
@@ -1677,9 +1845,59 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
             }
+            
+            /* For generic specializations with inline record types, also register the
+             * record type under its mangled name so cloned methods can find it */
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && 
+                alias_info != NULL && 
+                alias_info->inline_record_type != NULL &&
+                alias_info->inline_record_type->type_id != NULL)
+            {
+                const char *mangled_name = alias_info->inline_record_type->type_id;
+                
+                /* Only register if not already registered to avoid redeclaration errors */
+                HashNode_t *existing = NULL;
+                if (FindIdent(&existing, symtab, mangled_name) == -1)
+                {
+                    /* Create a GpcType for the inline record if not already created */
+                    GpcType *inline_gpc_type = create_record_type(alias_info->inline_record_type);
+                    if (inline_gpc_type != NULL)
+                    {
+                        int push_result = PushTypeOntoScope_Typed(symtab, mangled_name, inline_gpc_type);
+                        if (push_result == 0)
+                        {
+                            if (debug_env2 != NULL)
+                            {
+                                fprintf(stderr, "[GPC] Registered inline record type %s for alias %s\n",
+                                        mangled_name, tree->tree_data.type_decl_data.id);
+                            }
+                            /* Ownership transferred to symbol table */
+                        }
+                        /* Note: On failure, we leak the GpcType, but this should not happen
+                         * in practice since we checked that the name doesn't exist */
+                    }
+                }
+            }
+        }
+
+        if (debug_env2 != NULL && return_val > before_symtab_errors)
+        {
+            fprintf(stderr, "[GPC] Error increased in type %s (kind=%d), was %d now %d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                tree->tree_data.type_decl_data.kind, before_symtab_errors, return_val);
         }
 
         cur = cur->next;
+    }
+
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && return_val > 0)
+    {
+        fprintf(stderr, "[GPC] semcheck_type_decls returning error count: %d\n", return_val);
+    }
+    else if (debug_env != NULL)
+    {
+        fprintf(stderr, "[GPC] semcheck_type_decls completed successfully\n");
     }
 
     return return_val;
@@ -2269,6 +2487,24 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
       tree->line_num);
 
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
+    if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
+    {
+        ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
+        while (debug_cur != NULL)
+        {
+            if (debug_cur->type == LIST_TREE && debug_cur->cur != NULL)
+            {
+                Tree_t *debug_tree = (Tree_t *)debug_cur->cur;
+                if (debug_tree->type == TREE_TYPE_DECL && debug_tree->tree_data.type_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[GPC] program type decl: %s kind=%d\n",
+                        debug_tree->tree_data.type_decl_data.id,
+                        debug_tree->tree_data.type_decl_data.kind);
+                }
+            }
+            debug_cur = debug_cur->next;
+        }
+    }
     return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
@@ -2681,11 +2917,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     struct RecordType *var_record = gpc_type_get_record(var_gpc_type);
                     if (var_record != NULL)
                     {
-                        long long record_size = 0;
-                        if (semcheck_compute_record_size(symtab, var_record, &record_size,
-                                tree->line_num) != 0)
+                        /* Skip size computation for generic templates (not yet specialized)
+                         * Size can only be computed after type parameters are substituted */
+                        int is_unspecialized_generic = (var_record->generic_decl != NULL && 
+                                                         var_record->num_generic_args == 0);
+                        
+                        if (!is_unspecialized_generic)
                         {
-                            return_val += 1;
+                            long long record_size = 0;
+                            if (semcheck_compute_record_size(symtab, var_record, &record_size,
+                                    tree->line_num) != 0)
+                            {
+                                return_val += 1;
+                            }
                         }
                     }
                 }

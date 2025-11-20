@@ -40,6 +40,50 @@ int is_type_ir(int *type);
 static int types_numeric_compatible(int lhs, int rhs);
 static void semcheck_coerce_char_string_operands(int *type_first, struct Expression *expr1,
     int *type_second, struct Expression *expr2);
+
+/* Helper function to get type name from an expression for operator overloading */
+static const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr == NULL)
+        return NULL;
+    
+    /* Try to get from record_type field (legacy) */
+    if (expr->record_type != NULL && expr->record_type->type_id != NULL)
+        return expr->record_type->type_id;
+    
+    /* Try to get from resolved_gpc_type */
+    if (expr->resolved_gpc_type != NULL && gpc_type_is_record(expr->resolved_gpc_type))
+    {
+        struct RecordType *rec = gpc_type_get_record(expr->resolved_gpc_type);
+        if (rec != NULL && rec->type_id != NULL)
+            return rec->type_id;
+    }
+    
+    /* For variable IDs, look up in symbol table */
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, symtab, expr->expr_data.id) == 0 && node != NULL && node->type != NULL)
+        {
+            /* Check if this is a record type */
+            if (gpc_type_is_record(node->type))
+            {
+                struct RecordType *rec = gpc_type_get_record(node->type);
+                
+                /* Try to get type_id from record */
+                if (rec != NULL && rec->type_id != NULL)
+                    return rec->type_id;
+                
+                /* Try to get from type_alias */
+                if (node->type->type_alias != NULL && node->type->type_alias->target_type_id != NULL)
+                    return node->type->type_alias->target_type_id;
+            }
+        }
+    }
+    
+    return NULL;
+}
+
 int is_and_or(int *type);
 
 static void semcheck_expr_set_call_gpc_type(struct Expression *expr, GpcType *type,
@@ -2494,16 +2538,31 @@ static int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         HashNode_t *target_node = NULL;
         if (FindIdent(&target_node, symtab, (char *)type_id) == -1 || target_node == NULL)
         {
-            fprintf(stderr, "Error on line %d, SizeOf references unknown type %s.\n",
-                line_num, type_id);
-            return 1;
+            /* For generic type parameters that haven't been resolved yet,
+             * treat as unknown size rather than hard error - this allows
+             * generic templates to be processed without full instantiation */
+            const char *debug_env = getenv("GPC_DEBUG_TFPG");
+            if (debug_env != NULL)
+            {
+                fprintf(stderr, "[GPC] SizeOf: unknown type %s at line %d (may be unresolved generic parameter)\n",
+                    type_id, line_num);
+            }
+            *size_out = 0;  /* Unknown size - caller should handle */
+            return 1;  /* Still return error to indicate unresolved */
         }
         return sizeof_from_hashnode(symtab, target_node, size_out, depth + 1, line_num);
     }
 
-    fprintf(stderr, "Error on line %d, unable to resolve type information for SizeOf.\n",
-        line_num);
-    return 1;
+    /* If both type_tag and type_id are unspecified, we can't compute size.
+     * This might happen for generic type parameters - don't print error, just fail gracefully */
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL)
+    {
+        fprintf(stderr, "[GPC] SizeOf: unable to resolve type at line %d (unspecified type_tag and type_id)\n",
+            line_num);
+    }
+    *size_out = 0;
+    return 1;  /* Return error - caller should check if this is expected */
 }
 
 static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
@@ -2541,6 +2600,110 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     return 0;
 }
 
+/* Align offset to the specified alignment boundary */
+static long long align_offset(long long offset, int alignment)
+{
+    if (alignment <= 0)
+        return offset;
+    
+    long long remainder = offset % alignment;
+    if (remainder == 0)
+        return offset;
+    
+    return offset + (alignment - remainder);
+}
+
+/* Get alignment requirement for a field type (64-bit ABI) */
+static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int depth, int line_num)
+{
+    if (field == NULL)
+        return 1;  /* Minimum alignment */
+    
+    /* Prevent infinite recursion */
+    if (depth > SIZEOF_RECURSION_LIMIT)
+        return 1;
+    
+    /* Dynamic arrays are descriptors (pointer + int64), aligned to 8 */
+    if (field->is_array && field->array_is_open)
+        return POINTER_SIZE_BYTES;
+    
+    /* Nested record - get its alignment */
+    if (field->nested_record != NULL)
+    {
+        int max_align = 1;
+        ListNode_t *cur = field->nested_record->fields;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+            {
+                struct RecordField *nested_field = (struct RecordField *)cur->cur;
+                int nested_align = get_field_alignment(symtab, nested_field, depth + 1, line_num);
+                if (nested_align > max_align)
+                    max_align = nested_align;
+            }
+            cur = cur->next;
+        }
+        return max_align;
+    }
+    
+    /* Get alignment based on type */
+    int type_tag = field->type;
+    
+    /* Resolve type_id if needed */
+    if (type_tag == UNKNOWN_TYPE && field->type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, (char *)field->type_id) != -1 && type_node != NULL)
+        {
+            if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PRIMITIVE)
+                type_tag = type_node->type->info.primitive_type_tag;
+            else if (hashnode_is_record(type_node))
+            {
+                /* Record type - recursively get its alignment */
+                struct RecordType *rec = hashnode_get_record_type(type_node);
+                if (rec != NULL)
+                {
+                    int max_align = 1;
+                    ListNode_t *cur = rec->fields;
+                    while (cur != NULL)
+                    {
+                        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+                        {
+                            struct RecordField *rec_field = (struct RecordField *)cur->cur;
+                            int rec_align = get_field_alignment(symtab, rec_field, depth + 1, line_num);
+                            if (rec_align > max_align)
+                                max_align = rec_align;
+                        }
+                        cur = cur->next;
+                    }
+                    return max_align;
+                }
+            }
+        }
+    }
+    
+    /* Type-specific alignment rules for 64-bit */
+    switch (type_tag)
+    {
+        case POINTER_TYPE:
+        case RECORD_TYPE:  /* Classes are records with is_class flag */
+        case LONGINT_TYPE:
+        case REAL_TYPE:
+            return POINTER_SIZE_BYTES;  /* 8 bytes */
+        
+        case INT_TYPE:
+        case CHAR_TYPE:
+        case BOOL:  /* Boolean is BOOL, not BOOL_TYPE */
+        case ENUM_TYPE:
+        case SET_TYPE:
+            return 4;  /* 4 bytes for 32-bit integers and smaller */
+        
+        default:
+            /* For unknown types, use conservative alignment */
+            return 4;
+    }
+}
+
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num)
 {
@@ -2553,6 +2716,12 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
         return 0;
     }
 
+    const char *debug_env = getenv("GPC_DEBUG_TFPG");
+    if (debug_env != NULL && field->name != NULL) {
+        fprintf(stderr, "[GPC] compute_field_size: field=%s type=%d type_id=%s is_array=%d\n",
+            field->name, field->type, field->type_id ? field->type_id : "<null>", field->is_array);
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
@@ -2562,9 +2731,16 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
     if (field->is_array)
     {
+        const char *debug_env = getenv("GPC_DEBUG_TFPG");
+        if (debug_env != NULL && field->name != NULL) {
+            fprintf(stderr, "[GPC] compute_field_size array: field=%s is_open=%d start=%d end=%d\n",
+                field->name, field->array_is_open, field->array_start, field->array_end);
+        }
+
         if (field->array_is_open || field->array_end < field->array_start)
         {
-            *size_out = POINTER_SIZE_BYTES;
+            /* Dynamic arrays are descriptors {void *data, int64_t length}, so 16 bytes */
+            *size_out = POINTER_SIZE_BYTES * 2;
             return 0;
         }
 
@@ -2609,12 +2785,23 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         return 1;
 
     long long total = 0;
+    int max_alignment = 1;  /* Track maximum alignment for struct padding */
+    
     ListNode_t *cur = members;
     while (cur != NULL)
     {
         if (cur->type == LIST_RECORD_FIELD)
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
+            
+            /* Get field alignment and align current offset */
+            int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
+            if (field_alignment > max_alignment)
+                max_alignment = field_alignment;
+            
+            total = align_offset(total, field_alignment);
+            
+            /* Add field size */
             long long field_size = 0;
             if (compute_field_size(symtab, field, &field_size, depth + 1, line_num) != 0)
                 return 1;
@@ -2631,6 +2818,9 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         cur = cur->next;
     }
 
+    /* Align total size to the maximum alignment (struct padding at end) */
+    total = align_offset(total, max_alignment);
+    
     *size_out = total;
     return 0;
 }
@@ -2733,17 +2923,24 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
         if (cur->type == LIST_RECORD_FIELD)
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field != NULL && !record_field_is_hidden(field) &&
-                field->name != NULL &&
-                pascal_identifier_equals(field->name, field_name))
+            if (field != NULL && !record_field_is_hidden(field))
             {
-                if (out_field != NULL)
-                    *out_field = field;
-                if (offset_out != NULL)
-                    *offset_out = offset;
-                if (found != NULL)
-                    *found = 1;
-                return 0;
+                /* Align offset to field's alignment requirement */
+                int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
+                offset = align_offset(offset, field_alignment);
+                
+                /* Check if this is the target field */
+                if (field->name != NULL &&
+                    pascal_identifier_equals(field->name, field_name))
+                {
+                    if (out_field != NULL)
+                        *out_field = field;
+                    if (offset_out != NULL)
+                        *offset_out = offset;
+                    if (found != NULL)
+                        *found = 1;
+                    return 0;
+                }
             }
 
             long long field_size = 0;
@@ -4869,6 +5066,73 @@ int semcheck_relop(int *type_return,
             }
             else if (relop_type == EQ || relop_type == NE)
             {
+                /* Check for operator overloading for record types first */
+                if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+                {
+                    const char *left_type_name = get_expr_type_name(expr1, symtab);
+                    const char *right_type_name = get_expr_type_name(expr2, symtab);
+                    
+                    if (left_type_name != NULL && right_type_name != NULL &&
+                        strcasecmp(left_type_name, right_type_name) == 0)
+                    {
+                        const char *op_suffix = (relop_type == EQ) ? "op_eq" : "op_ne";
+                        size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                        char *operator_method = (char *)malloc(name_len);
+                        
+                        if (operator_method != NULL)
+                        {
+                            snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                            
+                            HashNode_t *operator_node = NULL;
+                            if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                            {
+                                if (operator_node->type != NULL && gpc_type_is_procedure(operator_node->type))
+                                {
+                                    GpcType *return_type = gpc_type_get_return_type(operator_node->type);
+                                    if (return_type != NULL)
+                                    {
+                                        /* Transform expression from RELOP to FUNCTION_CALL */
+                                        struct Expression *saved_left = expr->expr_data.relop_data.left;
+                                        struct Expression *saved_right = expr->expr_data.relop_data.right;
+                                        
+                                        expr->type = EXPR_FUNCTION_CALL;
+                                        
+                                        expr->expr_data.function_call_data.id = strdup(operator_method);
+                                        /* Use the actual mangled name from the symbol table */
+                                        if (operator_node->mangled_id != NULL)
+                                            expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                                        else
+                                            expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+                                        
+                                        ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
+                                        ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                        arg1->next = arg2;
+                                        expr->expr_data.function_call_data.args_expr = arg1;
+                                        
+                                        expr->expr_data.function_call_data.resolved_func = operator_node;
+                                        expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                                        expr->expr_data.function_call_data.call_gpc_type = operator_node->type;
+                                        gpc_type_retain(operator_node->type);
+                                        expr->expr_data.function_call_data.is_call_info_valid = 1;
+                                        
+                                        if (expr->resolved_gpc_type != NULL)
+                                        {
+                                            destroy_gpc_type(expr->resolved_gpc_type);
+                                        }
+                                        expr->resolved_gpc_type = return_type;
+                                        gpc_type_retain(return_type);
+                                        
+                                        free(operator_method);
+                                        *type_return = BOOL;
+                                        return return_val;
+                                    }
+                                }
+                            }
+                            free(operator_method);
+                        }
+                    }
+                }
+                
                 semcheck_coerce_char_string_operands(&type_first, expr1, &type_second, expr2);
 
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
@@ -4876,9 +5140,10 @@ int semcheck_relop(int *type_return,
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
                 int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok)
+                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
                 {
-                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, or character types!\n\n",
+                    fprintf(stderr, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
@@ -4992,6 +5257,107 @@ int semcheck_addop(int *type_return,
         }
     }
 
+    /* Check for operator overloading for record types */
+    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+    {
+        /* Both operands are records - check if they have an operator overload */
+        const char *left_type_name = get_expr_type_name(expr1, symtab);
+        const char *right_type_name = get_expr_type_name(expr2, symtab);
+        
+        /* Check if both types are the same and we have a type name */
+        if (left_type_name != NULL && right_type_name != NULL &&
+            strcasecmp(left_type_name, right_type_name) == 0)
+        {
+            /* Construct the operator method name */
+            const char *op_suffix = NULL;
+            switch (op_type)
+            {
+                case PLUS: op_suffix = "op_add"; break;
+                case MINUS: op_suffix = "op_sub"; break;
+                default: break;
+            }
+            
+            if (op_suffix != NULL)
+            {
+                /* Build the mangled operator method name: TypeName__op_add */
+                size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                char *operator_method = (char *)malloc(name_len);
+                if (operator_method != NULL)
+                {
+                    snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                    
+                    /* Look up the operator method in the symbol table */
+                    HashNode_t *operator_node = NULL;
+                    if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                    {
+                        /* Found the operator overload! */
+                        /* Get the return type from the operator method */
+                        if (operator_node->type != NULL && gpc_type_is_procedure(operator_node->type))
+                        {
+                            GpcType *return_type = gpc_type_get_return_type(operator_node->type);
+                            if (return_type != NULL)
+                            {
+                                *type_return = gpc_type_get_legacy_tag(return_type);
+                                
+                                /* Transform expression from ADDOP to FUNCTION_CALL */
+                                /* Save the operands before we overwrite the union */
+                                struct Expression *saved_left = expr->expr_data.addop_data.left_expr;
+                                struct Expression *saved_right = expr->expr_data.addop_data.right_term;
+                                
+                                /* Change expression type to FUNCTION_CALL */
+                                expr->type = EXPR_FUNCTION_CALL;
+                                
+                                /* Populate function_call_data */
+                                expr->expr_data.function_call_data.id = strdup(operator_method);
+                                /* Use the actual mangled name from the symbol table */
+                                if (operator_node->mangled_id != NULL)
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                                else
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+                                
+                                /* Create argument list with both operands */
+                                ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
+                                ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                arg1->next = arg2;
+                                expr->expr_data.function_call_data.args_expr = arg1;
+                                
+                                expr->expr_data.function_call_data.resolved_func = operator_node;
+                                
+                                /* Cache operator method type info for codegen */
+                                expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                                expr->expr_data.function_call_data.call_gpc_type = operator_node->type;
+                                gpc_type_retain(operator_node->type); /* Increment ref count */
+                                expr->expr_data.function_call_data.is_call_info_valid = 1;
+                                
+                                /* Set resolved_gpc_type to the return type */
+                                if (expr->resolved_gpc_type != NULL)
+                                {
+                                    destroy_gpc_type(expr->resolved_gpc_type);
+                                }
+                                expr->resolved_gpc_type = return_type;
+                                gpc_type_retain(return_type); /* Increment ref count */
+                                
+                                /* For record return types, preserve record type info */
+                                if (gpc_type_is_record(return_type))
+                                {
+                                    struct RecordType *ret_record = gpc_type_get_record(return_type);
+                                    if (ret_record != NULL)
+                                    {
+                                        expr->record_type = ret_record;
+                                    }
+                                }
+                                
+                                free(operator_method);
+                                return return_val; /* Success - operator overload transformed */
+                            }
+                        }
+                    }
+                    free(operator_method);
+                }
+            }
+        }
+    }
+
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
@@ -5058,6 +5424,106 @@ int semcheck_mulop(int *type_return,
             *type_return = SET_TYPE;
         }
         return return_val;
+    }
+
+    /* Check for operator overloading for record types */
+    if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
+    {
+        /* Both operands are records - check if they have an operator overload */
+        const char *left_type_name = get_expr_type_name(expr1, symtab);
+        const char *right_type_name = get_expr_type_name(expr2, symtab);
+        
+        /* Check if both types are the same and we have a type name */
+        if (left_type_name != NULL && right_type_name != NULL &&
+            strcasecmp(left_type_name, right_type_name) == 0)
+        {
+            /* Construct the operator method name */
+            const char *op_suffix = NULL;
+            switch (op_type)
+            {
+                case STAR: op_suffix = "op_mul"; break;
+                case SLASH: op_suffix = "op_div"; break;
+                default: break;
+            }
+            
+            if (op_suffix != NULL)
+            {
+                /* Build the mangled operator method name: TypeName__op_mul */
+                size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                char *operator_method = (char *)malloc(name_len);
+                if (operator_method != NULL)
+                {
+                    snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
+                    
+                    /* Look up the operator method in the symbol table */
+                    HashNode_t *operator_node = NULL;
+                    if (FindIdent(&operator_node, symtab, operator_method) == 0 && operator_node != NULL)
+                    {
+                        /* Found the operator overload! */
+                        if (operator_node->type != NULL && gpc_type_is_procedure(operator_node->type))
+                        {
+                            GpcType *return_type = gpc_type_get_return_type(operator_node->type);
+                            if (return_type != NULL)
+                            {
+                                *type_return = gpc_type_get_legacy_tag(return_type);
+                                
+                                /* Transform expression from MULOP to FUNCTION_CALL */
+                                /* Save the operands before we overwrite the union */
+                                struct Expression *saved_left = expr->expr_data.mulop_data.left_term;
+                                struct Expression *saved_right = expr->expr_data.mulop_data.right_factor;
+                                
+                                /* Change expression type to FUNCTION_CALL */
+                                expr->type = EXPR_FUNCTION_CALL;
+                                
+                                /* Populate function_call_data */
+                                expr->expr_data.function_call_data.id = strdup(operator_method);
+                                /* Use the actual mangled name from the symbol table */
+                                if (operator_node->mangled_id != NULL)
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                                else
+                                    expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+                                
+                                /* Create argument list with both operands */
+                                ListNode_t *arg1 = CreateListNode(saved_left, LIST_EXPR);
+                                ListNode_t *arg2 = CreateListNode(saved_right, LIST_EXPR);
+                                arg1->next = arg2;
+                                expr->expr_data.function_call_data.args_expr = arg1;
+                                
+                                expr->expr_data.function_call_data.resolved_func = operator_node;
+                                
+                                /* Cache operator method type info for codegen */
+                                expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                                expr->expr_data.function_call_data.call_gpc_type = operator_node->type;
+                                gpc_type_retain(operator_node->type);
+                                expr->expr_data.function_call_data.is_call_info_valid = 1;
+                                
+                                /* Set resolved_gpc_type to the return type */
+                                if (expr->resolved_gpc_type != NULL)
+                                {
+                                    destroy_gpc_type(expr->resolved_gpc_type);
+                                }
+                                expr->resolved_gpc_type = return_type;
+                                gpc_type_retain(return_type);
+                                
+                                /* For record return types, preserve record type info */
+                                if (gpc_type_is_record(return_type))
+                                {
+                                    struct RecordType *ret_record = gpc_type_get_record(return_type);
+                                    if (ret_record != NULL)
+                                    {
+                                        expr->record_type = ret_record;
+                                    }
+                                }
+                                
+                                free(operator_method);
+                                return return_val; /* Success - operator overload transformed */
+                            }
+                        }
+                    }
+                    free(operator_method);
+                }
+            }
+        }
     }
 
     /* Checking numeric types */
@@ -5426,6 +5892,14 @@ int semcheck_funccall(int *type_return,
     return_val = 0;
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
+
+    if (id != NULL && strncmp(id, "__tfpg_ctor$", strlen("__tfpg_ctor$")) == 0)
+    {
+        if (type_return != NULL)
+            *type_return = RECORD_TYPE;
+        expr->resolved_type = RECORD_TYPE;
+        return 0;
+    }
 
     if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);

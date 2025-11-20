@@ -1004,10 +1004,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     expr = node->expr;
     assert(target_reg != NULL);
+    
+    fprintf(stderr, "DEBUG gencode_case0: expr->type=%d\n", expr->type);
 
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        fprintf(stderr, "DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
+            func_mangled_name ? func_mangled_name : "NULL",
+            expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "NULL");
+        
         if (func_mangled_name != NULL && strcmp(func_mangled_name, "__gpc_dynarray_length") == 0)
         {
             inst_list = codegen_builtin_dynarray_length(expr, inst_list, ctx, target_reg);
@@ -1075,8 +1081,116 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
+        /* Check if this is a constructor call (e.g., TMyClass.Create)
+         * Constructors need special handling: allocate memory and initialize VMT */
+        int is_constructor = 0;
+        Register_t *constructor_instance_reg = NULL;
+        
+        if (func_mangled_name != NULL)
+        {
+            /* Check if name contains __Create (may be followed by type suffix like __Create_u) */
+            const char *create_pos = strstr(func_mangled_name, "__Create");
+            if (create_pos != NULL)
+                is_constructor = 1;
+            else if (strcmp(func_mangled_name, "Create") == 0)
+                is_constructor = 1;
+            
+            fprintf(stderr, "DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 
+                func_mangled_name, is_constructor);
+        }
+        
+        /* For constructors, allocate memory for the instance */
+        if (is_constructor)
+        {
+            /* Try to get class size from expression's record_type first */
+            struct RecordType *class_record = expr->record_type;
+            
+            fprintf(stderr, "DEBUG Constructor: expr->record_type=%p\n", (void *)class_record);
+            
+            /* If not available, try to get it from the first argument (class type) */
+            if (class_record == NULL)
+            {
+                ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
+                if (first_arg != NULL && first_arg->cur != NULL)
+                {
+                    struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                    if (class_expr != NULL)
+                        class_record = class_expr->record_type;
+                    
+                    fprintf(stderr, "DEBUG Constructor: first_arg class_expr=%p, class_record=%p\n", 
+                        (void *)class_expr, (void *)class_record);
+                }
+            }
+            
+            if (class_record != NULL)
+            {
+                fprintf(stderr, "DEBUG Constructor: class_record=%p, is_class=%d, properties=%p\n",
+                    (void *)class_record, class_record->is_class, (void *)class_record->properties);
+            }
+            
+            if (class_record != NULL && record_type_is_class(class_record))
+            {
+                /* Get the size of the class instance */
+                long long instance_size = 0;
+                if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
+                    instance_size > 0)
+                {
+                    /* Allocate memory using calloc to zero-initialize all fields */
+                    const char *calloc_arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    const char *calloc_arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+                    
+                    /* calloc(1, size) - allocate 1 element of instance_size bytes, zeroed */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", calloc_arg1_reg);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                        instance_size, calloc_arg2_reg);
+                    inst_list = add_inst(inst_list, buffer);
+                    
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
+                    free_arg_regs();
+                    
+                    /* Save the allocated instance pointer */
+                    constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (constructor_instance_reg == NULL)
+                    {
+                        codegen_report_error(ctx, 
+                            "ERROR: Unable to allocate register for constructor instance.");
+                        goto cleanup_constructor;
+                    }
+                    
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
+                        constructor_instance_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    
+                    /* Get VMT pointer from first argument (if exists) */
+                    ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
+                    if (first_arg != NULL && first_arg->cur != NULL)
+                    {
+                        struct Expression *vmt_expr = (struct Expression *)first_arg->cur;
+                        Register_t *vmt_reg = NULL;
+                        
+                        inst_list = codegen_expr_with_result(vmt_expr, inst_list, ctx, &vmt_reg);
+                        if (vmt_reg != NULL)
+                        {
+                            /* Initialize VMT pointer in the allocated instance */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), vmt_reg);
+                        }
+                    }
+                }
+            }
+        }
+        
         /* Pass arguments, shifted by 1 if static link is passed */
         int arg_start_index = should_pass_static_link ? 1 : 0;
+        
+        /* For constructors, skip the first argument (class type) and pass instance instead */
+        if (is_constructor && constructor_instance_reg != NULL)
+            arg_start_index += 1;
+        
         const char *proc_name_hint = expr->expr_data.function_call_data.id;
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
@@ -1136,21 +1250,67 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     break;
             }
         }
+        
+        /* For constructors, pass the allocated instance as the first argument (Self) */
+        if (is_constructor && constructor_instance_reg != NULL)
+        {
+            const char *self_arg_reg = should_pass_static_link ? 
+                current_arg_reg64(1) : current_arg_reg64(0);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                constructor_instance_reg->bit_64, self_arg_reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         if (static_link_expr_active)
             codegen_end_expression(ctx);
 
-        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", expr->expr_data.function_call_data.mangled_id);
-        inst_list = add_inst(inst_list, buffer);
+        const char *call_target = expr->expr_data.function_call_data.mangled_id;
+        if (call_target == NULL)
+            call_target = expr->expr_data.function_call_data.id;
+        
+        if (call_target != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            /* This should never happen - emit error */
+            snprintf(buffer, sizeof(buffer), "\t# ERROR: function call with NULL target\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         codegen_release_function_call_mangled_id(expr);
-        if (expr_has_type_tag(expr, REAL_TYPE))
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
-        else if (expr_uses_qword_gpctype(expr))
+        
+        /* For constructors, use the return value from the constructor (Self in %rax).
+         * Constructors now properly return Self, so we don't need to rely on the
+         * saved instance register which could be clobbered during the call. */
+        if (is_constructor && constructor_instance_reg != NULL)
+        {
+            /* Free the constructor_instance_reg as we won't use it */
+            free_reg(get_reg_stack(), constructor_instance_reg);
+            
+            /* Get the constructor return value from %rax */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
         else
-            snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        {
+            /* Normal function return value */
+            if (expr_has_type_tag(expr, REAL_TYPE))
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", target_reg->bit_64);
+            else if (expr_uses_qword_gpctype(expr))
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        return inst_list;
+        
+cleanup_constructor:
+        if (constructor_instance_reg != NULL)
+            free_reg(get_reg_stack(), constructor_instance_reg);
         return inst_list;
     }
     else if (expr->type == EXPR_ARRAY_ACCESS)

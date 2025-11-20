@@ -663,6 +663,21 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
+    // For-in statement: for identifier in expression do statement
+    // Use nested seq() pattern like for_stmt for consistent AST structure
+    combinator_t* for_in_stmt = seq(new_combinator(), PASCAL_T_FOR_IN_STMT,
+        token(keyword_ci("for")),                // for keyword (case-insensitive)
+        seq(new_combinator(), PASCAL_T_NONE,
+            simple_identifier,                       // loop variable (identifier)
+            token(keyword_ci("in")),                 // in keyword (case-insensitive)
+            lazy(expr_parser),                       // collection expression
+            token(keyword_ci("do")),                 // do keyword (case-insensitive)
+            lazy(stmt_parser),                       // loop body statement
+            NULL
+        ),
+        NULL
+    );
+
     // For statement: for [identifier := expression | identifier] (to|downto) expression do statement
     combinator_t* for_direction = multi(new_combinator(), PASCAL_T_NONE,
         token(create_keyword_parser("to", PASCAL_T_TO)),                 // to keyword (case-insensitive)
@@ -686,6 +701,13 @@ void init_pascal_statement_parser(combinator_t** p) {
             lazy(stmt_parser),                      // loop body statement
             NULL
         )),
+        NULL
+    );
+
+    // Combined for statement parser (try for-in first, then regular for)
+    combinator_t* any_for_stmt = multi(new_combinator(), PASCAL_T_NONE,
+        for_in_stmt,
+        for_stmt,
         NULL
     );
 
@@ -919,7 +941,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     dispatch_args->keyword_parsers[STMT_KW_EXIT] = exit_stmt;
     dispatch_args->keyword_parsers[STMT_KW_ASM] = asm_stmt;
     dispatch_args->keyword_parsers[STMT_KW_IF] = if_stmt;
-    dispatch_args->keyword_parsers[STMT_KW_FOR] = for_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_FOR] = any_for_stmt;
     dispatch_args->keyword_parsers[STMT_KW_REPEAT] = repeat_stmt;
     dispatch_args->keyword_parsers[STMT_KW_WHILE] = while_stmt;
     dispatch_args->keyword_parsers[STMT_KW_WITH] = with_stmt;
