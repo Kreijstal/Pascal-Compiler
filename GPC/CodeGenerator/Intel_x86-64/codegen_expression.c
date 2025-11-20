@@ -446,9 +446,10 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
     snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", instance_ptr_reg->bit_64, typeinfo_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
-    /* Preserve the instance pointer across the runtime call (caller-saved registers may be clobbered). */
-    inst_list = add_inst(inst_list, "\tsubq\t$16, %rsp\n");
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%%rsp)\n", instance_ptr_reg->bit_64);
+    /* Preserve the instance pointer across the runtime call (caller-saved registers may be clobbered).
+     * Reserve the 32-byte Windows shadow space as well so the saved pointer is not overwritten. */
+    inst_list = add_inst(inst_list, "\tsubq\t$48, %rsp\n");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 32(%%rsp)\n", instance_ptr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
     codegen_move_rtti_args(&inst_list, typeinfo_reg, target_label);
@@ -458,9 +459,9 @@ ListNode_t *codegen_emit_class_cast_check_from_address(struct Expression *expr,
     inst_list = add_inst(inst_list, "\tcall\tgpc_rtti_check_cast\n");
     free_arg_regs();
 
-    snprintf(buffer, sizeof(buffer), "\tmovq\t8(%%rsp), %s\n", instance_ptr_reg->bit_64);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t32(%%rsp), %s\n", instance_ptr_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
-    inst_list = add_inst(inst_list, "\taddq\t$16, %rsp\n");
+    inst_list = add_inst(inst_list, "\taddq\t$48, %rsp\n");
     return inst_list;
 }
 

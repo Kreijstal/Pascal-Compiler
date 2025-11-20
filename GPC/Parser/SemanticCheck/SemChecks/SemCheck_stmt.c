@@ -33,6 +33,9 @@
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
+/* Debug helpers used for corruption watchdog logging. */
+static struct Statement *g_debug_watch_stmt = NULL;
+static struct Expression *g_debug_watch_to_expr = NULL;
 
 /* Resolve the RecordType for a TFPGList specialization from a LHS expression.
  * This bypasses incomplete gpc_type inference and looks directly at the symbol
