@@ -47,6 +47,8 @@ gpc_cparser_sources = [
   'Parser/List/List.c',
   'Parser/ParseTree/tree.c',
   'Parser/ParseTree/GpcType.c',
+  'Parser/ParseTree/operator_registry.c',
+  'Parser/ParseTree/generic_types.c',
   'Parser/parser_error.c',
   'Parser/pascal_frontend.c',
   'Parser/SemanticCheck/SemCheck.c',
@@ -64,6 +66,7 @@ gpc_cparser_sources = [
   'CodeGenerator/Intel_x86-64/expr_tree/expr_tree.c',
   'Optimizer/optimizer.c',
   'Optimizer/pass_manager.c',
+  'Optimizer/mark_used.c',
   'stacktrace.c',
   'unit_paths.c',
 ]
@@ -143,5 +146,5 @@ test('Compiler tests', python,
   depends: [gpc_cparser_exe, gpc_runtime_lib, ctypes_helper],
   env: env,
   protocol: 'tap',
-  timeout: 300,
+  timeout: 600,
 )

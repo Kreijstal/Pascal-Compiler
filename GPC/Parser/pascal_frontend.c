@@ -12,6 +12,7 @@
 #include "ErrVars.h"
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
+#include "ParseTree/generic_types.h"
 #include "pascal_preprocessor.h"
 #include "../flags.h"
 #include "../../cparser/parser.h"
@@ -158,6 +159,15 @@ static bool buffer_starts_with_unit(const char *buffer, size_t length)
 // Cache for initialized parsers to avoid expensive re-initialization
 static combinator_t *cached_unit_parser = NULL;
 static combinator_t *cached_program_parser = NULL;
+static bool generic_registry_ready = false;
+
+static void ensure_generic_registry(void)
+{
+    if (generic_registry_ready)
+        return;
+    generic_registry_init();
+    generic_registry_ready = true;
+}
 
 static combinator_t *get_or_create_unit_parser(void)
 {
@@ -266,13 +276,19 @@ void pascal_frontend_cleanup(void)
         free_combinator(cached_program_parser);
         cached_program_parser = NULL;
     }
-
+    if (generic_registry_ready)
+    {
+        generic_registry_cleanup();
+        generic_registry_ready = false;
+    }
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
 {
     if (error_out != NULL)
         *error_out = NULL;
+
+    ensure_generic_registry();
 
     size_t length = 0;
     char *buffer = read_file(path, &length);
@@ -458,6 +474,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     file_to_parse = (char *)path;
 
     ParseResult result = parse(input, parser);
+    if (getenv("GPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL &&
+        path != NULL && (strstr(path, "fgl.p") != NULL || strstr(path, "FGL.p") != NULL))
+    {
+        fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);
+        print_pascal_ast(result.value.ast);
+        fprintf(stderr, "==== End AST ====\n");
+    }
     Tree_t *tree = NULL;
     bool success = false;
     if (!result.is_success)

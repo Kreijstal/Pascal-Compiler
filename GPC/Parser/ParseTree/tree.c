@@ -13,12 +13,18 @@
 #include <string.h>
 #include <assert.h>
 
+extern void free_ast(struct ast_t *ast);
+extern struct ast_t *copy_ast(struct ast_t *orig);
+
 static void print_record_field(struct RecordField *field, FILE *f, int num_indent);
 static void print_class_property(struct ClassProperty *property, FILE *f, int num_indent);
 static void destroy_record_field(struct RecordField *field);
 static void print_variant_part(struct VariantPart *variant, FILE *f, int num_indent);
 static void print_variant_branch(struct VariantBranch *branch, FILE *f, int num_indent);
 static void destroy_class_property(struct ClassProperty *property);
+static void destroy_method_template(struct MethodTemplate *method);
+static struct MethodTemplate *clone_method_template(const struct MethodTemplate *method);
+static ListNode_t *clone_method_template_list(const ListNode_t *methods);
 static struct ClassProperty *clone_class_property(const struct ClassProperty *property);
 static ListNode_t *clone_property_list(const ListNode_t *properties);
 static void destroy_variant_part(struct VariantPart *variant);
@@ -159,6 +165,70 @@ static void destroy_class_property(struct ClassProperty *property)
     free(property->read_accessor);
     free(property->write_accessor);
     free(property);
+}
+
+static void destroy_method_template(struct MethodTemplate *method)
+{
+    if (method == NULL)
+        return;
+    free(method->name);
+    if (method->method_ast != NULL)
+        free_ast(method->method_ast);
+    if (method->method_impl_ast != NULL)
+        free_ast(method->method_impl_ast);
+    if (method->method_tree != NULL)
+        destroy_tree(method->method_tree);
+    free(method);
+}
+
+static struct MethodTemplate *clone_method_template(const struct MethodTemplate *method)
+{
+    if (method == NULL)
+        return NULL;
+
+    struct MethodTemplate *clone = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
+    if (clone == NULL)
+        return NULL;
+
+    clone->name = method->name != NULL ? strdup(method->name) : NULL;
+    clone->method_ast = method->method_ast != NULL ? copy_ast(method->method_ast) : NULL;
+    clone->method_tree = NULL; /* Method trees are rebuilt on demand */
+    clone->kind = method->kind;
+    clone->is_class_method = method->is_class_method;
+    clone->is_virtual = method->is_virtual;
+    clone->is_override = method->is_override;
+    clone->has_return_type = method->has_return_type;
+    clone->params_ast = NULL;
+    clone->return_type_ast = NULL;
+    clone->directives_ast = NULL;
+    clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast(method->method_impl_ast) : NULL;
+
+    return clone;
+}
+
+static ListNode_t *clone_method_template_list(const ListNode_t *methods)
+{
+    if (methods == NULL)
+        return NULL;
+
+    ListNode_t *head = NULL;
+    ListNode_t **tail = &head;
+    const ListNode_t *cur = methods;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_METHOD_TEMPLATE)
+        {
+            struct MethodTemplate *method_clone = clone_method_template((struct MethodTemplate *)cur->cur);
+            if (method_clone != NULL)
+            {
+                ListNode_t *node = CreateListNode(method_clone, LIST_METHOD_TEMPLATE);
+                *tail = node;
+                tail = &node->next;
+            }
+        }
+        cur = cur->next;
+    }
+    return head;
 }
 
 static struct ClassProperty *clone_class_property(const struct ClassProperty *property)
@@ -516,6 +586,18 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
                 else
                 {
                     fprintf(f, "[ALIASES_TYPE:%d]\n", alias->base_type);
+                }
+            }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
+            {
+                const struct GenericDecl *generic = &tree->tree_data.type_decl_data.info.generic;
+                fprintf(f, "[TYPEDECL:%s GENERIC]\n", tree->tree_data.type_decl_data.id);
+                print_indent(f, num_indent + 1);
+                fprintf(f, "[TYPE_PARAMETERS:%d]\n", generic->num_type_params);
+                for (int i = 0; i < generic->num_type_params; ++i)
+                {
+                    print_indent(f, num_indent + 2);
+                    fprintf(f, "%s\n", generic->type_parameters[i]);
                 }
             }
             else
@@ -963,6 +1045,9 @@ void destroy_list(ListNode_t *list)
             case LIST_RECORD_FIELD:
                 destroy_record_field((struct RecordField *)cur->cur);
                 break;
+            case LIST_CLASS_PROPERTY:
+                destroy_class_property((struct ClassProperty *)cur->cur);
+                break;
             case LIST_SET_ELEMENT:
                 destroy_set_element((struct SetElement *)cur->cur);
                 break;
@@ -975,6 +1060,14 @@ void destroy_list(ListNode_t *list)
                 break;
             case LIST_VARIANT_BRANCH:
                 destroy_variant_branch((struct VariantBranch *)cur->cur);
+                break;
+            case LIST_METHOD_TEMPLATE:
+                destroy_method_template((struct MethodTemplate *)cur->cur);
+                break;
+            case LIST_UNSPECIFIED:
+                /* LIST_UNSPECIFIED nodes have unknown content type - cannot safely free.
+                 * These are used for temporary storage where the content ownership
+                 * is managed elsewhere. Do not free cur->cur here. */
                 break;
             default:
                 fprintf(stderr, "BAD TYPE IN destroy_list [%d]!\n", cur->type);
@@ -1104,6 +1197,28 @@ void destroy_tree(Tree_t *tree)
                 struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
                 clear_type_alias_fields(alias);
             }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
+            {
+                struct GenericDecl *generic = &tree->tree_data.type_decl_data.info.generic;
+                if (generic->type_parameters != NULL)
+                {
+                    for (int i = 0; i < generic->num_type_params; ++i)
+                        free(generic->type_parameters[i]);
+                    free(generic->type_parameters);
+                    generic->type_parameters = NULL;
+                }
+                generic->num_type_params = 0;
+                if (generic->original_ast != NULL)
+                {
+                    free_ast(generic->original_ast);
+                    generic->original_ast = NULL;
+                }
+                if (generic->record_template != NULL)
+                {
+                    destroy_record_type(generic->record_template);
+                    generic->record_template = NULL;
+                }
+            }
             break;
 
         default:
@@ -1186,6 +1301,12 @@ void destroy_stmt(struct Statement *stmt)
 
           destroy_expr(stmt->stmt_data.for_data.to);
           destroy_stmt(stmt->stmt_data.for_data.do_for);
+          break;
+
+        case STMT_FOR_IN:
+          destroy_expr(stmt->stmt_data.for_in_data.loop_var);
+          destroy_expr(stmt->stmt_data.for_in_data.collection);
+          destroy_stmt(stmt->stmt_data.for_in_data.do_stmt);
           break;
 
         case STMT_ASM_BLOCK:
@@ -1490,6 +1611,16 @@ void destroy_record_type(struct RecordType *record_type)
             cur = next;
         }
     }
+    destroy_list(record_type->method_templates);
+    if (record_type->generic_args != NULL)
+    {
+        for (int i = 0; i < record_type->num_generic_args; ++i)
+            free(record_type->generic_args[i]);
+        free(record_type->generic_args);
+    }
+    record_type->generic_args = NULL;
+    record_type->num_generic_args = 0;
+    record_type->generic_decl = NULL;
     
     free(record_type);
 }
@@ -1505,10 +1636,24 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->properties = NULL;
     clone->parent_class_name = record_type->parent_class_name ? strdup(record_type->parent_class_name) : NULL;
     clone->methods = NULL;  /* Methods list copied during semantic checking if needed */
+    clone->method_templates = clone_method_template_list(record_type->method_templates);
     clone->is_class = record_type->is_class;
     clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
     clone->has_cached_size = record_type->has_cached_size;
     clone->cached_size = record_type->cached_size;
+    clone->generic_decl = record_type->generic_decl;
+    clone->num_generic_args = record_type->num_generic_args;
+    clone->generic_args = NULL;
+    if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
+    {
+        clone->generic_args = (char **)calloc((size_t)record_type->num_generic_args, sizeof(char *));
+        if (clone->generic_args != NULL)
+        {
+            for (int i = 0; i < record_type->num_generic_args; ++i)
+                clone->generic_args[i] = record_type->generic_args[i] != NULL ?
+                    strdup(record_type->generic_args[i]) : NULL;
+        }
+    }
 
     clone->fields = clone_member_list(record_type->fields);
     clone->properties = clone_property_list(record_type->properties);
@@ -1839,6 +1984,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     struct TypeAlias *alias = &new_tree->tree_data.type_decl_data.info.alias;
     alias->base_type = is_array ? UNKNOWN_TYPE : actual_type;
     alias->target_type_id = NULL;
+    alias->inline_record_type = NULL;
     alias->is_array = is_array;
     alias->array_start = start;
     alias->array_end = end;
@@ -2118,6 +2264,23 @@ struct Statement *mk_forvar(int line_num, struct Expression *for_var, struct Exp
   new_stmt->stmt_data.for_data.is_downto = is_downto;
 
   return new_stmt;
+}
+
+struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Expression *collection,
+                             struct Statement *do_stmt)
+{
+    struct Statement *new_stmt;
+    new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = 0;
+    new_stmt->type = STMT_FOR_IN;
+    new_stmt->stmt_data.for_in_data.loop_var = loop_var;
+    new_stmt->stmt_data.for_in_data.collection = collection;
+    new_stmt->stmt_data.for_in_data.do_stmt = do_stmt;
+
+    return new_stmt;
 }
 
 struct Statement *mk_asmblock(int line_num, char *code)
@@ -2611,5 +2774,10 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     {
         destroy_gpc_type(alias->gpc_type);
         alias->gpc_type = NULL;
+    }
+    if (alias->inline_record_type != NULL)
+    {
+        destroy_record_type(alias->inline_record_type);
+        alias->inline_record_type = NULL;
     }
 }

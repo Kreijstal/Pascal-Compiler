@@ -19,6 +19,10 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
+#ifndef CODEGEN_POINTER_SIZE_BYTES
+#define CODEGEN_POINTER_SIZE_BYTES 8
+#endif
+
 static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label);
 static void codegen_pop_loop_exit(CodeGenContext *ctx);
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
@@ -39,6 +43,7 @@ static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_li
 static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -1284,6 +1289,117 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
         return inst_list;
 
+    /* Check if this is a class assignment. Classes are represented as pointers,
+     * so we should just copy the pointer value, not the entire instance. */
+    int is_class_assignment = 0;
+    if (dest_expr->record_type != NULL && record_type_is_class(dest_expr->record_type))
+        is_class_assignment = 1;
+    else if (src_expr->record_type != NULL && record_type_is_class(src_expr->record_type))
+        is_class_assignment = 1;
+
+    if (is_class_assignment)
+    {
+        /* For class variables, just copy the pointer (8 bytes) */
+        Register_t *dest_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        Register_t *src_reg = NULL;
+        
+        /* For function calls (especially constructors), the expression evaluates to the pointer value directly.
+         * For variable references, we need to load the pointer from the variable.
+         * We check if the source is addressable to distinguish these cases. */
+        int src_is_addressable = codegen_expr_is_addressable(src_expr);
+        
+        if (src_is_addressable)
+        {
+            /* Source is a variable - get its address and load the pointer value */
+            inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            
+            /* Load the pointer value from the variable */
+            Register_t *ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (ptr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for class pointer copy.");
+            }
+            
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", src_reg->bit_64, ptr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", ptr_reg->bit_64, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), ptr_reg);
+            free_reg(get_reg_stack(), src_reg);
+        }
+        else
+        {
+            /* Source is a function call or expression that returns the pointer value directly.
+             * Save dest_reg to the stack before evaluating source to prevent it from being clobbered. */
+            StackNode_t *dest_save_slot = add_l_x("__class_assign_dest__", CODEGEN_POINTER_SIZE_BYTES);
+            if (dest_save_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to reserve stack slot for class assignment destination.");
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                dest_reg->bit_64, dest_save_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), dest_reg);
+            dest_reg = NULL;
+            
+            /* Evaluate the source expression (constructor call) */
+            inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                return inst_list;
+            }
+            
+            /* Restore dest_reg from stack */
+            dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (dest_reg == NULL)
+            {
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for class assignment destination restore.");
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                dest_save_slot->offset, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* src_reg already contains the pointer value - store it directly */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", src_reg->bit_64, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), src_reg);
+        }
+        
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
     long long record_size = 0;
     int size_status = codegen_get_record_size(ctx, dest_expr, &record_size);
     if (size_status != 0)
@@ -1313,21 +1429,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
     if (!codegen_expr_is_addressable(src_expr))
     {
-        if (src_expr->type == EXPR_FUNCTION_CALL && expr_has_type_tag(src_expr, RECORD_TYPE))
+        if (src_expr->type == EXPR_FUNCTION_CALL)
         {
-            const char *ret_ptr_reg = current_arg_reg64(0);
-            if (ret_ptr_reg == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine register for record return pointer.");
-                free_reg(get_reg_stack(), dest_reg);
-                return inst_list;
-            }
-
-            char buffer[128];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, ret_ptr_reg);
-            inst_list = add_inst(inst_list, buffer);
-
             struct GpcType *func_type = NULL;
             if (src_expr->expr_data.function_call_data.is_call_info_valid)
             {
@@ -1345,19 +1448,200 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 }
             }
 
-            inst_list = codegen_pass_arguments(
-                src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                func_type, 
-                src_expr->expr_data.function_call_data.id, 1);
+            int call_returns_record = expr_has_type_tag(src_expr, RECORD_TYPE);
+            if (!call_returns_record && func_type != NULL &&
+                gpc_type_is_procedure(func_type))
+            {
+                GpcType *return_type = gpc_type_get_return_type(func_type);
+                if (return_type != NULL && gpc_type_is_record(return_type))
+                    call_returns_record = 1;
+            }
 
-            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
-                src_expr->expr_data.function_call_data.mangled_id);
-            inst_list = add_inst(inst_list, buffer);
-            inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-            codegen_release_function_call_mangled_id(src_expr);
+            if (call_returns_record)
+            {
+                const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
+                const char *func_id = src_expr->expr_data.function_call_data.id;
+                
+                /* Check if this is a constructor call */
+                int is_constructor = 0;
+                if (func_mangled_name != NULL)
+                {
+                    const char *create_pos = strstr(func_mangled_name, "__Create");
+                    if (create_pos != NULL)
+                        is_constructor = 1;
+                    else if (strcmp(func_mangled_name, "Create") == 0)
+                        is_constructor = 1;
+                }
+                
+                /* For constructors, allocate heap memory and initialize VMT */
+                Register_t *constructor_instance_reg = NULL;
+                if (is_constructor)
+                {
+                    /* Get the class type from the source expression or first argument */
+                    struct RecordType *class_record = src_expr->record_type;
+                    
+                    if (class_record == NULL)
+                    {
+                        ListNode_t *first_arg = src_expr->expr_data.function_call_data.args_expr;
+                        if (first_arg != NULL && first_arg->cur != NULL)
+                        {
+                            struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                            if (class_expr != NULL)
+                                class_record = class_expr->record_type;
+                        }
+                    }
+                    
+                    if (class_record != NULL && record_type_is_class(class_record))
+                    {
+                        /* Get the size of the class instance */
+                        long long instance_size = 0;
+                        if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
+                            instance_size > 0)
+                        {
+                            char buffer[128];
+                            
+                            /* Save dest_reg to stack since it will be clobbered by function calls */
+                            StackNode_t *dest_save_slot = add_l_x("__constructor_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                            if (dest_save_slot == NULL)
+                            {
+                                codegen_report_error(ctx,
+                                    "ERROR: Unable to reserve stack slot for constructor destination.");
+                                free_reg(get_reg_stack(), dest_reg);
+                                return inst_list;
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                dest_reg->bit_64, dest_save_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Allocate zero-initialized memory using calloc
+                             * This ensures all fields (including dynamic array descriptors) start at zero */
+                            const char *size_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                            const char *count_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+                            
+                            /* calloc(1, instance_size) - allocate 1 element of size instance_size */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                                instance_size, count_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            inst_list = codegen_vect_reg(inst_list, 0);
+                            inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
+                            free_arg_regs();
+                            
+                            /* Save the allocated instance pointer */
+                            constructor_instance_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (constructor_instance_reg == NULL)
+                            {
+                                codegen_report_error(ctx, 
+                                    "ERROR: Unable to allocate register for constructor instance.");
+                                free_reg(get_reg_stack(), dest_reg);
+                                return inst_list;
+                            }
+                            
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
+                                constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Initialize VMT pointer in the allocated instance */
+                            /* Use the class's TYPEINFO label instead of evaluating the first argument
+                             * to avoid side effects like storing into the destination variable */
+                            const char *class_type_id = class_record->type_id;
+                            if (class_type_id != NULL)
+                            {
+                                /* Load VMT (TYPEINFO) address */
+                                Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                                if (vmt_reg != NULL)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %s\n",
+                                        class_type_id, vmt_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    
+                                    /* Store VMT into first 8 bytes of instance */
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                        vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    
+                                    free_reg(get_reg_stack(), vmt_reg);
+                                }
+                            }
+                            
+                            /* Pass the allocated instance as the first argument (Self) */
+                            const char *self_arg_reg = current_arg_reg64(0);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                constructor_instance_reg->bit_64, self_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Pass remaining arguments starting from index 1 (skip class type argument) */
+                            inst_list = codegen_pass_arguments(
+                                src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                                func_type, func_id, 1);
+                            
+                            /* Call the constructor */
+                            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", func_mangled_name);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                            codegen_release_function_call_mangled_id(src_expr);
+                            
+                            /* Restore dest_reg from stack */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                dest_save_slot->offset, dest_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Store the instance pointer in the destination */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                constructor_instance_reg->bit_64, dest_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            free_reg(get_reg_stack(), constructor_instance_reg);
+                            free_reg(get_reg_stack(), dest_reg);
+                            return inst_list;
+                        }
+                    }
+                }
+                
+                /* Normal record-returning function (non-constructor) */
+                const char *ret_ptr_reg = current_arg_reg64(0);
+                if (ret_ptr_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine register for record return pointer.");
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
 
-            free_reg(get_reg_stack(), dest_reg);
-            return inst_list;
+                StackNode_t *dest_save_slot = add_l_x("__record_call_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                if (dest_save_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to reserve stack slot for record return destination.");
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                char buffer[128];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    dest_reg->bit_64, dest_save_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+
+                inst_list = codegen_pass_arguments(
+                    src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                    func_type,
+                    src_expr->expr_data.function_call_data.id, 1);
+
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    dest_save_slot->offset, ret_ptr_reg);
+                inst_list = add_inst(inst_list, buffer);
+
+                snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
+                    src_expr->expr_data.function_call_data.mangled_id);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                codegen_release_function_call_mangled_id(src_expr);
+
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
         }
 
         /* Handle character set literals - they generate a temporary buffer address */
@@ -1752,6 +2036,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_FOR:
             inst_list = codegen_for(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_FOR_IN:
+            inst_list = codegen_for_in(stmt, inst_list, ctx, symtab);
+            break;
         case STMT_BREAK:
             inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
             break;
@@ -1822,21 +2109,53 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     struct Expression *len_expr = (struct Expression *)args_expr->next->cur;
 
     struct Expression *array_expr = target_expr;
+    const char *array_id = NULL;
 
-    if (array_expr == NULL || array_expr->type != EXPR_VAR_ID)
+    /* Handle both simple variables and field access (e.g., self.FItems) */
+    if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
     {
-        fprintf(stderr, "ERROR: SetLength first argument must be a variable identifier.\n");
+        array_id = array_expr->expr_data.id;
+    }
+    else if (array_expr != NULL && array_expr->type == EXPR_RECORD_ACCESS)
+    {
+        /* For field access like self.FItems, use the field name */
+        array_id = array_expr->expr_data.record_access_data.field_id;
+    }
+
+    if (array_id == NULL)
+    {
+        fprintf(stderr, "ERROR: SetLength first argument must be a variable or field identifier.\n");
         return inst_list;
     }
 
-    StackNode_t *array_node = find_label(array_expr->expr_data.id);
-    if (array_node == NULL || !array_node->is_dynamic)
+    StackNode_t *array_node = find_label((char *)array_id);
+    int is_field_array = 0;
+    long long field_offset = 0;
+    
+    /* If not found in local stack, might be a field of the current object */
+    if (array_node == NULL && array_expr->type == EXPR_RECORD_ACCESS)
     {
-        fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_expr->expr_data.id);
+        is_field_array = 1;
+        field_offset = array_expr->expr_data.record_access_data.field_offset;
+    }
+    
+    if (!is_field_array && (array_node == NULL || !array_node->is_dynamic))
+    {
+        fprintf(stderr, "ERROR: Dynamic array %s not found for SetLength.\n", array_id);
         return inst_list;
     }
 
-    int element_size = codegen_dynamic_array_element_size(ctx, array_node, array_expr);
+    int element_size;
+    if (is_field_array)
+    {
+        /* For field arrays, we need to determine element size from the expression type */
+        /* For now, assume Integer (4 bytes) - this should be improved */
+        element_size = 4;
+    }
+    else
+    {
+        element_size = codegen_dynamic_array_element_size(ctx, array_node, array_expr);
+    }
 
     inst_list = codegen_expr(len_expr, inst_list, ctx);
     if (codegen_had_error(ctx))
@@ -1852,7 +2171,50 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
             "ERROR: Unable to allocate register for SetLength descriptor.");
 
     char buffer[128];
-    if (array_node->is_static)
+    if (is_field_array)
+    {
+        /* For field arrays, calculate address as self + field_offset */
+        /* Get self pointer from first local variable (convention for methods) */
+        StackNode_t *self_node = find_label("self");
+        if (self_node == NULL)
+        {
+            /* Try alternate names */
+            self_node = find_label("Self");
+        }
+        
+        if (self_node != NULL)
+        {
+            /* Load self pointer */
+            Register_t *self_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (self_reg == NULL)
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for self pointer.");
+            
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                self_node->offset, self_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Calculate field address: self + offset */
+            if (field_offset > 0)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%lld(%s), %s\n",
+                    field_offset, self_reg->bit_64, descriptor_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    self_reg->bit_64, descriptor_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), self_reg);
+        }
+        else
+        {
+            fprintf(stderr, "ERROR: Cannot find self pointer for field array SetLength.\n");
+            return inst_list;
+        }
+    }
+    else if (array_node->is_static)
     {
         const char *label = (array_node->static_label != NULL) ?
             array_node->static_label : array_node->label;
@@ -4135,6 +4497,11 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* Use cached information from semantic checking */
         call_hash_type = stmt->stmt_data.procedure_call_data.call_hash_type;
         call_gpc_type = stmt->stmt_data.procedure_call_data.call_gpc_type;
+        
+        fprintf(stderr, "DEBUG codegen_proc_call: id=%s, mangled=%s, hash_type=%d\n",
+            unmangled_name ? unmangled_name : "NULL",
+            proc_name ? proc_name : "NULL", 
+            call_hash_type);
     }
     else
     {
@@ -4442,7 +4809,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             codegen_end_expression(ctx);
         }
 
-        inst_list = codegen_vect_reg(inst_list, 0);
+     inst_list = codegen_vect_reg(inst_list, 0);
+        fprintf(stderr, "DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
@@ -4618,6 +4986,471 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
 
     snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
     inst_list = add_inst(inst_list, buffer);
+
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+    return inst_list;
+}
+
+/* Code generation for for-in statements - lower to regular for loop */
+static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_FOR_IN);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    // Extract for-in components
+    struct Expression *loop_var = stmt->stmt_data.for_in_data.loop_var;
+    struct Expression *collection = stmt->stmt_data.for_in_data.collection;
+    struct Statement *body = stmt->stmt_data.for_in_data.do_stmt;
+
+    if (loop_var == NULL || collection == NULL || body == NULL) {
+        codegen_report_error(ctx, "ERROR: FOR-IN statement has NULL components");
+        return inst_list;
+    }
+
+    // Get array type info from semantic check
+    GpcType *array_type = collection->resolved_gpc_type;
+    
+    // Check if this is a TFPGList (specialized generic list)
+    int is_fpglist = 0;
+    if (array_type != NULL && array_type->kind == TYPE_KIND_RECORD) {
+        struct RecordType *record_info = gpc_type_get_record(array_type);
+        if (record_info != NULL && record_info->type_id != NULL) {
+            const char *prefix = "TFPGList$";
+            size_t prefix_len = strlen(prefix);
+            if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+                is_fpglist = 1;
+            }
+        }
+    }
+    
+    if (is_fpglist) {
+        // Generate FOR-IN loop for TFPGList by accessing FItems and FCount directly
+        // Structure: for Item in L do body
+        // Becomes: for i := 0 to L.FCount-1 do Item := L.FItems[i]; body
+        
+        char cond_label[18], body_label[18], exit_label[18], buffer[256];
+        gen_label(cond_label, 18, ctx);
+        gen_label(body_label, 18, ctx);
+        gen_label(exit_label, 18, ctx);
+
+        // Allocate stack slot for loop index
+        StackNode_t *index_slot = codegen_alloc_temp_slot("fpg_idx");
+        // Allocate stack slot for object pointer to survive loop calls
+        StackNode_t *obj_ptr_slot = codegen_alloc_temp_slot("fpg_obj");
+        // Allocate stack slot for loop upper bound (FCount) to survive loop body codegen
+        StackNode_t *count_slot = codegen_alloc_temp_slot("fpg_count");
+        
+        if (index_slot == NULL || obj_ptr_slot == NULL || count_slot == NULL) {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for FOR-IN variables");
+            return inst_list;
+        }
+
+        // Get address of collection object (L)
+        Register_t *obj_addr_reg = NULL;
+        inst_list = codegen_address_for_expr(collection, inst_list, ctx, &obj_addr_reg);
+        if (obj_addr_reg == NULL || codegen_had_error(ctx)) {
+            return inst_list;
+        }
+        
+        // Dereference L to get the actual object pointer and store in stack slot
+        Register_t *temp_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (temp_reg == NULL) {
+            free_reg(get_reg_stack(), obj_addr_reg);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for object pointer load");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", obj_addr_reg->bit_64, temp_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        
+        // Store object pointer to stack
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", temp_reg->bit_64, obj_ptr_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        
+        free_reg(get_reg_stack(), obj_addr_reg);
+
+        // Load FCount and store to stack slot (to prevent register clobbering in loop body)
+        // Layout: [0..7]: TypeInfo, [8..23]: FItems (descriptor: data + length), [24..31]: FCount
+        // We use temp_reg (holding obj ptr) to access FCount at offset 24, then immediately
+        // spill to a stack slot so the loop body codegen can't clobber it
+        snprintf(buffer, sizeof(buffer), "\tmovq\t24(%s), %s\n", temp_reg->bit_64, temp_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", temp_reg->bit_64, count_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), temp_reg);
+
+        // Initialize index to 0
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Jump to condition check
+        inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+        // Body label
+        snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Push loop exit label for break statements
+        if (!codegen_push_loop_exit(ctx, exit_label)) {
+            return inst_list;
+        }
+
+        // Load loop variable: Item := L.FItems[index]
+        // FItems is a dynamic array pointer at offset 8
+        Register_t *fitems_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (fitems_reg == NULL) {
+            codegen_pop_loop_exit(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for FItems");
+            return inst_list;
+        }
+        
+        // Load object pointer from stack to temp register (reusing fitems_reg temporarily to save registers? No, safer to use another temp)
+        Register_t *obj_reload_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (obj_reload_reg == NULL) {
+             free_reg(get_reg_stack(), fitems_reg);
+             codegen_pop_loop_exit(ctx);
+             codegen_report_error(ctx, "ERROR: Unable to allocate register for object reload");
+             return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", obj_ptr_slot->offset, obj_reload_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Load FItems.data pointer from object using two-step approach
+        // Step 1: Get address of FItems descriptor (at Self+8)  
+        // Step 2: Load data pointer from descriptor[0]
+        Register_t *desc_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (desc_addr_reg == NULL) {
+            free_reg(get_reg_stack(), obj_reload_reg);
+            free_reg(get_reg_stack(), fitems_reg);
+            codegen_pop_loop_exit(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for descriptor address");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tleaq\t8(%s), %s\n", obj_reload_reg->bit_64, desc_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", desc_addr_reg->bit_64, fitems_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), desc_addr_reg);
+        free_reg(get_reg_stack(), obj_reload_reg);
+
+        // Load index into register
+        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (idx_reg == NULL) {
+            free_reg(get_reg_stack(), fitems_reg);
+            codegen_pop_loop_exit(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for index");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", index_slot->offset, idx_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Calculate element offset: index * element_size
+        // For Integer (32-bit), element_size = 4
+        // TODO: Get actual element size from type
+        int element_size = 4; // Assuming Integer for now
+        
+        if (element_size != 1) {
+            snprintf(buffer, sizeof(buffer), "\timulq\t$%d, %s\n", element_size, idx_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        // Load element: FItems[index]
+        Register_t *elem_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (elem_reg == NULL) {
+            free_reg(get_reg_stack(), idx_reg);
+            free_reg(get_reg_stack(), fitems_reg);
+            codegen_pop_loop_exit(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for element");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Assign element value to loop variable
+        // Get address of loop variable
+        Register_t *loop_var_addr_reg = NULL;
+        inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
+        if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
+            free_reg(get_reg_stack(), elem_reg);
+            free_reg(get_reg_stack(), idx_reg);
+            free_reg(get_reg_stack(), fitems_reg);
+            codegen_pop_loop_exit(ctx);
+            return inst_list;
+        }
+
+        // Store element to loop variable
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", elem_reg->bit_32, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), loop_var_addr_reg);
+        free_reg(get_reg_stack(), elem_reg);
+        free_reg(get_reg_stack(), idx_reg);
+        free_reg(get_reg_stack(), fitems_reg);
+
+        // Generate body
+        inst_list = codegen_stmt(body, inst_list, ctx, symtab);
+
+        codegen_pop_loop_exit(ctx);
+
+        // Increment index
+        Register_t *inc_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (inc_reg != NULL) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", index_slot->offset, inc_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tincq\t%s\n", inc_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", inc_reg->bit_64, index_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), inc_reg);
+        }
+
+        // Condition check label
+        snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Compare index < count
+        // Load index from stack
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        
+        // Load FCount from stack slot (to avoid register clobbering by loop body)
+        Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (count_reg != NULL) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", count_slot->offset, count_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %%rax\n", count_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), count_reg);
+        } else {
+            // Fallback: compare directly with memory operand
+            snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %%rax\n", count_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        // Jump to body if index < count
+        snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        // Exit label
+        snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (TFPGList path)\n", __func__);
+        #endif
+        return inst_list;
+    }
+    
+    if (array_type == NULL || array_type->kind != TYPE_KIND_ARRAY) {
+        codegen_report_error(ctx, "ERROR: FOR-IN collection is not an array type");
+        return inst_list;
+    }
+
+    // Get array bounds
+    int start_index = array_type->info.array_info.start_index;
+    int end_index = array_type->info.array_info.end_index;
+
+    // Generate labels for loop control
+    char cond_label[18], body_label[18], exit_label[18], buffer[256];
+    gen_label(cond_label, 18, ctx);
+    gen_label(body_label, 18, ctx);
+    gen_label(exit_label, 18, ctx);
+
+    // Allocate stack slot for the index variable
+    StackNode_t *index_slot = codegen_alloc_temp_slot("for_in_idx");
+    if (index_slot == NULL) {
+        codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for for-in index");
+        return inst_list;
+    }
+
+    // Initialize index to start_index
+    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, -%d(%%rbp)\n", start_index, index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Jump to condition check
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+    // Body label
+    snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Push loop exit label for break statements
+    if (!codegen_push_loop_exit(ctx, exit_label))
+        return inst_list;
+
+    // Generate code for: loop_var := collection[index]
+    // Load index from stack into a register
+    Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (index_reg == NULL) {
+        codegen_report_error(ctx, "ERROR: Unable to allocate register for for-in index");
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
+    
+    snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", index_slot->offset, index_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Get the base address of the array (not its value)
+    Register_t *array_base_reg = NULL;
+    inst_list = codegen_address_for_expr(collection, inst_list, ctx, &array_base_reg);
+    if (array_base_reg == NULL || codegen_had_error(ctx)) {
+        free_reg(get_reg_stack(), index_reg);
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
+
+    // Calculate offset: (index - start_index) * element_size
+    int element_size = gpc_type_sizeof(array_type->info.array_info.element_type);
+    
+    // Subtract start_index if non-zero
+    if (start_index != 0) {
+        snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", start_index, index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    // Multiply by element size
+    if (element_size > 1) {
+        if ((element_size & (element_size - 1)) == 0) {
+            // Power of 2 - use shift
+            int shift = 0;
+            int temp = element_size;
+            while (temp > 1) {
+                temp >>= 1;
+                shift++;
+            }
+            if (shift > 0) {
+                snprintf(buffer, sizeof(buffer), "\tsall\t$%d, %s\n", shift, index_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        } else {
+            // Not power of 2 - use multiply
+            snprintf(buffer, sizeof(buffer), "\timull\t$%d, %s\n", element_size, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    // Sign extend to 64-bit and add to base address
+    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", index_reg->bit_32, index_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", index_reg->bit_64, array_base_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Now array_base_reg points to the element - load it
+    Register_t *element_reg = array_base_reg;  // Reuse the register
+    free_reg(get_reg_stack(), index_reg);
+    index_reg = NULL;
+
+    if (element_size == 1) {
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", element_reg->bit_64, element_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 2) {
+        snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", element_reg->bit_64, element_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 4) {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", element_reg->bit_64, element_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 8) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", element_reg->bit_64, element_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else {
+        codegen_report_error(ctx, "ERROR: FOR-IN with large array elements not yet supported");
+        free_reg(get_reg_stack(), element_reg);
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
+
+    // Assign element value to loop variable
+    // Get address of loop variable
+    Register_t *loop_var_addr_reg = NULL;
+    inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
+    if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
+        free_reg(get_reg_stack(), element_reg);
+        codegen_pop_loop_exit(ctx);
+        return inst_list;
+    }
+
+    // Store element to loop variable (using proper byte/word/dword/qword)
+    if (element_size == 1) {
+        // Extract byte register name from 32-bit register (e.g., %eax -> %al)
+        char byte_reg[16];
+        const char *reg32 = element_reg->bit_32;
+        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
+            // %eax -> %al, %ebx -> %bl, etc.
+            snprintf(byte_reg, sizeof(byte_reg), "%%%cl", reg32[3]);
+        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
+            // %r8d -> %r8b, %r9d -> %r9b, etc.
+            int len = strlen(reg32);
+            strncpy(byte_reg, reg32, len - 1);
+            byte_reg[len - 1] = 'b';
+            byte_reg[len] = '\0';
+        } else {
+            strcpy(byte_reg, "%al");  // Fallback
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 2) {
+        // Extract word register name from 32-bit register (e.g., %eax -> %ax)
+        char word_reg[16];
+        const char *reg32 = element_reg->bit_32;
+        if (strncmp(reg32, "%e", 2) == 0 && strlen(reg32) >= 4) {
+            // %eax -> %ax, %ebx -> %bx, etc.
+            snprintf(word_reg, sizeof(word_reg), "%%%.2s", reg32 + 3);
+        } else if (strncmp(reg32, "%r", 2) == 0 && strlen(reg32) >= 4) {
+            // %r8d -> %r8w, %r9d -> %r9w, etc.
+            int len = strlen(reg32);
+            strncpy(word_reg, reg32, len - 1);
+            word_reg[len - 1] = 'w';
+            word_reg[len] = '\0';
+        } else {
+            strcpy(word_reg, "%ax");  // Fallback
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 4) {
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", element_reg->bit_32, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    } else if (element_size == 8) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", element_reg->bit_64, loop_var_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    free_reg(get_reg_stack(), element_reg);
+    free_reg(get_reg_stack(), loop_var_addr_reg);
+
+    // Generate code for the loop body
+    inst_list = codegen_stmt(body, inst_list, ctx, symtab);
+    
+    // Increment index
+    snprintf(buffer, sizeof(buffer), "\tincl\t-%d(%%rbp)\n", index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Jump to condition
+    inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+    // Condition label
+    snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Compare index with end_index
+    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", end_index, index_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Jump to body if index <= end_index
+    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Exit label
+    snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    // Pop loop exit label
+    codegen_pop_loop_exit(ctx);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

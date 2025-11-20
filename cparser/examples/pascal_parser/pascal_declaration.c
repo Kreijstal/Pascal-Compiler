@@ -1393,17 +1393,28 @@ void init_pascal_unit_parser(combinator_t** p) {
         function_body, optional(token(match(";"))), NULL);
     set_combinator_name(procedure_impl, "procedure_impl");
 
-    // Method implementations with qualified names (Class.Method)
+    // Helper for class-level generic type parameters in method implementations: ClassName<T>
+    // This captures the generic type parameters that appear after the class name
+    combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+
+    // Method implementations with qualified names (Class.Method or Class<T>.Method)
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),          // class name
+        class_generic_type_params,                   // optional generic type params for class
         token(match(".")),                           // dot
         token(cident(PASCAL_T_IDENTIFIER)),          // method name
         NULL
     );
 
-    // Operator name with class qualification (Class.+)
+    // Operator name with class qualification (Class.+ or Class<T>.+)
     combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
+        class_generic_type_params,                   // optional generic type params for class
         token(match(".")),                           // dot
         token(operator_name(PASCAL_T_IDENTIFIER)),   // operator symbol or name
         NULL
@@ -1765,9 +1776,18 @@ void init_pascal_method_implementation_parser(combinator_t** p) {
     *stmt_parser = new_combinator();
     init_pascal_statement_parser(stmt_parser);
 
-    // Method name with class: ClassName.MethodName
+    // Helper for class-level generic type parameters in method implementations: ClassName<T>
+    combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+
+    // Method name with class: ClassName.MethodName or ClassName<T>.MethodName
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),      // class name
+        class_generic_type_params,               // optional generic type params for class
         token(match(".")),                       // dot
         token(cident(PASCAL_T_IDENTIFIER)),      // method name
         NULL
@@ -1859,9 +1879,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
     combinator_t* constructed_type = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        optional(token(keyword_ci("specialize"))),      // optional specialize keyword
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        peek(create_generic_type_lookahead()),  // Lookahead to ensure '< identifier' pattern
-        type_arg_list,                          // Now parse the full type argument list
+        peek(create_generic_type_lookahead()),          // Lookahead to ensure '< identifier' pattern
+        type_arg_list,                                  // Now parse the full type argument list
         NULL
     );
 
@@ -1879,8 +1900,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         pointer_type(PASCAL_T_POINTER_TYPE),            // pointer types like ^TMyObject
         range_type(PASCAL_T_RANGE_TYPE),                // range types like -1..1
         type_name(PASCAL_T_IDENTIFIER),                 // built-in types
+        constructed_type,                               // constructed types like TFoo<Integer> (try before plain identifiers)
         token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),  // custom types with optional [size]
-        constructed_type,                               // constructed types like TFoo<Integer> (try last to avoid conflicts)
         NULL
     );
 
@@ -2364,8 +2385,18 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     // Object Pascal method implementations (constructor/destructor/procedure with class.method syntax)
     // These are Object Pascal extensions, not standard Pascal
+    
+    // Helper for class-level generic type parameters in method implementations: ClassName<T>
+    combinator_t* class_generic_type_params = optional(seq(new_combinator(), PASCAL_T_TYPE_PARAM_LIST,
+        token(match("<")),
+        sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+        token(match(">")),
+        NULL
+    ));
+
     combinator_t* method_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),          // class name
+        class_generic_type_params,                   // optional generic type params for class
         token(match(".")),                           // dot
         token(cident(PASCAL_T_IDENTIFIER)),          // method name
         NULL

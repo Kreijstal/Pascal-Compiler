@@ -1021,11 +1021,53 @@ void gpc_textcolor(int color)
     fflush(stdout);
 }
 
+/* 
+ * Dynamic Array ABI Design (Model A - Embedded Descriptor)
+ * =========================================================
+ * A dynarray variable (or field) stores a gpc_dynarray_descriptor_t BY VALUE.
+ * The descriptor contains:
+ *   - data: pointer to the element buffer (allocated with malloc/realloc)
+ *   - length: logical length/capacity of the array
+ * 
+ * The descriptor itself lives:
+ *   - in .bss (global/static variables)
+ *   - on the stack (local variables)
+ *   - inside a record/class (fields)
+ * 
+ * Runtime functions receive a POINTER to the descriptor (not the descriptor itself).
+ * 
+ * TFPGList Layout:
+ *   Offset 0-7:   TypeInfo pointer (class RTTI)
+ *   Offset 8-23:  FItems (gpc_dynarray_descriptor_t - data + length)
+ *                   8-15:  FItems.data (pointer to elements)
+ *                   16-23: FItems.length (capacity)
+ *   Offset 24-31: FCount (Int64 - number of valid elements)
+ */
 typedef struct {
     void *data;
     int64_t length;
 } gpc_dynarray_descriptor_t;
 
+/*
+ * Get the length of a dynamic array.
+ * descriptor_ptr: pointer to a gpc_dynarray_descriptor_t
+ * Returns: length field, or 0 if descriptor is NULL
+ */
+int64_t __gpc_dynarray_length(void *descriptor_ptr)
+{
+    if (descriptor_ptr == NULL)
+        return 0;
+    
+    gpc_dynarray_descriptor_t *desc = (gpc_dynarray_descriptor_t *)descriptor_ptr;
+    return desc->length;
+}
+
+/*
+ * Set the length of a dynamic array.
+ * descriptor_ptr: pointer to a gpc_dynarray_descriptor_t
+ * new_length: desired new length
+ * element_size: size of each element in bytes
+ */
 void gpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t element_size)
 {
     if (descriptor_ptr == NULL || element_size <= 0)

@@ -172,6 +172,14 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
         else if (node->type->kind == TYPE_KIND_RECORD || node->type->kind == TYPE_KIND_ARRAY)
         {
+            /* For classes, allocate only pointer size since instances are heap-allocated */
+            if (node->type->kind == TYPE_KIND_RECORD && 
+                node->type->info.record_info != NULL &&
+                record_type_is_class(node->type->info.record_info))
+            {
+                return 8;  /* Class variables are pointers */
+            }
+            
             long long size = gpc_type_sizeof(node->type);
             if (size > 0)
                 return (int)size;
@@ -1030,14 +1038,28 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
+            struct RecordType *record_info = NULL;
+            const char *class_label = NULL;
+            
             /* Check if this is a record/class type with methods */
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
-                struct RecordType *record_info = type_tree->tree_data.type_decl_data.info.record;
+                record_info = type_tree->tree_data.type_decl_data.info.record;
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
-                const char *class_label = (record_info != NULL && record_info->type_id != NULL) ?
+                class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
+            }
+            /* Also check for TYPE_DECL_ALIAS that points to specialized generic classes */
+            else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+                if (record_info != NULL && record_info->type_id != NULL) {
+                    /* Check if this is a specialized generic (has $ in the name) */
+                    if (strchr(record_info->type_id, '$') != NULL) {
+                        class_label = record_info->type_id;
+                    }
+                }
+            }
 
-                if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
+            if (record_info != NULL && record_type_is_class(record_info) && class_label != NULL) {
                     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
                     fprintf(ctx->output_file, "\t.align 8\n");
                     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
@@ -1067,12 +1089,11 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                             if (method != NULL && method->mangled_name != NULL) {
                                 fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
                             }
-                            method_node = method_node->next;
+                                                    method_node = method_node->next;
                         }
                     }
                 }
             }
-        }
         cur = cur->next;
     }
     
@@ -1481,14 +1502,27 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         }
                         else if (node_is_record_type(size_node))
                         {
-                            /* For records, get the full struct size */
-                            struct RecordType *record_desc = get_record_type_from_node(size_node);
-                            long long record_size = 0;
-                            if (record_desc != NULL &&
-                                codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
-                                record_size > 0)
+                            /* For classes, allocate only pointer size (8 bytes)
+                             * For records/objects, allocate the full struct size */
+                            if (node_is_class_type(size_node))
                             {
-                                alloc_size = (int)record_size;
+                                fprintf(stderr, "DEBUG ALLOC: Detected class type for '%s', allocating 8 bytes\n",
+                                    (char *)id_list->cur);
+                                alloc_size = 8;  /* Classes are heap-allocated; variable holds pointer */
+                            }
+                            else
+                            {
+                                fprintf(stderr, "DEBUG ALLOC: Detected record type for '%s', allocating full size\n",
+                                    (char *)id_list->cur);
+                                /* For records/objects, get the full struct size */
+                                struct RecordType *record_desc = get_record_type_from_node(size_node);
+                                long long record_size = 0;
+                                if (record_desc != NULL &&
+                                    codegen_sizeof_record_type(ctx, record_desc, &record_size) == 0 &&
+                                    record_size > 0)
+                                {
+                                    alloc_size = (int)record_size;
+                                }
                             }
                         }
                     }
@@ -1715,6 +1749,13 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
+        /* Skip unused functions (dead code elimination) */
+        if (!sub->tree_data.subprogram_data.is_used)
+        {
+            sub_list = sub_list->next;
+            continue;
+        }
+
         switch(sub->tree_data.subprogram_data.sub_type)
         {
             case TREE_SUBPROGRAM_PROC:
@@ -1813,6 +1854,41 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
+    
+    /* For constructors (methods with __Create in name), return Self in %rax.
+     * Constructors receive Self in the first parameter and should return it
+     * to allow constructor chaining and assignment. */
+    int is_constructor = 0;
+    if (sub_id != NULL && strstr(sub_id, "__Create") != NULL)
+        is_constructor = 1;
+    
+    if (is_constructor && num_args > 0)
+    {
+        /* Self is the first parameter. For class methods, it's in %rdi (or first stack slot).
+         * Retrieve it and place in %rax for the return value. */
+        ListNode_t *first_arg = (proc->args_var != NULL) ? proc->args_var : NULL;
+        if (first_arg != NULL && first_arg->cur != NULL)
+        {
+            Tree_t *first_param = (Tree_t *)first_arg->cur;
+            if (first_param != NULL && first_param->type == TREE_VAR_DECL)
+            {
+                struct Var *param_var = &first_param->tree_data.var_decl_data;
+                if (param_var->ids != NULL && param_var->ids->cur != NULL)
+                {
+                    char *param_id = (char *)param_var->ids->cur;
+                    StackNode_t *self_var = find_label(param_id);
+                    if (self_var != NULL)
+                    {
+                        /* Self parameter is on the stack - load it into %rax for return */
+                        char buffer[128];
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", self_var->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+            }
+        }
+    }
+    
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
     codegen_inst_list(inst_list, ctx);
@@ -1971,6 +2047,72 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
+    
+    /* Also check return_type_id from the function tree for functions with record returns
+     * that weren't looked up in symbol table correctly (e.g., class operators) */
+    if (!has_record_return && func->return_type_id != NULL && symtab != NULL)
+    {
+        fprintf(stderr, "DEBUG: Checking return_type_id='%s' for function '%s'\n", 
+                func->return_type_id, func->id);
+        HashNode_t *return_type_node = NULL;
+        FindIdent(&return_type_node, symtab, func->return_type_id);
+        if (return_type_node != NULL)
+        {
+            fprintf(stderr, "DEBUG: Found return type node\n");
+            struct RecordType *record_type = hashnode_get_record_type(return_type_node);
+            if (record_type != NULL)
+            {
+                fprintf(stderr, "DEBUG: It's a record type!\n");
+                if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                        record_type, &record_return_size) == 0 &&
+                    record_return_size > 0 && record_return_size <= INT_MAX)
+                {
+                    fprintf(stderr, "DEBUG: Setting has_record_return=1, size=%lld\n", record_return_size);
+                    has_record_return = 1;
+                }
+            }
+        }
+        else
+        {
+            fprintf(stderr, "DEBUG: return_type_node is NULL\n");
+        }
+    }
+    else
+    {
+        fprintf(stderr, "DEBUG: Skipped return_type_id check: has_record_return=%d, return_type_id=%s, symtab=%p\n",
+                has_record_return, func->return_type_id ? func->return_type_id : "NULL", (void*)symtab);
+    }
+    
+    /* Also check inline_return_type from the function tree for functions with inline record returns */
+    if (!has_record_return && func->inline_return_type != NULL &&
+        func->inline_return_type->base_type == RECORD_TYPE)
+    {
+        struct RecordType *inline_record = NULL;
+
+        if (func->inline_return_type->gpc_type != NULL &&
+            gpc_type_is_record(func->inline_return_type->gpc_type))
+        {
+            inline_record = gpc_type_get_record(func->inline_return_type->gpc_type);
+        }
+
+        if (inline_record == NULL &&
+            func->inline_return_type->target_type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *inline_type_node = NULL;
+            FindIdent(&inline_type_node, symtab,
+                func->inline_return_type->target_type_id);
+            if (inline_type_node != NULL)
+                inline_record = hashnode_get_record_type(inline_type_node);
+        }
+
+        if (inline_record != NULL &&
+            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                inline_record, &record_return_size) == 0 &&
+            record_return_size > 0 && record_return_size <= INT_MAX)
+        {
+            has_record_return = 1;
+        }
+    }
 
     /* Only functions that close over variables need static links (excluding class methods). */
     int will_need_static_link = (!is_class_method &&
@@ -2076,7 +2218,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             char ptr_buffer[64];
             snprintf(ptr_buffer, sizeof(ptr_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                 ret_reg, return_dest_slot->offset);
-            inst_list = add_inst(inst_list, ptr_buffer);
+            ListNode_t *record_return_inst = NULL;
+            record_return_inst = add_inst(record_return_inst, ptr_buffer);
+            inst_list = ConcatList(record_return_inst, inst_list);
         }
     }
 
@@ -2490,6 +2634,42 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
     next_gpr_index = arg_start_index;
 
+    /* Pre-pass: Save all parameter registers to temp stack slots to prevent them from being
+     * clobbered during gpc_move setup for record parameters. This is necessary because
+     * processing one record parameter may clobber registers containing subsequent parameters. */
+    ListNode_t *args_scan = args;
+    int scan_gpr_index = arg_start_index;
+    while(args_scan != NULL)
+    {
+        Tree_t *scan_decl = (Tree_t *)args_scan->cur;
+        if (scan_decl->type == TREE_VAR_DECL)
+        {
+            ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
+            while(scan_ids != NULL)
+            {
+                const char *param_reg = alloc_integer_arg_reg(1, &scan_gpr_index);
+                if (param_reg != NULL)
+                {
+                    /* Allocate temp slot and save parameter register */
+                    char temp_name[64];
+                    snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)scan_ids->cur);
+                    StackNode_t *temp_slot = add_l_x(temp_name, CODEGEN_POINTER_SIZE_BYTES);
+                    if (temp_slot != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            param_reg, temp_slot->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+                scan_ids = scan_ids->next;
+            }
+        }
+        args_scan = args_scan->next;
+    }
+    
+    /* Reset for main processing pass */
+    next_gpr_index = arg_start_index;
+
     while(args != NULL)
     {
         arg_decl = (Tree_t *)args->cur;
@@ -2569,7 +2749,33 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
                         arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
-                        const char *record_src_reg = arg_reg;
+                        
+                        /* Load parameter from temp slot that was saved in pre-pass */
+                        char temp_name[64];
+                        snprintf(temp_name, sizeof(temp_name), "__param_%s__", (char *)arg_ids->cur);
+                        StackNode_t *temp_param_slot = find_label(temp_name);
+                        
+                        const char *record_src_reg = NULL;
+                        Register_t *loaded_param_reg = NULL;
+                        
+                        if (temp_param_slot != NULL)
+                        {
+                            /* Load from temp slot */
+                            loaded_param_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (loaded_param_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                    temp_param_slot->offset, loaded_param_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                record_src_reg = loaded_param_reg->bit_64;
+                            }
+                        }
+                        else if (arg_reg != NULL)
+                        {
+                            /* Fallback to register (shouldn't happen if pre-pass worked) */
+                            record_src_reg = arg_reg;
+                        }
+                        
                         if (record_src_reg == NULL)
                         {
                             stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -2623,6 +2829,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         free_reg(get_reg_stack(), size_reg);
                         if (stack_value_reg != NULL)
                             free_reg(get_reg_stack(), stack_value_reg);
+                        if (loaded_param_reg != NULL)
+                            free_reg(get_reg_stack(), loaded_param_reg);
 
                         arg_ids = arg_ids->next;
                         continue;
@@ -2749,27 +2957,75 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name)
 {
-    (void)ctx;
     if (var_node == NULL || type_name == NULL || type_name[0] == '\0' || var_node->is_reference)
         return inst_list;
 
     char typeinfo_label[512];
     snprintf(typeinfo_label, sizeof(typeinfo_label), "%s_TYPEINFO", type_name);
 
+    /* Class variables are pointers to instances. We need to:
+     * 1. Allocate memory for the instance (size determined from type)
+     * 2. Store the typeinfo pointer in the first field
+     * 3. Store the instance pointer in the variable
+     * 
+     * For now, we use a simplified approach: allocate a fixed size (64 bytes should be enough for most classes)
+     * and zero-initialize with calloc. A better approach would compute the actual size from the RecordType.
+     */
+    
+    /* Call calloc to allocate and zero-initialize the instance */
     char buffer[1024];
-    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rax\n", typeinfo_label);
-    inst_list = add_inst(inst_list, buffer);
-
-    if (var_node->is_static)
+    const char *size_reg = current_arg_reg64(0);  /* RDI on Linux, RCX on Windows */
+    const char *count_reg = current_arg_reg64(1); /* RSI on Linux, RDX on Windows */
+    
+    if (size_reg != NULL && count_reg != NULL)
     {
-        const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s(%%rip)\n", label);
+        /* calloc(1, 64) - allocate one 64-byte block */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$64, %s\n", count_reg);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tcall\tcalloc\n");
+        
+        /* RAX now contains the pointer to the allocated instance */
+        /* Store the typeinfo pointer in the first field */
+        inst_list = add_inst(inst_list, "\tpushq\t%rax\n");  /* Save instance pointer */
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%r10\n", typeinfo_label);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovq\t%r10, (%rax)\n");  /* Store typeinfo in first field */
+        inst_list = add_inst(inst_list, "\tpopq\t%rax\n");   /* Restore instance pointer */
+        
+        /* Store the instance pointer in the class variable */
+        if (var_node->is_static)
+        {
+            const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s(%%rip)\n", label);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", var_node->offset);
+        }
+        inst_list = add_inst(inst_list, buffer);
     }
     else
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", var_node->offset);
+        /* Fallback if we can't determine arg registers - just store NULL for now */
+        if (ctx != NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate class instance - register allocation failed");
+        }
+        if (var_node->is_static)
+        {
+            const char *label = var_node->static_label != NULL ? var_node->static_label : var_node->label;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, %s(%%rip)\n", label);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, -%d(%%rbp)\n", var_node->offset);
+        }
+        inst_list = add_inst(inst_list, buffer);
     }
-    return add_inst(inst_list, buffer);
+    
+    return inst_list;
 }
 
 static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,

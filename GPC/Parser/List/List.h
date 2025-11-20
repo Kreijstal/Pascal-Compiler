@@ -13,7 +13,7 @@
 /* Careful with using LIST_UNSPECIFIED. Can cause errors on switch statements */
 enum ListType{LIST_TREE, LIST_STMT, LIST_EXPR, LIST_STRING,
               LIST_RECORD_FIELD, LIST_CLASS_PROPERTY, LIST_CASE_BRANCH, LIST_SET_ELEMENT,
-              LIST_VARIANT_PART, LIST_VARIANT_BRANCH,
+              LIST_VARIANT_PART, LIST_VARIANT_BRANCH, LIST_METHOD_TEMPLATE,
               LIST_UNSPECIFIED};
 
 /* Our linked list of tree type nodes */
