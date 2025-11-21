@@ -1690,6 +1690,84 @@ void init_pascal_unit_parser(combinator_t** p) {
     (*p)->extra_to_free = stmt_parser;
 }
 
+// Custom parser for directive keywords - matches identifiers and validates they are directive keywords
+// This is needed because cdecl, external, etc. are context-sensitive keywords, not reserved keywords
+static ParseResult directive_keyword_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state;
+    save_input_state(in, &state);
+    
+    // Try to match an identifier
+    combinator_t* ident_parser = cident(PASCAL_T_IDENTIFIER);
+    ParseResult res = parse(in, ident_parser);
+    free_combinator(ident_parser);
+    
+    if (!res.is_success) {
+        return res;
+    }
+    
+    // Check if the identifier is a valid directive keyword
+    if (res.value.ast != NULL && res.value.ast != ast_nil && 
+        res.value.ast->sym != NULL && res.value.ast->sym->name != NULL) {
+        const char* name = res.value.ast->sym->name;
+        if (strcasecmp(name, "stdcall") == 0 ||
+            strcasecmp(name, "cdecl") == 0 ||
+            strcasecmp(name, "register") == 0 ||
+            strcasecmp(name, "safecall") == 0 ||
+            strcasecmp(name, "pascal") == 0 ||
+            strcasecmp(name, "inline") == 0 ||
+            strcasecmp(name, "overload") == 0 ||
+            strcasecmp(name, "export") == 0 ||
+            strcasecmp(name, "external") == 0 ||
+            strcasecmp(name, "assembler") == 0 ||
+            strcasecmp(name, "forward") == 0) {
+            return res;  // Valid directive keyword
+        }
+    }
+    
+    // Not a valid directive keyword, restore state and fail
+    if (res.value.ast != NULL && res.value.ast != ast_nil) {
+        free_ast(res.value.ast);
+    }
+    restore_input_state(in, &state);
+    return make_failure_v2(in, parser_name, strdup("Expected directive keyword"), NULL);
+}
+
+// Custom parser for no-body directive keywords (forward, external, assembler)
+// These indicate that a function/procedure should not have a body
+static ParseResult no_body_directive_keyword_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state;
+    save_input_state(in, &state);
+    
+    // Try to match an identifier
+    combinator_t* ident_parser = cident(PASCAL_T_IDENTIFIER);
+    ParseResult res = parse(in, ident_parser);
+    free_combinator(ident_parser);
+    
+    if (!res.is_success) {
+        return res;
+    }
+    
+    // Check if the identifier is a no-body directive keyword
+    if (res.value.ast != NULL && res.value.ast != ast_nil && 
+        res.value.ast->sym != NULL && res.value.ast->sym->name != NULL) {
+        const char* name = res.value.ast->sym->name;
+        if (strcasecmp(name, "forward") == 0 ||
+            strcasecmp(name, "external") == 0 ||
+            strcasecmp(name, "assembler") == 0) {
+            return res;  // Valid no-body directive keyword
+        }
+    }
+    
+    // Not a no-body directive keyword, restore state and fail
+    if (res.value.ast != NULL && res.value.ast != ast_nil) {
+        free_ast(res.value.ast);
+    }
+    restore_input_state(in, &state);
+    return make_failure_v2(in, parser_name, strdup("Expected no-body directive keyword"), NULL);
+}
+
 // Pascal Procedure/Function Declaration Parser
 void init_pascal_procedure_parser(combinator_t** p) {
     // Create statement parser for procedure/function bodies
@@ -1706,21 +1784,61 @@ void init_pascal_procedure_parser(combinator_t** p) {
 
     // Procedure declaration: procedure name [(params)] ; [directive;]* body
     combinator_t* procedure_param_list = create_simple_param_list();
-    // Minimal support for calling convention or directive keywords appearing
-    // between the signature ';' and the body (e.g., "stdcall;" in Delphi/FPC).
-    // We parse and ignore these directives so the parser can continue to the body.
-    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("register")),
-        token(keyword_ci("safecall")),
-        token(keyword_ci("pascal")),
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        token(keyword_ci("export")),
-        token(keyword_ci("external")),
+    
+    combinator_t* directive_keyword = new_combinator();
+    directive_keyword->fn = directive_keyword_fn;
+    directive_keyword->args = NULL;
+
+    // Extended external directive argument components
+    combinator_t* external_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_external_name_clause
+    );
+
+    combinator_t* external_index_clause = seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("index")),
+        token(integer(PASCAL_T_INTEGER)),
         NULL
     );
+
+    combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        optional(external_name_clause),
+        optional(external_index_clause),
+        NULL
+    );
+
+    combinator_t* external_name_only_argument = seq(new_combinator(), PASCAL_T_NONE,
+        external_name_clause,
+        optional(external_index_clause),
+        NULL
+    );
+
+    combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
+        external_name_only_argument,
+        extended_external_argument,                  // extended external arguments
+        token(pascal_string(PASCAL_T_STRING)),       // simple string argument
+        token(cident(PASCAL_T_IDENTIFIER)),          // simple identifier argument
+        NULL
+    ));
+
+    combinator_t* routine_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+        directive_keyword,
+        directive_argument,
+        token(match(";")),
+        NULL
+    );
+
+    combinator_t* routine_directives = many(routine_directive);
+    
     combinator_t* directive_stmt = seq(new_combinator(), PASCAL_T_NONE,
         directive_keyword,
         // Tolerate simple forms like: external name 'foo'; or external 'lib';
@@ -1743,8 +1861,8 @@ void init_pascal_procedure_parser(combinator_t** p) {
         token(cident(PASCAL_T_IDENTIFIER)),      // procedure name
         procedure_param_list,                    // optional parameter list
         token(match(";")),                       // semicolon ending signature
-        many(directive_stmt),                    // optional directive list (ignored)
-        lazy(stmt_parser),                       // procedure body
+        routine_directives,                      // optional directive list
+        optional(lazy(stmt_parser)),             // optional procedure body (for external/forward)
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
@@ -1757,8 +1875,8 @@ void init_pascal_procedure_parser(combinator_t** p) {
         function_param_list,                     // optional parameter list
         return_type,                             // return type
         token(match(";")),                       // semicolon ending signature
-        many(directive_stmt),                    // optional directive list (ignored)
-        lazy(stmt_parser),                       // function body
+        routine_directives,                      // optional directive list
+        optional(lazy(stmt_parser)),             // optional function body (for external/forward)
         optional(token(match(";"))),             // optional terminating semicolon
         NULL
     );
@@ -2244,24 +2362,10 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // These work because they use the recursive statement parser for bodies
 
     // Routine directives like inline; overload; forward; etc.
-    combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("register")),
-        token(keyword_ci("export")),
-        token(keyword_ci("external")),
-        token(keyword_ci("assembler")),
-        token(keyword_ci("far")),
-        token(keyword_ci("near")),
-        token(keyword_ci("platform")),
-        token(keyword_ci("deprecated")),
-        token(keyword_ci("library")),
-        token(keyword_ci("local")),
-        token(keyword_ci("forward")),
-        NULL
-    );
+    // Use custom parser for directive keywords since they are context-sensitive, not reserved
+    combinator_t* directive_keyword = new_combinator();
+    directive_keyword->fn = directive_keyword_fn;
+    directive_keyword->args = NULL;
 
     // Copy exact working structure from unit parser
     combinator_t* external_name_clause = map(
@@ -2351,12 +2455,11 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Does NOT support forward (that's handled by forward_function)
     combinator_t* working_function_param_list = create_simple_param_list();
     // Guard: implementation must not start if next directive is 'forward'/'external'/'assembler'
-    combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("forward")),
-        token(keyword_ci("external")),
-        token(keyword_ci("assembler")),
-        NULL
-    );
+    // Use custom parser since these are context-sensitive keywords
+    combinator_t* no_body_directive_inner = new_combinator();
+    no_body_directive_inner->fn = no_body_directive_keyword_fn;
+    no_body_directive_inner->args = NULL;
+    combinator_t* no_body_directive = token(no_body_directive_inner);
     combinator_t* forbid_no_body = pnot(peek(no_body_directive));
 
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,

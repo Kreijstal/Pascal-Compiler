@@ -6053,6 +6053,18 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 
 static Tree_t *convert_function(ast_t *func_node) {
     fprintf(stderr, "[convert_function] ENTRY line=%d\n", func_node->line);
+    
+    // Debug: print all children
+    fprintf(stderr, "[convert_function] All children:\n");
+    ast_t *debug_cur = func_node->child;
+    int child_idx = 0;
+    while (debug_cur != NULL) {
+        fprintf(stderr, "  [%d] typ=%d line=%d sym=%s\n", 
+            child_idx++, debug_cur->typ, debug_cur->line, 
+            debug_cur->sym ? debug_cur->sym->name : "(null)");
+        debug_cur = debug_cur->next;
+    }
+    
     ast_t *cur = func_node->child;
     char *id = NULL;
     static int debug_external_nodes = -1;
@@ -6203,6 +6215,11 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
+            fprintf(stderr, "[convert_function] IDENTIFIER: sym=%s child=%p child_typ=%d child_sym=%s\n",
+                cur->sym ? cur->sym->name : "(null)",
+                cur->child,
+                cur->child ? cur->child->typ : -1,
+                (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {

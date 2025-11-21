@@ -615,6 +615,11 @@ void tree_print(Tree_t *tree, FILE *f, int num_indent)
 
 void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
 {
+    if (stmt == NULL) {
+        print_indent(f, num_indent);
+        fprintf(f, "[NULL_STMT]\\n");
+        return;
+    }
     print_indent(f, num_indent);
     switch(stmt->type)
     {
