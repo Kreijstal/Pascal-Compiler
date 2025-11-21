@@ -2803,8 +2803,15 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
             
             /* Add field size */
             long long field_size = 0;
-            if (compute_field_size(symtab, field, &field_size, depth + 1, line_num) != 0)
+            int field_result = compute_field_size(symtab, field, &field_size, depth + 1, line_num);
+            if (field_result != 0)
+            {
+#ifdef DEBUG
+                fprintf(stderr, "DEBUG: compute_field_size FAILED for field %s: result=%d\n",
+                    field->name ? field->name : "<null>", field_result);
+#endif
                 return 1;
+            }
             total += field_size;
         }
         else if (cur->type == LIST_VARIANT_PART)
@@ -5566,6 +5573,11 @@ int semcheck_varid(int *type_return,
     semcheck_clear_array_info(expr);
 
     scope_return = FindIdent(&hash_return, symtab, id);
+    if (strcmp(id, "Sock") == 0) {
+#ifdef DEBUG
+        fprintf(stderr, "DEBUG: semcheck_varid looking up Sock. scope_return=%d hash_return=%p\n", scope_return, hash_return);
+#endif
+    }
     if(scope_return == -1)
     {
         struct Expression *with_expr = NULL;
@@ -5891,6 +5903,11 @@ int semcheck_funccall(int *type_return,
 
     return_val = 0;
     id = expr->expr_data.function_call_data.id;
+    if (id != NULL && strcmp(id, "socket") == 0) {
+#ifdef DEBUG
+        fprintf(stderr, "DEBUG: semcheck_funccall processing socket call. line=%d\n", expr->line_num);
+#endif
+    }
     args_given = expr->expr_data.function_call_data.args_expr;
 
     if (id != NULL && strncmp(id, "__tfpg_ctor$", strlen("__tfpg_ctor$")) == 0)

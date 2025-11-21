@@ -2134,7 +2134,6 @@ GpcType *convert_type_spec_to_gpctype(ast_t *type_spec, struct SymTab *symtab) {
             }
                 
             if (cursor != NULL) {
-                fprintf(stderr, "DEBUG: Found return type node, typ=%d\n", cursor->typ);
                 #ifdef DEBUG_GPC_TYPE_CREATION
                 fprintf(stderr, "DEBUG: Found return type node, typ=%d\n", cursor->typ);
                 #endif
@@ -5347,6 +5346,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         ast_t *body_wrapper = expr_wrapper != NULL ? expr_wrapper->next : NULL;
         ast_t *body_node = unwrap_pascal_node(body_wrapper);
         
+        #ifdef DEBUG_FOR_IN_STATEMENT
         fprintf(stderr, "DEBUG FOR_IN: id=%p typ=%d, expr=%p typ=%d, body=%p typ=%d\n",
                 (void*)id_node, id_node ? id_node->typ : -1,
                 (void*)expr_node, expr_node ? expr_node->typ : -1,
@@ -5354,6 +5354,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         if (id_node && id_node->sym) {
             fprintf(stderr, "  id.sym->name=%s\n", id_node->sym->name);
         }
+        #endif
         
         if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER) {
             fprintf(stderr, "ERROR: FOR_IN missing loop variable identifier\n");
@@ -5968,10 +5969,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
-        fprintf(stderr, "[convert_procedure] node typ=%d line=%d sym=%s child_typ=%d child_sym=%s\n",
-            cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)",
-            cur->child ? cur->child->typ : -1,
-            (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs);
@@ -6052,19 +6049,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 }
 
 static Tree_t *convert_function(ast_t *func_node) {
-    fprintf(stderr, "[convert_function] ENTRY line=%d\n", func_node->line);
-    
-    // Debug: print all children
-    fprintf(stderr, "[convert_function] All children:\n");
-    ast_t *debug_cur = func_node->child;
-    int child_idx = 0;
-    while (debug_cur != NULL) {
-        fprintf(stderr, "  [%d] typ=%d line=%d sym=%s\n", 
-            child_idx++, debug_cur->typ, debug_cur->line, 
-            debug_cur->sym ? debug_cur->sym->name : "(null)");
-        debug_cur = debug_cur->next;
-    }
-    
     ast_t *cur = func_node->child;
     char *id = NULL;
     static int debug_external_nodes = -1;
@@ -6076,7 +6060,6 @@ static Tree_t *convert_function(ast_t *func_node) {
 
     if (cur != NULL) {
         cur = cur->next;
-        fprintf(stderr, "[convert_function] after id, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     }
 
     ListNode_t *params = NULL;
@@ -6084,14 +6067,12 @@ static Tree_t *convert_function(ast_t *func_node) {
         ast_t *param_cursor = cur->child;
         params = convert_param_list(&param_cursor);
         cur = cur->next;
-        fprintf(stderr, "[convert_function] after param_list, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     } else {
         while (cur != NULL && cur->typ == PASCAL_T_PARAM) {
             ListNode_t *param_nodes = convert_param(cur);
             extend_list(&params, param_nodes);
             cur = cur->next;
         }
-        fprintf(stderr, "[convert_function] after params loop, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     }
 
     char *return_type_id = NULL;
@@ -6151,7 +6132,6 @@ static Tree_t *convert_function(ast_t *func_node) {
         }
         
         cur = cur->next;
-        fprintf(stderr, "[convert_function] after return_type, cur=%p typ=%d\n", cur, cur ? cur->typ : -1);
     }
 
     ListNode_t *const_decls = NULL;
@@ -6167,10 +6147,6 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
-        fprintf(stderr, "[convert_function] node typ=%d line=%d sym=%s child_typ=%d child_sym=%s\n",
-            cur->typ, cur->line, cur->sym ? cur->sym->name : "(null)",
-            cur->child ? cur->child->typ : -1,
-            (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs);
@@ -6215,11 +6191,6 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
-            fprintf(stderr, "[convert_function] IDENTIFIER: sym=%s child=%p child_typ=%d child_sym=%s\n",
-                cur->sym ? cur->sym->name : "(null)",
-                cur->child,
-                cur->child ? cur->child->typ : -1,
-                (cur->child && cur->child->sym) ? cur->child->sym->name : "(null)");
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
@@ -6324,7 +6295,6 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         /* Start iterating from the first child, or the node after the program header */
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
-            fprintf(stderr, "[tree_from_pascal_ast] section typ=%d line=%d\n", section->typ, section->line);
             /* Check for circular reference before processing */
             if (!is_safe_to_continue(visited, section)) {
                 fprintf(stderr, "ERROR: Circular reference detected in program sections, stopping traversal\n");

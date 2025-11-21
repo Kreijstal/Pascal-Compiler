@@ -462,7 +462,9 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     struct Expression *array_expr = (struct Expression *)args->cur;
     struct Expression *length_expr = (struct Expression *)args->next->cur;
     
+#ifdef DEBUG
     fprintf(stderr, "DEBUG: semcheck_builtin_setlength length_expr=%p\n", length_expr);
+#endif
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
@@ -2437,7 +2439,9 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
             fprintf(stderr, "CRITICAL: g_debug_watch_stmt corrupted at end of compoundstmt! Changed from %p to %p\n",
                     g_debug_watch_to_expr, g_debug_watch_stmt->stmt_data.for_data.to);
         } else {
+#ifdef DEBUG
             fprintf(stderr, "DEBUG: g_debug_watch_stmt OK at end of compoundstmt. to=%p\n", g_debug_watch_stmt->stmt_data.for_data.to);
+#endif
         }
     }
 
@@ -2662,13 +2666,12 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     semcheck_loop_depth++;
     
-    fprintf(stderr, "DEBUG: semcheck_for stmt=%p line=%d to_expr=%p current_to=%p\n", 
-            stmt, stmt->line_num, to_expr, stmt->stmt_data.for_data.to);
-
     if (stmt->line_num == 42) {
         g_debug_watch_stmt = stmt;
         g_debug_watch_to_expr = stmt->stmt_data.for_data.to;
+#ifdef DEBUG
         fprintf(stderr, "DEBUG: Watching stmt at line 42\n");
+#endif
     }
 
     if (to_expr != NULL && ((uintptr_t)to_expr == 0x686374616d || (uintptr_t)to_expr == 0x1db2)) {
