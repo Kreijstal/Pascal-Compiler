@@ -152,6 +152,50 @@ static ast_t* wrap_with_contexts(ast_t* contexts) {
     return ast1(PASCAL_T_WITH_CONTEXTS, contexts);
 }
 
+// Utility to drop an AST node entirely.
+static ast_t* discard_ast_stmt(ast_t* ast) {
+    if (ast != NULL && ast != ast_nil) {
+        free_ast(ast);
+    }
+    return ast_nil;
+}
+
+// Extract the statement body from an exception handler of the form
+// "on <id>[:<type>] do <statement>" and discard the header tokens.
+// We keep only the final statement node so downstream consumers treat
+// handlers like regular except-body statements.
+static ast_t* wrap_except_on_handler(ast_t* parsed) {
+    const char* debug_flag = getenv("GPC_DEBUG_ON_HANDLER");
+    if (debug_flag != NULL) {
+        fprintf(stderr, "[pascal_parser] on-handler wrapper invoked\n");
+    }
+    if (parsed == NULL || parsed == ast_nil) {
+        return ast_nil;
+    }
+
+    ast_t* chain = parsed->child;
+    ast_t* prev = NULL;
+    ast_t* tail = chain;
+    while (tail != NULL && tail->next != NULL) {
+        prev = tail;
+        tail = tail->next;
+    }
+
+    if (tail == NULL) {
+        free_ast(parsed);
+        return ast_nil;
+    }
+
+    if (prev != NULL) {
+        prev->next = NULL;
+        free_ast(chain);
+    }
+
+    parsed->child = NULL;
+    free_ast(parsed);
+    return tail;
+}
+
 static bool slice_matches_keyword_ci(const char* slice, size_t len, const char* keyword) {
     if (slice == NULL || keyword == NULL) {
         return false;
@@ -222,6 +266,9 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         }
         memcpy(keyword_buf, slice, ident_len);
         keyword_buf[ident_len] = '\0';
+        if (getenv("GPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
+            fprintf(stderr, "[statement_dispatch] leading identifier '%s'\n", keyword_buf);
+        }
         for (size_t i = 0; i < ident_len; ++i) {
             keyword_buf[i] = (char)tolower((unsigned char)keyword_buf[i]);
         }
@@ -236,6 +283,10 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             if (keyword_parser != NULL) {
                 return parse(in, keyword_parser);
             }
+        }
+
+        if (slice_matches_keyword_ci(slice, ident_len, "on") && dispatch->on_handler_parser != NULL) {
+            return parse(in, dispatch->on_handler_parser);
         }
 
         if (dispatch->label_parser != NULL && peek_label_statement(in)) {
@@ -803,15 +854,30 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
+    // On-exception handler: "on <id>[:<type>] do <statement>"
+    combinator_t* optional_handler_semicolon = map(optional(token(match(";"))), discard_ast_stmt);
+    combinator_t* on_exception_handler = map(seq(new_combinator(), PASCAL_T_EXCEPT_BLOCK,
+        token(keyword_ci("on")),
+        map(until(token(keyword_ci("do")), PASCAL_T_NONE), discard_ast_stmt),
+        token(keyword_ci("do")),
+        lazy(stmt_parser),
+        optional_handler_semicolon,
+        NULL
+    ), wrap_except_on_handler);
+
     // Try-except block: try statements except statements end
     combinator_t* try_except = seq(new_combinator(), PASCAL_T_TRY_BLOCK,
         token(keyword_ci("try")),
         try_statement_list,
         seq(new_combinator(), PASCAL_T_EXCEPT_BLOCK,
             token(keyword_ci("except")),
-            many(seq(new_combinator(), PASCAL_T_NONE,
-                lazy(stmt_parser),
-                optional(token(match(";"))),
+            many(multi(new_combinator(), PASCAL_T_NONE,
+                on_exception_handler,
+                seq(new_combinator(), PASCAL_T_NONE,
+                    lazy(stmt_parser),
+                    optional(token(match(";"))),
+                    NULL
+                ),
                 NULL
             )),
             NULL
@@ -945,6 +1011,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     dispatch_args->keyword_parsers[STMT_KW_REPEAT] = repeat_stmt;
     dispatch_args->keyword_parsers[STMT_KW_WHILE] = while_stmt;
     dispatch_args->keyword_parsers[STMT_KW_WITH] = with_stmt;
+    dispatch_args->on_handler_parser = on_exception_handler;
     dispatch_args->label_parser = labeled_stmt;
     dispatch_args->assignment_parser = assignment;
     dispatch_args->expr_parser = expr_stmt;

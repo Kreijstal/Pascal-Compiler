@@ -1296,6 +1296,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 
     inst_list = NULL;
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
+    if (data->body_statement == NULL && getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] WARNING: program body is NULL during codegen\n");
+    }
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
     // Generate finalization code from units (in LIFO order - already reversed in list)

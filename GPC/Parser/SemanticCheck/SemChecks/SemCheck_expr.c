@@ -359,6 +359,117 @@ static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *s
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
 
+static int semcheck_map_builtin_type_name(const char *id)
+{
+    if (id == NULL)
+        return UNKNOWN_TYPE;
+
+    if (pascal_identifier_equals(id, "Integer"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "LongInt"))
+        return LONGINT_TYPE;
+    if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
+        return REAL_TYPE;
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
+        return STRING_TYPE;
+    if (pascal_identifier_equals(id, "Char"))
+        return CHAR_TYPE;
+    if (pascal_identifier_equals(id, "Boolean"))
+        return BOOL;
+    if (pascal_identifier_equals(id, "Pointer"))
+        return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "Byte"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "Word"))
+        return INT_TYPE;
+
+    return UNKNOWN_TYPE;
+}
+
+/* Detect Pascal-style typecasts that were parsed as function calls (TypeId(expr))
+ * and reinterpret them so the usual EXPR_TYPECAST path can handle them. */
+static int semcheck_try_reinterpret_as_typecast(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    const char *id = expr->expr_data.function_call_data.id;
+    if (id == NULL)
+        return 0;
+    char *id_copy = strdup(id);
+    if (id_copy == NULL)
+        return 0;
+
+    /* Only proceed if the callee resolves to a type identifier or a known builtin type */
+    HashNode_t *type_node = semcheck_find_type_node_with_gpc_type(symtab, id);
+    int target_type = UNKNOWN_TYPE;
+    if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        set_type_from_hashtype(&target_type, type_node);
+    if (target_type == UNKNOWN_TYPE)
+        target_type = semcheck_map_builtin_type_name(id);
+
+    int is_type_identifier =
+        (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) ||
+        (target_type != UNKNOWN_TYPE);
+    if (!is_type_identifier)
+    {
+        free(id_copy);
+        return 0;
+    }
+
+    /* Require exactly one argument for a typecast */
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+    {
+        fprintf(stderr, "Error on line %d, typecast to %s expects exactly one argument.\n",
+            expr->line_num, id);
+        *type_return = UNKNOWN_TYPE;
+        free(id_copy);
+        return 1;
+    }
+
+    struct Expression *inner_expr = (struct Expression *)args->cur;
+
+    /* Clean up function-call-specific fields without freeing the inner expression */
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        free(expr->expr_data.function_call_data.id);
+        expr->expr_data.function_call_data.id = NULL;
+    }
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    if (expr->expr_data.function_call_data.call_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->expr_data.function_call_data.call_gpc_type);
+        expr->expr_data.function_call_data.call_gpc_type = NULL;
+    }
+
+    /* Manually free the argument list nodes but keep the expression alive */
+    ListNode_t *to_free = args;
+    while (to_free != NULL)
+    {
+        ListNode_t *next = to_free->next;
+        to_free->cur = NULL;
+        free(to_free);
+        to_free = next;
+    }
+    expr->expr_data.function_call_data.args_expr = NULL;
+
+    /* Reinterpret as a typecast expression */
+    expr->type = EXPR_TYPECAST;
+    expr->expr_data.typecast_data.target_type = target_type;
+    expr->expr_data.typecast_data.target_type_id = id_copy;
+    expr->expr_data.typecast_data.expr = inner_expr;
+
+    return semcheck_typecast(type_return, symtab, expr, max_scope_lev, NO_MUTATE);
+}
+
 /* Helper function to get TypeAlias from HashNode, preferring GpcType when available */
 static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 {
@@ -3427,8 +3538,15 @@ static int semcheck_typecast(int *type_return,
             expr->expr_data.typecast_data.expr, max_scope_lev, NO_MUTATE);
 
     int target_type = expr->expr_data.typecast_data.target_type;
-    error_count += resolve_type_identifier(&target_type, symtab,
-        expr->expr_data.typecast_data.target_type_id, expr->line_num);
+    int target_is_builtin = semcheck_map_builtin_type_name(
+        expr->expr_data.typecast_data.target_type_id) != UNKNOWN_TYPE;
+
+    /* Resolve the target type unless we already mapped a builtin */
+    if (target_type == UNKNOWN_TYPE || !target_is_builtin)
+    {
+        error_count += resolve_type_identifier(&target_type, symtab,
+            expr->expr_data.typecast_data.target_type_id, expr->line_num);
+    }
 
     if (target_type == UNKNOWN_TYPE &&
         expr->expr_data.typecast_data.target_type_id == NULL)
@@ -3439,6 +3557,24 @@ static int semcheck_typecast(int *type_return,
     }
 
     *type_return = target_type;
+    expr->resolved_type = target_type;
+
+    if (expr->resolved_gpc_type != NULL)
+    {
+        destroy_gpc_type(expr->resolved_gpc_type);
+        expr->resolved_gpc_type = NULL;
+    }
+    if (target_type == POINTER_TYPE)
+    {
+        expr->resolved_gpc_type = create_pointer_type(NULL);
+        semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+    }
+    else if (target_type != UNKNOWN_TYPE)
+    {
+        expr->resolved_gpc_type = create_primitive_type(target_type);
+        semcheck_clear_array_info(expr);
+        expr->record_type = NULL;
+    }
 
     (void)inner_type;
     return error_count;
@@ -5924,6 +6060,11 @@ int semcheck_funccall(int *type_return,
         expr->resolved_type = RECORD_TYPE;
         return 0;
     }
+
+    /* If this "call" is actually a type identifier, treat it as a typecast */
+    int typecast_result = semcheck_try_reinterpret_as_typecast(type_return, symtab, expr, max_scope_lev);
+    if (typecast_result != 0 || expr->type == EXPR_TYPECAST)
+        return typecast_result;
 
     if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
         return semcheck_builtin_sizeof(type_return, symtab, expr, max_scope_lev);

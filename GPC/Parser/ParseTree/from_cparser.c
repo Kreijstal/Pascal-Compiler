@@ -5113,6 +5113,10 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 }
 
 static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_proc_call: typ=%d line=%d\n",
+            call_node ? call_node->typ : -1, call_node ? call_node->line : -1);
+    }
     ast_t *child = call_node->child;
     ast_t *args_start = NULL;
     char *id = NULL;
@@ -5260,7 +5264,11 @@ static struct Statement *build_nested_with_statements(int line,
 static struct Statement *convert_statement(ast_t *stmt_node) {
     stmt_node = unwrap_pascal_node(stmt_node);
     if (stmt_node == NULL)
+    {
+        if (getenv("GPC_DEBUG_BODY") != NULL)
+            fprintf(stderr, "[GPC] convert_statement: stmt_node NULL after unwrap\n");
         return NULL;
+    }
 
     switch (stmt_node->typ) {
     case PASCAL_T_ASSIGNMENT:
@@ -5309,6 +5317,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return convert_statement(inner);
     }
     case PASCAL_T_FUNC_CALL:
+        if (getenv("GPC_DEBUG_BODY") != NULL)
+            fprintf(stderr, "[GPC] convert_statement: FUNC_CALL at line %d\n", stmt_node->line);
         return convert_proc_call(stmt_node, true);
     case PASCAL_T_MEMBER_ACCESS: {
         struct Statement *method_stmt = convert_method_call_statement(stmt_node, NULL);
@@ -5640,6 +5650,9 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         struct Statement *stmt = convert_statement(unwrapped);
         if (stmt != NULL)
             list_builder_append(&builder, stmt, LIST_STMT);
+        else if (getenv("GPC_DEBUG_BODY") != NULL)
+            fprintf(stderr, "[GPC] convert_statement_list: dropped statement typ=%d line=%d\n",
+                unwrapped->typ, unwrapped->line);
         cur = cur->next;
     }
 
@@ -5649,10 +5662,16 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 
 static struct Statement *convert_block(ast_t *block_node) {
     if (block_node == NULL)
+    {
+        if (getenv("GPC_DEBUG_BODY") != NULL)
+            fprintf(stderr, "[GPC] convert_block: block_node is NULL\n");
         return NULL;
+    }
 
     ast_t *stmts = block_node->child;
     ListNode_t *list = convert_statement_list(stmts);
+    if (list == NULL && getenv("GPC_DEBUG_BODY") != NULL)
+        fprintf(stderr, "[GPC] convert_block: statement list is NULL\n");
     return mk_compoundstatement(block_node->line, list);
 }
 
@@ -6338,6 +6357,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         /* Start iterating from the first child, or the node after the program header */
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
+            if (getenv("GPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
+                fprintf(stderr, "[gpc program] section typ=%d line=%d\n", section->typ, section->line);
+            }
             /* Check for circular reference before processing */
             if (!is_safe_to_continue(visited, section)) {
                 fprintf(stderr, "ERROR: Circular reference detected in program sections, stopping traversal\n");

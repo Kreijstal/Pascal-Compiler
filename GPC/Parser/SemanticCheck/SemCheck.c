@@ -3665,8 +3665,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 return_was_assigned);
 #endif
 
-            /* Skip check for external functions (which have cname_override set) */
-            if (subprogram->tree_data.subprogram_data.cname_override != NULL)
+            /* Skip check for external functions (cname_flag or cname_override) or declarations without bodies */
+            int is_external = (subprogram->tree_data.subprogram_data.cname_override != NULL) ||
+                              (subprogram->tree_data.subprogram_data.cname_flag != 0);
+            int has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
+            if (is_external || !has_body)
             {
                 /* External function, no body expected */
             }
