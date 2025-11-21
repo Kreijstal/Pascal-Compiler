@@ -2998,6 +2998,13 @@ static int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
         return 1;
     }
 
+    if (alias->storage_size > 0 && !alias->is_array && !alias->is_set &&
+        !alias->is_enum && !alias->is_file)
+    {
+        *size_out = alias->storage_size;
+        return 0;
+    }
+
     if (depth > SIZEOF_RECURSION_LIMIT)
     {
         fprintf(stderr, "Error on line %d, SizeOf exceeded recursion depth while resolving type alias.\n",

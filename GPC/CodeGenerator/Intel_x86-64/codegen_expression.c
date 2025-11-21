@@ -43,7 +43,7 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 
 static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size);
 static const char *codegen_register_name8(const Register_t *reg);
-static const char *codegen_register_name16(const Register_t *reg);
+const char *codegen_register_name16(const Register_t *reg);
 static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_t *value_reg,
     int offset, int element_size);
 static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
@@ -519,7 +519,7 @@ static const char *codegen_register_name8(const Register_t *reg)
     return NULL;
 }
 
-static const char *codegen_register_name16(const Register_t *reg)
+const char *codegen_register_name16(const Register_t *reg)
 {
     if (reg == NULL || reg->bit_64 == NULL)
         return NULL;
@@ -841,7 +841,7 @@ int codegen_type_is_signed(int type_tag)
  * Returns NULL if type cannot be determined.
  * Note: The returned GpcType should NOT be freed - it's either owned by the expression
  * or is a static/temporary type. */
-static GpcType* expr_get_gpc_type(const struct Expression *expr)
+GpcType* expr_get_gpc_type(const struct Expression *expr)
 {
     if (expr == NULL)
         return NULL;
@@ -879,6 +879,38 @@ static GpcType* expr_get_gpc_type(const struct Expression *expr)
         default:
             /* Complex types or unknown - can't create GpcType */
             return NULL;
+    }
+}
+
+long long expr_effective_size_bytes(const struct Expression *expr)
+{
+    GpcType *type = expr_get_gpc_type(expr);
+    if (type != NULL)
+    {
+        long long size = gpc_type_sizeof(type);
+        if (size > 0)
+            return size;
+    }
+
+    int tag = expr_get_type_tag(expr);
+    switch (tag)
+    {
+        case CHAR_TYPE:
+            return 1;
+        case INT_TYPE:
+        case BOOL:
+        case SET_TYPE:
+        case ENUM_TYPE:
+            return 4;
+        case STRING_TYPE:
+        case POINTER_TYPE:
+        case FILE_TYPE:
+        case TEXT_TYPE:
+        case LONGINT_TYPE:
+        case REAL_TYPE:
+            return 8;
+        default:
+            return 0;
     }
 }
 
@@ -1474,6 +1506,13 @@ static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
         return 1;
     }
 
+    if (alias->storage_size > 0 && !alias->is_array && !alias->is_set &&
+        !alias->is_enum && !alias->is_file)
+    {
+        *size_out = alias->storage_size;
+        return 0;
+    }
+
     if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
     {
         codegen_report_error(ctx, "ERROR: Type alias nesting exceeds supported depth.");
@@ -1848,16 +1887,20 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     inst_list = gencode_expr_tree(pointer_tree, inst_list, ctx, addr_reg);
     free_expr_tree(pointer_tree);
 
+    long long load_size = expr_effective_size_bytes(expr);
     char buffer[64];
-    if (expr_uses_qword_gpctype(expr))
+    if (load_size == 1)
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    else if (load_size == 2)
+    {
+        const int is_signed = expr_is_signed_gpctype(expr);
+        snprintf(buffer, sizeof(buffer), "\t%s\t(%s), %s\n",
+            is_signed ? "movswl" : "movzwl", addr_reg->bit_64, target_reg->bit_32);
+    }
+    else if (expr_uses_qword_gpctype(expr))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else
-    {
-        if (expr_has_type_tag(expr, CHAR_TYPE))
-            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-        else
-            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    }
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), addr_reg);

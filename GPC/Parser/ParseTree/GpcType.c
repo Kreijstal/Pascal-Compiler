@@ -682,6 +682,13 @@ long long gpc_type_sizeof(GpcType *type)
 {
     if (type == NULL)
         return -1;
+
+    if (type->type_alias != NULL &&
+        type->type_alias->storage_size > 0 &&
+        type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        return type->type_alias->storage_size;
+    }
     
     switch (type->kind)
     {
@@ -989,6 +996,11 @@ int gpc_type_uses_qword(GpcType *type)
 {
     if (type == NULL)
         return 0;
+
+    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
+    {
+        return (type->type_alias->storage_size > 4);
+    }
     
     switch (type->kind) {
         case TYPE_KIND_PRIMITIVE:
@@ -1022,6 +1034,9 @@ int gpc_type_is_signed(GpcType *type)
 {
     if (type == NULL)
         return 0;
+
+    if (type->type_alias != NULL && type->type_alias->range_known)
+        return (type->type_alias->range_start < 0);
     
     if (type->kind != TYPE_KIND_PRIMITIVE)
         return 0;

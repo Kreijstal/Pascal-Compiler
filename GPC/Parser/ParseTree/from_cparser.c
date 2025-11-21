@@ -3725,6 +3725,42 @@ static int select_range_primitive_tag(const TypeInfo *info)
     return LONGINT_TYPE;
 }
 
+static long long compute_range_storage_size(const TypeInfo *info)
+{
+    if (info == NULL || !info->is_range || !info->range_known)
+        return 0;
+
+    long long start = info->range_start;
+    long long end = info->range_end;
+    if (start > end)
+    {
+        long long tmp = start;
+        start = end;
+        end = tmp;
+    }
+
+    if (start >= 0)
+    {
+        if (end <= 0xFF)
+            return 1;
+        if (end <= 0xFFFF)
+            return 2;
+        if (end <= 0xFFFFFFFFLL)
+            return 4;
+        return 8;
+    }
+
+    /* Signed ranges */
+    if (start >= -128 && end <= 127)
+        return 1;
+    if (start >= -32768 && end <= 32767)
+        return 2;
+    if (start >= INT_MIN && end <= INT_MAX)
+        return 4;
+
+    return 8;
+}
+
 static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clones) {
     if (type_decl_node == NULL)
         return NULL;
@@ -3867,6 +3903,13 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
                 decl->tree_data.type_decl_data.gpc_type =
                     create_record_type(alias->inline_record_type);
             }
+        }
+        if (type_info.is_range) {
+            alias->is_range = 1;
+            alias->range_known = type_info.range_known;
+            alias->range_start = type_info.range_start;
+            alias->range_end = type_info.range_end;
+            alias->storage_size = compute_range_storage_size(&type_info);
         }
         if (type_info.is_generic_specialization && type_info.record_type == NULL) {
             register_pending_generic_alias(decl, &type_info);

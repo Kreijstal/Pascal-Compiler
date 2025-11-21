@@ -4051,7 +4051,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (!var->is_reference && var->size >= 8)
                 use_qword = 1;
             int use_byte = 0;
+            int use_word = 0;
             const char *value_reg8 = NULL;
+            const char *value_reg16 = NULL;
+            long long target_size = expr_effective_size_bytes(var_expr);
             if (!use_qword && var_type == CHAR_TYPE)
             {
                 value_reg8 = register_name8(reg);
@@ -4064,6 +4067,15 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     codegen_report_error(ctx,
                         "ERROR: Unable to select 8-bit register for character assignment.");
                 }
+            }
+            else if (!use_qword && target_size == 2)
+            {
+                value_reg16 = codegen_register_name16(reg);
+                if (value_reg16 != NULL)
+                    use_word = 1;
+                else
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 16-bit register for assignment.");
             }
             if (use_qword)
             {
@@ -4081,6 +4093,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s(%%rip)\n", reg->bit_64, label);
                 else if (use_byte)
                     snprintf(buffer, sizeof(buffer), "\tmovb\t%s, %s(%%rip)\n", value_reg8, label);
+                else if (use_word)
+                    snprintf(buffer, sizeof(buffer), "\tmovw\t%s, %s(%%rip)\n", value_reg16, label);
                 else
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s(%%rip)\n", reg->bit_32, label);
                 inst_list = add_inst(inst_list, buffer);
@@ -4102,6 +4116,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", reg->bit_64, ptr_reg->bit_64);
                 else if (use_byte)
                     snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", value_reg8, ptr_reg->bit_64);
+                else if (use_word)
+                    snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", value_reg16, ptr_reg->bit_64);
                 else
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", reg->bit_32, ptr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
@@ -4116,6 +4132,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
                 else if (use_byte)
                     snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
+                else if (use_word)
+                    snprintf(buffer, sizeof(buffer), "\tmovw\t%s, -%d(%%rbp)\n", value_reg16, var->offset);
                 else
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
             }
@@ -4129,6 +4147,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%s)\n", reg->bit_64, var->offset, frame_reg->bit_64);
                     else if (use_byte)
                         snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%s)\n", value_reg8, var->offset, frame_reg->bit_64);
+                    else if (use_word)
+                        snprintf(buffer, sizeof(buffer), "\tmovw\t%s, -%d(%s)\n", value_reg16, var->offset, frame_reg->bit_64);
                     else
                         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%s)\n", reg->bit_32, var->offset, frame_reg->bit_64);
                 }
@@ -4141,6 +4161,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg->bit_64, var->offset);
                     else if (use_byte)
                         snprintf(buffer, sizeof(buffer), "\tmovb\t%s, -%d(%%rbp)\n", value_reg8, var->offset);
+                    else if (use_word)
+                        snprintf(buffer, sizeof(buffer), "\tmovw\t%s, -%d(%%rbp)\n", value_reg16, var->offset);
                     else
                         snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", reg->bit_32, var->offset);
                 }
@@ -4236,6 +4258,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type);
+        long long element_size = expr_get_array_element_size(var_expr, ctx);
+        if (element_size <= 0)
+            element_size = expr_effective_size_bytes(var_expr);
+        int use_word = (!use_qword && element_size == 2);
         if (var_type == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
@@ -4263,6 +4289,20 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 else
                 {
                     snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else if (use_word)
+            {
+                const char *value_reg16 = codegen_register_name16(value_reg);
+                if (value_reg16 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 16-bit register for array assignment.");
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovw\t%s, (%s)\n", value_reg16, addr_reload->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                 }
             }
@@ -4324,6 +4364,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = codegen_maybe_convert_int_like_to_real(var_type_2, assign_expr,
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type_2);
+        long long record_element_size = expr_effective_size_bytes(var_expr);
+        int use_word = (!use_qword && record_element_size == 2);
         if (var_type_2 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
@@ -4351,6 +4393,20 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 else
                 {
                     snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else if (use_word)
+            {
+                const char *value_reg16 = codegen_register_name16(value_reg);
+                if (value_reg16 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 16-bit register for record assignment.");
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovw\t%s, (%s)\n", value_reg16, addr_reload->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                 }
             }
@@ -4415,6 +4471,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int coerced_to_real = 0;
         inst_list = codegen_maybe_convert_int_like_to_real(var_type_3, assign_expr,
             value_reg, inst_list, &coerced_to_real);
+        long long pointer_target_size = expr_effective_size_bytes(var_expr);
+        int use_word = (!codegen_type_uses_qword(var_type_3) && pointer_target_size == 2);
         if (var_type_3 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
@@ -4447,8 +4505,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             else
             {
-                snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                if (use_word)
+                {
+                    const char *value_reg16 = codegen_register_name16(value_reg);
+                    if (value_reg16 == NULL)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to select 16-bit register for pointer assignment.");
+                    }
+                    else
+                    {
+                        snprintf(buffer, 50, "\tmovw\t%s, (%s)\n", value_reg16, addr_reload->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovl\t%s, (%s)\n", value_reg->bit_32, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
         }
 

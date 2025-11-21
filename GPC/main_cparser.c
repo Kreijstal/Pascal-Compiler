@@ -914,6 +914,12 @@ int main(int argc, char **argv)
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
     UnitSet visited_units;
     unit_set_init(&visited_units);
+    ListNode_t *user_types = user_tree->tree_data.program_data.type_declaration;
+    ListNode_t *user_consts = user_tree->tree_data.program_data.const_declaration;
+    ListNode_t *user_vars = user_tree->tree_data.program_data.var_declaration;
+    user_tree->tree_data.program_data.type_declaration = NULL;
+    user_tree->tree_data.program_data.const_declaration = NULL;
+    user_tree->tree_data.program_data.var_declaration = NULL;
     if (prelude_subs != NULL)
         mark_stdlib_var_params(prelude_subs);
     if (prelude_subs != NULL)
@@ -932,6 +938,12 @@ int main(int argc, char **argv)
 
     load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    user_tree->tree_data.program_data.type_declaration =
+        ConcatList(user_tree->tree_data.program_data.type_declaration, user_types);
+    user_tree->tree_data.program_data.const_declaration =
+        ConcatList(user_tree->tree_data.program_data.const_declaration, user_consts);
+    user_tree->tree_data.program_data.var_declaration =
+        ConcatList(user_tree->tree_data.program_data.var_declaration, user_vars);
     resolve_pending_generic_aliases(user_tree);
 
     unit_set_destroy(&visited_units);

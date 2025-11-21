@@ -16,8 +16,10 @@ type
     // Added for Unix support
     AnsiChar = cchar;
     PAnsiChar = pcchar;
-    Word = cuint16;
-    Byte = cuint8;
+    SmallInt = -32768..32767;
+    Word = 0..65535;
+    LongWord = 0..4294967295;
+    Byte = 0..255;
 
 const
     PathDelim = '/';

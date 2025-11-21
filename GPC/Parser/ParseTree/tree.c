@@ -2009,6 +2009,11 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->file_type = UNKNOWN_TYPE;
     alias->gpc_type = NULL;  /* Initialize shared GpcType for enums/sets */
     alias->file_type_id = NULL;
+    alias->is_range = 0;
+    alias->range_known = 0;
+    alias->range_start = 0;
+    alias->range_end = 0;
+    alias->storage_size = 0;
     new_tree->tree_data.type_decl_data.defined_in_unit = 0;
     new_tree->tree_data.type_decl_data.unit_is_public = 0;
 
@@ -2785,4 +2790,9 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         destroy_record_type(alias->inline_record_type);
         alias->inline_record_type = NULL;
     }
+    alias->is_range = 0;
+    alias->range_known = 0;
+    alias->range_start = 0;
+    alias->range_end = 0;
+    alias->storage_size = 0;
 }

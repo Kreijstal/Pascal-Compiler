@@ -47,6 +47,12 @@ struct TypeAlias
     int is_file;
     int file_type;
     char *file_type_id;
+    /* Range/size metadata for scalar aliases */
+    int is_range;
+    int range_known;
+    long long range_start;
+    long long range_end;
+    long long storage_size;
     
     /* GpcType for this type alias - used for enums and sets to provide a shared
      * type that all literals/members reference. Owned by this structure. */
