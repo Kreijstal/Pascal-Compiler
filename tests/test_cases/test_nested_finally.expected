@@ -1,0 +1,7 @@
+Start
+Outer try
+Inner try
+Inner finally, i = 11
+After inner, i = 11
+Outer finally, i = 11
+End, i = 11

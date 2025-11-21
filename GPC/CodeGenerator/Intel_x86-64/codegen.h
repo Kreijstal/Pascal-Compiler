@@ -142,19 +142,29 @@ typedef struct {
 } CodeGenFinallyFrame;
 
 typedef struct {
+    char *label;
+    int finally_depth;
+} CodeGenExceptFrame;
+
+typedef struct {
+    char *label;
+    int finally_depth;
+} CodeGenLoopFrame;
+
+typedef struct {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
     SymTab_t *symtab;
     gpc_target_abi_t target_abi;
     int had_error;
-    char **loop_exit_labels;
+    CodeGenLoopFrame *loop_frames;
     int loop_depth;
     int loop_capacity;
     CodeGenFinallyFrame *finally_stack;
     int finally_depth;
     int finally_capacity;
-    char **except_labels;
+    CodeGenExceptFrame *except_frames;
     int except_depth;
     int except_capacity;
     int global_data_counter;

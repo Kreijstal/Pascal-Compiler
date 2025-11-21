@@ -21,6 +21,14 @@ type
     LongWord = 0..4294967295;
     Byte = 0..255;
 
+    Exception = class
+    private
+        FMessage: AnsiString;
+    public
+        constructor Create(const Msg: AnsiString);
+        property Message: AnsiString read FMessage;
+    end;
+
 const
     PathDelim = '/';
     AltPathDelim = '\';
@@ -519,5 +527,11 @@ begin
         Obj := nil;
     end;
 end;
+
+constructor Exception.Create(const Msg: AnsiString);
+begin
+    FMessage := Msg;
+end;
+
 
 end.

@@ -491,15 +491,15 @@ static void codegen_reset_except_stack(CodeGenContext *ctx)
 {
     if (ctx == NULL)
         return;
-    if (ctx->except_labels != NULL)
+    if (ctx->except_frames != NULL)
     {
         for (int i = 0; i < ctx->except_depth; ++i)
         {
-            free(ctx->except_labels[i]);
-            ctx->except_labels[i] = NULL;
+            free(ctx->except_frames[i].label);
+            ctx->except_frames[i].label = NULL;
         }
-        free(ctx->except_labels);
-        ctx->except_labels = NULL;
+        free(ctx->except_frames);
+        ctx->except_frames = NULL;
     }
     ctx->except_depth = 0;
     ctx->except_capacity = 0;
@@ -509,12 +509,15 @@ static void codegen_reset_loop_stack(CodeGenContext *ctx)
 {
     if (ctx == NULL)
         return;
-    if (ctx->loop_exit_labels != NULL)
+    if (ctx->loop_frames != NULL)
     {
         for (int i = 0; i < ctx->loop_depth; ++i)
-            free(ctx->loop_exit_labels[i]);
-        free(ctx->loop_exit_labels);
-        ctx->loop_exit_labels = NULL;
+        {
+            free(ctx->loop_frames[i].label);
+            ctx->loop_frames[i].label = NULL;
+        }
+        free(ctx->loop_frames);
+        ctx->loop_frames = NULL;
     }
     ctx->loop_depth = 0;
     ctx->loop_capacity = 0;
