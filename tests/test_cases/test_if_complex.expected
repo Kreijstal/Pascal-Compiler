@@ -1,0 +1,5 @@
+VAL is 10
+VAL is between 5 and 20
+FLAG is defined and VAL >= 10
+NONEXISTENT is not defined
+VAL is not 5
