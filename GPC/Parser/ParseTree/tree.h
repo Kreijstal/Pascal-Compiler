@@ -262,7 +262,8 @@ struct Statement *mk_with(int line_num, struct Expression *context, struct State
 
 struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts);
 
-struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts);
+struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
+                               char *exception_var_name, char *exception_type_name);
 
 struct Statement *mk_raise(int line_num, struct Expression *expr);
 

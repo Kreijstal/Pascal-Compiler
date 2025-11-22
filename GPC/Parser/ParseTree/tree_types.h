@@ -307,6 +307,9 @@ struct Statement
         {
             ListNode_t *try_statements;   /* List of Statement */
             ListNode_t *except_statements; /* List of Statement */
+            char *exception_var_name;     /* Variable name from 'on E: Exception do' (optional) */
+            char *exception_type_name;    /* Type name from 'on E: Exception do' (optional) */
+            int has_on_clause;            /* 1 if 'on' clause present, 0 otherwise */
         } try_except_data;
 
         /* RAISE */

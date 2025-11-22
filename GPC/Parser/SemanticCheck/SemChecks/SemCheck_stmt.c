@@ -1304,7 +1304,49 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_TRY_EXCEPT:
             return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.try_statements, max_scope_lev);
-            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            
+            /* If there's an 'on E: Exception do' clause, create a local scope for the exception variable */
+            if (stmt->stmt_data.try_except_data.has_on_clause && 
+                stmt->stmt_data.try_except_data.exception_var_name != NULL) {
+                
+                /* Push a new scope for the exception variable */
+                PushScope(symtab);
+                
+                /* Add the exception variable to the symbol table */
+                char *var_name = stmt->stmt_data.try_except_data.exception_var_name;
+                char *type_name = stmt->stmt_data.try_except_data.exception_type_name;
+                
+                /* Look up the type if specified, otherwise use NULL (defaults to integer) */
+                GpcType *var_gpc_type = NULL;
+                if (type_name != NULL) {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, type_name) >= 0 && type_node != NULL) {
+                        if (type_node->hash_type == HASHTYPE_TYPE) {
+                            var_gpc_type = type_node->type;
+                        } else {
+                            fprintf(stderr, "Error: '%s' is not a type at line %d\n", 
+                                    type_name, stmt->line_num);
+                            return_val++;
+                        }
+                    } else {
+                        fprintf(stderr, "Error: Unknown exception type '%s' at line %d\n", 
+                                type_name, stmt->line_num);
+                        return_val++;
+                    }
+                }
+                
+                /* Push the exception variable onto the scope (NULL type defaults to integer) */
+                PushVarOntoScope_Typed(symtab, var_name, var_gpc_type);
+                
+                /* Semantic check the except statements in the new scope */
+                return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+                
+                /* Pop the scope */
+                PopScope(symtab);
+            } else {
+                /* No exception variable - just check the except statements normally */
+                return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            }
             break;
 
         case STMT_RAISE:

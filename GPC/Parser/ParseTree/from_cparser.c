@@ -5486,6 +5486,9 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         list_builder_init(&try_builder);
         list_builder_init(&finally_builder);
         list_builder_init(&except_builder);
+        
+        char *exception_var_name = NULL;
+        char *exception_type_name = NULL;
 
         ast_t *cur = stmt_node->child;
         while (cur != NULL) {
@@ -5498,9 +5501,52 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                 ListBuilder *target = (unwrapped->typ == PASCAL_T_FINALLY_BLOCK) ? &finally_builder : &except_builder;
                 ast_t *inner = unwrapped->child;
                 while (inner != NULL) {
-                    struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(inner));
-                    if (inner_stmt != NULL)
-                        list_builder_append(target, inner_stmt, LIST_STMT);
+                    ast_t *inner_unwrapped = unwrap_pascal_node(inner);
+                    
+                    /* Check if this is an 'on' clause with exception variable */
+                    if (inner_unwrapped != NULL && inner_unwrapped->typ == PASCAL_T_ON_CLAUSE) {
+                        /* Extract exception variable and type from on clause */
+                        /* Structure: on <var> [: <type>] do <stmt> */
+                        ast_t *on_child = inner_unwrapped->child;
+                        
+                        /* First child should be the variable name */
+                        if (on_child != NULL && on_child->typ == PASCAL_T_IDENTIFIER) {
+                            if (exception_var_name == NULL && on_child->sym != NULL)
+                                exception_var_name = strdup(on_child->sym->name);
+                            on_child = on_child->next;
+                        }
+                        
+                        /* Next might be a NONE node containing the type, or directly the type */
+                        if (on_child != NULL) {
+                            /* Unwrap if it's a NONE node */
+                            ast_t *type_node = (on_child->typ == PASCAL_T_NONE && on_child->child != NULL) ? on_child->child : on_child;
+                            
+                            /* Look for the type identifier */
+                            if (type_node->typ == PASCAL_T_IDENTIFIER) {
+                                if (exception_type_name == NULL && type_node->sym != NULL)
+                                    exception_type_name = strdup(type_node->sym->name);
+                            }
+                            on_child = on_child->next;
+                        }
+                        
+                        /* Find the statement (should be after all the header stuff) */
+                        while (on_child != NULL && on_child->typ != PASCAL_T_STATEMENT && 
+                               on_child->typ != PASCAL_T_BEGIN_BLOCK && on_child->typ != PASCAL_T_ASSIGNMENT &&
+                               on_child->typ != PASCAL_T_FUNC_CALL) {
+                            on_child = on_child->next;
+                        }
+                        
+                        /* Convert the statement */
+                        if (on_child != NULL) {
+                            struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(on_child));
+                            if (inner_stmt != NULL)
+                                list_builder_append(target, inner_stmt, LIST_STMT);
+                        }
+                    } else {
+                        struct Statement *inner_stmt = convert_statement(inner_unwrapped);
+                        if (inner_stmt != NULL)
+                            list_builder_append(target, inner_stmt, LIST_STMT);
+                    }
                     inner = inner->next;
                 }
             } else {
@@ -5528,7 +5574,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
 
         if (finally_stmts != NULL)
             return mk_tryfinally(stmt_node->line, try_stmts, finally_stmts);
-        return mk_tryexcept(stmt_node->line, try_stmts, except_stmts);
+        return mk_tryexcept(stmt_node->line, try_stmts, except_stmts, exception_var_name, exception_type_name);
     }
     case PASCAL_T_RAISE_STMT: {
         struct Expression *exc_expr = convert_expression(unwrap_pascal_node(stmt_node->child));

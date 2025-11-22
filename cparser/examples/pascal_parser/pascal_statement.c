@@ -855,15 +855,24 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // On-exception handler: "on <id>[:<type>] do <statement>"
+    // Parse the variable name and optional type specification
+    combinator_t* exception_var = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    combinator_t* exception_type_spec = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+    
     combinator_t* optional_handler_semicolon = map(optional(token(match(";"))), discard_ast_stmt);
-    combinator_t* on_exception_handler = map(seq(new_combinator(), PASCAL_T_EXCEPT_BLOCK,
+    combinator_t* on_exception_handler = seq(new_combinator(), PASCAL_T_ON_CLAUSE,
         token(keyword_ci("on")),
-        map(until(token(keyword_ci("do")), PASCAL_T_NONE), discard_ast_stmt),
+        exception_var,
+        exception_type_spec,
         token(keyword_ci("do")),
         lazy(stmt_parser),
         optional_handler_semicolon,
         NULL
-    ), wrap_except_on_handler);
+    );
 
     // Try-except block: try statements except statements end
     combinator_t* try_except = seq(new_combinator(), PASCAL_T_TRY_BLOCK,
