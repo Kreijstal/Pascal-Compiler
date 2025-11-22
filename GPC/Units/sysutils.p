@@ -75,6 +75,7 @@ function GetProcessID: Longint;
 function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
+procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
@@ -525,6 +526,27 @@ begin
         { Set to nil. In a complete implementation, this would
           call the object's destructor first. }
         Obj := nil;
+    end;
+end;
+
+procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
+var
+    i: Integer;
+    P: PAnsiChar;
+    C: AnsiChar;
+begin
+    if (Buffer = nil) or (Len <= 0) then
+        S := ''
+    else
+    begin
+        SetLength(S, Len);
+        P := Buffer;
+        for i := 1 to Len do
+        begin
+            C := P^;
+            S[i] := Chr(Ord(C));
+            P := PAnsiChar(NativeUInt(P) + 1);
+        end;
     end;
 end;
 

@@ -178,10 +178,17 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     if (symtab == NULL || record_info == NULL || property_name == NULL)
         return NULL;
 
+    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+        fprintf(stderr, "[SemCheck] semcheck_find_class_property: searching for '%s' in record_info=%p\n",
+            property_name, record_info);
+        fprintf(stderr, "[SemCheck]   record_info->properties=%p\n", record_info->properties);
+    }
+
     struct RecordType *current = record_info;
     while (current != NULL)
     {
         ListNode_t *node = current->properties;
+        int prop_count = 0;
         while (node != NULL)
         {
 #ifdef DEBUG_PROPERTY_RESOLVE
@@ -191,18 +198,26 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
             {
                 struct ClassProperty *property = (struct ClassProperty *)node->cur;
 #ifdef DEBUG_PROPERTY_RESOLVE
-                fprintf(stderr, "[DEBUG] candidate property '%s' (len=%zu) vs '%s' (len=%zu)\n",
-                    property->name ? property->name : "<unnamed>",
+                fprintf(stderr, "[DEBUG] property name=%s (len=%zu), searching for=%s (len=%zu)\n",
+                    property->name ? property->name : "<null>",
                     property->name ? strlen(property->name) : 0,
                     property_name ? property_name : "<null>",
                     property_name ? strlen(property_name) : 0);
 #endif
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck]   Found property: '%s'\n",
+                        property->name ? property->name : "<null>");
+                }
+                prop_count++;
                 if (property->name != NULL &&
                     pascal_identifier_equals(property->name, property_name))
                 {
 #ifdef DEBUG_PROPERTY_RESOLVE
                     fprintf(stderr, "[DEBUG] matched property %s\n", property->name);
 #endif
+                    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck]   MATCHED property '%s'!\n", property->name);
+                    }
                     if (owner_out != NULL)
                         *owner_out = current;
                     return property;
@@ -210,7 +225,13 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
             }
             node = node->next;
         }
+        if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck]   Searched %d properties in this record, no match\n", prop_count);
+        }
         current = semcheck_lookup_parent_record(symtab, current);
+    }
+    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+        fprintf(stderr, "[SemCheck]   Property '%s' NOT FOUND\n", property_name);
     }
     return NULL;
 }
@@ -3568,7 +3589,56 @@ static int semcheck_typecast(int *type_return,
     if (target_type == POINTER_TYPE)
     {
         expr->resolved_gpc_type = create_pointer_type(NULL);
-        semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+        /* Preserve the target type ID as the pointer subtype */
+        if (expr->expr_data.typecast_data.target_type_id != NULL)
+        {
+            /* Look up the type to get its pointed-to type */
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0 &&
+                target_node != NULL && target_node->type != NULL)
+            {
+                /* If it's a pointer type, get what it points to */
+                if (target_node->type->kind == TYPE_KIND_POINTER &&
+                    target_node->type->info.points_to != NULL)
+                {
+                    GpcType *points_to = target_node->type->info.points_to;
+                    if (points_to->kind == TYPE_KIND_RECORD && 
+                        points_to->info.record_info != NULL)
+                    {
+                        /* It's a pointer to a record */
+                        semcheck_set_pointer_info(expr, RECORD_TYPE, 
+                            points_to->info.record_info->type_id);
+                        expr->record_type = points_to->info.record_info;
+                    }
+                    else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                    {
+                        /* It's a pointer to a primitive type */
+                        int subtype = gpc_type_get_primitive_tag(points_to);
+                        semcheck_set_pointer_info(expr, subtype, NULL);
+                    }
+                    else
+                    {
+                        /* Other pointer types */
+                        semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+                    }
+                }
+                else
+                {
+                    /* Not a pointer type or no points_to info */
+                    semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+                }
+            }
+            else
+            {
+                /* Couldn't find the type, set it anyway for later resolution */
+                semcheck_set_pointer_info(expr, UNKNOWN_TYPE, 
+                    expr->expr_data.typecast_data.target_type_id);
+            }
+        }
+        else
+        {
+            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+        }
     }
     else if (target_type != UNKNOWN_TYPE)
     {
@@ -4038,6 +4108,11 @@ static int semcheck_recordaccess(int *type_return,
     int record_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&record_type, symtab, record_expr, max_scope_lev, mutating);
 
+    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+        fprintf(stderr, "[SemCheck] semcheck_recordaccess: field_id=%s, record_type=%d, record_expr->record_type=%p\n",
+            field_id, record_type, record_expr->record_type);
+    }
+
     struct RecordType *record_info = NULL;
     if (record_type == RECORD_TYPE)
     {
@@ -4071,6 +4146,11 @@ static int semcheck_recordaccess(int *type_return,
         return error_count + 1;
     }
 
+    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+        fprintf(stderr, "[SemCheck] semcheck_recordaccess: record_info=%p, is_class=%d\n",
+            record_info, record_info ? record_type_is_class(record_info) : -1);
+    }
+
     if (record_info == NULL)
     {
         fprintf(stderr, "Error on line %d, unable to resolve record type for field %s.\n\n",
@@ -4082,8 +4162,10 @@ static int semcheck_recordaccess(int *type_return,
     struct RecordField *field_desc = NULL;
     long long field_offset = 0;
     int property_matched = 0;
+    /* For classes, use silent mode when looking for fields, since we'll check properties next */
+    int silent_mode = record_type_is_class(record_info) ? 1 : 0;
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
-            &field_offset, expr->line_num, 0) != 0 || field_desc == NULL)
+            &field_offset, expr->line_num, silent_mode) != 0 || field_desc == NULL)
     {
         if (record_type_is_class(record_info))
         {
