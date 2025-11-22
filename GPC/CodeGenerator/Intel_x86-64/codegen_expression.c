@@ -3516,6 +3516,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * 
                  * However, for class methods, Self (first parameter) needs to be dereferenced to pass the
                  * instance pointer, even though it's technically a var parameter internally. */
+                 
+                if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+                    fprintf(stderr, "[CodeGen] Checking var param arg %d: expr=%p, type=%d, record_type=%p\n", 
+                        arg_num, arg_expr, arg_expr ? arg_expr->type : -1, arg_expr ? arg_expr->record_type : NULL);
+                }
+
                 if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
                     arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
                 {

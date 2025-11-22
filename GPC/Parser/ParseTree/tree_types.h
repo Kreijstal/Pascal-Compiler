@@ -359,6 +359,7 @@ struct Expression
 {
     int line_num;
     int col_num;
+    struct RecordType *record_type; /* MOVED HERE */
     enum ExprType type;
     union expr_data
     {
@@ -520,7 +521,7 @@ struct Expression
     
     int pointer_subtype;
     char *pointer_subtype_id;
-    struct RecordType *record_type;
+    /* struct RecordType *record_type; MOVED */
     int is_array_expr;
     int array_element_type;
     char *array_element_type_id;

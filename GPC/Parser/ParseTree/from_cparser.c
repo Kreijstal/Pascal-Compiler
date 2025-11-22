@@ -3824,6 +3824,17 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
     if (spec_node != NULL)
         gpc_type = convert_type_spec_to_gpctype(spec_node, NULL);
 
+    /* If GpcType wasn't created (e.g. for classes/records handled by legacy path), create it now */
+    if (gpc_type == NULL && record_type != NULL) {
+        GpcType *rec_type = create_record_type(record_type);
+        if (record_type->is_class) {
+            /* Classes are pointers to records */
+            gpc_type = create_pointer_type(rec_type);
+        } else {
+            gpc_type = rec_type;
+        }
+    }
+
     Tree_t *decl = NULL;
     if (record_type != NULL) {
         /* Direct record/class type declaration */
@@ -4637,6 +4648,14 @@ static const char *tag_name(tag_t tag) {
 
 static struct Expression *convert_expression(ast_t *expr_node) {
     expr_node = unwrap_pascal_node(expr_node);
+    
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_expression: typ=%d line=%d\n", expr_node->typ, expr_node->line);
+        if (expr_node->next != NULL) {
+            fprintf(stderr, "[GPC] convert_expression: has next sibling typ=%d\n", expr_node->next->typ);
+        }
+    }
+
     if (expr_node == NULL || expr_node == ast_nil)
         return NULL;
 
@@ -5020,6 +5039,47 @@ static struct Expression *convert_member_access(ast_t *node) {
 
     ast_t *base_node = node->child;
     ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
+    ast_t *args_node = (field_node != NULL) ? field_node->next : NULL;
+
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_member_access: base=%d field=%d args=%d\n",
+            base_node ? base_node->typ : -1,
+            field_node ? field_node->typ : -1,
+            args_node ? args_node->typ : -1);
+    }
+
+    /* Check for function call (MEMBER_ACCESS with ARG_LIST as 3rd child) */
+    if (args_node != NULL && args_node->typ == PASCAL_T_ARG_LIST) {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] convert_member_access: detected ARG_LIST child, converting to function call\n");
+        }
+        
+        struct Expression *base_expr = convert_expression(base_node);
+        char *method_id = dup_symbol(field_node);
+        
+        /* Convert args */
+        ListNode_t *args_list = NULL;
+        ast_t *arg_child = args_node->child;
+        while (arg_child != NULL) {
+            struct Expression *arg_expr = convert_expression(arg_child);
+            if (arg_expr != NULL) {
+                args_list = PushListNodeBack(args_list, CreateListNode(arg_expr, LIST_EXPR));
+            }
+            arg_child = arg_child->next;
+        }
+        
+        /* Prepend base expression to args */
+        args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
+        
+        struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+        call_expr->line_num = node->line;
+        call_expr->type = EXPR_FUNCTION_CALL;
+        call_expr->expr_data.function_call_data.id = method_id;
+        call_expr->expr_data.function_call_data.args_expr = args_list;
+        call_expr->expr_data.function_call_data.resolved_func = NULL;
+        
+        return call_expr;
+    }
 
     struct Expression *record_expr = convert_expression(base_node);
     if (record_expr == NULL)
@@ -5038,7 +5098,106 @@ static struct Expression *convert_member_access_chain(int line,
         return NULL;
     }
 
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_member_access_chain: field_node typ=%d, has_next=%d\n",
+            field_node->typ, field_node->next != NULL);
+        if (field_node->next != NULL) {
+            fprintf(stderr, "[GPC]   next typ=%d\n", field_node->next->typ);
+        }
+        if (field_node->child != NULL) {
+            fprintf(stderr, "[GPC]   child typ=%d\n", field_node->child->typ);
+            if (field_node->child->next != NULL) {
+                fprintf(stderr, "[GPC]   child->next typ=%d\n", field_node->child->next->typ);
+            }
+        }
+    }
+
     ast_t *unwrapped = unwrap_pascal_node(field_node);
+    if (unwrapped == NULL)
+        unwrapped = field_node;
+
+    /* Check if this is PASCAL_T_FUNC_CALL (type 43) */
+    if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FUNC_CALL) {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] convert_member_access_chain: detected FUNC_CALL, converting to method call\n");
+        }
+        
+        ast_t *method_id_node = unwrapped->child;
+        ast_t *args_node = (method_id_node != NULL) ? method_id_node->next : NULL;
+        
+        if (method_id_node != NULL && method_id_node->typ == PASCAL_T_IDENTIFIER) {
+            char *method_id = dup_symbol(method_id_node);
+            
+            /* Convert args */
+            ListNode_t *args_list = NULL;
+            if (args_node != NULL && args_node->typ == PASCAL_T_ARG_LIST) {
+                ast_t *arg_child = args_node->child;
+                while (arg_child != NULL) {
+                    struct Expression *arg_expr = convert_expression(arg_child);
+                    if (arg_expr != NULL) {
+                        ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                        if (args_list == NULL) {
+                            args_list = new_node;
+                        } else {
+                            PushListNodeBack(args_list, new_node);
+                        }
+                    }
+                    arg_child = arg_child->next;
+                }
+            }
+            
+            /* Prepend base expression to args */
+            ListNode_t *base_node_list = CreateListNode(base_expr, LIST_EXPR);
+            if (args_list == NULL) {
+                args_list = base_node_list;
+            } else {
+                args_list = PushListNodeFront(args_list, base_node_list);
+            }
+            
+            struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+            call_expr->line_num = line;
+            call_expr->type = EXPR_FUNCTION_CALL;
+            call_expr->expr_data.function_call_data.id = method_id;
+            call_expr->expr_data.function_call_data.args_expr = args_list;
+            call_expr->expr_data.function_call_data.resolved_func = NULL;
+            call_expr->resolved_gpc_type = NULL;
+            
+            return call_expr;
+        }
+    }
+
+    /* Check if field_node has ARG_LIST as sibling (method call) */
+    if (unwrapped != NULL && unwrapped->next != NULL && unwrapped->next->typ == PASCAL_T_ARG_LIST) {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] convert_member_access_chain: detected ARG_LIST sibling, converting to function call\n");
+        }
+        
+        char *method_id = dup_symbol(unwrapped);
+        
+        /* Convert args from ARG_LIST */
+        ListNode_t *args_list = NULL;
+        ast_t *arg_child = unwrapped->next->child;
+        while (arg_child != NULL) {
+            struct Expression *arg_expr = convert_expression(arg_child);
+            if (arg_expr != NULL) {
+                args_list = PushListNodeBack(args_list, CreateListNode(arg_expr, LIST_EXPR));
+            }
+            arg_child = arg_child->next;
+        }
+        
+        /* Prepend base expression to args */
+        args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
+        
+        struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
+        call_expr->line_num = line;
+        call_expr->type = EXPR_FUNCTION_CALL;
+        call_expr->expr_data.function_call_data.id = method_id;
+        call_expr->expr_data.function_call_data.args_expr = args_list;
+        call_expr->expr_data.function_call_data.resolved_func = NULL;
+        
+        return call_expr;
+    }
+
     if (unwrapped == NULL)
         unwrapped = field_node;
 
@@ -6406,6 +6565,7 @@ static Tree_t *convert_function(ast_t *func_node) {
 }
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
+    Tree_t *final_tree = NULL;
     if (program_ast == NULL)
         return NULL;
 
@@ -6418,7 +6578,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         return NULL;
     }
 
-    if (cur->typ == PASCAL_T_PROGRAM_DECL) {
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] tree_from_pascal_ast: root typ=%d\n", cur->typ);
+    }
+    
+    if (cur->typ == PASCAL_T_PROGRAM_DECL || cur->typ == 88) {
         /* The structure of PASCAL_T_PROGRAM_DECL is:
          *   - optional(program_header)       [PASCAL_T_PROGRAM_HEADER or NULL/skipped]
          *   - optional(uses_section)          [PASCAL_T_USES_SECTION or NULL/skipped]
@@ -6515,9 +6679,18 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             case PASCAL_T_BEGIN_BLOCK:
             case PASCAL_T_MAIN_BLOCK:
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Found block type %d\n", section->typ);
+                }
                 body = convert_block(section);
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: body assigned, body=%p\n", body);
+                }
                 break;
             default:
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Skipping node type %d\n", section->typ);
+                }
                 break;
             }
             section = section->next;
@@ -6526,9 +6699,17 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         visited_set_destroy(visited);
         
         ListNode_t *label_decls = list_builder_finish(&label_builder);
-        Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
-                                  list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
-        return tree;
+        Tree_t *tree = NULL;
+        if (body != NULL) {
+            tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
+                              list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
+            final_tree = tree;
+        } else {
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: body is NULL, skipping mk_program for this section\n");
+            }
+        }
+        return final_tree;
     }
 
     if (cur->typ == PASCAL_T_UNIT_DECL) {
@@ -6567,6 +6748,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         while (section != NULL) {
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: Visiting section type %d\n", section->typ);
+            }
             /* Check for circular reference */
             if (!is_safe_to_continue(visited_unit, section)) {
                 fprintf(stderr, "ERROR: Circular reference detected in unit sections, stopping traversal\n");
@@ -6595,7 +6779,10 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             } else {
                 ast_t *section = interface_node->child;
                 while (section != NULL) {
-                    /* Check for circular reference */
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n", section->typ);
+            }
+            /* Check for circular reference */
                     if (!is_safe_to_continue(visited_if, section)) {
                         fprintf(stderr, "ERROR: Circular reference detected in interface sections, stopping traversal\n");
                         break;

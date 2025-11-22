@@ -1126,6 +1126,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 CODEGEN_DEBUG("DEBUG Constructor: class_record=%p, is_class=%d, properties=%p\n",
                     (void *)class_record, class_record->is_class, (void *)class_record->properties);
+                
+                if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+                    struct Expression *cexpr = (struct Expression*)expr->expr_data.function_call_data.args_expr->cur;
+                    fprintf(stderr, "[CodeGen] gencode_case0: Checking class_record %p from class_expr %p (type=%d line=%d)\n", 
+                        class_record, (void*)cexpr, cexpr->type, cexpr->line_num);
+                }
             }
             
             if (class_record != NULL && record_type_is_class(class_record))
@@ -1757,9 +1763,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
-                if (ctx != NULL && ctx->symtab != NULL &&
+                int found = (ctx != NULL && ctx->symtab != NULL &&
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
-                    node != NULL && node->hash_type == HASHTYPE_CONST)
+                    node != NULL);
+
+                if (found && node->hash_type == HASHTYPE_CONST)
                 {
                     /* Check if this is a real constant */
                     if (node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
@@ -1777,6 +1785,16 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         /* Integer constant */
                         snprintf(buffer, buf_len, "$%lld", node->const_int_value);
                     }
+                }
+                else if (found && node->hash_type == HASHTYPE_TYPE &&
+                         node->type != NULL && node->type->kind == TYPE_KIND_POINTER &&
+                         node->type->info.points_to != NULL &&
+                         node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                         node->type->info.points_to->info.record_info != NULL &&
+                         record_type_is_class(node->type->info.points_to->info.record_info))
+                {
+                     /* Class type used as value -> Address of VMT */
+                     snprintf(buffer, buf_len, "$%s_VMT", expr->expr_data.id);
                 }
                 else if(stack_node != NULL)
                 {

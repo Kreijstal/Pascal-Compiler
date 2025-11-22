@@ -1075,25 +1075,27 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                     char name_label[256];
                     snprintf(name_label, sizeof(name_label), "__gpc_typeinfo_name_%s", class_label);
                     fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
-                    if (record_info->methods != NULL)
-                        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
-                    else
-                        fprintf(ctx->output_file, "\t.quad\t0\n");
+                    /* Always emit VMT reference, even if no methods */
+                    fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
                     fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, class_label);
 
+                    /* Always emit VMT for classes, even if no virtual methods */
+                    fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
+                    fprintf(ctx->output_file, "\t.align 8\n");
+                    fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
+                    fprintf(ctx->output_file, "%s_VMT:\n", class_label);
                     if (record_info->methods != NULL) {
-                        fprintf(ctx->output_file, "\n# VMT for class %s\n", class_label);
-                        fprintf(ctx->output_file, "\t.align 8\n");
-                        fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
-                        fprintf(ctx->output_file, "%s_VMT:\n", class_label);
                         ListNode_t *method_node = record_info->methods;
                         while (method_node != NULL) {
                             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                             if (method != NULL && method->mangled_name != NULL) {
                                 fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
                             }
-                                                    method_node = method_node->next;
+                            method_node = method_node->next;
                         }
+                    } else {
+                        /* Emit a null entry for classes with no virtual methods */
+                        fprintf(ctx->output_file, "\t.quad\t0\n");
                     }
                 }
             }
@@ -1271,6 +1273,18 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 /* Returns the program name for use with main */
 char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 {
+    if (prgm == NULL)
+        return NULL;
+
+    struct Program *prog_data = &prgm->tree_data.program_data;
+    if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_program: starting\n");
+        if (prog_data->body_statement != NULL) {
+            fprintf(stderr, "[CodeGen]   body_statement is NOT NULL, type=%d\n", prog_data->body_statement->type);
+        } else {
+            fprintf(stderr, "[CodeGen]   body_statement is NULL\n");
+        }
+    }
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif

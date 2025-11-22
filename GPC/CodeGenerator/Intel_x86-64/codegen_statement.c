@@ -2022,12 +2022,37 @@ static int codegen_current_except_finally_depth(const CodeGenContext *ctx)
 static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab)
 {
-    while (stmts != NULL)
-    {
-        if (stmts->cur != NULL)
-            inst_list = codegen_stmt((struct Statement *)stmts->cur, inst_list, ctx, symtab);
-        stmts = stmts->next;
+    if (stmts == NULL) {
+        if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+            fprintf(stderr, "[CodeGen] codegen_statement_list: stmts is NULL\n");
+        }
+        return inst_list;
     }
+
+    if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_statement_list: starting\n");
+    }
+
+    ListNode_t *node = stmts;
+    while (node != NULL)
+    {
+        if (node->type == LIST_STMT)
+        {
+            struct Statement *stmt = (struct Statement *)node->cur;
+            if (stmt != NULL) {
+                if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+                    fprintf(stderr, "[CodeGen]   generating statement type=%d line=%d\n", stmt->type, stmt->line_num);
+                }
+                inst_list = codegen_stmt(stmt, inst_list, ctx, symtab);
+            }
+        }
+        node = node->next;
+    }
+    
+    if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_statement_list: finished\n");
+    }
+
     return inst_list;
 }
 
@@ -6040,6 +6065,8 @@ static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_l
     int limit_depth = codegen_current_loop_finally_depth(ctx);
     return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, limit_depth);
 }
+
+
 
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
