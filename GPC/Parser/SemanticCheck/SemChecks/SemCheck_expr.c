@@ -11,6 +11,7 @@
 */
 
 #include <stdlib.h>
+
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
@@ -4084,10 +4085,6 @@ static int semcheck_recordaccess(int *type_return,
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, 0) != 0 || field_desc == NULL)
     {
-#ifdef DEBUG_PROPERTY_RESOLVE
-        fprintf(stderr, "DEBUG property lookup: class=%d props=%p name=%s\n",
-            record_type_is_class(record_info), (void *)record_info->properties, field_id);
-#endif
         if (record_type_is_class(record_info))
         {
             struct RecordType *property_owner = NULL;
@@ -5716,11 +5713,6 @@ int semcheck_varid(int *type_return,
     semcheck_clear_array_info(expr);
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    if (strcmp(id, "Sock") == 0) {
-#ifdef DEBUG
-        fprintf(stderr, "DEBUG: semcheck_varid looking up Sock. scope_return=%d hash_return=%p\n", scope_return, hash_return);
-#endif
-    }
     if(scope_return == -1)
     {
         struct Expression *with_expr = NULL;

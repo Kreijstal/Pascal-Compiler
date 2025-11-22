@@ -2543,7 +2543,23 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     if(optimize_flag() > 0 && return_val == 0)
     {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] Before optimize: body_statement = %p\n", 
+                    (void*)tree->tree_data.program_data.body_statement);
+            if (tree->tree_data.program_data.body_statement != NULL) {
+                fprintf(stderr, "[GPC] Body statement type: %d\n", 
+                        tree->tree_data.program_data.body_statement->type);
+                if (tree->tree_data.program_data.body_statement->type == STMT_COMPOUND_STATEMENT) {
+                    fprintf(stderr, "[GPC] Compound statement list: %p\n",
+                            (void*)tree->tree_data.program_data.body_statement->stmt_data.compound_statement);
+                }
+            }
+        }
         optimize(symtab, tree);
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] After optimize: body_statement = %p\n", 
+                    (void*)tree->tree_data.program_data.body_statement);
+        }
     }
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */

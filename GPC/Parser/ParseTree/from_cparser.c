@@ -2666,8 +2666,13 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
             typeinfo_field->array_is_open = 0;
             typeinfo_field->is_hidden = 1;
             ListNode_t *node = CreateListNode(typeinfo_field, LIST_RECORD_FIELD);
-            if (node != NULL)
-                record->fields = PushListNodeFront(record->fields, node);
+            if (node != NULL) {
+                if (record->fields == NULL) {
+                    record->fields = node;
+                } else {
+                    record->fields = PushListNodeFront(record->fields, node);
+                }
+            }
             else
             {
                 free(typeinfo_field->name);
@@ -5116,16 +5121,29 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     if (getenv("GPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[GPC] convert_proc_call: typ=%d line=%d\n",
             call_node ? call_node->typ : -1, call_node ? call_node->line : -1);
+        if (call_node && call_node->child) {
+            fprintf(stderr, "[GPC]   child typ=%d\n", call_node->child->typ);
+        }
     }
     ast_t *child = call_node->child;
     ast_t *args_start = NULL;
     char *id = NULL;
 
     if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS) {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC]   Handling MEMBER_ACCESS\n");
+        }
         ast_t *args_node = child->next;
         struct Statement *method_stmt = convert_method_call_statement(child, args_node);
-        if (method_stmt != NULL)
+        if (method_stmt != NULL) {
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC]   convert_method_call_statement returned statement\n");
+            }
             return method_stmt;
+        }
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC]   convert_method_call_statement returned NULL\n");
+        }
     }
 
     if (call_node->typ == PASCAL_T_IDENTIFIER) {
@@ -5144,6 +5162,10 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
                 args_start = child->next;
             }
         }
+    }
+
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC]   id=%s\n", id ? id : "(null)");
     }
 
     ListNode_t *args = convert_expression_list(args_start);
@@ -5674,7 +5696,12 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         return NULL;
     }
     
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_statement_list: starting, stmt_list_node=%p\n", (void*)stmt_list_node);
+    }
+    
     ast_t *cur = stmt_list_node;
+    int stmt_count = 0;
     while (cur != NULL && cur != ast_nil) {
         /* Check for circular reference before processing */
         if (!is_safe_to_continue(visited, cur)) {
@@ -5693,13 +5720,37 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
             continue;
         }
 
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] convert_statement_list: processing stmt %d, typ=%d line=%d\n", 
+                    stmt_count, unwrapped->typ, unwrapped->line);
+            fprintf(stderr, "[GPC]   calling convert_statement...\n");
+            fflush(stderr);
+        }
+
         struct Statement *stmt = convert_statement(unwrapped);
-        if (stmt != NULL)
+        
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC]   convert_statement returned: %p\n", (void*)stmt);
+            fflush(stderr);
+        }
+        
+        if (stmt != NULL) {
             list_builder_append(&builder, stmt, LIST_STMT);
-        else if (getenv("GPC_DEBUG_BODY") != NULL)
-            fprintf(stderr, "[GPC] convert_statement_list: dropped statement typ=%d line=%d\n",
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC]   -> converted successfully\n");
+                fflush(stderr);
+            }
+        } else if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC]   -> convert_statement returned NULL, dropped statement typ=%d line=%d\n",
                 unwrapped->typ, unwrapped->line);
+            fflush(stderr);
+        }
         cur = cur->next;
+        stmt_count++;
+    }
+
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_statement_list: processed %d statements\n", stmt_count);
     }
 
     visited_set_destroy(visited);
@@ -5714,7 +5765,27 @@ static struct Statement *convert_block(ast_t *block_node) {
         return NULL;
     }
 
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] convert_block: typ=%d line=%d\n", block_node->typ, block_node->line);
+        if (block_node->child) {
+            fprintf(stderr, "[GPC]   child typ=%d line=%d\n", 
+                    block_node->child->typ, block_node->child->line);
+            // Check if child is ast_nil
+            if (block_node->child == ast_nil) {
+                fprintf(stderr, "[GPC]   child is ast_nil!\n");
+            }
+        } else {
+            fprintf(stderr, "[GPC]   child is NULL\n");
+        }
+    }
+
     ast_t *stmts = block_node->child;
+    if (stmts == ast_nil) {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] convert_block: stmts is ast_nil, treating as NULL\n");
+        }
+        stmts = NULL;
+    }
     ListNode_t *list = convert_statement_list(stmts);
     if (list == NULL && getenv("GPC_DEBUG_BODY") != NULL)
         fprintf(stderr, "[GPC] convert_block: statement list is NULL\n");
