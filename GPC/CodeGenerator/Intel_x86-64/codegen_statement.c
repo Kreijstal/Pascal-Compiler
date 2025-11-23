@@ -1945,14 +1945,7 @@ static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_
         const char *target = (i == 0) ? target_label : entry_labels[i - 1];
         const char *entry = entry_labels[i];
 
-        char buffer[32];
-        snprintf(buffer, sizeof(buffer), "%s:\n", entry);
-        inst_list = add_inst(inst_list, buffer);
-
-        /* Calculate index in finally_stack: (original_depth - 1) - (unwind_count - 1 - i) */
-        /* When i = unwind_count - 1 (top), index = original_depth - 1 */
-        /* When i = 0 (bottom), index = original_depth - unwind_count = limit_depth */
-        int frame_index = original_depth - 1 - (unwind_count - 1 - i);
+        /* codegen_emit_finally_block will emit the entry label, so we don't emit it here */
         inst_list = codegen_emit_finally_block(ctx, inst_list, symtab, entry, target);
     }
     ctx->finally_depth = original_depth;
