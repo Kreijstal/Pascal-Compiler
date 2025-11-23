@@ -318,6 +318,11 @@ static void register_class_method_ex(const char *class_name, const char *method_
 
     node->next = class_method_bindings;
     class_method_bindings = node;
+    
+    if (getenv("GPC_DEBUG_CLASS_METHODS") != NULL) {
+        fprintf(stderr, "[GPC] Registered method %s.%s (virtual=%d, override=%d)\n",
+            class_name, method_name, is_virtual, is_override);
+    }
 }
 
 
@@ -2623,6 +2628,15 @@ static struct RecordType *convert_class_type(const char *class_name, ast_t *clas
         }
         // Move to the actual class body (next sibling)
         body_start = body_start->next;
+    }
+    
+    if (getenv("GPC_DEBUG_CLASS_METHODS") != NULL) {
+        fprintf(stderr, "[GPC] convert_class_type: processing class %s\n", class_name ? class_name : "<null>");
+        if (body_start != NULL) {
+            fprintf(stderr, "[GPC]   body_start type: %d\n", body_start->typ);
+        } else {
+            fprintf(stderr, "[GPC]   body_start is NULL\n");
+        }
     }
     
     collect_class_members(body_start, class_name, &field_builder, &property_builder, &method_template_builder);
@@ -6621,6 +6635,26 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
          * We need to check if the first child is a PASCAL_T_PROGRAM_HEADER.
          */
         ast_t *first_child = cur->child;
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] tree_from_pascal_ast: program block entered. first_child=%p\n", first_child);
+            if (first_child) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: first_child->typ=%d\n", first_child->typ);
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: first_child->next=%p\n", first_child->next);
+                
+                // Print all siblings to understand the structure
+                int sibling_count = 0;
+                ast_t *sibling = first_child;
+                while (sibling != NULL && sibling_count < 100) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: sibling[%d] typ=%d next=%p\n", 
+                            sibling_count, sibling->typ, sibling->next);
+                    sibling = sibling->next;
+                    sibling_count++;
+                }
+                if (sibling != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: ... more siblings ...\n");
+                }
+            }
+        }
         ast_t *program_header_node = NULL;
         char *program_id = NULL;
         
@@ -6676,6 +6710,10 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             }
             
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n", section->typ);
+            }
+            
             switch (section->typ) {
             case PASCAL_T_CONST_SECTION:
                 append_const_decls_from_section(section, &const_decls, &var_decls_builder, type_section_ast);
@@ -6701,7 +6739,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 append_subprogram_node(&subprograms, sub);
                 break;
             }
-            case PASCAL_T_METHOD_IMPL: {
+            case PASCAL_T_METHOD_IMPL:
+            case PASCAL_T_CONSTRUCTOR_DECL:
+            case PASCAL_T_DESTRUCTOR_DECL: {
                 Tree_t *method_tree = convert_method_impl(section);
                 append_subprogram_node(&subprograms, method_tree);
                 break;
@@ -6716,30 +6756,118 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: body assigned, body=%p\n", body);
                 }
                 break;
+            case PASCAL_T_TYPE_SPEC:
+            case PASCAL_T_VAR_DECL:
+            case PASCAL_T_TYPE_DECL:
+            case PASCAL_T_CONST_DECL:
+                /* These are components of sections, not top-level sections themselves.
+                 * They should be children of VAR_SECTION, TYPE_SECTION, or CONST_SECTION.
+                 * If we encounter them here, it means the AST structure is malformed,
+                 * but we can safely skip them to continue parsing. */
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Skipping declaration component type %d (should be child of section)\n", section->typ);
+                }
+                break;
             default:
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
-                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Skipping node type %d\n", section->typ);
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Skipping unknown node type %d\n", section->typ);
                 }
                 break;
             }
             section = section->next;
         }
+        
+        /* If we haven't found a main block, search recursively in the AST tree.
+         * This handles the case where the parser's seq() and many() combinators
+         * don't properly link subsequent children in the sibling chain. */
+        if (body == NULL) {
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: Main block not found in sibling chain, searching recursively\n");
+            }
+            
+            /* Helper function to recursively search for a node type */
+            ast_t* (*find_node_recursive)(ast_t*, int) = NULL;
+            ast_t* find_node_impl(ast_t* node, int target_type) {
+                if (node == NULL) return NULL;
+                
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] find_node_impl: visiting node typ=%d, looking for typ=%d\n", 
+                            node->typ, target_type);
+                }
+                
+                if (node->typ == target_type) {
+                    if (getenv("GPC_DEBUG_BODY") != NULL) {
+                        fprintf(stderr, "[GPC] find_node_impl: FOUND target typ=%d\n", target_type);
+                    }
+                    return node;
+                }
+                
+                /* Search in children */
+                ast_t* result = find_node_impl(node->child, target_type);
+                if (result != NULL) return result;
+                
+                /* Search in siblings */
+                return find_node_impl(node->next, target_type);
+            }
+            find_node_recursive = find_node_impl;
+            
+            /* Search for VAR_SECTION */
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: Searching for VAR_SECTION (typ=%d)\n", PASCAL_T_VAR_SECTION);
+            }
+            ast_t* var_section_node = find_node_recursive(cur->child, PASCAL_T_VAR_SECTION);
+            if (var_section_node != NULL) {
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Found VAR_SECTION via recursive search\n");
+                }
+                list_builder_extend(&var_decls_builder, convert_var_section(var_section_node));
+            }
+            
+            /* Search for MAIN_BLOCK */
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: Searching for MAIN_BLOCK (typ=%d)\n", PASCAL_T_MAIN_BLOCK);
+            }
+            ast_t* main_block_node = find_node_recursive(cur->child, PASCAL_T_MAIN_BLOCK);
+            if (main_block_node == NULL) {
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: MAIN_BLOCK not found, searching for BEGIN_BLOCK (typ=%d)\n", PASCAL_T_BEGIN_BLOCK);
+                }
+                main_block_node = find_node_recursive(cur->child, PASCAL_T_BEGIN_BLOCK);
+            }
+            /* Also try searching for type 100 which appears in the AST */
+            if (main_block_node == NULL) {
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=100\n");
+                }
+                main_block_node = find_node_recursive(cur->child, 100);
+            }
+            if (main_block_node != NULL) {
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: Found MAIN_BLOCK via recursive search (typ=%d)\n", main_block_node->typ);
+                }
+                body = convert_block(main_block_node);
+            }
+        }
 
         visited_set_destroy(visited);
         
+        
         ListNode_t *label_decls = list_builder_finish(&label_builder);
-        Tree_t *tree = NULL;
-        if (body != NULL) {
-            tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
-                              list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
-            final_tree = tree;
-        } else {
+        
+        /* If no main block was found, create an empty one to avoid NULL body */
+        if (body == NULL) {
             if (getenv("GPC_DEBUG_BODY") != NULL) {
-                fprintf(stderr, "[GPC] tree_from_pascal_ast: body is NULL, skipping mk_program for this section\n");
+                fprintf(stderr, "[GPC] tree_from_pascal_ast: No main block found, creating empty body\\n");
             }
+            body = mk_compoundstatement(cur->line, NULL);
         }
+        
+        Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
+                                  list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
+        final_tree = tree;
         return final_tree;
     }
+
 
     if (cur->typ == PASCAL_T_UNIT_DECL) {
         ast_t *unit_name_node = cur->child;
@@ -6888,7 +7016,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             append_subprogram_node(&subprograms, func);
                             break;
                         }
-                        case PASCAL_T_METHOD_IMPL: {
+                        case PASCAL_T_METHOD_IMPL:
+                        case PASCAL_T_CONSTRUCTOR_DECL:
+                        case PASCAL_T_DESTRUCTOR_DECL: {
                             Tree_t *method_tree = convert_method_impl(node);
                             append_subprogram_node(&subprograms, method_tree);
                             break;

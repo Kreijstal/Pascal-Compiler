@@ -1084,6 +1084,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                     fprintf(ctx->output_file, "\t.align 8\n");
                     fprintf(ctx->output_file, ".globl %s_VMT\n", class_label);
                     fprintf(ctx->output_file, "%s_VMT:\n", class_label);
+                    /* Pointer to TypeInfo at offset 0 */
+                    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
+                    
                     if (record_info->methods != NULL) {
                         ListNode_t *method_node = record_info->methods;
                         while (method_node != NULL) {
@@ -1093,9 +1096,6 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                             }
                             method_node = method_node->next;
                         }
-                    } else {
-                        /* Emit a null entry for classes with no virtual methods */
-                        fprintf(ctx->output_file, "\t.quad\t0\n");
                     }
                 }
             }

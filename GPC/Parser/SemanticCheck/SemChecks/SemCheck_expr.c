@@ -2745,6 +2745,11 @@ static int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     }
 
     long long computed_size = 0;
+    
+    /* Classes have a VMT pointer at offset 0 */
+    if (record->is_class)
+        computed_size = 8; /* 64-bit pointer */
+        
     if (sizeof_from_record_members(symtab, record->fields, &computed_size, depth + 1, line_num) != 0)
         return 1;
 
@@ -2938,7 +2943,7 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
     if (size_out == NULL)
         return 1;
 
-    long long total = 0;
+    long long total = *size_out;
     int max_alignment = 1;  /* Track maximum alignment for struct padding */
     
     ListNode_t *cur = members;

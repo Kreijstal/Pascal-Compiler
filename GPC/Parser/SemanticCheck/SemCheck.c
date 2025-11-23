@@ -1323,7 +1323,7 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
-                    new_method->vmt_index = vmt_size;
+                    new_method->vmt_index = vmt_size + 1;
                     
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {

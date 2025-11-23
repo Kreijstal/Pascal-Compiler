@@ -139,7 +139,10 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
         /* Class variables are pointers: first load the pointer, then dereference it */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        /* Now typeinfo_reg contains the pointer to the instance, dereference to get typeinfo */
+        /* Now typeinfo_reg contains the pointer to the instance, dereference to get VMT */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        /* Now typeinfo_reg contains the VMT pointer, dereference to get TypeInfo (offset 0) */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
