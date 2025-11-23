@@ -6622,7 +6622,12 @@ static Tree_t *convert_function(ast_t *func_node) {
 
 /**
  * Helper function to recursively search for an AST node with a specific type.
- * Searches both child and sibling chains.
+ * Uses depth-first search, checking children before siblings.
+ * 
+ * Traversal order:
+ * 1. Check if current node matches target_type
+ * 2. Recursively search in child chain
+ * 3. Recursively search in sibling chain
  * 
  * @param node The node to start searching from
  * @param target_type The type ID to search for
