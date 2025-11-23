@@ -1089,7 +1089,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         while (method_node != NULL) {
                             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                             if (method != NULL && method->mangled_name != NULL) {
-                                fprintf(ctx->output_file, "\t.quad\t%s_u\n", method->mangled_name);
+                                fprintf(ctx->output_file, "\t.quad\t%s_p\n", method->mangled_name);
                             }
                             method_node = method_node->next;
                         }

@@ -154,6 +154,29 @@ static void semcheck_set_function_call_target(struct Expression *expr, HashNode_
     expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
 
+/* Helper function to get RecordType from HashNode */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
+{
+    if (node == NULL) return NULL;
+    
+    /* Use hashnode helper which handles NULL GpcType */
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record != NULL)
+        return record;
+        
+    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
+    if (node->type != NULL && gpc_type_is_pointer(node->type))
+    {
+        GpcType *pointed_to = node->type->info.points_to;
+        if (pointed_to != NULL && gpc_type_is_record(pointed_to))
+        {
+            return gpc_type_get_record(pointed_to);
+        }
+    }
+    
+    return NULL;
+}
+
 static struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
     struct RecordType *record_info)
 {
@@ -166,7 +189,7 @@ static struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
         parent_node == NULL)
         return NULL;
 
-    return hashnode_get_record_type(parent_node);
+    return get_record_type_from_node(parent_node);
 }
 
 struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
@@ -300,21 +323,23 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     {
         if (current->type_id != NULL)
         {
-            size_t class_len = strlen(current->type_id);
-            size_t method_len = strlen(method_name);
-            size_t total = class_len + 2 + method_len + 1;
-            char *candidate = (char *)malloc(total);
-            if (candidate == NULL)
-                return NULL;
-
-            snprintf(candidate, total, "%s__%s", current->type_id, method_name);
+            char mangled_name[256];
+            snprintf(mangled_name, sizeof(mangled_name), "%s__%s", current->type_id, method_name);
+            
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] semcheck_find_class_method: Searching for '%s' (mangled: '%s') in class '%s'\n", 
+                    method_name, mangled_name, current->type_id);
+            }
 
             HashNode_t *method_node = NULL;
-            int find_result = FindIdent(&method_node, symtab, candidate);
-            free(candidate);
+            int find_result = FindIdent(&method_node, symtab, mangled_name);
 
             if (find_result != -1 && method_node != NULL)
             {
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_find_class_method: Found '%s' in class '%s'\n", 
+                        method_name, current->type_id);
+                }
                 if (owner_out != NULL)
                     *owner_out = current;
                 return method_node;
@@ -498,11 +523,7 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
-/* Helper function to get RecordType from HashNode */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    return hashnode_get_record_type(node);
-}
+
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -3674,7 +3695,19 @@ static int semcheck_is_expr(int *type_return,
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
 
     struct RecordType *value_record = value_expr->record_type;
-    if (value_type != RECORD_TYPE || value_record == NULL || !record_type_is_class(value_record))
+    
+    /* Classes are pointers to records, so we need to handle POINTER_TYPE */
+    int is_valid_class = 0;
+    if (value_type == RECORD_TYPE && value_record != NULL && record_type_is_class(value_record))
+    {
+        is_valid_class = 1;
+    }
+    else if (value_type == POINTER_TYPE && value_record != NULL && record_type_is_class(value_record))
+    {
+        is_valid_class = 1;
+    }
+
+    if (!is_valid_class)
     {
         fprintf(stderr, "Error on line %d, \"is\" operator requires a class instance on the left-hand side.\n\n",
             expr->line_num);
@@ -3687,8 +3720,24 @@ static int semcheck_is_expr(int *type_return,
     {
         target_record = semcheck_lookup_record_type(symtab,
             expr->expr_data.is_data.target_type_id);
+            
+        if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] is_expr: lookup '%s' -> %p\n", 
+                expr->expr_data.is_data.target_type_id, target_record);
+            if (target_record) {
+                fprintf(stderr, "[SemCheck]   is_class=%d\n", target_record->is_class);
+            }
+        }
     }
-    if (target_record == NULL || !record_type_is_class(target_record))
+    
+    /* Check if target is a class (could be RECORD_TYPE or POINTER_TYPE to record) */
+    int is_valid_target = 0;
+    if (target_record != NULL && record_type_is_class(target_record))
+    {
+        is_valid_target = 1;
+    }
+    
+    if (!is_valid_target)
     {
         fprintf(stderr, "Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
             expr->line_num);
@@ -3726,7 +3775,19 @@ static int semcheck_as_expr(int *type_return,
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
 
     struct RecordType *value_record = value_expr->record_type;
-    if (value_type != RECORD_TYPE || value_record == NULL || !record_type_is_class(value_record))
+    
+    /* Classes are pointers to records, so we need to handle POINTER_TYPE */
+    int is_valid_class = 0;
+    if (value_type == RECORD_TYPE && value_record != NULL && record_type_is_class(value_record))
+    {
+        is_valid_class = 1;
+    }
+    else if (value_type == POINTER_TYPE && value_record != NULL && record_type_is_class(value_record))
+    {
+        is_valid_class = 1;
+    }
+
+    if (!is_valid_class)
     {
         fprintf(stderr, "Error on line %d, \"as\" operator requires a class instance on the left-hand side.\n\n",
             expr->line_num);
@@ -3740,25 +3801,51 @@ static int semcheck_as_expr(int *type_return,
         target_record = semcheck_lookup_record_type(symtab,
             expr->expr_data.as_data.target_type_id);
     }
-    if (target_record == NULL || !record_type_is_class(target_record))
+    
+    /* Check if target is a class (could be RECORD_TYPE or POINTER_TYPE to record) */
+    int is_valid_target = 0;
+    if (target_record != NULL && record_type_is_class(target_record))
+    {
+        is_valid_target = 1;
+    }
+    
+    if (!is_valid_target)
     {
         fprintf(stderr, "Error on line %d, \"as\" operator requires a class type on the right-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
+    /* Determine correct target type */
     target_type = RECORD_TYPE;
+    GpcType *result_gpc_type = NULL;
+
+    if (target_record != NULL && record_type_is_class(target_record))
+    {
+        target_type = POINTER_TYPE;
+        GpcType *record_gpc = create_record_type(target_record);
+        if (record_gpc != NULL)
+        {
+            result_gpc_type = create_pointer_type(record_gpc);
+        }
+    }
+    else
+    {
+        result_gpc_type = create_record_type(target_record);
+    }
 
     expr->expr_data.as_data.target_type = target_type;
     expr->expr_data.as_data.target_record_type = target_record;
     expr->record_type = target_record;
-    expr->resolved_type = RECORD_TYPE;
+    expr->resolved_type = target_type;
+    
     if (expr->resolved_gpc_type != NULL)
     {
         destroy_gpc_type(expr->resolved_gpc_type);
         expr->resolved_gpc_type = NULL;
     }
-    expr->resolved_gpc_type = create_record_type(target_record);
-    *type_return = RECORD_TYPE;
+    expr->resolved_gpc_type = result_gpc_type;
+    
+    *type_return = target_type;
     return error_count;
 }
 
@@ -4185,14 +4272,26 @@ static int semcheck_recordaccess(int *type_return,
                         return error_count + 1;
                     }
 
+                    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck]   Property read_accessor='%s'\n",
+                            property->read_accessor ? property->read_accessor : "<null>");
+                    }
+
                     struct RecordField *read_field =
                         semcheck_find_class_field_including_hidden(symtab,
                             record_info, property->read_accessor, NULL);
+                    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck]   Found read_field=%p\n", read_field);
+                    }
                     if (read_field != NULL &&
                         resolve_record_field(symtab, record_info, property->read_accessor,
                             &field_desc, &field_offset, expr->line_num, 0) == 0 &&
                         field_desc != NULL)
                     {
+                        if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck]   Transforming property '%s' to field '%s'\n",
+                                field_id, property->read_accessor);
+                        }
                         if (!pascal_identifier_equals(field_id, property->read_accessor))
                         {
                             free(expr->expr_data.record_access_data.field_id);
@@ -4329,6 +4428,87 @@ static int semcheck_recordaccess(int *type_return,
 
         if (property_matched)
             return error_count;
+
+        /* Special handling for default Create constructor */
+        /* If the field is "Create" and this is a class type, treat it as a default constructor */
+        if (record_type_is_class(record_info) && field_id != NULL && 
+            pascal_identifier_equals(field_id, "Create"))
+        {
+            /* Transform this EXPR_RECORD_ACCESS into EXPR_FUNCTION_CALL */
+            /* The record_expr should be a type name (EXPR_VAR_ID) */
+            if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+            {
+                const char *class_name = record_expr->expr_data.id;
+                
+                /* Clean up the old record_access_data before transforming */
+                expr->expr_data.record_access_data.record_expr = NULL;
+                
+                /* Calculate class size using GpcType */
+                GpcType *record_gpc = create_record_type(record_info);
+                if (record_gpc == NULL) {
+                    fprintf(stderr, "Error on line %d: Unable to create GpcType for class %s\n", 
+                        expr->line_num, class_name);
+                    destroy_expr(record_expr);
+                    return error_count + 1;
+                }
+                
+                long long class_size = gpc_type_sizeof(record_gpc);
+                if (class_size <= 0) {
+                    fprintf(stderr, "Error on line %d: Unable to determine size for class %s\n", 
+                        expr->line_num, class_name);
+                    destroy_expr(record_expr);
+                    return error_count + 1;
+                }
+                
+                /* Create argument 1: class size as integer literal */
+                struct Expression *size_arg = (struct Expression *)calloc(1, sizeof(struct Expression));
+                size_arg->type = EXPR_INUM;
+                size_arg->expr_data.i_num = class_size;
+                size_arg->resolved_type = INT_TYPE;
+                
+                /* Create argument 2: VMT pointer (address of global VMT label) */
+                /* The VMT is a global label - codegen will handle it specially */
+                struct Expression *vmt_arg = (struct Expression *)calloc(1, sizeof(struct Expression));
+                vmt_arg->type = EXPR_VAR_ID;
+                char vmt_label[256];
+                snprintf(vmt_label, sizeof(vmt_label), "%s_VMT", class_name);
+                vmt_arg->expr_data.id = strdup(vmt_label);
+                vmt_arg->resolved_type = POINTER_TYPE;
+                
+                /* Create argument list */
+                ListNode_t *arg1_node = CreateListNode(size_arg, LIST_EXPR);
+                ListNode_t *arg2_node = CreateListNode(vmt_arg, LIST_EXPR);
+                arg1_node->next = arg2_node;
+                
+                /* Transform the expression into a function call to __gpc_default_create */
+                expr->type = EXPR_FUNCTION_CALL;
+                /* Initialize function_call_data - use memset to clear the union */
+                memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                expr->expr_data.function_call_data.id = strdup("__gpc_default_create");
+                expr->expr_data.function_call_data.mangled_id = strdup("__gpc_default_create");
+                expr->expr_data.function_call_data.args_expr = arg1_node;
+                
+                /* Set the return type information */
+                expr->record_type = record_info;
+                expr->resolved_type = POINTER_TYPE;
+                
+                /* Create a GpcType for the class (pointer to record) */
+                GpcType *class_gpc = create_pointer_type(record_gpc);
+                semcheck_expr_set_resolved_gpc_type_shared(expr, class_gpc);
+                
+                *type_return = POINTER_TYPE;
+                
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_recordaccess: Transformed '%s.%s' to __gpc_default_create(%lld, %s) call\n",
+                        class_name, field_id, class_size, vmt_label);
+                }
+                
+                /* Free the record_expr since we're not using it anymore */
+                destroy_expr(record_expr);
+                
+                return error_count;
+            }
+        }
 
         fprintf(stderr, "Error on line %d, record field %s not found.\n", expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
@@ -4697,12 +4877,31 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
         
         case EXPR_FUNCTION_CALL:
         {
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
+                strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
+                fprintf(stderr, "[SemCheck] semcheck_resolve_expression_gpc_type for Create:\n");
+                fprintf(stderr, "[SemCheck]   expr=%p\n", (void*)expr);
+                fprintf(stderr, "[SemCheck]   expr->resolved_gpc_type=%p\n", (void*)expr->resolved_gpc_type);
+                if (expr->resolved_gpc_type != NULL) {
+                    fprintf(stderr, "[SemCheck]   expr->resolved_gpc_type->kind=%d\n", expr->resolved_gpc_type->kind);
+                }
+            }
+            
             /* First, try the cached resolved_gpc_type if available */
             if (expr->resolved_gpc_type != NULL)
             {
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
+                    strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
+                    fprintf(stderr, "[SemCheck]   Returning cached resolved_gpc_type\n");
+                }
                 if (owns_type != NULL)
                     *owns_type = 0;  /* Shared reference */
                 return expr->resolved_gpc_type;
+            }
+            
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
+                strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
+                fprintf(stderr, "[SemCheck]   resolved_gpc_type is NULL, trying other paths\n");
             }
             
             /* Prefer cached call info populated during semantic checking */
@@ -4978,6 +5177,14 @@ GpcType* semcheck_resolve_expression_gpc_type(SymTab_t *symtab, struct Expressio
     
     if (result != 0 || type_tag == UNKNOWN_TYPE)
         return NULL;
+
+    /* Check if semcheck_expr_main populated resolved_gpc_type */
+    if (expr->resolved_gpc_type != NULL)
+    {
+        if (owns_type != NULL)
+            *owns_type = 0;
+        return expr->resolved_gpc_type;
+    }
     
     /* Create a GpcType from the type tag - caller owns this */
     if (owns_type != NULL)
@@ -5912,6 +6119,9 @@ int semcheck_varid(int *type_return,
         semcheck_mark_static_link_needed(scope_return, hash_return);
         if(scope_return > max_scope_lev)
         {
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] semcheck_varid: scope_return=%d max_scope_lev=%d\n", scope_return, max_scope_lev);
+            }
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n",
                 expr->line_num, id);
             fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
@@ -6177,7 +6387,7 @@ int semcheck_funccall(int *type_return,
 {
     int return_val, scope_return;
     char *id;
-    char *mangled_name;
+    char *mangled_name = NULL;
     int arg_type, cur_arg;
     ListNode_t *true_args, *true_arg_ids, *args_given;
     HashNode_t *hash_return;
@@ -6479,11 +6689,12 @@ int semcheck_funccall(int *type_return,
                      set_type_from_hashtype(type_return, method_node);
                      semcheck_expr_set_resolved_gpc_type_shared(expr, method_node->type);
                      expr->expr_data.function_call_data.resolved_func = method_node;
-                     expr->expr_data.function_call_data.mangled_id = method_node->mangled_id;
+                     expr->expr_data.function_call_data.mangled_id = strdup(method_node->mangled_id);
                      
                      if (strcasecmp(id, "Create") == 0) {
                          if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
                              fprintf(stderr, "[SemCheck] semcheck_funccall: Fixing return type for Create\n");
+                             fprintf(stderr, "[SemCheck]   expr=%p\n", (void*)expr);
                              fprintf(stderr, "[SemCheck]   owner_type kind=%d\n", owner_type->kind);
                          }
 
@@ -6499,41 +6710,66 @@ int semcheck_funccall(int *type_return,
                                      first_arg->resolved_gpc_type->kind == TYPE_KIND_RECORD) {
                                       semcheck_expr_set_resolved_gpc_type_shared(expr, first_arg->resolved_gpc_type);
                                       *type_return = gpc_type_get_legacy_tag(first_arg->resolved_gpc_type);
+                                      /* Also set record_type for compatibility */
+                                      expr->record_type = first_arg->record_type;
                                       if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
-                                          fprintf(stderr, "[SemCheck]   Set return type to %s (tag=%d)\n", 
+                                          fprintf(stderr, "[SemCheck]   Set return type to %s (tag=%d), record_type=%p\n", 
                                               (first_arg->resolved_gpc_type->kind == TYPE_KIND_POINTER) ? "POINTER" : "RECORD", 
-                                              *type_return);
+                                              *type_return, (void*)expr->record_type);
                                       }
                                  }
                              }
                          } else {
                              semcheck_expr_set_resolved_gpc_type_shared(expr, owner_type);
                              *type_return = gpc_type_get_legacy_tag(owner_type);
+                             /* Also set record_type for compatibility */
+                             if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to != NULL &&
+                                 owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                 expr->record_type = owner_type->info.points_to->info.record_info;
+                             } else if (owner_type->kind == TYPE_KIND_RECORD) {
+                                 expr->record_type = owner_type->info.record_info;
+                             }
                              if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
-                                 fprintf(stderr, "[SemCheck]   Set return type to owner type (tag=%d)\n", *type_return);
+                                 fprintf(stderr, "[SemCheck]   Set return type to owner type (tag=%d), record_type=%p\n", 
+                                     *type_return, (void*)expr->record_type);
                              }
                          }
                      }
                      
-                     /* We should also validate arguments against method parameters */
-                     /* But we have an extra argument (the instance/type) at the head */
-                     /* We should skip it for validation? */
-                     /* Or semcheck_funccall logic below handles it? */
-                     /* The logic below expects args to match parameters. */
-                     /* Method parameters usually include implicit Self? */
-                     /* If GPC AST includes Self in params, then we are good. */
-                     /* If not, we have a mismatch. */
-                     /* Usually methods have hidden Self. */
-                     /* If we pass Self explicitly (as we did), we need to match it. */
-                     /* I'll assume for now we return success and skip standard validation for this hack. */
-                     
-                     return 0;
+                     /* Continue to normal argument processing below instead of returning early.
+                      * This ensures constructor arguments are validated and processed correctly.
+                      * The method_node and return type have already been set above. */
+                     if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                         fprintf(stderr, "[SemCheck] After setting constructor return type:\n");
+                         fprintf(stderr, "[SemCheck]   expr->resolved_gpc_type=%p\n", (void*)expr->resolved_gpc_type);
+                         if (expr->resolved_gpc_type != NULL) {
+                             fprintf(stderr, "[SemCheck]   expr->resolved_gpc_type->kind=%d\n", expr->resolved_gpc_type->kind);
+                         }
+                         fprintf(stderr, "[SemCheck]   expr->record_type=%p\n", (void*)expr->record_type);
+                     }
+                     goto constructor_resolved;
                  }
              }
         }
     }
 
-    ListNode_t *overload_candidates = FindAllIdents(symtab, id);
+constructor_resolved:
+    /* Constructor handling completed, continue with normal function call processing */
+
+    /* Declare and initialize overload_candidates early to avoid uninitialized use */
+    ListNode_t *overload_candidates = NULL;
+    
+    /* If constructor was already resolved above, skip overload resolution */
+    if (expr->expr_data.function_call_data.resolved_func != NULL &&
+        expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        /* Constructor already resolved, skip to argument validation */
+        hash_return = expr->expr_data.function_call_data.resolved_func;
+        scope_return = 0; /* Constructor is in current scope */
+        goto skip_overload_resolution;
+    }
+
+    overload_candidates = FindAllIdents(symtab, id);
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
     if (mangled_name == NULL)
     {
@@ -6559,7 +6795,10 @@ int semcheck_funccall(int *type_return,
 
             /* Get formal arguments from GpcType instead of deprecated args field */
             ListNode_t *candidate_args = gpc_type_get_procedure_params(candidate->type);
-            
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] semcheck_funccall: candidate %s args=%d given=%d\n", 
+                    candidate->id, ListLength(candidate_args), ListLength(args_given));
+            }
             if (ListLength(candidate_args) == ListLength(args_given))
             {
                 int current_score = 0;
@@ -6707,6 +6946,9 @@ int semcheck_funccall(int *type_return,
     }
 
 
+skip_overload_resolution:
+    /* Overload resolution completed or skipped for constructors */
+
     if(scope_return == -1) // Should not happen if match_count > 0
     {
         fprintf(stderr, "Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
@@ -6719,13 +6961,18 @@ int semcheck_funccall(int *type_return,
         set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] semcheck_funccall: scope_return (%d) > max_scope_lev (%d)\n",
+                    scope_return, max_scope_lev);
+            }
             fprintf(stderr, "Error on line %d, cannot change \"%s\", invalid scope!\n\n",
                 expr->line_num, id);
             fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
             ++return_val;
         }
         if(hash_return->hash_type != HASHTYPE_FUNCTION &&
-            hash_return->hash_type != HASHTYPE_FUNCTION_RETURN)
+            hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
+            hash_return->hash_type != HASHTYPE_PROCEDURE)
         {
             fprintf(stderr, "Error on line %d, \"%s\" is not a function!\n\n",
                 expr->line_num, id);
@@ -6740,6 +6987,10 @@ int semcheck_funccall(int *type_return,
             GpcType *return_type = gpc_type_get_return_type(hash_return->type);
             if (return_type != NULL)
             {
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] Overwriting resolved_gpc_type from hash_return return_type\n");
+                    fprintf(stderr, "[SemCheck]   return_type kind=%d\n", return_type->kind);
+                }
                 semcheck_expr_set_resolved_gpc_type_shared(expr, return_type);
                 if (return_type->kind == TYPE_KIND_ARRAY)
                     semcheck_set_array_info_from_gpctype(expr, symtab, return_type, expr->line_num);
@@ -6769,7 +7020,8 @@ int semcheck_funccall(int *type_return,
             }
             else
             {
-                semcheck_expr_set_resolved_gpc_type_shared(expr, NULL);
+                /* Do not clear resolved_gpc_type here, as it may have been set
+                 * by constructor handling logic earlier. */
                 semcheck_clear_array_info(expr);
             }
         }
@@ -6796,31 +7048,107 @@ int semcheck_funccall(int *type_return,
         cur_arg = 0;
         /* Get formal arguments from GpcType instead of deprecated args field */
         true_args = gpc_type_get_procedure_params(hash_return->type);
-        while(args_given != NULL && true_args != NULL)
-        {
-            ++cur_arg;
-            assert(args_given->type == LIST_EXPR);
-            assert(true_args->type == LIST_TREE);
+        
+        /* For constructors, skip the first argument (class type) in args_given
+         * AND skip the first formal parameter (Self) in true_args */
+        ListNode_t *args_to_validate = args_given;
+        ListNode_t *true_args_to_validate = true_args;
+        
+        if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] Constructor %s: args_given=%d, true_args=%d\n",
+                id, ListLength(args_given), ListLength(true_args));
+        }
 
-            arg_decl = (Tree_t *)true_args->cur;
+        if (id != NULL && (strcasecmp(id, "Create") == 0 || strcasecmp(id, "Destroy") == 0) &&
+            args_given != NULL)
+        {
+            /* If lengths match, we assume first arg is class type and first param is Self -> skip both */
+            if (ListLength(args_given) == ListLength(true_args)) {
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL) fprintf(stderr, "[SemCheck] Skipping both Self and Class Type\n");
+                args_to_validate = args_given->next;
+                if (true_args_to_validate != NULL)
+                    true_args_to_validate = true_args_to_validate->next;
+            }
+            /* If args_given is one less, we assume class type is implicit but Self is explicit in params -> skip Self only */
+            else if (ListLength(args_given) == ListLength(true_args) - 1) {
+                if (getenv("GPC_DEBUG_SEMCHECK") != NULL) fprintf(stderr, "[SemCheck] Skipping Self only\n");
+                if (true_args_to_validate != NULL)
+                    true_args_to_validate = true_args_to_validate->next;
+            }
+        }
+            
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                int args_given_count = 0;
+                int true_args_count = 0;
+                int args_to_validate_count = 0;
+                for (ListNode_t *c = args_given; c != NULL; c = c->next) args_given_count++;
+                for (ListNode_t *c = true_args_to_validate; c != NULL; c = c->next) true_args_count++;
+                for (ListNode_t *c = args_to_validate; c != NULL; c = c->next) args_to_validate_count++;
+                fprintf(stderr, "[SemCheck] Constructor %s: args_given=%d, true_args=%d, args_to_validate=%d\n",
+                    id, args_given_count, true_args_count, args_to_validate_count);
+            }
+        
+        if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] Before validation loop: true_args len=%d, args_given len=%d\n", 
+                ListLength(true_args), ListLength(args_given));
+            
+            ListNode_t *cur = true_args;
+            int i = 0;
+            while (cur != NULL) {
+                Tree_t *decl = (Tree_t *)cur->cur;
+                if (decl->type == TREE_VAR_DECL) {
+                    ListNode_t *ids = decl->tree_data.var_decl_data.ids;
+                    while (ids != NULL) {
+                        fprintf(stderr, "[SemCheck]   true_arg[%d]: %s\n", i++, (char*)ids->cur);
+                        ids = ids->next;
+                    }
+                } else {
+                    fprintf(stderr, "[SemCheck]   true_arg[%d]: (array decl)\n", i++);
+                }
+                cur = cur->next;
+            }
+            
+            cur = args_given;
+            i = 0;
+            while (cur != NULL) {
+                struct Expression *e = (struct Expression *)cur->cur;
+                fprintf(stderr, "[SemCheck]   arg_given[%d]: type=%d\n", i++, e->type);
+                cur = cur->next;
+            }
+        }
+        
+        while(true_args_to_validate != NULL && args_to_validate != NULL)
+        {
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] validation loop: arg %d\n", cur_arg);
+                fprintf(stderr, "[SemCheck]   true_args_to_validate=%p next=%p\n", 
+                    (void*)true_args_to_validate, (void*)true_args_to_validate->next);
+                fprintf(stderr, "[SemCheck]   args_to_validate=%p next=%p\n", 
+                    (void*)args_to_validate, (void*)args_to_validate->next);
+            }
+            cur_arg++;
+            assert(args_to_validate->type == LIST_EXPR);
+            assert(true_args_to_validate->type == LIST_TREE);
+
+            arg_decl = (Tree_t *)true_args_to_validate->cur;
             if (arg_decl->type != TREE_VAR_DECL && arg_decl->type != TREE_ARR_DECL)
             {
                 fprintf(stderr, "Error on line %d, unsupported parameter declaration in call to %s.\n",
                     expr->line_num, id);
                 ++return_val;
-                true_args = true_args->next;
-                args_given = args_given->next;
+                true_args_to_validate = true_args_to_validate->next;
+                args_to_validate = args_to_validate->next;
                 continue;
             }
-            struct Expression *current_arg_expr = (struct Expression *)args_given->cur;
+            struct Expression *current_arg_expr = (struct Expression *)args_to_validate->cur;
             if (arg_decl->type == TREE_ARR_DECL)
             {
                 if (semcheck_prepare_array_literal_argument(arg_decl, current_arg_expr,
                         symtab, max_scope_lev, expr->line_num) != 0)
                 {
                     ++return_val;
-                    true_args = true_args->next;
-                    args_given = args_given->next;
+                    true_args_to_validate = true_args_to_validate->next;
+                    args_to_validate = args_to_validate->next;
                     continue;
                 }
             }
@@ -6832,9 +7160,10 @@ int semcheck_funccall(int *type_return,
             else
                 true_arg_ids = arg_decl->tree_data.arr_decl_data.ids;
 
-            while(true_arg_ids != NULL && args_given != NULL)
+            while(true_arg_ids != NULL && args_to_validate != NULL)
             {
                 int expected_type = resolve_param_type(arg_decl, symtab);
+
                 if (arg_decl->type == TREE_ARR_DECL && current_arg_expr != NULL &&
                     current_arg_expr->type == EXPR_ARRAY_LITERAL)
                 {
@@ -6875,18 +7204,18 @@ int semcheck_funccall(int *type_return,
                 }
 
                 true_arg_ids = true_arg_ids->next;
-                args_given = args_given->next;
+                args_to_validate = args_to_validate->next;
             }
 
-            true_args = true_args->next;
+            true_args_to_validate = true_args_to_validate->next;
         }
-        if(true_args == NULL && args_given != NULL)
+        if(true_args_to_validate == NULL && args_to_validate != NULL)
         {
             fprintf(stderr, "Error on line %d, on function call %s, too many arguments given!\n\n",
                 expr->line_num, id);
             ++return_val;
         }
-        else if(true_args != NULL && args_given == NULL)
+        else if(true_args_to_validate != NULL && args_to_validate == NULL)
         {
             fprintf(stderr, "Error on line %d, on function call %s, not enough arguments given!\n\n",
                 expr->line_num, id);

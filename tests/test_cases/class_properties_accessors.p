@@ -26,6 +26,7 @@ begin
     1. The compiler initialization (calloc) already zeroes the instance.
     2. FillChar(Counter, ...) on a class wipes the pointer, not the instance.
   }
+  Counter := TCounter.Create;
   
   Counter.Value := 7;
   Counter.Value := 7;

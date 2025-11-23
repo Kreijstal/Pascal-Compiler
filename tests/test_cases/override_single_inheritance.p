@@ -41,13 +41,16 @@ var
 begin
   WriteLn('Testing override in inheritance chain:');
   
+  L1 := TLevel1.Create;
   L1.V1 := 1;
   L1.ShowLevel;
   
+  L2 := TLevel2.Create;
   L2.V1 := 1;
   L2.V2 := 2;
   L2.ShowLevel;
   
+  L3 := TLevel3.Create;
   L3.V1 := 1;
   L3.V2 := 2;
   L3.V3 := 3;

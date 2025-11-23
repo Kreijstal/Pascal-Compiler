@@ -6133,14 +6133,44 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
 
     codegen_pop_except(ctx);
 
-    char buffer[32];
+    char buffer[64];
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
-    if (except_stmts != NULL)
-        inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
-    else
-        inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+    /* If there's an 'on E: Exception do' clause, add the exception variable to the stack */
+    StackNode_t *exception_var_node = NULL;
+    if (stmt->stmt_data.try_except_data.has_on_clause && 
+        stmt->stmt_data.try_except_data.exception_var_name != NULL) {
+        
+        /* Push a new scope for the exception variable */
+        PushScope(symtab);
+        
+        /* Add the exception variable to the stack manager (8 bytes for pointer) */
+        exception_var_node = add_l_x(stmt->stmt_data.try_except_data.exception_var_name, 8);
+        
+        /* Generate code to store the current exception into the variable */
+        if (exception_var_node != NULL) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\tgpc_current_exception(%%rip), %%rax\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", exception_var_node->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        /* Generate the except statements with the exception variable in scope */
+        if (except_stmts != NULL)
+            inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
+        else
+            inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+        
+        /* Pop the scope */
+        PopScope(symtab);
+    } else {
+        /* No exception variable - just generate the except statements normally */
+        if (except_stmts != NULL)
+            inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
+        else
+            inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+    }
 
     snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
     inst_list = add_inst(inst_list, buffer);

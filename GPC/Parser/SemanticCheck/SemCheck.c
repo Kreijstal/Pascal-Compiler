@@ -129,8 +129,24 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 /* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
+    if (node == NULL) return NULL;
+    
     /* Use hashnode helper which handles NULL GpcType */
-    return hashnode_get_record_type(node);
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record != NULL)
+        return record;
+        
+    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
+    if (node->type != NULL && gpc_type_is_pointer(node->type))
+    {
+        GpcType *pointed_to = node->type->info.points_to;
+        if (pointed_to != NULL && gpc_type_is_record(pointed_to))
+        {
+            return gpc_type_get_record(pointed_to);
+        }
+    }
+    
+    return NULL;
 }
 
 /* Helper function to get VarType from HashNode */
@@ -1071,7 +1087,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 line_num, record_info->parent_class_name);
         return 1;
     }
-    
+
     /* Get parent's RecordType */
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
     if (parent_record == NULL)
@@ -1798,15 +1814,20 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     resolve_array_bounds_in_gpctype(symtab, gpc_type, alias_info);
                 }
             }
-            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
                 gpc_type->info.record_info = record_info;
             
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] Pushing type '%s' onto scope, gpc_type=%p kind=%d\n", 
+                    tree->tree_data.type_decl_data.id, (void*)gpc_type, gpc_type ? gpc_type->kind : -1);
+            }
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
             {
                 /* GpcType ownership transferred to symbol table */
                 tree->tree_data.type_decl_data.gpc_type = NULL;
                 /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
+                
             }
         } else {
         /* Fall back to legacy API for types we can't convert yet */
@@ -2524,7 +2545,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
 
-    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, 0);
+    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
@@ -2535,7 +2556,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         while (final_node != NULL) {
             if (final_node->type == LIST_STMT && final_node->cur != NULL) {
                 struct Statement *final_stmt = (struct Statement *)final_node->cur;
-                return_val += semcheck_stmt(symtab, final_stmt, 0);
+                return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
             }
             final_node = final_node->next;
         }

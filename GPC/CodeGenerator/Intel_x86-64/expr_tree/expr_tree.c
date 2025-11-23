@@ -1193,16 +1193,32 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Pass arguments, shifted by 1 if static link is passed */
         int arg_start_index = should_pass_static_link ? 1 : 0;
         
-        /* For constructors, skip the first argument (class type) and pass instance instead */
+        /* For constructors, we need to:
+         * 1. Skip the first argument in the list (class type)
+         * 2. Shift register allocation by 1 to make room for Self */
+        ListNode_t *args_to_pass = expr->expr_data.function_call_data.args_expr;
         if (is_constructor && constructor_instance_reg != NULL)
+        {
+            /* Skip the first argument (class type) in the argument list */
+            if (args_to_pass != NULL)
+                args_to_pass = args_to_pass->next;
+            /* Shift register allocation by 1 for Self parameter */
             arg_start_index += 1;
+        }
         
         const char *proc_name_hint = expr->expr_data.function_call_data.id;
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
             proc_name_hint = mangled_name_hint;
 
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
+        if (is_constructor) {
+            int args_count = 0;
+            for (ListNode_t *c = args_to_pass; c != NULL; c = c->next) args_count++;
+            fprintf(stderr, "[CODEGEN] Constructor %s: args_to_pass has %d arguments, arg_start_index=%d\n",
+                proc_name_hint ? proc_name_hint : "(null)", args_count, arg_start_index);
+        }
+
+        inst_list = codegen_pass_arguments(args_to_pass,
             inst_list, ctx, func_type, proc_name_hint, arg_start_index);
 
         /* Invalidate static link cache after argument evaluation
@@ -1457,6 +1473,18 @@ cleanup_constructor:
         HashNode_t *symbol_node = NULL;
         if (ctx != NULL && ctx->symtab != NULL)
             FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+        /* Check if this is a VMT label - need address, not value */
+        const char *var_name = expr->expr_data.id;
+        size_t name_len = var_name != NULL ? strlen(var_name) : 0;
+        int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
+        
+        if (is_vmt_label)
+        {
+            /* For VMT labels, use leaq to get the address instead of loading the value */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
 
         int treat_as_reference = 0;
         if (stack_node != NULL && stack_node->is_reference)
@@ -1830,12 +1858,24 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 }
                 else
                 {
+                    /* Check if this is a VMT label (global symbol ending with "_VMT") */
                     const char *var_name = expr != NULL ? expr->expr_data.id : "<unknown>";
-                    fprintf(stderr,
-                        "ERROR: Non-local codegen support disabled while accessing %s.\n",
-                        var_name != NULL ? var_name : "<unknown>");
-                    fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                    exit(1);
+                    size_t name_len = var_name != NULL ? strlen(var_name) : 0;
+                    int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
+                    
+                    if (is_vmt_label)
+                    {
+                        /* VMT is a global label - use RIP-relative addressing */
+                        snprintf(buffer, buf_len, "%s(%%rip)", var_name);
+                    }
+                    else
+                    {
+                        fprintf(stderr,
+                            "ERROR: Non-local codegen support disabled while accessing %s.\n",
+                            var_name != NULL ? var_name : "<unknown>");
+                        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+                        exit(1);
+                    }
                 }
             }
 

@@ -1,1 +1,10 @@
+Test 1: Read-only property (Message)
+PASSED: Test 1
+Test 2: Read-write property read (ErrorCode)
+PASSED: Test 2
+Test 3: Read-write property write (ErrorCode)
+PASSED: Test 3
+Test 4: Property access in except block
+PASSED: Test 4
+
 All tests PASSED

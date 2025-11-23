@@ -4713,9 +4713,20 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         struct RecordType *inline_record = NULL;
         TypeInfo type_info;
         memset(&type_info, 0, sizeof(TypeInfo));
+        
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] convert_expression IS: value_node=%p type_node=%p\n", value_node, type_node);
+            if (type_node) fprintf(stderr, "[GPC]   type_node typ=%d\n", type_node->typ);
+        }
+        
         if (type_node != NULL)
         {
             target_type = convert_type_spec(type_node, &target_type_id, &inline_record, &type_info);
+            
+            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                fprintf(stderr, "[GPC]   convert_type_spec result: type=%d id=%s\n", target_type, target_type_id ? target_type_id : "<null>");
+            }
+            
             destroy_type_info_contents(&type_info);
             if (inline_record != NULL)
                 destroy_record_type(inline_record);
@@ -5128,9 +5139,10 @@ static struct Expression *convert_member_access_chain(int line,
         if (method_id_node != NULL && method_id_node->typ == PASCAL_T_IDENTIFIER) {
             char *method_id = dup_symbol(method_id_node);
             
-            /* Convert args */
+            /* Convert args - handle both ARG_LIST and direct siblings */
             ListNode_t *args_list = NULL;
             if (args_node != NULL && args_node->typ == PASCAL_T_ARG_LIST) {
+                /* Arguments wrapped in ARG_LIST node - iterate through children */
                 ast_t *arg_child = args_node->child;
                 while (arg_child != NULL) {
                     struct Expression *arg_expr = convert_expression(arg_child);
@@ -5144,7 +5156,23 @@ static struct Expression *convert_member_access_chain(int line,
                     }
                     arg_child = arg_child->next;
                 }
+            } else if (args_node != NULL) {
+                /* Arguments as direct siblings - iterate through all siblings */
+                ast_t *arg_child = args_node;
+                while (arg_child != NULL) {
+                    struct Expression *arg_expr = convert_expression(arg_child);
+                    if (arg_expr != NULL) {
+                        ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                        if (args_list == NULL) {
+                            args_list = new_node;
+                        } else {
+                            PushListNodeBack(args_list, new_node);
+                        }
+                    }
+                    arg_child = arg_child->next;
+                }
             }
+            /* If args_node is NULL, args_list remains NULL (zero arguments) */
             
             /* Prepend base expression to args */
             ListNode_t *base_node_list = CreateListNode(base_expr, LIST_EXPR);
@@ -5380,7 +5408,8 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
      * A proper fix would require semantic analysis to resolve the method name
      * based on the actual object type.
      */
-    const char *class_name = find_class_for_method(method_name);
+    /* Disable heuristic - always use semantic resolution */
+    const char *class_name = NULL; /* find_class_for_method(method_name); */
     
     char *proc_name = NULL;
     if (class_name != NULL) {

@@ -68,6 +68,7 @@ begin
   
   { Test Dog }
   WriteLn('Testing TDog:');
+  Dog := TDog.Create;
   Dog.Name := 1;
   Dog.Breed := 2;
   Dog.Speak;  { Should print "Dog barks: Woof!" }
@@ -76,6 +77,7 @@ begin
   
   { Test Cat }
   WriteLn('Testing TCat:');
+  Cat := TCat.Create;
   Cat.Name := 3;
   Cat.Color := 4;
   Cat.Speak;  { Should print "Cat meows: Meow!" }
