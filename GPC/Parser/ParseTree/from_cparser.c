@@ -272,6 +272,7 @@ static struct Expression *convert_set_literal(ast_t *set_node);
 static char *pop_last_identifier(ListNode_t **ids);
 static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
 static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
+static ast_t *find_node_by_type(ast_t *node, int target_type);
 
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
@@ -6619,6 +6620,46 @@ static Tree_t *convert_function(ast_t *func_node) {
     return tree;
 }
 
+/**
+ * Helper function to recursively search for an AST node with a specific type.
+ * Uses depth-first search, checking children before siblings.
+ * 
+ * Traversal order:
+ * 1. Check if current node matches target_type
+ * 2. Recursively search in child chain
+ * 3. Recursively search in sibling chain
+ * 
+ * @param node The node to start searching from
+ * @param target_type The type ID to search for
+ * @return The first node found with the target type, or NULL if not found
+ */
+static ast_t *find_node_by_type(ast_t *node, int target_type) {
+    if (node == NULL) {
+        return NULL;
+    }
+    
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] find_node_by_type: visiting node typ=%d, looking for typ=%d\n", 
+                node->typ, target_type);
+    }
+    
+    if (node->typ == target_type) {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] find_node_by_type: FOUND target typ=%d\n", target_type);
+        }
+        return node;
+    }
+    
+    /* Search in children */
+    ast_t *result = find_node_by_type(node->child, target_type);
+    if (result != NULL) {
+        return result;
+    }
+    
+    /* Search in siblings */
+    return find_node_by_type(node->next, target_type);
+}
+
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     Tree_t *final_tree = NULL;
     if (program_ast == NULL)
@@ -6827,37 +6868,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 fprintf(stderr, "[GPC] tree_from_pascal_ast: Main block not found in sibling chain, searching recursively\n");
             }
             
-            /* Helper function to recursively search for a node type */
-            ast_t* (*find_node_recursive)(ast_t*, int) = NULL;
-            ast_t* find_node_impl(ast_t* node, int target_type) {
-                if (node == NULL) return NULL;
-                
-                if (getenv("GPC_DEBUG_BODY") != NULL) {
-                    fprintf(stderr, "[GPC] find_node_impl: visiting node typ=%d, looking for typ=%d\n", 
-                            node->typ, target_type);
-                }
-                
-                if (node->typ == target_type) {
-                    if (getenv("GPC_DEBUG_BODY") != NULL) {
-                        fprintf(stderr, "[GPC] find_node_impl: FOUND target typ=%d\n", target_type);
-                    }
-                    return node;
-                }
-                
-                /* Search in children */
-                ast_t* result = find_node_impl(node->child, target_type);
-                if (result != NULL) return result;
-                
-                /* Search in siblings */
-                return find_node_impl(node->next, target_type);
-            }
-            find_node_recursive = find_node_impl;
-            
             /* Search for VAR_SECTION */
             if (getenv("GPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[GPC] tree_from_pascal_ast: Searching for VAR_SECTION (typ=%d)\n", PASCAL_T_VAR_SECTION);
             }
-            ast_t* var_section_node = find_node_recursive(cur->child, PASCAL_T_VAR_SECTION);
+            ast_t* var_section_node = find_node_by_type(cur->child, PASCAL_T_VAR_SECTION);
             if (var_section_node != NULL) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: Found VAR_SECTION via recursive search\n");
@@ -6869,19 +6884,19 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             if (getenv("GPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[GPC] tree_from_pascal_ast: Searching for MAIN_BLOCK (typ=%d)\n", PASCAL_T_MAIN_BLOCK);
             }
-            ast_t* main_block_node = find_node_recursive(cur->child, PASCAL_T_MAIN_BLOCK);
+            ast_t* main_block_node = find_node_by_type(cur->child, PASCAL_T_MAIN_BLOCK);
             if (main_block_node == NULL) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: MAIN_BLOCK not found, searching for BEGIN_BLOCK (typ=%d)\n", PASCAL_T_BEGIN_BLOCK);
                 }
-                main_block_node = find_node_recursive(cur->child, PASCAL_T_BEGIN_BLOCK);
+                main_block_node = find_node_by_type(cur->child, PASCAL_T_BEGIN_BLOCK);
             }
             /* Also try typ=112 which appears in the AST */
             if (main_block_node == NULL) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=112\n");
                 }
-                main_block_node = find_node_recursive(cur->child, 112);
+                main_block_node = find_node_by_type(cur->child, 112);
             }
             if (main_block_node != NULL) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
@@ -6893,7 +6908,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: MAIN_BLOCK not found directly, searching for typ=100 wrapper\n");
                 }
-                ast_t* wrapper_node = find_node_recursive(cur->child, 100);
+                ast_t* wrapper_node = find_node_by_type(cur->child, 100);
                 if (wrapper_node != NULL && wrapper_node->child != NULL) {
                     if (getenv("GPC_DEBUG_BODY") != NULL) {
                         fprintf(stderr, "[GPC] tree_from_pascal_ast: Found typ=100 wrapper, checking its children\n");
