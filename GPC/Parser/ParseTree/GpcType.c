@@ -41,7 +41,7 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type) {
     GpcType *type = (GpcType *)calloc(1, sizeof(GpcType));
     assert(type != NULL);
     type->kind = TYPE_KIND_PROCEDURE;
-    type->info.proc_info.params = params; // Takes ownership
+    type->info.proc_info.params = CopyListShallow(params); // Takes ownership of a copy
     type->info.proc_info.return_type = return_type; // Takes ownership
     type->info.proc_info.definition = NULL;
     type->info.proc_info.return_type_id = NULL;

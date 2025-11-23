@@ -3450,16 +3450,28 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         /* Create GpcType for the procedure */
-        GpcType *proc_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            NULL  /* procedures have no return type */
-        );
-        if (proc_type != NULL)
+        /* Create GpcType for the procedure */
+        GpcType *proc_type = NULL;
+        int created_new_type = 0;
+
+        if (already_declared && existing_decl != NULL && existing_decl->type != NULL)
         {
-            proc_type->info.proc_info.definition = subprogram;
-            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
-                proc_type->info.proc_info.return_type_id =
-                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            proc_type = existing_decl->type;
+        }
+        else
+        {
+            proc_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                NULL  /* procedures have no return type */
+            );
+            if (proc_type != NULL)
+            {
+                proc_type->info.proc_info.definition = subprogram;
+                if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                    proc_type->info.proc_info.return_type_id =
+                        strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            }
+            created_new_type = 1;
         }
         
         /* ARCHITECTURAL FIX: Resolve array bounds in parameter types now that constants are in scope */
@@ -3505,6 +3517,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         else
         {
             func_return = 0;  /* No error since it's expected to be already declared */
+            
+            /* If we created a new type but it was already declared (e.g. existing had no type), update it */
+            if (created_new_type && existing_decl != NULL && existing_decl->type == NULL)
+            {
+                existing_decl->type = proc_type;
+            }
+            else if (created_new_type)
+            {
+                /* We created a type but didn't use it (shouldn't happen if logic is correct, but for safety) */
+                destroy_gpc_type(proc_type);
+            }
         }
 
         PushScope(symtab);

@@ -139,3 +139,23 @@ int ListLength(ListNode_t *head_node)
     }
     return length;
 }
+
+ListNode_t *CopyListShallow(ListNode_t *head_node)
+{
+    if (head_node == NULL)
+        return NULL;
+
+    ListNode_t *new_head = CreateListNode(head_node->cur, head_node->type);
+    ListNode_t *cur_old = head_node->next;
+    ListNode_t *cur_new = new_head;
+
+    while (cur_old != NULL)
+    {
+        ListNode_t *new_node = CreateListNode(cur_old->cur, cur_old->type);
+        cur_new->next = new_node;
+        cur_new = new_node;
+        cur_old = cur_old->next;
+    }
+
+    return new_head;
+}

@@ -6541,6 +6541,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
+
         switch (cur->typ) {
         case PASCAL_T_TYPE_SECTION:
             append_type_decls_from_section(cur, &type_decls, &nested_subs);
@@ -6585,6 +6586,14 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_IDENTIFIER: {
+            char *self_sym = dup_symbol(cur);
+            if (self_sym != NULL) {
+                if (strcasecmp(self_sym, "external") == 0) {
+                    is_external = 1;
+                }
+                free(self_sym);
+            }
+
             if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
                 char *directive = dup_symbol(cur->child);
                 if (directive != NULL) {
