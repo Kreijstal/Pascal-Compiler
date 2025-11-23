@@ -4209,6 +4209,11 @@ static int semcheck_recordaccess(int *type_return,
     if (record_type == RECORD_TYPE)
     {
         record_info = record_expr->record_type;
+        /* Fallback: infer from resolved GpcType when legacy record_type is missing */
+        if (record_info == NULL && record_expr->resolved_gpc_type != NULL &&
+            gpc_type_is_record(record_expr->resolved_gpc_type)) {
+            record_info = gpc_type_get_record(record_expr->resolved_gpc_type);
+        }
     }
     else if (record_type == POINTER_TYPE)
     {
@@ -4220,6 +4225,14 @@ static int semcheck_recordaccess(int *type_return,
                 target_node != NULL)
             {
                 record_info = get_record_type_from_node(target_node);
+            }
+        }
+        /* Try resolved GpcType pointer target */
+        if (record_info == NULL && record_expr->resolved_gpc_type != NULL &&
+            record_expr->resolved_gpc_type->kind == TYPE_KIND_POINTER) {
+            GpcType *pointee = record_expr->resolved_gpc_type->info.points_to;
+            if (pointee != NULL && gpc_type_is_record(pointee)) {
+                record_info = gpc_type_get_record(pointee);
             }
         }
 
@@ -4424,9 +4437,28 @@ static int semcheck_recordaccess(int *type_return,
                 if (method_node->hash_type == HASHTYPE_FUNCTION || 
                     method_node->hash_type == HASHTYPE_PROCEDURE)
                 {
-                    set_type_from_hashtype(type_return, method_node);
-                    semcheck_expr_set_resolved_gpc_type_shared(expr, method_node->type);
-                    return 0;
+                    /* Transform record access into an explicit method call: receiver.Method() */
+                    struct Expression *receiver = record_expr;
+                    char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
+
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0,
+                        sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.id = method_id;
+                    if (method_node->mangled_id != NULL)
+                        expr->expr_data.function_call_data.mangled_id =
+                            strdup(method_node->mangled_id);
+                    else if (method_id != NULL)
+                        expr->expr_data.function_call_data.mangled_id = strdup(method_id);
+                    expr->expr_data.function_call_data.resolved_func = method_node;
+
+                    ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                    expr->expr_data.function_call_data.args_expr = arg_node;
+
+                    /* Re-run semantic checking as a function call */
+                    expr->record_type = NULL;
+                    expr->resolved_type = UNKNOWN_TYPE;
+                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                 }
             }
         }

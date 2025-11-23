@@ -1085,6 +1085,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
          * Constructors need special handling: allocate memory and initialize VMT */
         int is_constructor = 0;
         Register_t *constructor_instance_reg = NULL;
+        StackNode_t *constructor_instance_slot = NULL;
         
         if (func_mangled_name != NULL)
         {
@@ -1168,18 +1169,29 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
                         constructor_instance_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
-                    
-                    /* Get VMT pointer from first argument (if exists) */
-                    ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
-                    if (first_arg != NULL && first_arg->cur != NULL)
+
+                    /* Spill the instance pointer to a temporary stack slot to survive the call. */
+                    constructor_instance_slot = add_l_t("ctor_instance");
+                    if (constructor_instance_slot != NULL)
                     {
-                        struct Expression *vmt_expr = (struct Expression *)first_arg->cur;
-                        Register_t *vmt_reg = NULL;
-                        
-                        inst_list = codegen_expr_with_result(vmt_expr, inst_list, ctx, &vmt_reg);
-                        if (vmt_reg != NULL)
-                        {
-                            /* Initialize VMT pointer in the allocated instance */
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            constructor_instance_reg->bit_64, constructor_instance_slot->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    
+                    /* Initialize VMT pointer using the class' static VMT label */
+                    const char *vmt_label = NULL;
+                    if (class_record->type_id != NULL) {
+                        static char vmt_buf[256];
+                        snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", class_record->type_id);
+                        vmt_label = vmt_buf;
+                    }
+                    if (vmt_label != NULL) {
+                        Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (vmt_reg != NULL) {
+                            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                                vmt_label, vmt_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
                                 vmt_reg->bit_64, constructor_instance_reg->bit_64);
                             inst_list = add_inst(inst_list, buffer);
@@ -1199,6 +1211,30 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         ListNode_t *args_to_pass = expr->expr_data.function_call_data.args_expr;
         if (is_constructor && constructor_instance_reg != NULL)
         {
+            /* Move the newly allocated instance pointer into the correct argument register slot
+             * for the implicit Self parameter, accounting for a possible static-link argument. */
+            int self_index = arg_start_index;
+            const char *sysv_int_args[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
+            const char *win_int_args[]  = { "%rcx", "%rdx", "%r8", "%r9" };
+            const char *self_reg = NULL;
+            if (codegen_target_is_windows()) {
+                if (self_index < (int)(sizeof(win_int_args) / sizeof(win_int_args[0])))
+                    self_reg = win_int_args[self_index];
+            } else {
+                if (self_index < (int)(sizeof(sysv_int_args) / sizeof(sysv_int_args[0])))
+                    self_reg = sysv_int_args[self_index];
+            }
+            if (self_reg != NULL) {
+                if (constructor_instance_slot != NULL) {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        constructor_instance_slot->offset, self_reg);
+                } else {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                        constructor_instance_reg->bit_64, self_reg);
+                }
+                inst_list = add_inst(inst_list, buffer);
+            }
+
             /* Skip the first argument (class type) in the argument list */
             if (args_to_pass != NULL)
                 args_to_pass = args_to_pass->next;
@@ -1310,12 +1346,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
          * saved instance register which could be clobbered during the call. */
         if (is_constructor && constructor_instance_reg != NULL)
         {
-            /* Free the constructor_instance_reg as we won't use it */
+            /* Use the allocated instance pointer as the result, regardless of what the callee returns. */
+            if (constructor_instance_slot != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    constructor_instance_slot->offset, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    constructor_instance_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
             free_reg(get_reg_stack(), constructor_instance_reg);
-            
-            /* Get the constructor return value from %rax */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
         }
         else
         {

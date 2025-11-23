@@ -1448,6 +1448,9 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 }
             }
 
+            const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
+            const char *func_id = src_expr->expr_data.function_call_data.id;
+
             int call_returns_record = expr_has_type_tag(src_expr, RECORD_TYPE);
             if (!call_returns_record && func_type != NULL &&
                 gpc_type_is_procedure(func_type))
@@ -1457,22 +1460,19 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     call_returns_record = 1;
             }
 
-            if (call_returns_record)
+            /* Detect constructors even if the static type isn't a record (e.g., pointer return). */
+            int is_constructor = 0;
+            if (func_mangled_name != NULL)
             {
-                const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
-                const char *func_id = src_expr->expr_data.function_call_data.id;
-                
-                /* Check if this is a constructor call */
-                int is_constructor = 0;
-                if (func_mangled_name != NULL)
-                {
-                    const char *create_pos = strstr(func_mangled_name, "__Create");
-                    if (create_pos != NULL)
-                        is_constructor = 1;
-                    else if (strcmp(func_mangled_name, "Create") == 0)
-                        is_constructor = 1;
-                }
-                
+                const char *create_pos = strstr(func_mangled_name, "__Create");
+                if (create_pos != NULL)
+                    is_constructor = 1;
+                else if (strcmp(func_mangled_name, "Create") == 0)
+                    is_constructor = 1;
+            }
+
+            if (call_returns_record || is_constructor)
+            {
                 /* For constructors, allocate heap memory and initialize VMT */
                 Register_t *constructor_instance_reg = NULL;
                 if (is_constructor)

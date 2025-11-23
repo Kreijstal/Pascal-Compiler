@@ -3608,6 +3608,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             /* "Result" is not already declared, so we can add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_gpc_type);
         }
+
+        /* For class methods, also add an alias using the unmangled method name (suffix after __) */
+        const char *alias_suffix = NULL;
+        if (subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *sep = strstr(subprogram->tree_data.subprogram_data.id, "__");
+            if (sep != NULL && sep[2] != '\0')
+                alias_suffix = sep + 2;
+        }
+        if (alias_suffix != NULL && alias_suffix[0] != '\0')
+        {
+            size_t alias_len = strcspn(alias_suffix, "_");
+            if (alias_len > 0 && alias_len < 128)
+            {
+                char alias_buf[128];
+                memcpy(alias_buf, alias_suffix, alias_len);
+                alias_buf[alias_len] = '\0';
+
+                HashNode_t *suffix_check = NULL;
+                if (FindIdent(&suffix_check, symtab, alias_buf) == -1)
+                    PushFuncRetOntoScope_Typed(symtab, alias_buf, return_gpc_type);
+            }
+        }
         /* Note: We don't check for "result" anymore since it conflicts with built-in Result alias */
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
@@ -3680,8 +3703,20 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* Allow functions with asm blocks to skip explicit return assignment */
         int has_asm = statement_contains_asm_block(body);
         
+        /* Constructors implicitly yield the constructed instance, so do not
+         * require an explicit assignment to the return variable. */
+        int is_constructor = 0;
+        if (subprogram->tree_data.subprogram_data.id != NULL) {
+            const char *suffix = strstr(subprogram->tree_data.subprogram_data.id, "__");
+            const char *name = (suffix != NULL && suffix[2] != '\0') ? suffix + 2
+                                                                     : subprogram->tree_data.subprogram_data.id;
+            if (strcasecmp(name, "create") == 0) {
+                is_constructor = 1;
+            }
+        }
+
         /* Check if either the function name or "Result" was assigned to */
-        int return_was_assigned = (hash_return->mutated != NO_MUTATE);
+        int return_was_assigned = is_constructor ? 1 : (hash_return->mutated != NO_MUTATE);
         if (!return_was_assigned)
         {
             /* Also check if "Result" was mutated */
@@ -3689,6 +3724,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (FindIdent(&result_node, symtab, "Result") == 0 && result_node != NULL)
             {
                 return_was_assigned = (result_node->mutated != NO_MUTATE);
+            }
+        }
+
+        /* Methods use mangled identifiers like Class__Func; allow assignments to the
+         * unmangled function name (after the final '__') to satisfy the return check. */
+        if (!return_was_assigned && subprogram->tree_data.subprogram_data.id != NULL) {
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            const char *sep = strstr(id, "__");
+            if (sep != NULL && sep[2] != '\0') {
+                HashNode_t *suffix_node = NULL;
+                if (FindIdent(&suffix_node, symtab, (char *)(sep + 2)) == 0 && suffix_node != NULL) {
+                    return_was_assigned = (suffix_node->mutated != NO_MUTATE);
+                }
             }
         }
         

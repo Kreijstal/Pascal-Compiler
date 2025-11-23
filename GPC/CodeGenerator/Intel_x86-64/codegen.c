@@ -32,6 +32,7 @@
 /* Helper functions for transitioning from legacy type fields to GpcType */
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
+static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_label);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
@@ -2226,6 +2227,23 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
+    /* For class methods, also alias the unmangled method name to the return slot */
+    if (func->id != NULL)
+    {
+        const char *sep = strstr(func->id, "__");
+        if (sep != NULL && sep[2] != '\0')
+        {
+            const char *suffix = sep + 2;
+            size_t base_len = strcspn(suffix, "_");
+            if (base_len > 0 && base_len < 128)
+            {
+                char base_name[128];
+                memcpy(base_name, suffix, base_len);
+                base_name[base_len] = '\0';
+                add_alias_for_return_var(return_var, base_name);
+            }
+        }
+    }
 
     if (has_record_return)
         return_dest_slot = add_l_x("__record_return_dest__", (int)sizeof(void *));
@@ -2414,19 +2432,21 @@ static int get_return_type_size(int return_type)
     return 4; /* Default for INT_TYPE, BOOL, CHAR_TYPE, etc. */
 }
 
-/* Helper function to add a Result alias for anonymous function return variable */
-static void add_result_alias_for_return_var(StackNode_t *return_var)
+/* Helper to add an alias label for a return variable so multiple identifiers share storage. */
+static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_label)
 {
-    if (return_var == NULL)
+    if (return_var == NULL || alias_label == NULL || alias_label[0] == '\0')
         return;
     
-    /* Create a stack node for "Result" pointing to the same offset */
-    StackNode_t *result_alias = init_stack_node(return_var->offset, "Result", return_var->size);
+    /* Create a stack node pointing to the same offset */
+    StackNode_t *result_alias = init_stack_node(return_var->offset, (char *)alias_label, return_var->size);
     if (result_alias == NULL)
         return;
     
     result_alias->element_size = return_var->element_size;
     result_alias->is_alias = 1;
+    if (return_var->is_static && return_var->static_label != NULL)
+        result_alias->static_label = strdup(return_var->static_label);
     
     /* Add it to the x list in the current stack scope using the list API */
     StackScope_t *cur_scope = get_cur_scope();
@@ -2441,6 +2461,12 @@ static void add_result_alias_for_return_var(StackNode_t *return_var)
                 cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
         }
     }
+}
+
+/* Helper function to add a Result alias for anonymous function return variable */
+static void add_result_alias_for_return_var(StackNode_t *return_var)
+{
+    add_alias_for_return_var(return_var, "Result");
 }
 
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, GpcType *array_type)
@@ -2700,6 +2726,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 type = arg_decl->tree_data.var_decl_data.type;
                 HashNode_t *resolved_type_node = NULL;
                 GpcType *cached_arg_type = arg_decl->tree_data.var_decl_data.cached_gpc_type;
+                int inferred_type_tag = type;
                 HashNode_t cached_arg_node;
                 HashNode_t *cached_arg_node_ptr = NULL;
                 if (cached_arg_type != NULL)
@@ -2725,11 +2752,43 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
                 }
 
+                /* If the legacy type tag was UNKNOWN, derive it from the resolved GpcType
+                 * so that class/pointer parameters are treated as 64-bit values. */
+                if (inferred_type_tag == UNKNOWN_TYPE)
+                {
+                    if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+                        inferred_type_tag = gpc_type_get_legacy_tag(resolved_type_node->type);
+                    else if (cached_arg_type != NULL)
+                        inferred_type_tag = gpc_type_get_legacy_tag(cached_arg_type);
+                }
+
                 while(arg_ids != NULL)
                 {
                     int tree_is_var_param = arg_decl->tree_data.var_decl_data.is_var_param;
                     int symbol_is_var_param = tree_is_var_param;
                     struct RecordType *record_type_info = NULL;
+
+                    if (getenv("GPC_DEBUG_ARG_TYPES") != NULL && arg_ids->cur != NULL)
+                    {
+                        fprintf(stderr,
+                            "[CODEGEN] Arg %s: type=%d inferred=%d type_id=%s resolved_type_node=%p cached=%p\n",
+                            (char *)arg_ids->cur, type, inferred_type_tag,
+                            arg_decl->tree_data.var_decl_data.type_id ?
+                                arg_decl->tree_data.var_decl_data.type_id : "(null)",
+                            (void *)resolved_type_node, (void *)cached_arg_type);
+                        if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+                        {
+                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d legacy=%d\n",
+                                resolved_type_node->type->kind,
+                                gpc_type_get_legacy_tag(resolved_type_node->type));
+                        }
+                        if (cached_arg_type != NULL)
+                        {
+                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d legacy=%d\n",
+                                cached_arg_type->kind,
+                                gpc_type_get_legacy_tag(cached_arg_type));
+                        }
+                    }
                     if (!symbol_is_var_param)
                     {
                         if (resolved_type_node != NULL)
@@ -2874,10 +2933,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
                     
                     int use_64bit = is_var_param || is_array_type ||
-                        (type == STRING_TYPE || type == POINTER_TYPE ||
-                         type == REAL_TYPE || type == LONGINT_TYPE || type == PROCEDURE);
+                        (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
+                         inferred_type_tag == REAL_TYPE || inferred_type_tag == LONGINT_TYPE || type == PROCEDURE);
                     int use_sse_reg = (!is_var_param && !is_array_type &&
-                        type == REAL_TYPE);
+                        inferred_type_tag == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type))
                         arg_stack->is_reference = 1;

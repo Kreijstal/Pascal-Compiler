@@ -668,6 +668,7 @@ void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *
 
                 break;
             }
+            break;
 
         case EXPR_TYPECAST:
             if (expr->expr_data.typecast_data.expr != NULL)

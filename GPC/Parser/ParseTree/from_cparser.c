@@ -6121,6 +6121,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             is_class_operator = 1;
         }
     }
+    int is_constructor = (method_name != NULL && strcasecmp(method_name, "create") == 0);
 
     ListBuilder params_builder;
     list_builder_init(&params_builder);
@@ -6261,6 +6262,15 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         cur = cur->next;
     }
 
+    /* Constructors implicitly return their class instance as a pointer. */
+    if (is_constructor && !has_return_type) {
+        has_return_type = 1;
+        if (return_type_id != NULL)
+            free(return_type_id);
+        return_type_id = (effective_class != NULL) ? strdup(effective_class) : NULL;
+        return_type = POINTER_TYPE;
+    }
+
     /* Wrap method body in WITH Self for instance methods, but not for class operators */
     if (body != NULL && !is_class_operator) {
         struct Expression *self_expr = mk_varid(method_node->line, strdup("Self"));
@@ -6270,7 +6280,6 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ListNode_t *params = list_builder_finish(&params_builder);
     ListNode_t *label_decls = list_builder_finish(&label_builder);
     
-    /* Create function if method has return type, otherwise create procedure */
     Tree_t *tree;
     if (has_return_type) {
         tree = mk_function(method_node->line, proc_name, params, const_decls,
@@ -6280,6 +6289,9 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         tree = mk_procedure(method_node->line, proc_name, params, const_decls,
                            label_decls, type_decls, list_builder_finish(&var_builder),
                            nested_subs, body, 0, 0);
+    }
+    if (tree != NULL) {
+        tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);
@@ -6645,13 +6657,43 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 int sibling_count = 0;
                 ast_t *sibling = first_child;
                 while (sibling != NULL && sibling_count < 100) {
-                    fprintf(stderr, "[GPC] tree_from_pascal_ast: sibling[%d] typ=%d next=%p\n", 
-                            sibling_count, sibling->typ, sibling->next);
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: sibling[%d] typ=%d next=%p child=%p\n", 
+                            sibling_count, sibling->typ, sibling->next, sibling->child);
                     sibling = sibling->next;
                     sibling_count++;
                 }
                 if (sibling != NULL) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: ... more siblings ...\n");
+                }
+                
+                // Also check if there are children beyond the sibling chain
+                // by looking at the last sibling's child
+                if (sibling_count > 0) {
+                    ast_t *last = first_child;
+                    while (last->next != NULL) last = last->next;
+                    if (last->child != NULL) {
+                        fprintf(stderr, "[GPC] tree_from_pascal_ast: Last sibling (typ=%d) has children:\n", last->typ);
+                        ast_t *child = last->child;
+                        int child_count = 0;
+                        while (child != NULL && child_count < 20) {
+                            fprintf(stderr, "[GPC] tree_from_pascal_ast:   child[%d] typ=%d next=%p\n", child_count, child->typ, child->next);
+                            
+                            // Print siblings of this child
+                            if (child->next != NULL) {
+                                fprintf(stderr, "[GPC] tree_from_pascal_ast:     Siblings of child[%d]:\n", child_count);
+                                ast_t *sibling = child->next;
+                                int sib_count = 0;
+                                while (sibling != NULL && sib_count < 10) {
+                                    fprintf(stderr, "[GPC] tree_from_pascal_ast:       sibling[%d] typ=%d\n", sib_count, sibling->typ);
+                                    sibling = sibling->next;
+                                    sib_count++;
+                                }
+                            }
+                            
+                            child = child->next;
+                            child_count++;
+                        }
+                    }
                 }
             }
         }
@@ -6834,18 +6876,53 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 }
                 main_block_node = find_node_recursive(cur->child, PASCAL_T_BEGIN_BLOCK);
             }
-            /* Also try searching for type 100 which appears in the AST */
+            /* Also try typ=112 which appears in the AST */
             if (main_block_node == NULL) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
-                    fprintf(stderr, "[GPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=100\n");
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=112\n");
                 }
-                main_block_node = find_node_recursive(cur->child, 100);
+                main_block_node = find_node_recursive(cur->child, 112);
             }
             if (main_block_node != NULL) {
                 if (getenv("GPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[GPC] tree_from_pascal_ast: Found MAIN_BLOCK via recursive search (typ=%d)\n", main_block_node->typ);
                 }
                 body = convert_block(main_block_node);
+            } else {
+                /* MAIN_BLOCK not found directly. Check if there's a typ=100 node that contains it */
+                if (getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: MAIN_BLOCK not found directly, searching for typ=100 wrapper\n");
+                }
+                ast_t* wrapper_node = find_node_recursive(cur->child, 100);
+                if (wrapper_node != NULL && wrapper_node->child != NULL) {
+                    if (getenv("GPC_DEBUG_BODY") != NULL) {
+                        fprintf(stderr, "[GPC] tree_from_pascal_ast: Found typ=100 wrapper, checking its children\n");
+                    }
+                    /* Check if the wrapper's child is a MAIN_BLOCK or BEGIN_BLOCK */
+                    ast_t* child = wrapper_node->child;
+                    int child_count = 0;
+                    while (child != NULL) {
+                        if (getenv("GPC_DEBUG_BODY") != NULL) {
+                            fprintf(stderr, "[GPC] tree_from_pascal_ast: typ=100 child[%d] has typ=%d\n", child_count, child->typ);
+                        }
+                        if (child->typ == PASCAL_T_MAIN_BLOCK || child->typ == PASCAL_T_BEGIN_BLOCK) {
+                            if (getenv("GPC_DEBUG_BODY") != NULL) {
+                                fprintf(stderr, "[GPC] tree_from_pascal_ast: Found MAIN_BLOCK (typ=%d) inside typ=100 wrapper\n", child->typ);
+                            }
+                            main_block_node = child;
+                            body = convert_block(main_block_node);
+                            break;
+                        }
+                        child = child->next;
+                        child_count++;
+                    }
+                }
+                
+                if (body == NULL && getenv("GPC_DEBUG_BODY") != NULL) {
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: MAIN_BLOCK not found via recursive search\n");
+                    fprintf(stderr, "[GPC] tree_from_pascal_ast: PASCAL_T_MAIN_BLOCK=%d, PASCAL_T_BEGIN_BLOCK=%d\n", 
+                            PASCAL_T_MAIN_BLOCK, PASCAL_T_BEGIN_BLOCK);
+                }
             }
         }
 

@@ -273,9 +273,9 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             keyword_buf[i] = (char)tolower((unsigned char)keyword_buf[i]);
         }
         const struct statement_keyword_record* keyword_record = statement_keyword_lookup(keyword_buf, ident_len);
-        if (heap_keyword) {
-            free(keyword_buf);
-        }
+        bool reserved_keyword = is_reserved_keyword_slice(slice, ident_len);
+        bool keyword_allowed_as_expr = pascal_keyword_allowed_in_expression(keyword_buf);
+        if (heap_keyword) free(keyword_buf);
         if (keyword_record != NULL &&
             dispatch->keyword_parsers != NULL &&
             (size_t)keyword_record->id < dispatch->keyword_count) {
@@ -293,7 +293,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return parse(in, dispatch->label_parser);
         }
 
-        if (is_reserved_keyword_slice(slice, ident_len)) {
+        if (reserved_keyword && !keyword_allowed_as_expr) {
             return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
         }
 

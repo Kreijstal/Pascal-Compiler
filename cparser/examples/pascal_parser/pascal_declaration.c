@@ -2629,6 +2629,20 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* method_function_param_list = create_simple_param_list();
+    combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class keyword
+        token(keyword_ci("function")),               // function keyword (with word boundary check)
+        method_name_with_class,                      // ClassName.MethodName
+        method_function_param_list,                  // optional parameter list
+        return_type,                                 // return type
+        token(match(";")),                           // semicolon
+        program_routine_directives,                  // routine directives (inline, overload, etc.)
+        method_body,                                 // method body with var section support
+        optional(token(match(";"))),                 // optional terminating semicolon
+        NULL
+    );
+
     // Operator name with class qualification (Class.+ or Class.Add)
     combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
@@ -2676,6 +2690,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         constructor_impl,
         destructor_impl,
         procedure_impl,
+        method_function_impl,
         headeronly_method_procedure,
         headeronly_method_function,
         operator_impl,
