@@ -1099,6 +1099,27 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 
                 func_mangled_name, is_constructor);
         }
+
+        /* Avoid infinite recursion when a constructor ends up calling itself (e.g., inherited calls with
+         * no parent implementation). In that case, just reuse Self instead of re-entering the constructor. */
+        if (is_constructor && func_mangled_name != NULL &&
+            ctx->current_subprogram_mangled != NULL &&
+            strcmp(func_mangled_name, ctx->current_subprogram_mangled) == 0)
+        {
+            StackNode_t *self_slot = find_label("Self");
+            if (self_slot != NULL && target_reg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    self_slot->offset, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+        }
+
+        /* Constructors for classes return the constructed instance by value,
+         * which uses a hidden sret pointer in the first argument slot. */
+        int has_record_return = expr_has_type_tag(expr, RECORD_TYPE);
+        int ctor_has_record_return = (is_constructor && has_record_return);
         
         /* For constructors, allocate memory for the instance */
         if (is_constructor)
@@ -1202,8 +1223,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
-        /* Pass arguments, shifted by 1 if static link is passed */
-        int arg_start_index = should_pass_static_link ? 1 : 0;
+        /* Pass arguments, shifted by hidden return pointer and/or static link */
+        int arg_start_index = (has_record_return ? 1 : 0) +
+            (should_pass_static_link ? 1 : 0);
+        int self_index = -1;
         
         /* For constructors, we need to:
          * 1. Skip the first argument in the list (class type)
@@ -1211,9 +1234,26 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         ListNode_t *args_to_pass = expr->expr_data.function_call_data.args_expr;
         if (is_constructor && constructor_instance_reg != NULL)
         {
+            /* Place the hidden return pointer (sret) in the first argument slot */
+            if (ctor_has_record_return)
+            {
+                const char *ret_reg = current_arg_reg64(0);
+                if (ret_reg != NULL)
+                {
+                    if (constructor_instance_slot != NULL) {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            constructor_instance_slot->offset, ret_reg);
+                    } else {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                            constructor_instance_reg->bit_64, ret_reg);
+                    }
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+
             /* Move the newly allocated instance pointer into the correct argument register slot
              * for the implicit Self parameter, accounting for a possible static-link argument. */
-            int self_index = arg_start_index;
+            self_index = arg_start_index;
             const char *sysv_int_args[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
             const char *win_int_args[]  = { "%rcx", "%rdx", "%r8", "%r9" };
             const char *self_reg = NULL;
@@ -1280,8 +1320,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         if (should_pass_static_link)
         {
-            const char *dest_reg = current_arg_reg64(0);
-            assert(dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
+            const char *dest_reg = current_arg_reg64(has_record_return ? 1 : 0);
+            assert(dest_reg != NULL && "current_arg_reg64(..) should never return NULL");
             char link_buffer[64];
             switch (static_link_source)
             {
@@ -1310,12 +1350,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         
         /* For constructors, pass the allocated instance as the first argument (Self) */
-        if (is_constructor && constructor_instance_reg != NULL)
+        if (is_constructor && constructor_instance_reg != NULL && self_index >= 0)
         {
-            const char *self_arg_reg = should_pass_static_link ? 
-                current_arg_reg64(1) : current_arg_reg64(0);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                constructor_instance_reg->bit_64, self_arg_reg);
+            const char *self_arg_reg = current_arg_reg64(self_index);
+            if (constructor_instance_slot != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    constructor_instance_slot->offset, self_arg_reg);
+            }
+            else
+            {
+                const char *source_reg = constructor_instance_reg->bit_64;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    source_reg, self_arg_reg);
+            }
             inst_list = add_inst(inst_list, buffer);
         }
 

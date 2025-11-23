@@ -336,6 +336,26 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
 
             if (find_result != -1 && method_node != NULL)
             {
+                if (method_node->hash_type == HASHTYPE_FUNCTION_RETURN)
+                {
+                    ListNode_t *all_methods = FindAllIdents(symtab, mangled_name);
+                    ListNode_t *cur = all_methods;
+                    while (cur != NULL)
+                    {
+                        HashNode_t *candidate = (HashNode_t *)cur->cur;
+                        if (candidate != NULL &&
+                            (candidate->hash_type == HASHTYPE_FUNCTION ||
+                             candidate->hash_type == HASHTYPE_PROCEDURE))
+                        {
+                            method_node = candidate;
+                            break;
+                        }
+                        cur = cur->next;
+                    }
+                    if (all_methods != NULL)
+                        DestroyList(all_methods);
+                }
+
                 if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_find_class_method: Found '%s' in class '%s'\n", 
                         method_name, current->type_id);
@@ -6445,6 +6465,50 @@ int semcheck_funccall(int *type_return,
     }
     args_given = expr->expr_data.function_call_data.args_expr;
 
+    /* If no receiver was provided, but Self is in scope and defines this method,
+     * prepend Self so unqualified method calls resolve correctly. */
+    if (id != NULL && (args_given == NULL || args_given->cur == NULL))
+    {
+        HashNode_t *self_node = NULL;
+        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = get_record_type_from_node(self_node);
+            if (self_record != NULL)
+            {
+                HashNode_t *method_node = semcheck_find_class_method(symtab,
+                    self_record, id, NULL);
+                if (method_node != NULL)
+                {
+                    ListNode_t *method_params = gpc_type_get_procedure_params(method_node->type);
+                    if (getenv("GPC_DEBUG_SEMCHECK") != NULL)
+                    {
+                        fprintf(stderr, "[SemCheck] Implicit Self injection? method_params_len=%d mangled=%s\n",
+                            ListLength(method_params),
+                            method_node->mangled_id ? method_node->mangled_id : "(null)");
+                    }
+                    if (method_params != NULL)
+                    {
+                        struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
+                        ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                        self_arg->next = args_given;
+                        expr->expr_data.function_call_data.args_expr = self_arg;
+                        args_given = self_arg;
+                    }
+                    if (expr->expr_data.function_call_data.resolved_func == NULL)
+                        expr->expr_data.function_call_data.resolved_func = method_node;
+                    if (expr->expr_data.function_call_data.mangled_id == NULL)
+                    {
+                        const char *resolved_name = method_node->mangled_id ?
+                            method_node->mangled_id :
+                            (method_node->id ? method_node->id : id);
+                        if (resolved_name != NULL)
+                            expr->expr_data.function_call_data.mangled_id = strdup(resolved_name);
+                    }
+                }
+            }
+        }
+    }
+
     if (id != NULL && strncmp(id, "__tfpg_ctor$", strlen("__tfpg_ctor$")) == 0)
     {
         if (type_return != NULL)
@@ -6717,7 +6781,7 @@ int semcheck_funccall(int *type_return,
              if (record_info != NULL) {
                  HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, id, NULL);
                  if (method_node != NULL) {
-                     if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                    if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
                          fprintf(stderr, "[SemCheck] semcheck_funccall: Found constructor/method %s in class\n", id);
                      }
                      
@@ -6726,7 +6790,12 @@ int semcheck_funccall(int *type_return,
                      set_type_from_hashtype(type_return, method_node);
                      semcheck_expr_set_resolved_gpc_type_shared(expr, method_node->type);
                      expr->expr_data.function_call_data.resolved_func = method_node;
-                     expr->expr_data.function_call_data.mangled_id = strdup(method_node->mangled_id);
+                     const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                        method_node->mangled_id : method_node->id;
+                     if (expr->expr_data.function_call_data.mangled_id != NULL)
+                         free(expr->expr_data.function_call_data.mangled_id);
+                     expr->expr_data.function_call_data.mangled_id =
+                        (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
                      
                      if (strcasecmp(id, "Create") == 0) {
                          if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
@@ -6829,6 +6898,13 @@ constructor_resolved:
         while(cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate == NULL ||
+                (candidate->hash_type != HASHTYPE_FUNCTION &&
+                 candidate->hash_type != HASHTYPE_PROCEDURE))
+            {
+                cur = cur->next;
+                continue;
+            }
 
             /* Get formal arguments from GpcType instead of deprecated args field */
             ListNode_t *candidate_args = gpc_type_get_procedure_params(candidate->type);

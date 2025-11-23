@@ -1395,11 +1395,13 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
                         const char *method_name = call_expr->expr_data.function_call_data.id;
                         HashNode_t *self_node = NULL;
+                        const char *parent_class_name = NULL;
                         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
                             self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
                             self_node->type->info.record_info != NULL)
                         {
                             struct RecordType *current_class = self_node->type->info.record_info;
+                            parent_class_name = current_class->parent_class_name;
                             
                             /* Check if there's no parent class and this is Create or Destroy */
                             if (current_class->parent_class_name == NULL && method_name != NULL &&
@@ -1417,6 +1419,17 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 /* No errors */
                                 break;
                             }
+                        }
+
+                        /* If a parent exists, direct the call to the parent's mangled name */
+                        if (parent_class_name != NULL && method_name != NULL)
+                        {
+                            char parent_mangled[512];
+                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
+                                parent_class_name, method_name);
+                            if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                                free(call_expr->expr_data.function_call_data.mangled_id);
+                            call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled);
                         }
                         
                         struct Statement temp_call;
