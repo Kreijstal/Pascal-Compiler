@@ -203,6 +203,19 @@ static int formal_decl_expects_string(Tree_t *decl)
     return 0;
 }
 
+static int builtin_arg_expects_string(const char *procedure_name, int arg_index)
+{
+    if (procedure_name == NULL || arg_index != 0)
+        return 0;
+    if (pascal_identifier_equals(procedure_name, "Pos") ||
+        pascal_identifier_equals(procedure_name, "AnsiPos") ||
+        pascal_identifier_equals(procedure_name, "gpc_string_pos"))
+    {
+        return 1;
+    }
+    return 0;
+}
+
 static int codegen_param_expected_type(Tree_t *decl)
 {
     if (decl == NULL)
@@ -3826,7 +3839,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     arg_expr, top_reg, inst_list);
 
             /* Promote char arguments to strings when the formal parameter expects string. */
-            if (formal_decl_expects_string(formal_arg_decl) && expr_has_type_tag(arg_expr, CHAR_TYPE))
+            if ((formal_decl_expects_string(formal_arg_decl) ||
+                 builtin_arg_expects_string(procedure_name, arg_num)) &&
+                expr_has_type_tag(arg_expr, CHAR_TYPE))
             {
                 const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);

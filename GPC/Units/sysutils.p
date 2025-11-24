@@ -50,6 +50,7 @@ function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
+function DateTimeToStr(DateTime: TDateTime): AnsiString;
 function Format(const Fmt: string; const Args: array of const): string;
 function FloatToStr(Value: Real): AnsiString;
 function StrToInt(const S: AnsiString): longint;
@@ -366,6 +367,11 @@ begin
     else
         dt_value := DateTime;
     FormatDateTime := gpc_format_datetime(ToPChar(FormatStr), dt_value);
+end;
+
+function DateTimeToStr(DateTime: TDateTime): AnsiString;
+begin
+    DateTimeToStr := FormatDateTime('yyyy-mm-dd hh:nn:ss', DateTime);
 end;
 
 function Format(const Fmt: string; const Args: array of const): string;

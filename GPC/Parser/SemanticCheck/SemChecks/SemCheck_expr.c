@@ -1761,7 +1761,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int substr_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && substr_type != STRING_TYPE)
+    if (error_count == 0 && substr_type != STRING_TYPE && substr_type != CHAR_TYPE)
     {
         fprintf(stderr, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
         ++error_count;

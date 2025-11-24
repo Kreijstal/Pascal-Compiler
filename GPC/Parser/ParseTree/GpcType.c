@@ -454,6 +454,21 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
         return 1;
     }
 
+    /* Allow PChar <-> String assignment */
+    /* PChar is ^Char */
+    int lhs_is_pchar = (lhs_type->kind == TYPE_KIND_POINTER && lhs_type->info.points_to != NULL &&
+                        lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                        lhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+    int rhs_is_pchar = (rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to != NULL &&
+                        rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                        rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+    int lhs_is_string = (lhs_type->kind == TYPE_KIND_PRIMITIVE && lhs_type->info.primitive_type_tag == STRING_TYPE);
+    int rhs_is_string = (rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == STRING_TYPE);
+
+    if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
+        return 1;
+    }
+
     /* Allow procedure variables to accept explicit @proc references */
     if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
     {
