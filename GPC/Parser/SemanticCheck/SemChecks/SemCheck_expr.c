@@ -214,19 +214,11 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
         int prop_count = 0;
         while (node != NULL)
         {
-#ifdef DEBUG_PROPERTY_RESOLVE
-            fprintf(stderr, "[DEBUG] inspecting property node type=%d\n", node->type);
-#endif
+
             if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
             {
                 struct ClassProperty *property = (struct ClassProperty *)node->cur;
-#ifdef DEBUG_PROPERTY_RESOLVE
-                fprintf(stderr, "[DEBUG] property name=%s (len=%zu), searching for=%s (len=%zu)\n",
-                    property->name ? property->name : "<null>",
-                    property->name ? strlen(property->name) : 0,
-                    property_name ? property_name : "<null>",
-                    property_name ? strlen(property_name) : 0);
-#endif
+
                 if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck]   Found property: '%s'\n",
                         property->name ? property->name : "<null>");
@@ -235,9 +227,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                 if (property->name != NULL &&
                     pascal_identifier_equals(property->name, property_name))
                 {
-#ifdef DEBUG_PROPERTY_RESOLVE
-                    fprintf(stderr, "[DEBUG] matched property %s\n", property->name);
-#endif
+
                     if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck]   MATCHED property '%s'!\n", property->name);
                     }

@@ -672,7 +672,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
-    fprintf(stderr, "[DEBUG] gencode_expr_tree: node=%p, expr type=%d\n", (void*)node, node->expr->type);
+
 
     #ifdef DEBUG_CODEGEN
     fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
@@ -787,30 +787,26 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg)
 {
-    fprintf(stderr, "[DEBUG] gencode_string_concat: entering\n");
+
     
     if (node == NULL || node->left_expr == NULL || node->right_expr == NULL)
         return inst_list;
 
     char buffer[128];
-    fprintf(stderr, "[DEBUG] gencode_string_concat: calling get_free_reg\n");
+
     Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
-    fprintf(stderr, "[DEBUG] gencode_string_concat: returned from get_free_reg, rhs_reg=%p\n", (void*)rhs_reg);
+
 
     if (rhs_reg == NULL)
     {
-        fprintf(stderr, "[DEBUG] gencode_string_concat: rhs_reg is NULL, using spill path\n");
+
         StackNode_t *spill_loc = add_l_t("str_concat_rhs");
-        fprintf(stderr, "[DEBUG] gencode_string_concat: calling gencode_expr_tree for right_expr\n");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
-        fprintf(stderr, "[DEBUG] gencode_string_concat: returned from gencode_expr_tree for right_expr\n");
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
-        fprintf(stderr, "[DEBUG] gencode_string_concat: calling gencode_expr_tree for left_expr\n");
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        fprintf(stderr, "[DEBUG] gencode_string_concat: returned from gencode_expr_tree for left_expr\n");
         inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
 
         if (codegen_target_is_windows())
@@ -830,18 +826,13 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     }
     else
     {
-        fprintf(stderr, "[DEBUG] gencode_string_concat: rhs_reg is NOT NULL, using register path\n");
         StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
-        fprintf(stderr, "[DEBUG] gencode_string_concat: calling gencode_expr_tree for left_expr\n");
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        fprintf(stderr, "[DEBUG] gencode_string_concat: returned from gencode_expr_tree for left_expr\n");
         inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, lhs_spill->offset);
         inst_list = add_inst(inst_list, buffer);
 
-        fprintf(stderr, "[DEBUG] gencode_string_concat: calling gencode_expr_tree for right_expr\n");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
-        fprintf(stderr, "[DEBUG] gencode_string_concat: returned from gencode_expr_tree for right_expr\n");
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", lhs_spill->offset, target_reg->bit_64);
@@ -866,7 +857,6 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
         }
     }
 
-    fprintf(stderr, "[DEBUG] gencode_string_concat: calling gpc_string_concat\n");
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = add_inst(inst_list, "\tcall\tgpc_string_concat\n");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
@@ -874,11 +864,9 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 
     if (rhs_reg != NULL)
     {
-        fprintf(stderr, "[DEBUG] gencode_string_concat: freeing rhs_reg\n");
         free_reg(get_reg_stack(), rhs_reg);
     }
     free_arg_regs();
-    fprintf(stderr, "[DEBUG] gencode_string_concat: exiting\n");
     return inst_list;
 }
 
@@ -972,12 +960,9 @@ void free_expr_tree(expr_node_t *node)
 {
     if(node != NULL)
     {
-        fprintf(stderr, "[DEBUG] free_expr_tree: freeing node %p, expr type=%d\n", (void*)node, node->expr ? node->expr->type : -1);
         free_expr_tree(node->left_expr);
         free_expr_tree(node->right_expr);
-        fprintf(stderr, "[DEBUG] free_expr_tree: about to free node %p\n", (void*)node);
         free(node);
-        fprintf(stderr, "[DEBUG] free_expr_tree: freed node %p\n", (void*)node);
     }
 }
 
