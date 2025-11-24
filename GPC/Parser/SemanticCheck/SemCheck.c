@@ -2119,6 +2119,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, string_name, string_type);
         destroy_gpc_type(string_type);
         free(string_name);
+    char *ansistring_name = strdup("AnsiString");
+    if (ansistring_name != NULL) {
+        GpcType *ansistring_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(ansistring_type != NULL && "Failed to create AnsiString type");
+        AddBuiltinType_Typed(symtab, ansistring_name, ansistring_type);
+        destroy_gpc_type(ansistring_type);
+        free(ansistring_name);
+    }
     }
     char *unicode_name = strdup("UnicodeString");
     if (unicode_name != NULL) {
