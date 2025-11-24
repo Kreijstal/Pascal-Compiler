@@ -3284,6 +3284,35 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             treat_as_string = 1;
         }
         
+        /* Also treat PAnsiChar (pointer to char) as string */
+        if (expr != NULL && expr->resolved_gpc_type != NULL && 
+            gpc_type_is_pointer(expr->resolved_gpc_type))
+        {
+             if (expr->resolved_gpc_type->type_alias != NULL && expr->resolved_gpc_type->type_alias->target_type_id != NULL)
+             {
+                 const char *alias_name = expr->resolved_gpc_type->type_alias->target_type_id;
+                 
+                 if (strcasecmp(alias_name, "PAnsiChar") == 0 ||
+                     strcasecmp(alias_name, "PChar") == 0 ||
+                     strcasecmp(alias_name, "pcchar") == 0 ||
+                     strcasecmp(alias_name, "cchar") == 0 ||
+                     strcasecmp(alias_name, "char") == 0)
+                 {
+                     treat_as_string = 1;
+                 }
+             }
+        }
+
+        if (expr != NULL && expr->resolved_gpc_type != NULL && 
+            gpc_type_is_pointer(expr->resolved_gpc_type))
+        {
+            int subtype = gpc_type_get_pointer_subtype_tag(expr->resolved_gpc_type);
+            if (subtype == CHAR_TYPE)
+            {
+                treat_as_string = 1;
+            }
+        }
+        
         const int expr_is_real = (expr_type == REAL_TYPE);
         const char *file_dest64 = current_arg_reg64(0);
         const char *width_dest64 = current_arg_reg64(1);

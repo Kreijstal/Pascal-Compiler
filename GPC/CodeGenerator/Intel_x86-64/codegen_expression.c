@@ -3664,8 +3664,69 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 return inst_list;
             }
 
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
-            inst_list = add_inst(inst_list, copy_buffer);
+            /* For external C functions (cdecl), small structs (≤8 bytes) are passed by VALUE,
+             * but Pascal passes them by reference (pointer). We automatically dereference
+             * the pointer here so Pascal code doesn't need to change.
+             * 
+             * Example: inet_ntoa(in_addr: TInAddr) where TInAddr is 4 bytes
+             * - Pascal passes pointer to TInAddr
+             * - C expects TInAddr value in register
+             * - We dereference: load the 4-byte value from the pointer
+             * 
+             * CRITICAL FIX: Check the GpcType's procedure definition for cname_flag
+             * instead of checking if the procedure name contains "cdecl" or "external".
+             * The procedure name is just "inet_ntoa", not "inet_ntoa_cdecl_external".
+             */
+            int is_external_c_function = 0;
+            if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
+                proc_type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = proc_type->info.proc_info.definition;
+                /* External function declarations use TREE_SUBPROGRAM, while full definitions
+                 * use TREE_SUBPROGRAM_PROC or TREE_SUBPROGRAM_FUNC. We need to check all three. */
+                if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
+                {
+                    is_external_c_function = def->tree_data.subprogram_data.cname_flag;
+                }
+            }
+
+            
+            if (is_external_c_function && record_size <= 8)
+            {
+                /* Load address of the record copy */
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", 
+                    temp_slot->offset, result_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+                
+                /* Dereference: load the value from the address */
+                if (record_size == 1)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzbl\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_32);
+                }
+                else if (record_size == 2)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzwl\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_32);
+                }
+                else if (record_size <= 4)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovl\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_32);
+                }
+                else /* record_size <= 8 */
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_64);
+                }
+                inst_list = add_inst(inst_list, copy_buffer);
+            }
+            else
+            {
+                /* Normal case: pass pointer to struct */
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+            }
 
             /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
             StackNode_t *arg_spill = add_l_t("arg_eval");
