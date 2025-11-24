@@ -716,13 +716,16 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           expr_print(stmt->stmt_data.for_data.to, f, num_indent+1);
 
           print_indent(f, num_indent);
-          fprintf(f, "[DO]:\n");
+              fprintf(f, "[DO]:\n");
           stmt_print(stmt->stmt_data.for_data.do_for, f, num_indent+1);
           break;
 
         case STMT_BREAK:
           fprintf(f, "[BREAK]\n");
           break;
+        case STMT_CONTINUE:
+            fprintf(f, "[CONTINUE]\n");
+            break;
 
         case STMT_ASM_BLOCK:
           fprintf(f, "[ASM_BLOCK]:\n");
@@ -1320,6 +1323,7 @@ void destroy_stmt(struct Statement *stmt)
 
         case STMT_EXIT:
         case STMT_BREAK:
+        case STMT_CONTINUE:
           /* No data to free for simple control flow statements */
           break;
 
@@ -2146,6 +2150,20 @@ struct Statement *mk_break(int line_num)
 
     return new_stmt;
 }
+
+struct Statement *mk_continue(int line_num)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = 0;
+    new_stmt->type = STMT_CONTINUE;
+    memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
+
+    return new_stmt;
+}
+
 
 struct Statement *mk_exit(int line_num)
 {

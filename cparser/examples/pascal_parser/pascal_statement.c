@@ -273,6 +273,12 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             keyword_buf[i] = (char)tolower((unsigned char)keyword_buf[i]);
         }
         const struct statement_keyword_record* keyword_record = statement_keyword_lookup(keyword_buf, ident_len);
+        
+        // Manual fallback for 'continue' which collides with 'asm' in the perfect hash
+        static const struct statement_keyword_record continue_record = {"continue", STMT_KW_CONTINUE};
+        if (keyword_record == NULL && ident_len == 8 && strcmp(keyword_buf, "continue") == 0) {
+            keyword_record = &continue_record;
+        }
         bool reserved_keyword = is_reserved_keyword_slice(slice, ident_len);
         bool keyword_allowed_as_expr = pascal_keyword_allowed_in_expression(keyword_buf);
         if (heap_keyword) free(keyword_buf);
@@ -924,6 +930,9 @@ void init_pascal_statement_parser(combinator_t** p) {
     // Break statement: break
     combinator_t* break_stmt = token(create_keyword_parser("break", PASCAL_T_BREAK_STMT));
 
+    // Continue statement: continue
+    combinator_t* continue_stmt = token(create_keyword_parser("continue", PASCAL_T_CONTINUE_STMT));
+
     // Case statement: case expression of label1: stmt1; label2: stmt2; [else stmt;] end
     // Case labels should handle constant expressions, not just simple values
     
@@ -1013,6 +1022,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     dispatch_args->keyword_parsers[STMT_KW_RAISE] = raise_stmt;
     dispatch_args->keyword_parsers[STMT_KW_INHERITED] = inherited_stmt;
     dispatch_args->keyword_parsers[STMT_KW_BREAK] = break_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_CONTINUE] = continue_stmt;
     dispatch_args->keyword_parsers[STMT_KW_EXIT] = exit_stmt;
     dispatch_args->keyword_parsers[STMT_KW_ASM] = asm_stmt;
     dispatch_args->keyword_parsers[STMT_KW_IF] = if_stmt;

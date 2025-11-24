@@ -5565,6 +5565,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     }
     case PASCAL_T_BREAK_STMT:
         return mk_break(stmt_node->line);
+    case PASCAL_T_CONTINUE_STMT:
+        return mk_continue(stmt_node->line);
     case PASCAL_T_BEGIN_BLOCK:
         return convert_block(stmt_node);
     case PASCAL_T_IF_STMT: {

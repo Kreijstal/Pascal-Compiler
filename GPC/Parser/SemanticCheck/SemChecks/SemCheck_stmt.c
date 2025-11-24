@@ -1107,6 +1107,18 @@ static int semcheck_break_stmt(struct Statement *stmt)
     return 0;
 }
 
+static int semcheck_continue_stmt(struct Statement *stmt)
+{
+    if (semcheck_loop_depth <= 0)
+    {
+        if (stmt != NULL)
+            fprintf(stderr, "Error on line %d, Continue is only valid inside a loop.\n", stmt->line_num);
+        return 1;
+    }
+    return 0;
+}
+
+
 /* Main semantic checking */
 
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -1191,7 +1203,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_BREAK:
-            return_val += semcheck_break_stmt(stmt);
+            return_val = semcheck_break_stmt(stmt);
+            break;
+        case STMT_CONTINUE:
+            return_val = semcheck_continue_stmt(stmt);
             break;
 
         case STMT_ASM_BLOCK:

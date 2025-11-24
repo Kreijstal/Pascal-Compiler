@@ -1,0 +1,325 @@
+{$mode objfpc}
+{$H+}
+
+program http_server;
+
+{ A simple HTTP server implementation using Unix sockets via libc.
+  This server listens on port 8080 and responds to HTTP requests. }
+
+uses
+  SysUtils, DateUtils;
+
+const
+  libc = 'c';
+  SERVER_PORT = 8080;
+  BACKLOG = 10;
+  BUFFER_SIZE = 4096;
+  AF_INET = 2;
+  SOCK_STREAM = 1;
+  SOL_SOCKET = 1;
+  SO_REUSEADDR = 2;
+
+type
+  TInt = LongInt;
+  TSize = NativeUInt;
+  TSSize = NativeInt;
+  PSockLen = ^TSockLen;
+  TSockLen = LongWord;
+
+  TInAddr = record
+    S_addr: LongWord;
+  end;
+  PInAddr = ^TInAddr;
+
+  TSockAddrIn = packed record
+    sin_family: Word;
+    sin_port: Word;
+    sin_addr: TInAddr;
+    sin_zero: array[0..7] of Byte;
+  end;
+  PSockAddrIn = ^TSockAddrIn;
+
+{ External libc functions }
+function socket(domain, typ, protocol: TInt): TInt; cdecl; external libc;
+function bind(sockfd: TInt; addr: Pointer; addrlen: TSockLen): TInt; cdecl; external libc;
+function listen(sockfd: TInt; backlog: TInt): TInt; cdecl; external libc;
+function accept(sockfd: TInt; addr: Pointer; addrlen: PSockLen): TInt; cdecl; external libc;
+function recv(sockfd: TInt; buf: Pointer; len: TSize; flags: TInt): TSSize; cdecl; external libc;
+function send(sockfd: TInt; buf: Pointer; len: TSize; flags: TInt): TSSize; cdecl; external libc;
+function libc_close(fd: TInt): TInt; cdecl; external libc name 'close';
+function setsockopt(sockfd: TInt; level: TInt; optname: TInt; optval: Pointer; optlen: TSockLen): TInt; cdecl; external libc;
+function htons(hostshort: Word): Word; cdecl; external libc;
+function inet_ntoa(in_addr: TInAddr): PAnsiChar; cdecl; external libc;
+
+var
+  ServerSocket, ClientSocket: TInt;
+  ServerAddr, ClientAddr: TSockAddrIn;
+  ClientAddrLen: TSockLen;
+  OptVal: TInt;
+  Buffer: array[0..BUFFER_SIZE - 1] of AnsiChar;
+  BytesReceived: TSSize;
+  Request, Response: AnsiString;
+  RequestLine, Method, Path, Version: AnsiString;
+  SpacePos1, SpacePos2: Integer;
+  ClientIP: PAnsiChar;
+  Running: Boolean;
+
+{ Parse the first line of HTTP request }
+procedure ParseRequestLine(const Line: AnsiString; out Method, Path, Version: AnsiString);
+var
+  Pos1, Pos2: Integer;
+begin
+  Method := '';
+  Path := '';
+  Version := '';
+  
+  Pos1 := Pos(' ', Line);
+  if Pos1 = 0 then Exit;
+  
+  Method := Copy(Line, 1, Pos1 - 1);
+  
+  Pos2 := Pos(' ', Copy(Line, Pos1 + 1, Length(Line)));
+  if Pos2 = 0 then Exit;
+  
+  Path := Copy(Line, Pos1 + 1, Pos2 - 1);
+  Version := Copy(Line, Pos1 + Pos2 + 1, Length(Line));
+end;
+
+{ Generate HTTP response }
+function GenerateResponse(const Method, Path: AnsiString): AnsiString;
+var
+  Body, Headers: AnsiString;
+  CurrentTime: TDateTime;
+begin
+  CurrentTime := Now;
+  
+  { Generate HTML body based on path }
+  if Path = '/' then
+  begin
+    Body := '<!DOCTYPE html>' + #13#10 +
+            '<html>' + #13#10 +
+            '<head>' + #13#10 +
+            '  <title>FPC HTTP Server</title>' + #13#10 +
+            '  <style>' + #13#10 +
+            '    body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }' + #13#10 +
+            '    .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }' + #13#10 +
+            '    h1 { color: #333; }' + #13#10 +
+            '    .info { background: #e3f2fd; padding: 15px; border-radius: 4px; margin: 20px 0; }' + #13#10 +
+            '    code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }' + #13#10 +
+            '  </style>' + #13#10 +
+            '</head>' + #13#10 +
+            '<body>' + #13#10 +
+            '  <div class="container">' + #13#10 +
+            '    <h1>🚀 Welcome to FPC HTTP Server!</h1>' + #13#10 +
+            '    <div class="info">' + #13#10 +
+            '      <p><strong>Server Time:</strong> ' + DateTimeToStr(CurrentTime) + '</p>' + #13#10 +
+            '      <p><strong>Server:</strong> Free Pascal HTTP Server v1.0</p>' + #13#10 +
+            '      <p><strong>Port:</strong> ' + IntToStr(SERVER_PORT) + '</p>' + #13#10 +
+            '    </div>' + #13#10 +
+            '    <h2>Available Endpoints:</h2>' + #13#10 +
+            '    <ul>' + #13#10 +
+            '      <li><code>GET /</code> - This page</li>' + #13#10 +
+            '      <li><code>GET /hello</code> - Simple greeting</li>' + #13#10 +
+            '      <li><code>GET /time</code> - Current server time</li>' + #13#10 +
+            '      <li><code>GET /info</code> - Server information</li>' + #13#10 +
+            '    </ul>' + #13#10 +
+            '  </div>' + #13#10 +
+            '</body>' + #13#10 +
+            '</html>';
+  end
+  else if Path = '/hello' then
+  begin
+    Body := '<!DOCTYPE html>' + #13#10 +
+            '<html><head><title>Hello</title></head>' + #13#10 +
+            '<body style="font-family: Arial; margin: 40px;">' + #13#10 +
+            '  <h1>👋 Hello from Free Pascal!</h1>' + #13#10 +
+            '  <p>This response was generated by a Pascal HTTP server.</p>' + #13#10 +
+            '</body></html>';
+  end
+  else if Path = '/time' then
+  begin
+    Body := '<!DOCTYPE html>' + #13#10 +
+            '<html><head><title>Server Time</title></head>' + #13#10 +
+            '<body style="font-family: Arial; margin: 40px;">' + #13#10 +
+            '  <h1>⏰ Current Server Time</h1>' + #13#10 +
+            '  <p style="font-size: 24px;">' + DateTimeToStr(CurrentTime) + '</p>' + #13#10 +
+            '</body></html>';
+  end
+  else if Path = '/info' then
+  begin
+    Body := '<!DOCTYPE html>' + #13#10 +
+            '<html><head><title>Server Info</title></head>' + #13#10 +
+            '<body style="font-family: Arial; margin: 40px;">' + #13#10 +
+            '  <h1>ℹ️ Server Information</h1>' + #13#10 +
+            '  <ul>' + #13#10 +
+            '    <li><strong>Language:</strong> Free Pascal (FPC)</li>' + #13#10 +
+            '    <li><strong>Port:</strong> ' + IntToStr(SERVER_PORT) + '</li>' + #13#10 +
+            '    <li><strong>Socket API:</strong> Unix sockets (libc)</li>' + #13#10 +
+            '    <li><strong>Protocol:</strong> HTTP/1.1</li>' + #13#10 +
+            '  </ul>' + #13#10 +
+            '</body></html>';
+  end
+  else
+  begin
+    { 404 Not Found }
+    Body := '<!DOCTYPE html>' + #13#10 +
+            '<html><head><title>404 Not Found</title></head>' + #13#10 +
+            '<body style="font-family: Arial; margin: 40px;">' + #13#10 +
+            '  <h1>❌ 404 - Not Found</h1>' + #13#10 +
+            '  <p>The requested path <code>' + Path + '</code> was not found on this server.</p>' + #13#10 +
+            '  <p><a href="/">Go to home page</a></p>' + #13#10 +
+            '</body></html>';
+    
+    Headers := 'HTTP/1.1 404 Not Found' + #13#10 +
+               'Content-Type: text/html; charset=utf-8' + #13#10 +
+               'Content-Length: ' + IntToStr(Length(Body)) + #13#10 +
+               'Connection: close' + #13#10 +
+               'Server: FPC-HTTP-Server/1.0' + #13#10 + #13#10;
+    
+    Result := Headers + Body;
+    Exit;
+  end;
+  
+  { Generate 200 OK response }
+  Headers := 'HTTP/1.1 200 OK' + #13#10 +
+             'Content-Type: text/html; charset=utf-8' + #13#10 +
+             'Content-Length: ' + IntToStr(Length(Body)) + #13#10 +
+             'Connection: close' + #13#10 +
+             'Server: FPC-HTTP-Server/1.0' + #13#10 + #13#10;
+  
+  Result := Headers + Body;
+end;
+
+{ Handle a client connection }
+procedure HandleClient(ClientSock: TInt; const ClientIP: AnsiString);
+var
+  BytesRecv, BytesSent: TSSize;
+  Buf: array[0..BUFFER_SIZE - 1] of AnsiChar;
+  Req, Resp: AnsiString;
+  FirstLine, Meth, Pth, Ver: AnsiString;
+  LineEnd: Integer;
+begin
+  try
+    { Receive request }
+    FillChar(Buf, SizeOf(Buf), 0);
+    BytesRecv := recv(ClientSock, @Buf[0], BUFFER_SIZE - 1, 0);
+    
+    if BytesRecv <= 0 then
+    begin
+      Writeln('[', ClientIP, '] Failed to receive request');
+      Exit;
+    end;
+    
+    SetString(Req, PAnsiChar(@Buf[0]), BytesRecv);
+    
+    { Extract first line }
+    LineEnd := Pos(#13#10, Req);
+    if LineEnd > 0 then
+      FirstLine := Copy(Req, 1, LineEnd - 1)
+    else
+      FirstLine := Req;
+    
+    { Parse request }
+    ParseRequestLine(FirstLine, Meth, Pth, Ver);
+    
+    if Meth = '' then
+    begin
+      Writeln('[', ClientIP, '] Invalid request');
+      Exit;
+    end;
+    
+    Writeln('[', ClientIP, '] ', Meth, ' ', Pth);
+    
+    { Generate and send response }
+    Resp := GenerateResponse(Meth, Pth);
+    BytesSent := send(ClientSock, PAnsiChar(Resp), Length(Resp), 0);
+    
+    if BytesSent < Length(Resp) then
+      Writeln('[', ClientIP, '] Warning: Not all bytes sent');
+      
+  except
+    on E: Exception do
+      Writeln('[', ClientIP, '] Error handling client: ', E.Message);
+  end;
+end;
+
+begin
+  ServerSocket := -1;
+  Running := True;
+  
+  Writeln('===========================================');
+  Writeln('  Free Pascal HTTP Server');
+  Writeln('===========================================');
+  Writeln;
+  
+  try
+    { Create socket }
+    Writeln('[Server] Creating socket...');
+    ServerSocket := socket(AF_INET, SOCK_STREAM, 0);
+    if ServerSocket < 0 then
+      raise Exception.Create('Failed to create socket');
+    
+    { Set socket options to reuse address }
+    OptVal := 1;
+    if setsockopt(ServerSocket, SOL_SOCKET, SO_REUSEADDR, @OptVal, SizeOf(OptVal)) < 0 then
+      Writeln('[Server] Warning: Could not set SO_REUSEADDR');
+    
+    { Bind socket }
+    Writeln('[Server] Binding to port ', SERVER_PORT, '...');
+    FillChar(ServerAddr, SizeOf(ServerAddr), 0);
+    ServerAddr.sin_family := AF_INET;
+    ServerAddr.sin_port := htons(SERVER_PORT);
+    ServerAddr.sin_addr.S_addr := 0; { INADDR_ANY - listen on all interfaces }
+    
+    if bind(ServerSocket, @ServerAddr, SizeOf(ServerAddr)) < 0 then
+      raise Exception.Create('Failed to bind socket to port ' + IntToStr(SERVER_PORT));
+    
+    { Listen for connections }
+    Writeln('[Server] Listening for connections...');
+    if listen(ServerSocket, BACKLOG) < 0 then
+      raise Exception.Create('Failed to listen on socket');
+    
+    Writeln('[Server] Server started successfully!');
+    Writeln('[Server] Listening on http://localhost:', SERVER_PORT);
+    Writeln('[Server] Press Ctrl+C to stop');
+    Writeln;
+    
+    { Main server loop }
+    while Running do
+    begin
+      { Accept client connection }
+      ClientAddrLen := SizeOf(ClientAddr);
+      FillChar(ClientAddr, SizeOf(ClientAddr), 0);
+      
+      ClientSocket := accept(ServerSocket, @ClientAddr, @ClientAddrLen);
+      
+      if ClientSocket < 0 then
+      begin
+        Writeln('[Server] Error accepting connection');
+        Continue;
+      end;
+      
+      { Get client IP }
+      ClientIP := inet_ntoa(ClientAddr.sin_addr);
+      
+      { Handle the client request }
+      HandleClient(ClientSocket, ClientIP);
+      
+      { Close client socket }
+      libc_close(ClientSocket);
+    end;
+    
+  except
+    on E: Exception do
+      Writeln('[Server] Fatal error: ', E.Message);
+  end;
+  
+  { Cleanup }
+  if ServerSocket >= 0 then
+  begin
+    Writeln;
+    Writeln('[Server] Shutting down...');
+    libc_close(ServerSocket);
+    Writeln('[Server] Server stopped.');
+  end;
+end.

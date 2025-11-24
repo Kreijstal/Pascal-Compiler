@@ -148,6 +148,7 @@ typedef struct {
 
 typedef struct {
     char *label;
+    char *continue_label;
     int finally_depth;
 } CodeGenLoopFrame;
 

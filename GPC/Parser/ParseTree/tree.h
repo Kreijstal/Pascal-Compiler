@@ -255,6 +255,7 @@ struct Statement *mk_asmblock(int line_num, char *code);
 struct Statement *mk_exit(int line_num);
 
 struct Statement *mk_break(int line_num);
+struct Statement *mk_continue(int line_num);
 
 struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt);
 
