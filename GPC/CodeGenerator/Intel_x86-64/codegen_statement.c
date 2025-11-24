@@ -2028,7 +2028,6 @@ static int codegen_push_except(CodeGenContext *ctx, const char *label)
     }
     ctx->except_frames[ctx->except_depth].label = strdup(label);
     ctx->except_frames[ctx->except_depth].finally_depth = ctx->finally_depth;
-    fprintf(stderr, "DEBUG: Pushed except frame %d, label=%s, finally_depth=%d\n", ctx->except_depth, label, ctx->finally_depth);
     if (ctx->except_frames[ctx->except_depth].label == NULL)
     {
         codegen_report_error(ctx, "ERROR: Unable to duplicate except label.\n");
@@ -6199,11 +6198,8 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     gen_label(after_label, sizeof(after_label), ctx);
 
     if (!codegen_push_except(ctx, except_label)) {
-        fprintf(stderr, "DEBUG: codegen_push_except failed\n");
         return inst_list;
     }
-
-    fprintf(stderr, "DEBUG: Generating try statements\n");
     inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
     inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
 
