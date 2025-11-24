@@ -3893,6 +3893,76 @@ static int semcheck_pointer_deref(int *type_return,
                     target_type = FILE_TYPE;
             }
         }
+
+        /* If still unknown, try to infer size from the subtype id.
+         * This helps pointer types like PAnsiChar inherit a 1-byte element size
+         * instead of defaulting to LONGINT (4 bytes). */
+        if (target_type == UNKNOWN_TYPE)
+        {
+            long long inferred_size = 0;
+            if (sizeof_from_type_ref(symtab, UNKNOWN_TYPE, pointer_expr->pointer_subtype_id,
+                    &inferred_size, 0, expr->line_num) == 0 && inferred_size > 0)
+            {
+                if (inferred_size == 1)
+                    target_type = CHAR_TYPE;
+                else if (inferred_size == 2)
+                    target_type = INT_TYPE; /* 16-bit */
+                else if (inferred_size <= 4)
+                    target_type = INT_TYPE;
+                else
+                    target_type = LONGINT_TYPE;
+            }
+        }
+    }
+
+    /* If we still don't know the subtype, inspect the pointer symbol's alias info */
+    if (target_type == UNKNOWN_TYPE && pointer_expr->type == EXPR_VAR_ID)
+    {
+        HashNode_t *ptr_node = NULL;
+        if (FindIdent(&ptr_node, symtab, pointer_expr->expr_data.id) != -1 && ptr_node != NULL)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(ptr_node);
+            if (alias != NULL && alias->is_pointer)
+            {
+                target_type = alias->pointer_type;
+                if (target_type == UNKNOWN_TYPE && alias->pointer_type_id != NULL)
+                {
+                    long long inferred_size = 0;
+                    if (sizeof_from_type_ref(symtab, UNKNOWN_TYPE, alias->pointer_type_id,
+                            &inferred_size, 0, expr->line_num) == 0 && inferred_size > 0)
+                    {
+                        if (inferred_size == 1)
+                            target_type = CHAR_TYPE;
+                        else if (inferred_size <= 4)
+                            target_type = INT_TYPE;
+                        else
+                            target_type = LONGINT_TYPE;
+                    }
+                }
+
+                if (alias->pointer_type_id != NULL && expr->pointer_subtype_id == NULL)
+                    semcheck_set_pointer_info(expr, target_type, alias->pointer_type_id);
+            }
+        }
+    }
+
+    /* If subtype id was absent, try to infer from the resolved GpcType pointer info */
+    if (target_type == UNKNOWN_TYPE && pointer_expr->resolved_gpc_type != NULL &&
+        pointer_expr->resolved_gpc_type->kind == TYPE_KIND_POINTER)
+    {
+        GpcType *points_to = pointer_expr->resolved_gpc_type->info.points_to;
+        if (points_to != NULL)
+        {
+            long long inferred_size = gpc_type_sizeof(points_to);
+            if (inferred_size == 1)
+                target_type = CHAR_TYPE;
+            else if (inferred_size == 2)
+                target_type = INT_TYPE;
+            else if (inferred_size > 0 && inferred_size <= 4)
+                target_type = INT_TYPE;
+            else if (inferred_size > 0)
+                target_type = LONGINT_TYPE;
+        }
     }
 
     if (target_type == UNKNOWN_TYPE)

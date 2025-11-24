@@ -1243,6 +1243,14 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("string");
         return STRING_TYPE;
     }
+    /* C-style char aliases from ctypes/sysutils */
+    if (strcasecmp(name, "cchar") == 0 || strcasecmp(name, "cschar") == 0 ||
+        strcasecmp(name, "cuchar") == 0 || strcasecmp(name, "ansichar") == 0)
+    {
+        if (type_id_out != NULL)
+            *type_id_out = strdup(name);
+        return CHAR_TYPE;
+    }
     if (strcasecmp(name, "char") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("char");
