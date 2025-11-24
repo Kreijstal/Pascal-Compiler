@@ -1740,6 +1740,57 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
 ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg);
 
+/* Lookup the RecordField metadata for a record access expression */
+static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr)
+{
+    if (record_access_expr == NULL ||
+        record_access_expr->type != EXPR_RECORD_ACCESS ||
+        record_access_expr->expr_data.record_access_data.field_id == NULL)
+        return NULL;
+
+    const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
+    struct RecordType *record = record_access_expr->record_type;
+    if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
+        record = record_access_expr->expr_data.record_access_data.record_expr->record_type;
+    if (record == NULL)
+        return NULL;
+
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL && strcmp(field->name, field_id) == 0)
+                return field;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+/* Best-effort size for a record field, respecting packed/range aliases */
+static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return expr_effective_size_bytes(expr);
+
+    long long size = expr_effective_size_bytes(expr);
+    struct RecordField *field = codegen_lookup_record_field_expr(expr);
+    long long field_size = 0;
+    if (field != NULL && !field->is_array)
+    {
+        struct RecordType *nested = field->nested_record;
+        if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
+            field_size > 0)
+            return field_size;
+    }
+
+    if (size > 0)
+        return size;
+    return field_size;
+}
+
 
 /* Code generation for expressions */
 static const char *describe_expression_kind(const struct Expression *expr)
@@ -2081,15 +2132,15 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
 
     char buffer[64];
-    if (expr_uses_qword_gpctype(expr))
+    long long field_size = codegen_record_field_effective_size(expr, ctx);
+    if (expr_uses_qword_gpctype(expr) || field_size == 8)
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+    else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE))
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    else if (field_size == 2)
+        snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     else
-    {
-        if (expr_has_type_tag(expr, CHAR_TYPE))
-            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-        else
-            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    }
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), addr_reg);

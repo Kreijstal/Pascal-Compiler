@@ -2805,82 +2805,42 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     /* Dynamic arrays are descriptors (pointer + int64), aligned to 8 */
     if (field->is_array && field->array_is_open)
         return POINTER_SIZE_BYTES;
-    
-    /* Nested record - get its alignment */
-    if (field->nested_record != NULL)
+
+    /*
+     * Compute a natural alignment based on the underlying element size.
+     * We clamp the result to pointer size (8 on this target) but never
+     * return less than 1 so that small scalar fields (Byte/Word) can sit
+     * back-to-back without being promoted to 4-byte boundaries.
+     */
+    long long elem_size = 0;
+    int status = 0;
+
+    if (field->is_array)
     {
-        int max_align = 1;
-        ListNode_t *cur = field->nested_record->fields;
-        while (cur != NULL)
-        {
-            if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
-            {
-                struct RecordField *nested_field = (struct RecordField *)cur->cur;
-                int nested_align = get_field_alignment(symtab, nested_field, depth + 1, line_num);
-                if (nested_align > max_align)
-                    max_align = nested_align;
-            }
-            cur = cur->next;
-        }
-        return max_align;
+        /* Static arrays align to their element type, not total size */
+        if (field->array_element_type == RECORD_TYPE && field->nested_record != NULL)
+            status = sizeof_from_record(symtab, field->nested_record, &elem_size, depth + 1, line_num);
+        else if (field->array_element_type != UNKNOWN_TYPE || field->array_element_type_id != NULL)
+            status = sizeof_from_type_ref(symtab, field->array_element_type, field->array_element_type_id,
+                &elem_size, depth + 1, line_num);
+        else
+            status = sizeof_from_type_ref(symtab, field->type, field->type_id, &elem_size, depth + 1, line_num);
     }
-    
-    /* Get alignment based on type */
-    int type_tag = field->type;
-    
-    /* Resolve type_id if needed */
-    if (type_tag == UNKNOWN_TYPE && field->type_id != NULL && symtab != NULL)
+    else if (field->nested_record != NULL)
     {
-        HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, (char *)field->type_id) != -1 && type_node != NULL)
-        {
-            if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_PRIMITIVE)
-                type_tag = type_node->type->info.primitive_type_tag;
-            else if (hashnode_is_record(type_node))
-            {
-                /* Record type - recursively get its alignment */
-                struct RecordType *rec = hashnode_get_record_type(type_node);
-                if (rec != NULL)
-                {
-                    int max_align = 1;
-                    ListNode_t *cur = rec->fields;
-                    while (cur != NULL)
-                    {
-                        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
-                        {
-                            struct RecordField *rec_field = (struct RecordField *)cur->cur;
-                            int rec_align = get_field_alignment(symtab, rec_field, depth + 1, line_num);
-                            if (rec_align > max_align)
-                                max_align = rec_align;
-                        }
-                        cur = cur->next;
-                    }
-                    return max_align;
-                }
-            }
-        }
+        status = sizeof_from_record(symtab, field->nested_record, &elem_size, depth + 1, line_num);
     }
-    
-    /* Type-specific alignment rules for 64-bit */
-    switch (type_tag)
+    else
     {
-        case POINTER_TYPE:
-        case RECORD_TYPE:  /* Classes are records with is_class flag */
-        case LONGINT_TYPE:
-        case REAL_TYPE:
-            return POINTER_SIZE_BYTES;  /* 8 bytes */
-        
-        case INT_TYPE:
-        case CHAR_TYPE:
-        case BOOL:  /* Boolean is BOOL, not BOOL_TYPE */
-        case ENUM_TYPE:
-        case SET_TYPE:
-            return 4;  /* 4 bytes for 32-bit integers and smaller */
-        
-        default:
-            /* For unknown types, use conservative alignment */
-            return 4;
+        status = sizeof_from_type_ref(symtab, field->type, field->type_id, &elem_size, depth + 1, line_num);
     }
+
+    if (status != 0 || elem_size <= 0)
+        return 1; /* fallback to minimal alignment */
+
+    if (elem_size > POINTER_SIZE_BYTES)
+        return POINTER_SIZE_BYTES;
+    return (int)elem_size;
 }
 
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,

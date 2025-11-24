@@ -88,6 +88,58 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
 
+/* Lookup RecordField info from a record-access expression */
+static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr)
+{
+    if (record_access_expr == NULL ||
+        record_access_expr->type != EXPR_RECORD_ACCESS ||
+        record_access_expr->expr_data.record_access_data.field_id == NULL)
+        return NULL;
+
+    const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
+    struct RecordType *record = record_access_expr->record_type;
+    if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
+        record = record_access_expr->expr_data.record_access_data.record_expr->record_type;
+    if (record == NULL)
+        return NULL;
+
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL && strcmp(field->name, field_id) == 0)
+                return field;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+/* Best-effort field size honoring packed/range aliases */
+static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return expr_effective_size_bytes(expr);
+
+    long long size = expr_effective_size_bytes(expr);
+    struct RecordField *field = codegen_lookup_record_field_expr(expr);
+    long long field_size = 0;
+    if (field != NULL && !field->is_array)
+    {
+        struct RecordType *nested = field->nested_record;
+        if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
+            field_size > 0)
+            return field_size;
+    }
+
+    if (size > 0)
+        return size;
+    return field_size;
+}
+
+
 static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
 {
     if (record_type == NULL || field_name == NULL)
@@ -4150,7 +4202,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int use_word = 0;
             const char *value_reg8 = NULL;
             const char *value_reg16 = NULL;
-            long long target_size = expr_effective_size_bytes(var_expr);
+            long long target_size = (var_expr->type == EXPR_RECORD_ACCESS) ?
+                codegen_record_field_effective_size(var_expr, ctx) :
+                expr_effective_size_bytes(var_expr);
             if (!use_qword && var_type == CHAR_TYPE)
             {
                 value_reg8 = register_name8(reg);
@@ -4460,7 +4514,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = codegen_maybe_convert_int_like_to_real(var_type_2, assign_expr,
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type_2);
-        long long record_element_size = expr_effective_size_bytes(var_expr);
+        long long record_element_size = codegen_record_field_effective_size(var_expr, ctx);
         int use_word = (!use_qword && record_element_size == 2);
         if (var_type_2 == STRING_TYPE)
         {
