@@ -1309,18 +1309,23 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
 
+    fprintf(stderr, "[DEBUG] codegen_program: processing function locals\n");
     codegen_function_locals(data->var_declaration, ctx, symtab);
+    fprintf(stderr, "[DEBUG] codegen_program: processing subprograms\n");
     codegen_subprograms(data->subprograms, ctx, symtab);
 
     inst_list = NULL;
+    fprintf(stderr, "[DEBUG] codegen_program: processing var initializers\n");
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
     if (data->body_statement == NULL && getenv("GPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[GPC] WARNING: program body is NULL during codegen\n");
     }
+    fprintf(stderr, "[DEBUG] codegen_program: processing body statement\n");
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
     // Generate finalization code from units (in LIFO order - already reversed in list)
     if (data->finalization_statements != NULL) {
+        fprintf(stderr, "[DEBUG] codegen_program: processing finalization statements\n");
         ListNode_t *final_node = data->finalization_statements;
         while (final_node != NULL) {
             if (final_node->type == LIST_STMT && final_node->cur != NULL) {
@@ -1331,10 +1336,15 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
+    fprintf(stderr, "[DEBUG] codegen_program: generating function header\n");
     codegen_function_header(prgm_name, ctx);
+    fprintf(stderr, "[DEBUG] codegen_program: generating stack space\n");
     codegen_stack_space(ctx);
+    fprintf(stderr, "[DEBUG] codegen_program: writing instruction list\n");
     codegen_inst_list(inst_list, ctx);
+    fprintf(stderr, "[DEBUG] codegen_program: generating function footer\n");
     codegen_function_footer(prgm_name, ctx);
+    fprintf(stderr, "[DEBUG] codegen_program: freeing instruction list\n");
     free_inst_list(inst_list);
 
     pop_stackscope();
@@ -1371,6 +1381,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
         if (tree->type == TREE_VAR_DECL)
         {
+            fprintf(stderr, "[DEBUG] codegen_function_locals: processing VAR_DECL\n");
             id_list = tree->tree_data.var_decl_data.ids;
            HashNode_t *type_node = NULL;
            if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
@@ -1380,6 +1391,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
             while(id_list != NULL)
             {
+                fprintf(stderr, "[DEBUG] codegen_function_locals: processing id %s\n", (char *)id_list->cur);
                 HashNode_t cached_type_node;
                 HashNode_t *fallback_type_node = NULL;
                 if (cached_type != NULL)
@@ -1566,6 +1578,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         add_l_x((char *)id_list->cur, alloc_size);
                     }
                 }
+                fprintf(stderr, "[DEBUG] codegen_function_locals: finished processing id %s\n", (char *)id_list->cur);
                 id_list = id_list->next;
             };
         }
@@ -1776,6 +1789,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             sub_list = sub_list->next;
             continue;
         }
+
+        fprintf(stderr, "[DEBUG] codegen_subprograms: generating %s\n", sub->tree_data.subprogram_data.id);
 
         switch(sub->tree_data.subprogram_data.sub_type)
         {
@@ -2264,11 +2279,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     codegen_function_locals(func->declarations, ctx, symtab);
 
+    fprintf(stderr, "[DEBUG] codegen_function: calling codegen_subprograms for %s\n", sub_id);
     /* Recursively generate nested subprograms */
     codegen_subprograms(func->subprograms, ctx, symtab);
     
+    fprintf(stderr, "[DEBUG] codegen_function: calling codegen_var_initializers for %s\n", sub_id);
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
+    fprintf(stderr, "[DEBUG] codegen_function: calling codegen_stmt for %s\n", sub_id);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
+    fprintf(stderr, "[DEBUG] codegen_function: returned from codegen_stmt for %s\n", sub_id);
+    
     if (returns_dynamic_array)
     {
 #if GPC_ENABLE_REG_DEBUG
@@ -2407,10 +2427,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
         inst_list = add_inst(inst_list, buffer);
     }
+    
+    fprintf(stderr, "[DEBUG] codegen_function: generating header for %s\n", sub_id);
     codegen_function_header(sub_id, ctx);
+    fprintf(stderr, "[DEBUG] codegen_function: generating stack space for %s\n", sub_id);
     codegen_stack_space(ctx);
+    fprintf(stderr, "[DEBUG] codegen_function: writing inst list for %s\n", sub_id);
     codegen_inst_list(inst_list, ctx);
+    fprintf(stderr, "[DEBUG] codegen_function: generating footer for %s\n", sub_id);
     codegen_function_footer(sub_id, ctx);
+    fprintf(stderr, "[DEBUG] codegen_function: freeing inst list for %s\n", sub_id);
     free_inst_list(inst_list);
     pop_stackscope();
 
@@ -3220,6 +3246,8 @@ static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_
     *element_hash_tag_out = hash_tag;
     return 1;
 }
+
+
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {

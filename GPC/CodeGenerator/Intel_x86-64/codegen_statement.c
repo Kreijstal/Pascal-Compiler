@@ -2127,6 +2127,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #endif
     if (stmt == NULL)
         return inst_list;
+    
+    fprintf(stderr, "[DEBUG] codegen_stmt: processing statement type %d at line %d\n", stmt->type, stmt->line_num);
+
     assert(ctx != NULL);
     assert(symtab != NULL);
     switch(stmt->type)
@@ -4062,6 +4065,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
+    fprintf(stderr, "[DEBUG] codegen_var_assignment: line %d, var_expr type=%d, assign_expr type=%d\n",
+        stmt->line_num, var_expr ? var_expr->type : -1, assign_expr ? assign_expr->type : -1);
+
+
     if (codegen_expr_is_mp_integer(var_expr))
     {
         Register_t *value_reg = NULL;
@@ -4136,8 +4143,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
 
+        fprintf(stderr, "[DEBUG] codegen_var_assignment: calling codegen_expr_with_result for line %d\n", stmt->line_num);
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        fprintf(stderr, "[DEBUG] codegen_var_assignment: returned from codegen_expr_with_result for line %d\n", stmt->line_num);
         if (codegen_had_error(ctx) || value_reg == NULL)
         {
             if (value_reg != NULL)
@@ -6187,6 +6196,8 @@ static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *ins
     int limit_depth = codegen_current_loop_finally_depth(ctx);
     return codegen_branch_through_finally(ctx, inst_list, symtab, continue_label, limit_depth);
 }
+
+
 
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {

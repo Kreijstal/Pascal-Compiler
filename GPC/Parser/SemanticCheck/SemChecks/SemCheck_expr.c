@@ -3474,18 +3474,43 @@ static void semcheck_coerce_char_string_operands(int *type_first, struct Express
     if (type_first == NULL || type_second == NULL)
         return;
 
+    /* Handle CHAR + STRING or STRING + CHAR comparisons
+     * Upgrade CHAR to STRING for comparison purposes */
     if ((*type_first == CHAR_TYPE && *type_second == STRING_TYPE) ||
         (*type_first == STRING_TYPE && *type_second == CHAR_TYPE))
     {
-        struct Expression *string_expr = (*type_first == STRING_TYPE) ? expr1 : expr2;
-        int *string_type_ptr = (*type_first == STRING_TYPE) ? type_first : type_second;
-
-        if (string_expr != NULL && string_expr->type == EXPR_STRING &&
-            string_expr->expr_data.string != NULL &&
-            strlen(string_expr->expr_data.string) == 1)
+        /* Upgrade CHAR operand to STRING */
+        if (*type_first == CHAR_TYPE)
         {
-            *string_type_ptr = CHAR_TYPE;
-            string_expr->resolved_type = CHAR_TYPE;
+            *type_first = STRING_TYPE;
+            if (expr1 != NULL)
+                expr1->resolved_type = STRING_TYPE;
+        }
+        else /* *type_second == CHAR_TYPE */
+        {
+            *type_second = STRING_TYPE;
+            if (expr2 != NULL)
+                expr2->resolved_type = STRING_TYPE;
+        }
+    }
+    
+    /* Handle CHAR + CHAR comparisons where both are string literals
+     * Single-character string literals like '/' are parsed as CHAR_TYPE,
+     * but should be treated as STRING_TYPE for comparison purposes */
+    if (*type_first == CHAR_TYPE && *type_second == CHAR_TYPE)
+    {
+        int expr1_is_string_literal = (expr1 != NULL && expr1->type == EXPR_STRING);
+        int expr2_is_string_literal = (expr2 != NULL && expr2->type == EXPR_STRING);
+        
+        /* If at least one is a string literal, treat both as strings */
+        if (expr1_is_string_literal || expr2_is_string_literal)
+        {
+            *type_first = STRING_TYPE;
+            *type_second = STRING_TYPE;
+            if (expr1 != NULL)
+                expr1->resolved_type = STRING_TYPE;
+            if (expr2 != NULL)
+                expr2->resolved_type = STRING_TYPE;
         }
     }
 }

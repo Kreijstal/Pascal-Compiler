@@ -1847,6 +1847,8 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
 static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: entering, expr type=%d\n", expr ? expr->type : -1);
+    
     if (expr != NULL)
     {
         if (expr->type == EXPR_IS)
@@ -1871,20 +1873,28 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         }
     }
 
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: calling codegen_begin_expression\n");
     codegen_begin_expression(ctx);
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: calling build_expr_tree\n");
     expr_node_t *expr_tree = build_expr_tree(expr);
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: returned from build_expr_tree, calling codegen_try_get_reg\n");
     Register_t *target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
     if (target_reg == NULL)
     {
+        fprintf(stderr, "[DEBUG] codegen_expr_tree_value: target_reg is NULL, calling free_expr_tree\n");
         free_expr_tree(expr_tree);
+        fprintf(stderr, "[DEBUG] codegen_expr_tree_value: returned from free_expr_tree\n");
         if (out_reg != NULL)
             *out_reg = NULL;
         codegen_end_expression(ctx);
         return inst_list;
     }
 
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: calling gencode_expr_tree\n");
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: returned from gencode_expr_tree, calling free_expr_tree\n");
     free_expr_tree(expr_tree);
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: returned from free_expr_tree\n");
 
     if (out_reg != NULL)
     {
@@ -1896,6 +1906,7 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         codegen_end_expression(ctx);
         free_reg(get_reg_stack(), target_reg);
     }
+    fprintf(stderr, "[DEBUG] codegen_expr_tree_value: exiting normally\n");
     return inst_list;
 }
 
@@ -2771,7 +2782,11 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(out_reg != NULL);
+    
+    fprintf(stderr, "[DEBUG] codegen_expr_with_result: calling codegen_expr_tree_value, expr type=%d\n", expr ? expr->type : -1);
     inst_list = codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
+    fprintf(stderr, "[DEBUG] codegen_expr_with_result: returned from codegen_expr_tree_value\n");
+    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
