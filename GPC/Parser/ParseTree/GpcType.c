@@ -236,6 +236,20 @@ void gpc_type_retain(GpcType *type) {
 
 void destroy_gpc_type(GpcType *type) {
     if (type == NULL) return;
+    
+    /* Defensive check: if ref_count is already 0, this indicates a double-free.
+     * This can happen when a GpcType is shared across multiple structures but
+     * not properly retained, or when the same pointer is destroyed multiple times.
+     * Instead of crashing, we log a warning and return safely. */
+    if (type->ref_count == 0) {
+        static int warn_once = 0;
+        if (!warn_once) {
+            fprintf(stderr, "Warning: Attempting to destroy GpcType with ref_count=0 (possible double-free)\n");
+            warn_once = 1;
+        }
+        return;
+    }
+    
     assert(type->ref_count > 0);
     type->ref_count--;
     if (type->ref_count > 0)

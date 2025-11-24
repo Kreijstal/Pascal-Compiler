@@ -2537,14 +2537,31 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Working function parser: function name [(params)] : return_type ; [directives] body ;
     // Does NOT support forward (that's handled by forward_function)
     combinator_t* working_function_param_list = create_simple_param_list();
-    // Guard: implementation must not start if next directive is 'forward'/'external'/'assembler'
+    // Guard: implementation must not start if there's a forward/external/assembler directive
+    // in the upcoming directive sequence (not just the immediate next token)
+    // This handles cases like: function foo: Integer; cdecl; external libc;
     combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("forward")),
         token(keyword_ci("external")),
         token(keyword_ci("assembler")),
         NULL
     );
-    combinator_t* forbid_no_body = pnot(peek(no_body_directive));
+    
+    // Check if there's a sequence of directives containing a no-body directive
+    // Pattern: [directive; directive; ...] no_body_directive
+    combinator_t* has_no_body_directive = seq(new_combinator(), PASCAL_T_NONE,
+        many(seq(new_combinator(), PASCAL_T_NONE,
+            pnot(peek(no_body_directive)),  // Not a no-body directive
+            directive_keyword,
+            directive_argument,
+            token(match(";")),
+            NULL
+        )),
+        peek(no_body_directive),  // Ends with a no-body directive
+        NULL
+    );
+    
+    combinator_t* forbid_no_body = pnot(has_no_body_directive);
 
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         token(keyword_ci("function")),               // function keyword (with word boundary check)
