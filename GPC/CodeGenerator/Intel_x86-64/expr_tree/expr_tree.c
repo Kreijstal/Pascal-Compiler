@@ -1026,7 +1026,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (func_mangled_name != NULL && strcmp(func_mangled_name, "__gpc_dynarray_length") == 0)
         {
             inst_list = codegen_builtin_dynarray_length(expr, inst_list, ctx, target_reg);
-            codegen_release_function_call_mangled_id(expr);
+            // NOTE: Don't free mangled_id here - it will be freed when the AST is destroyed
+            // codegen_release_function_call_mangled_id(expr);
             return inst_list;
         }
 
@@ -1396,7 +1397,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-        codegen_release_function_call_mangled_id(expr);
+        // NOTE: Don't free mangled_id here - it will be freed when the AST is destroyed
+        // This was causing double-free errors in nested function calls within string concatenations
+        // codegen_release_function_call_mangled_id(expr);
         
         /* For constructors, use the return value from the constructor (Self in %rax).
          * Constructors now properly return Self, so we don't need to rely on the
