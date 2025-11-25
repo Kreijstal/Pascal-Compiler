@@ -732,7 +732,7 @@ static size_t memo_table_bucket_index(size_t bucket_count, size_t combinator_id,
 
 static memo_table_t* memo_table_create(void) {
     memo_table_t* table = (memo_table_t*)safe_malloc(sizeof(memo_table_t));
-    table->bucket_count = 1024;
+    table->bucket_count = 4096;  // Increased from 1024 to reduce resize overhead
     table->size = 0;
     table->buckets = (memo_entry_t**)safe_malloc(sizeof(memo_entry_t*) * table->bucket_count);
     memset(table->buckets, 0, sizeof(memo_entry_t*) * table->bucket_count);
@@ -1331,7 +1331,28 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (g_parser_stats_enabled) {
         g_parser_stats.parse_calls++;
     }
-    if (in->memo == NULL) {
+    
+    // Skip memoization for primitive parsers - they're fast and don't benefit from it
+    bool should_memoize = true;
+    switch (comb->type) {
+        case P_MATCH:
+        case P_MATCH_RAW:
+        case P_INTEGER:
+        case P_CIDENT:
+        case P_STRING:
+        case P_ANY_CHAR:
+        case P_SATISFY:
+        case P_CI_KEYWORD:
+        case P_EOI:
+        case P_SUCCEED:
+            should_memoize = false;
+            break;
+        default:
+            should_memoize = true;
+            break;
+    }
+    
+    if (in->memo == NULL && should_memoize) {
         in->memo = memo_table_create();
     }
 
@@ -1348,7 +1369,11 @@ ParseResult parse(input_t * in, combinator_t * comb) {
             cstats->type = comb->type;
         }
     }
-    memo_entry_t* entry = memo_table_lookup(in->memo, combinator_id, position);
+    
+    memo_entry_t* entry = NULL;
+    if (should_memoize && in->memo != NULL) {
+        entry = memo_table_lookup(in->memo, combinator_id, position);
+    }
     if (entry && entry->has_result) {
         bool can_replay =
             (entry->result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
@@ -1386,26 +1411,33 @@ ParseResult parse(input_t * in, combinator_t * comb) {
         return make_failure_v2(in, comb->name, message, NULL);
     }
 
-    if (!entry) {
+    if (!entry && should_memoize && in->memo != NULL) {
         entry = memo_table_insert(in->memo, combinator_id, position);
     }
 
-    if (g_parser_stats_enabled) {
+    if (g_parser_stats_enabled && should_memoize) {
         g_parser_stats.memo_misses++;
     }
-    entry->in_progress = true;
+    
+    if (entry) {
+        entry->in_progress = true;
+    }
+    
     ParseResult result = comb->fn(in, (void *)comb->args, comb->name);
     InputState final_state;
     save_input_state(in, &final_state);
-    entry->in_progress = false;
-    bool should_store =
-        (result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
-        (!result.is_success && g_memo_mode != PARSER_MEMO_DISABLED);
-    if (should_store) {
-        memo_table_store_result(entry, &result, &final_state);
-    } else if (entry->has_result) {
-        free_parse_result_contents(&entry->result);
-        entry->has_result = false;
+    
+    if (entry) {
+        entry->in_progress = false;
+        bool should_store =
+            (result.is_success && g_memo_mode == PARSER_MEMO_FULL) ||
+            (!result.is_success && g_memo_mode != PARSER_MEMO_DISABLED);
+        if (should_store) {
+            memo_table_store_result(entry, &result, &final_state);
+        } else if (entry->has_result) {
+            free_parse_result_contents(&entry->result);
+            entry->has_result = false;
+        }
     }
     if (g_parser_stats_enabled) {
         if (result.is_success) {

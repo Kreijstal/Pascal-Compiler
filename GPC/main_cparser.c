@@ -39,6 +39,7 @@
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
 #include "unit_paths.h"
+#include "arena.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -767,6 +768,10 @@ int main(int argc, char **argv)
 {
     install_stack_trace_handler();
 
+    // Initialize global arena with 1MB blocks
+    arena_t* arena = arena_create(1024 * 1024);
+    arena_set_global(arena);
+
     if (argc < 3)
     {
         print_usage(argv[0]);
@@ -793,6 +798,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Error: Unable to locate stdlib.p. Set GPC_STDLIB or run from the project root.\n");
         clear_dump_ast_path();
         unit_search_paths_destroy(&g_unit_paths);
+        arena_destroy(arena);
         return 1;
     }
 
@@ -1020,11 +1026,13 @@ int main(int argc, char **argv)
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        arena_destroy(arena);
         return exit_code > 0 ? exit_code : 1;
     }
 
     clear_dump_ast_path();
     pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
+    arena_destroy(arena);
     return exit_code;
 }

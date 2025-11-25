@@ -5093,11 +5093,19 @@ static struct Expression *convert_member_access(ast_t *node) {
         
         /* Convert args */
         ListNode_t *args_list = NULL;
+        ListNode_t *tail = NULL;
         ast_t *arg_child = args_node->child;
         while (arg_child != NULL) {
             struct Expression *arg_expr = convert_expression(arg_child);
             if (arg_expr != NULL) {
-                args_list = PushListNodeBack(args_list, CreateListNode(arg_expr, LIST_EXPR));
+                ListNode_t *node = CreateListNode(arg_expr, LIST_EXPR);
+                if (args_list == NULL) {
+                    args_list = node;
+                    tail = node;
+                } else {
+                    tail->next = node;
+                    tail = node;
+                }
             }
             arg_child = arg_child->next;
         }
@@ -5167,14 +5175,22 @@ static struct Expression *convert_member_access_chain(int line,
             if (args_node != NULL && args_node->typ == PASCAL_T_ARG_LIST) {
                 /* Arguments wrapped in ARG_LIST node - iterate through children */
                 ast_t *arg_child = args_node->child;
+                ListNode_t *tail = NULL;
                 while (arg_child != NULL) {
                     struct Expression *arg_expr = convert_expression(arg_child);
                     if (arg_expr != NULL) {
                         ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
                         if (args_list == NULL) {
                             args_list = new_node;
+                            tail = new_node;
                         } else {
-                            PushListNodeBack(args_list, new_node);
+                            if (tail == NULL) {
+                                // Find tail if we're appending to existing list
+                                tail = args_list;
+                                while (tail->next != NULL) tail = tail->next;
+                            }
+                            tail->next = new_node;
+                            tail = new_node;
                         }
                     }
                     arg_child = arg_child->next;
@@ -5182,14 +5198,21 @@ static struct Expression *convert_member_access_chain(int line,
             } else if (args_node != NULL) {
                 /* Arguments as direct siblings - iterate through all siblings */
                 ast_t *arg_child = args_node;
+                ListNode_t *tail = NULL;
                 while (arg_child != NULL) {
                     struct Expression *arg_expr = convert_expression(arg_child);
                     if (arg_expr != NULL) {
                         ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
                         if (args_list == NULL) {
                             args_list = new_node;
+                            tail = new_node;
                         } else {
-                            PushListNodeBack(args_list, new_node);
+                            if (tail == NULL) {
+                                tail = args_list;
+                                while (tail->next != NULL) tail = tail->next;
+                            }
+                            tail->next = new_node;
+                            tail = new_node;
                         }
                     }
                     arg_child = arg_child->next;
@@ -5227,11 +5250,19 @@ static struct Expression *convert_member_access_chain(int line,
         
         /* Convert args from ARG_LIST */
         ListNode_t *args_list = NULL;
+        ListNode_t *tail = NULL;
         ast_t *arg_child = unwrapped->next->child;
         while (arg_child != NULL) {
             struct Expression *arg_expr = convert_expression(arg_child);
             if (arg_expr != NULL) {
-                args_list = PushListNodeBack(args_list, CreateListNode(arg_expr, LIST_EXPR));
+                ListNode_t *node = CreateListNode(arg_expr, LIST_EXPR);
+                if (args_list == NULL) {
+                    args_list = node;
+                    tail = node;
+                } else {
+                    tail->next = node;
+                    tail = node;
+                }
             }
             arg_child = arg_child->next;
         }

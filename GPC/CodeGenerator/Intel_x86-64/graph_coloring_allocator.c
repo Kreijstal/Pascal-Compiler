@@ -62,15 +62,6 @@ void add_live_range(InterferenceGraph_t *graph, LiveRange_t *lr)
     assert(graph != NULL);
     assert(lr != NULL);
     
-    /* Check if this live range is already in the graph to prevent duplicates */
-    ListNode_t *check = graph->live_ranges;
-    while (check != NULL)
-    {
-        if (check->cur == lr)
-            return;  /* Already in the graph, don't add again */
-        check = check->next;
-    }
-    
     if (graph->live_ranges == NULL)
     {
         graph->live_ranges = CreateListNode(lr, LIST_UNSPECIFIED);

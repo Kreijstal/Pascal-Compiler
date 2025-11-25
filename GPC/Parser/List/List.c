@@ -8,12 +8,15 @@
 #include <assert.h>
 
 #include "List.h"
+#include "arena.h"
 
 /* Creates a list node */
 ListNode_t *CreateListNode(void *new_obj, enum ListType type)
 {
     ListNode_t *new_node;
 
+    // Arena allocation disabled for ListNodes due to temporal mismatch
+    // between allocation (with arena) and deallocation (after arena destroyed)
     new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
     assert(new_node != NULL);
 
