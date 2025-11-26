@@ -387,15 +387,28 @@ void free_interference_graph(InterferenceGraph_t *graph)
     if (graph == NULL)
         return;
     
-    /* Free live ranges */
+    /* NOTE: We do NOT free the LiveRange_t objects themselves because they are owned
+     * by the register stack (reg_stack->active_live_ranges), not by the interference graph.
+     * The graph only references them. The LiveRange_t objects will be freed when the
+     * register stack is cleaned up.
+     * 
+     * We only need to free the list structure and the neighbor lists within each LiveRange.
+     */
+    
+    /* Free the neighbor lists within each LiveRange */
     ListNode_t *cur = graph->live_ranges;
     while (cur != NULL)
     {
         LiveRange_t *lr = (LiveRange_t *)cur->cur;
-        free_live_range(lr);
+        if (lr != NULL && lr->neighbors != NULL)
+        {
+            DestroyList(lr->neighbors);
+            lr->neighbors = NULL;  /* Prevent double-free if same LiveRange is in multiple graphs */
+        }
         cur = cur->next;
     }
     
+    /* Free the list structure (but not the LiveRange_t objects) */
     if (graph->live_ranges != NULL)
         DestroyList(graph->live_ranges);
     

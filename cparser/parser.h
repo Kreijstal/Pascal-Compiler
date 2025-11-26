@@ -251,6 +251,7 @@ typedef struct statement_dispatch_args {
     combinator_t* label_parser;
     combinator_t* assignment_parser;
     combinator_t* expr_parser;
+    combinator_t* on_handler_parser;
 } statement_dispatch_args_t;
 
 typedef struct class_member_dispatch_args {

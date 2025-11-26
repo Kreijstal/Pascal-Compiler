@@ -57,4 +57,7 @@ void PrintList(ListNode_t *head_node, FILE *f, int num_indent);
 /* Returns the length of the list */
 int ListLength(ListNode_t *head_node);
 
+/* Returns a shallow copy of the list (new nodes, same content pointers) */
+ListNode_t *CopyListShallow(ListNode_t *head_node);
+
 #endif

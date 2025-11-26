@@ -538,7 +538,9 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
         sub_list = sub_list->next;
     }
     
-    fprintf(stderr, "DEBUG mark_used_functions: Reachability analysis complete\n");
+    #ifdef DEBUG_OPTIMIZER
+        fprintf(stderr, "DEBUG mark_used_functions: Reachability analysis complete\n");
+    #endif
     
     map_destroy(&map);
 }

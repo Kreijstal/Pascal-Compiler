@@ -12,7 +12,8 @@ inc_dirs = include_directories(
   'Parser/SemanticCheck/SymTab',
   'Parser/SemanticCheck',
   'CodeGenerator/Intel_x86-64',
-  'Optimizer'
+  'Optimizer',
+  '../common'
 )
 
 gpc_deps = [

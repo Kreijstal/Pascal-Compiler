@@ -13,6 +13,22 @@ type
     NativeUInt = cuint64;
     Uint64 = cuint64;
 
+    // Added for Unix support
+    AnsiChar = cchar;
+    PAnsiChar = pcchar;
+    SmallInt = -32768..32767;
+    Word = 0..65535;
+    LongWord = 0..4294967295;
+    Byte = 0..255;
+
+    Exception = class
+    private
+        FMessage: AnsiString;
+    public
+        constructor Create(const Msg: AnsiString);
+        property Message: AnsiString read FMessage;
+    end;
+
 const
     PathDelim = '/';
     AltPathDelim = '\';
@@ -34,6 +50,7 @@ function SameText(const S1, S2: AnsiString): Boolean;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
+function DateTimeToStr(DateTime: TDateTime): AnsiString;
 function Format(const Fmt: string; const Args: array of const): string;
 function FloatToStr(Value: Real): AnsiString;
 function StrToInt(const S: AnsiString): longint;
@@ -59,6 +76,7 @@ function GetProcessID: Longint;
 function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
+procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 
 { Generic procedure to free an object and set its reference to nil }
 procedure FreeAndNil(var Obj: Pointer);
@@ -351,6 +369,11 @@ begin
     FormatDateTime := gpc_format_datetime(ToPChar(FormatStr), dt_value);
 end;
 
+function DateTimeToStr(DateTime: TDateTime): AnsiString;
+begin
+    DateTimeToStr := FormatDateTime('yyyy-mm-dd hh:nn:ss', DateTime);
+end;
+
 function Format(const Fmt: string; const Args: array of const): string;
 var
     ArgPointer: Pointer;
@@ -511,5 +534,32 @@ begin
         Obj := nil;
     end;
 end;
+
+procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
+var
+    i: Integer;
+    P: PAnsiChar;
+    C: AnsiChar;
+begin
+    if (Buffer = nil) or (Len <= 0) then
+        S := ''
+    else
+    begin
+        SetLength(S, Len);
+        P := Buffer;
+        for i := 1 to Len do
+        begin
+            C := P^;
+            S[i] := Chr(Ord(C));
+            P := PAnsiChar(NativeUInt(P) + 1);
+        end;
+    end;
+end;
+
+constructor Exception.Create(const Msg: AnsiString);
+begin
+    FMessage := Msg;
+end;
+
 
 end.

@@ -46,10 +46,13 @@ ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_re
 int codegen_type_uses_qword(int type_tag);
 int codegen_type_is_signed(int type_tag);
 int codegen_expr_is_signed(const struct Expression *expr);
+const char *codegen_register_name16(const Register_t *reg);
 
 /* Helper to get type tag from expression, preferring resolved_gpc_type.
  * This is a migration helper for moving from legacy type fields to GpcType. */
 int expr_get_type_tag(const struct Expression *expr);
+struct GpcType *expr_get_gpc_type(const struct Expression *expr);
+long long expr_effective_size_bytes(const struct Expression *expr);
 
 /* Check if expression type matches a specific type tag, using GpcType when available.
  * Returns 1 if match, 0 otherwise. */

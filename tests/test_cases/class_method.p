@@ -14,6 +14,7 @@ end;
 var
   Obj: TMyClass;
 begin
+  Obj := TMyClass.Create;
   Obj.MyInt := 5;
   Obj.MyMethod;
 end.

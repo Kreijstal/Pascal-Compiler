@@ -595,6 +595,11 @@ int main(int argc, char *argv[]) {
     }
 
     if (result.is_success) {
+        // Consume any trailing whitespace before checking if all input was consumed
+        while (in->start < in->length && isspace((unsigned char)in->buffer[in->start])) {
+            in->start++;
+        }
+        
         if (in->start < in->length) {
             int trailing_index = in->start;
             int trailing_line = 1;

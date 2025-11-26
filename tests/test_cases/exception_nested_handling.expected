@@ -1,0 +1,54 @@
+=== Exception Handling Unit Tests ===
+
+Test 1: Simple try-finally
+  In try block
+  In finally block
+[PASS] Simple try-finally
+
+Test 2: Nested try-finally
+  Outer try
+  Inner try
+  Inner finally
+  Outer finally
+[PASS] Nested try-finally
+
+Test 3: Simple try-except
+  Raising exception 42
+  Caught exception
+[PASS] Simple try-except
+
+Test 4: Try-except within try-finally
+  Inner try
+  Caught in inner except
+  Outer finally
+[PASS] Try-except within try-finally
+
+Test 5: Multiple nested except
+  Outer try
+  Inner try
+  Inner except
+  After inner except
+[PASS] Multiple nested except
+
+Test 6: Exception propagation through finally
+  Inner try
+  Finally block (should execute)
+  Outer except
+[PASS] Exception propagation through finally
+
+Test 7: Complex nesting (unix_http_request pattern)
+  Inner try
+  Inner except
+  Outer finally
+[PASS] Complex nesting (unix_http_request pattern)
+
+Test 8: Exception re-raise
+  Raising exception
+  Inner except - re-raising
+  Outer except
+[PASS] Exception re-raise
+
+=== Test Results ===
+Passed: 8
+Failed: 0
+All tests passed!
