@@ -9,7 +9,7 @@ Usage (from the project root):
     python scripts/ci_debug.py --mode typedfiles
 
 The script discovers *.p files under scripts/clang64_debug, compiles them
-with the already-built gpc compiler, links the resulting assembly into an
+with the already-built kgpc compiler, links the resulting assembly into an
 executable, and finally runs the executable.  Output for each case is stored
 under builddir/debug/clang64/logs/<case>.log and also echoed to stdout.
 """
@@ -33,9 +33,9 @@ def run(cmd, **kwargs):
     return subprocess.run(cmd, check=True, **kwargs)
 
 
-def compile_case(gpc_path: Path, pas_path: Path, asm_path: Path):
+def compile_case(kgpc_path: Path, pas_path: Path, asm_path: Path):
     asm_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [str(gpc_path), str(pas_path), str(asm_path)]
+    cmd = [str(kgpc_path), str(pas_path), str(asm_path)]
     run(cmd)
 
 
@@ -76,12 +76,12 @@ def run_typedfile_suite():
         sys.exit(1)
 
     build_root = build_dir_from_env()
-    gpc_path = build_root / ("GPC/gpc.exe" if os.name == "nt" else "GPC/gpc")
-    if not gpc_path.exists():
-        print(f"Compiler not found at {gpc_path}", file=sys.stderr)
+    kgpc_path = build_root / ("KGPC/kgpc.exe" if os.name == "nt" else "KGPC/kgpc")
+    if not kgpc_path.exists():
+        print(f"Compiler not found at {kgpc_path}", file=sys.stderr)
         sys.exit(1)
 
-    runtime_lib = build_root / "GPC/libgpc_runtime.a"
+    runtime_lib = build_root / "KGPC/libkgpc_runtime.a"
     if not runtime_lib.exists():
         print(f"Runtime library not found at {runtime_lib}", file=sys.stderr)
         sys.exit(1)
@@ -99,7 +99,7 @@ def run_typedfile_suite():
         exe_path = tmp_build / f"{case_name}.exe"
         log_path = logs_dir / f"{case_name}.log"
 
-        compile_case(gpc_path, pas_file, asm_path)
+        compile_case(kgpc_path, pas_file, asm_path)
         link_case(cc, asm_path, exe_path, runtime_lib)
         returncode, output = execute_case(exe_path, log_path)
 

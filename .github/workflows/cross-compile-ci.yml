@@ -68,8 +68,8 @@ jobs:
       run: |
         echo "=== Checking for build outputs ==="
         if [ -d builddir-cross ]; then
-          find builddir-cross -name "*.exe" -o -name "gpc" | head -20
-          ls -lh builddir-cross/GPC/ || true
+          find builddir-cross -name "*.exe" -o -name "kgpc" | head -20
+          ls -lh builddir-cross/KGPC/ || true
         else
           echo "Build directory not created"
         fi
@@ -92,8 +92,8 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: gpc-cross-${{ matrix.msystem }}
+        name: kgpc-cross-${{ matrix.msystem }}
         path: |
-          builddir-cross/GPC/gpc.exe
-          builddir-cross/GPC/gpc
+          builddir-cross/KGPC/kgpc.exe
+          builddir-cross/KGPC/kgpc
         if-no-files-found: ignore

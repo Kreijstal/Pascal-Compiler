@@ -115,12 +115,12 @@ echo ""
 echo "Step 9: Check build outputs"
 cd ..
 if [ -d "builddir-cross" ]; then
-    echo "Files in builddir-cross/GPC:"
-    ls -lh builddir-cross/GPC/ 2>/dev/null || echo "GPC directory not found"
+    echo "Files in builddir-cross/KGPC:"
+    ls -lh builddir-cross/KGPC/ 2>/dev/null || echo "KGPC directory not found"
     
     echo ""
     echo "Searching for executables:"
-    find builddir-cross -name "*.exe" -o -name "gpc" 2>/dev/null | head -20 || echo "No executables found"
+    find builddir-cross -name "*.exe" -o -name "kgpc" 2>/dev/null | head -20 || echo "No executables found"
 else
     echo "⚠ Build directory not created"
 fi

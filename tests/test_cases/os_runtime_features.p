@@ -1,14 +1,14 @@
 program OsRuntimeFeatures;
 
-{$if defined(GPC)}
-  {$define GPC_COMPILER}
+{$if defined(KGPC)}
+  {$define KGPC_COMPILER}
 {$endif}
 
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
 {$mode objfpc}{$H+}
 {$endif}
 
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
   {$ifdef MSWINDOWS}
   uses SysUtils, DynLibs, Windows;
   {$else}
@@ -22,7 +22,7 @@ const
 {$ifdef MSWINDOWS}
     TestLib = 'kernel32.dll';
 {$endif}
-    EnvVarName = 'GPC_RTL_TEST_VAR';
+    EnvVarName = 'KGPC_RTL_TEST_VAR';
 
 function BoolStr(Value: boolean): string;
 begin
@@ -32,7 +32,7 @@ begin
         BoolStr := 'FALSE';
 end;
 
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
 {$ifdef MSWINDOWS}
 function SetEnvironmentVariable(const Name, Value: string): Boolean;
 begin
@@ -71,7 +71,7 @@ end;
 
 function LoadUnixLibrary: NativeUInt;
 begin
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
     Result := NativeUInt(LoadLibrary('libc.so.6'));
     if Result = 0 then
         Result := NativeUInt(LoadLibrary('libc.so'));

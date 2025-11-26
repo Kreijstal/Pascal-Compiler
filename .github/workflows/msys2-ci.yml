@@ -42,7 +42,7 @@ jobs:
     - name: Run tests
       shell: msys2 {0}
       env:
-        GPC_CI_FAILURE_DIR: builddir/failing-tests
+        KGPC_CI_FAILURE_DIR: builddir/failing-tests
       run: |
         rm -rf builddir/failing-tests
         meson test -v -C builddir

@@ -1,4 +1,4 @@
-project('gpc-project', 'c')
+project('kgpc-project', 'c')
 
 cparser_core_sources = [
   'cparser/parser.c',
@@ -103,4 +103,4 @@ if build_integration_tests
   )
 endif
 
-subdir('GPC')
+subdir('KGPC')

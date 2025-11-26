@@ -2,17 +2,17 @@
 
 ## Project Overview
 
-This is the Gwinn Pascal Compiler (GPC), a Pascal compiler written in C that outputs gcc-targeted x86-64 assembly. The project uses a custom parser combinator library (cparser) for parsing Pascal code.
+This is the Kreijstal Gwinn Pascal Compiler (KGPC), a Pascal compiler written in C that outputs gcc-targeted x86-64 assembly. The project uses a custom parser combinator library (cparser) for parsing Pascal code.
 
 ## Architecture
 
 The compiler consists of several key components:
 
-- **Parser**: Located in `GPC/Parser/` - Handles parsing Pascal source code using the cparser combinator library
+- **Parser**: Located in `KGPC/Parser/` - Handles parsing Pascal source code using the cparser combinator library
   - `ParseTree/`: Parse tree structure and manipulation
   - `SemanticCheck/`: Semantic analysis and type checking
-- **Code Generator**: Located in `GPC/CodeGenerator/Intel_x86-64/` - Generates x86-64 assembly code
-- **Optimizer**: Located in `GPC/Optimizer/` - Implements optimization passes (O1, O2)
+- **Code Generator**: Located in `KGPC/CodeGenerator/Intel_x86-64/` - Generates x86-64 assembly code
+- **Optimizer**: Located in `KGPC/Optimizer/` - Implements optimization passes (O1, O2)
 - **cparser**: Located in `cparser/` - Parser combinator library
   - `examples/pascal_parser/`: Pascal-specific parser implementation
 
@@ -76,8 +76,8 @@ bash -c 'source quasi-msys2/env/all.src && meson test -C builddir-cross'
 
 ### Build Outputs
 
-- Main compiler executable: `builddir/GPC/gpc`
-- Runtime library: `builddir/GPC/libgpc_runtime.a`
+- Main compiler executable: `builddir/KGPC/kgpc`
+- Runtime library: `builddir/KGPC/libkgpc_runtime.a`
 - Parser tests: `builddir/cparser_tests`
 - Pascal parser tests: `builddir/pascal_tests` (when integration tests enabled)
 
@@ -107,7 +107,7 @@ meson test -C builddir "pascal parser unit tests"
 
 ```bash
 # Compile Pascal to assembly
-./builddir/GPC/gpc input.p output.s [flags]
+./builddir/KGPC/kgpc input.p output.s [flags]
 
 # Assemble with gcc
 gcc -o output output.s
@@ -148,15 +148,15 @@ gcc -o output output.s
 
 ### Main Entry Points
 
-- `GPC/main_cparser.c` - Main compiler entry point using cparser
-- `GPC/main.c` - Legacy main (if applicable)
+- `KGPC/main_cparser.c` - Main compiler entry point using cparser
+- `KGPC/main.c` - Legacy main (if applicable)
 
 ### Core Modules
 
-- `GPC/Parser/pascal_frontend.c` - Pascal language frontend
-- `GPC/Parser/SemanticCheck/SemCheck.c` - Main semantic checker
-- `GPC/CodeGenerator/Intel_x86-64/codegen.c` - Code generation entry point
-- `GPC/Optimizer/optimizer.c` - Optimization pass implementation
+- `KGPC/Parser/pascal_frontend.c` - Pascal language frontend
+- `KGPC/Parser/SemanticCheck/SemCheck.c` - Main semantic checker
+- `KGPC/CodeGenerator/Intel_x86-64/codegen.c` - Code generation entry point
+- `KGPC/Optimizer/optimizer.c` - Optimization pass implementation
 
 ### Parser Combinator Library
 
@@ -167,7 +167,7 @@ gcc -o output output.s
 ### Build Configuration
 
 - `meson.build` - Root build configuration
-- `GPC/meson.build` - GPC-specific build configuration
+- `KGPC/meson.build` - KGPC-specific build configuration
 - `meson_options.txt` - Build options
 
 ## Memory Management
@@ -175,7 +175,7 @@ gcc -o output output.s
 This project has **zero tolerance for memory leaks**. When writing code:
 
 1. Every `malloc`/`calloc`/`strdup` must have a corresponding `free`
-2. Use valgrind to verify no leaks: `valgrind --leak-check=full ./builddir/GPC/gpc test.p test.s`
+2. Use valgrind to verify no leaks: `valgrind --leak-check=full ./builddir/KGPC/kgpc test.p test.s`
 3. Clean up parse trees, symbol tables, and other data structures properly
 4. Pay special attention to error paths - they must also free resources
 
@@ -228,9 +228,9 @@ All workflows are triggered on pull requests and pushes to any branch.
 ### Adding a New Language Feature
 
 1. Update parser in `cparser/examples/pascal_parser/pascal_*.c`
-2. Add parse tree node type if needed in `GPC/Parser/ParseTree/tree.c`
-3. Implement semantic checking in `GPC/Parser/SemanticCheck/`
-4. Add code generation in `GPC/CodeGenerator/Intel_x86-64/`
+2. Add parse tree node type if needed in `KGPC/Parser/ParseTree/tree.c`
+3. Implement semantic checking in `KGPC/Parser/SemanticCheck/`
+4. Add code generation in `KGPC/CodeGenerator/Intel_x86-64/`
 5. Add test cases in `tests/test_cases/`
 6. Update documentation if user-facing
 
@@ -243,7 +243,7 @@ All workflows are triggered on pull requests and pushes to any branch.
 ### Debugging
 
 - Use `stacktrace.c` for stack trace functionality
-- Debug serializer/deserializer available in `GPC/debug_*.c`
+- Debug serializer/deserializer available in `KGPC/debug_*.c`
 - Check `builddir/meson-logs/` for build issues
 - Use GDB for debugging compiled executables
 

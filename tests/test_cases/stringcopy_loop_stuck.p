@@ -1,7 +1,7 @@
 program StringCopyLoopStuck;
 {
   Regression test: copying a fixed-size char array via assignment must copy
-  every element. Gwinn GPC currently writes only the first byte, so the
+  every element. Gwinn KGPC currently writes only the first byte, so the
   sentinel-based search loop never terminates.
 }
 
