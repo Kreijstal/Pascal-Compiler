@@ -45,16 +45,35 @@ static bool peek_label_statement(input_t* in) {
     return false;
 }
 
-
-static bool peek_assignment_operator(input_t* in, int start_pos) {
-    if (in == NULL || in->buffer == NULL)
+static bool peek_assignment_operator(input_t* in) {
+    if (in == NULL || in->buffer == NULL) {
         return false;
-    int length = in->length > 0 ? in->length : (int)strlen(in->buffer);
-    int pos = start_pos;
+    }
     const char* buffer = in->buffer;
-
-    while (pos < length) {
+    int length = in->length > 0 ? in->length : (int)strlen(buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    const int scan_limit = pos + 512 < length ? pos + 512 : length;
+    bool in_string = false;
+    while (pos < scan_limit) {
         unsigned char ch = (unsigned char)buffer[pos];
+        if (in_string) {
+            if (ch == '\'') {
+                if (pos + 1 < length && buffer[pos + 1] == '\'') {
+                    pos += 2;
+                    continue;
+                }
+                in_string = false;
+                pos++;
+                continue;
+            }
+            pos++;
+            continue;
+        }
+        if (ch == '\'') {
+            in_string = true;
+            pos++;
+            continue;
+        }
         if (ch == '{') {
             pos++;
             while (pos < length && buffer[pos] != '}') {
@@ -83,7 +102,7 @@ static bool peek_assignment_operator(input_t* in, int start_pos) {
             continue;
         }
         if (isspace(ch)) {
-            pos++;
+            pos = skip_pascal_layout_preview(in, pos);
             continue;
         }
         if (ch == ':' && pos + 1 < length && buffer[pos + 1] == '=') {
@@ -99,7 +118,6 @@ static bool peek_assignment_operator(input_t* in, int start_pos) {
     }
     return false;
 }
-
 
 static bool next_non_layout_is_comma(input_t* in) {
     if (in == NULL || in->buffer == NULL)
@@ -285,7 +303,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
         }
 
-        if (dispatch->assignment_parser != NULL && peek_assignment_operator(in, cursor)) {
+        if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
             return parse(in, dispatch->assignment_parser);
         }
 
@@ -319,26 +337,7 @@ static ParseResult for_init_dispatch_fn(input_t* in, void* args, char* parser_na
     if (dispatch == NULL) {
         return make_failure(in, strdup("for-initializer dispatcher misconfigured"));
     }
-    int pos = skip_pascal_layout_preview(in, in->start);
-    int length = in->length > 0 ? in->length : (int)strlen(in->buffer);
-    const char* buffer = in->buffer;
-    
-    // Skip identifier if present
-    if (pos < length) {
-        unsigned char ch = (unsigned char)buffer[pos];
-        if (ch == '_' || isalpha(ch)) {
-            pos++;
-            while (pos < length) {
-                unsigned char next = (unsigned char)buffer[pos];
-                if (!(isalnum(next) || next == '_')) {
-                    break;
-                }
-                pos++;
-            }
-        }
-    }
-
-    if (peek_assignment_operator(in, pos)) {
+    if (peek_assignment_operator(in)) {
         return parse(in, dispatch->assignment_parser);
     }
     return parse(in, dispatch->identifier_parser);

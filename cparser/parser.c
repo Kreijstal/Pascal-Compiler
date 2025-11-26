@@ -1332,25 +1332,8 @@ ParseResult parse(input_t * in, combinator_t * comb) {
         g_parser_stats.parse_calls++;
     }
     
-    // Skip memoization for primitive parsers - they're fast and don't benefit from it
+    // Memoization is enabled for all parser types
     bool should_memoize = true;
-    switch (comb->type) {
-        case P_MATCH:
-        case P_MATCH_RAW:
-        case P_INTEGER:
-        case P_CIDENT:
-        case P_STRING:
-        case P_ANY_CHAR:
-        case P_SATISFY:
-        case P_CI_KEYWORD:
-        case P_EOI:
-        case P_SUCCEED:
-            should_memoize = false;
-            break;
-        default:
-            should_memoize = true;
-            break;
-    }
     
     if (in->memo == NULL && should_memoize) {
         in->memo = memo_table_create();
