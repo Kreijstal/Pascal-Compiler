@@ -66,6 +66,21 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         return 1;
 
     int hash = hashpjw(canonical_id);
+    
+    HashNode_t *node = FindIdentInTable(table, params->id);
+    if (node != NULL)
+    {
+        /* Check for collisions */
+        if (!check_collision_allowance(node, params->hash_type))
+        {
+            free(canonical_id);
+            return 1;
+        }
+        // If collision is allowed, we proceed to add it as a new entry in the list.
+        // The original code would have iterated through the list to find the collision,
+        // but FindIdentInTable already does that.
+    }
+
     ListNode_t *list = table->table[hash];
     
     if (list == NULL)

@@ -40,5 +40,6 @@ int gpc_free_library(uintptr_t handle);
 int gpc_directory_create(const char *path);
 int gpc_directory_remove(const char *path);
 int gpc_file_rename(const char *old_path, const char *new_path);
+void *__gpc_default_create(size_t class_size, const void *vmt_ptr);
 
 #endif /* GPC_RUNTIME_INTERNAL_H */

@@ -25,6 +25,7 @@ end;
 var
   MyDog: TDog;
 begin
+  MyDog := TDog.Create;
   MyDog.Name := 1;
   MyDog.Age := 5;
   MyDog.Breed := 42;

@@ -28,7 +28,7 @@
 #error "gperf generated tables don't work with this execution character set."
 #endif
 
-#define TOTAL_KEYWORDS 14
+#define TOTAL_KEYWORDS 15
 #define MIN_WORD_LENGTH 2
 #define MAX_WORD_LENGTH 9
 #define MIN_HASH_VALUE 2

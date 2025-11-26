@@ -30,7 +30,6 @@ def build_dir_from_env() -> Path:
 
 
 def run(cmd, **kwargs):
-    print(f"[DEBUG] running: {' '.join(cmd)}")
     return subprocess.run(cmd, check=True, **kwargs)
 
 

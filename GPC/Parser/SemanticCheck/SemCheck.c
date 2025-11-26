@@ -129,8 +129,24 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 /* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
+    if (node == NULL) return NULL;
+    
     /* Use hashnode helper which handles NULL GpcType */
-    return hashnode_get_record_type(node);
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record != NULL)
+        return record;
+        
+    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
+    if (node->type != NULL && gpc_type_is_pointer(node->type))
+    {
+        GpcType *pointed_to = node->type->info.points_to;
+        if (pointed_to != NULL && gpc_type_is_record(pointed_to))
+        {
+            return gpc_type_get_record(pointed_to);
+        }
+    }
+    
+    return NULL;
 }
 
 /* Helper function to get VarType from HashNode */
@@ -1071,7 +1087,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 line_num, record_info->parent_class_name);
         return 1;
     }
-    
+
     /* Get parent's RecordType */
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
     if (parent_record == NULL)
@@ -1307,7 +1323,7 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
-                    new_method->vmt_index = vmt_size;
+                    new_method->vmt_index = vmt_size + 1;
                     
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {
@@ -1468,30 +1484,6 @@ static void resolve_array_bounds_in_gpctype(SymTab_t *symtab, GpcType *gpc_type,
     }
 }
 
-/* Register operator overloads from a record type declaration
- * This function is called when processing TYPE_DECL_RECORD to extract
- * operator declarations and register them in the operator registry.
- */
-static void register_record_operators(const char *type_name, struct RecordType *record_info)
-{
-    if (type_name == NULL || record_info == NULL || record_info->fields == NULL)
-        return;
-    
-    /* Iterate through the fields list looking for METHOD_DECL AST nodes (LIST_UNSPECIFIED) */
-    ListNode_t *cur = record_info->fields;
-    while (cur != NULL)
-    {
-        /* Check if this is an operator method declaration (stored as LIST_UNSPECIFIED with AST node) */
-        if (cur->type == LIST_UNSPECIFIED && cur->cur != NULL)
-        {
-            /* This is likely an AST node - we need to extract operator info from it
-             * For now, we skip this since we need access to the full AST structure
-             * and the from_cparser conversion. This will be handled in a second pass. */
-        }
-        cur = cur->next;
-    }
-}
-
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
@@ -1511,6 +1503,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
+        
+#ifdef DEBUG
+        fprintf(stderr, "DEBUG: semcheck_type_decls processing type: %s kind=%d\n",
+            tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+            tree->tree_data.type_decl_data.kind);
+#endif
 
         const char *debug_env_check = getenv("GPC_DEBUG_TFPG");
         if (debug_env_check != NULL)
@@ -1569,9 +1567,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     if (!is_unspecialized_generic)
                     {
                         long long record_size = 0;
-                        if (semcheck_compute_record_size(symtab, record_info, &record_size,
-                                tree->line_num) != 0)
+                        int size_result = semcheck_compute_record_size(symtab, record_info, &record_size,
+                                tree->line_num);
+                        if (size_result != 0)
                         {
+#ifdef DEBUG
+                            fprintf(stderr, "DEBUG: semcheck_compute_record_size FAILED for %s: result=%d\n",
+                                tree->tree_data.type_decl_data.id, size_result);
+#endif
                             return_val += 1;
                         }
                     }
@@ -1811,15 +1814,20 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     resolve_array_bounds_in_gpctype(symtab, gpc_type, alias_info);
                 }
             }
-            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
                 gpc_type->info.record_info = record_info;
             
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] Pushing type '%s' onto scope, gpc_type=%p kind=%d\n", 
+                    tree->tree_data.type_decl_data.id, (void*)gpc_type, gpc_type ? gpc_type->kind : -1);
+            }
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
             {
                 /* GpcType ownership transferred to symbol table */
                 tree->tree_data.type_decl_data.gpc_type = NULL;
                 /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
+                
             }
         } else {
         /* Fall back to legacy API for types we can't convert yet */
@@ -1845,7 +1853,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
             }
-            
+
             /* For generic specializations with inline record types, also register the
              * record type under its mangled name so cloned methods can find it */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && 
@@ -1857,13 +1865,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Only register if not already registered to avoid redeclaration errors */
                 HashNode_t *existing = NULL;
-                if (FindIdent(&existing, symtab, mangled_name) == -1)
+                if (FindIdent(&existing, symtab, (char *)mangled_name) == -1)
                 {
                     /* Create a GpcType for the inline record if not already created */
                     GpcType *inline_gpc_type = create_record_type(alias_info->inline_record_type);
                     if (inline_gpc_type != NULL)
                     {
-                        int push_result = PushTypeOntoScope_Typed(symtab, mangled_name, inline_gpc_type);
+                        int push_result = PushTypeOntoScope_Typed(symtab, (char *)mangled_name, inline_gpc_type);
                         if (push_result == 0)
                         {
                             if (debug_env2 != NULL)
@@ -1885,6 +1893,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             fprintf(stderr, "[GPC] Error increased in type %s (kind=%d), was %d now %d\n",
                 tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
                 tree->tree_data.type_decl_data.kind, before_symtab_errors, return_val);
+        }
+        
+        if (return_val > loop_start_errors)
+        {
+#ifdef DEBUG
+            fprintf(stderr, "DEBUG: semcheck_type_decls ERROR in type %s: was %d now %d\n",
+                tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
+                loop_start_errors, return_val);
+#endif
         }
 
         cur = cur->next;
@@ -2102,6 +2119,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, string_name, string_type);
         destroy_gpc_type(string_type);
         free(string_name);
+    char *ansistring_name = strdup("AnsiString");
+    if (ansistring_name != NULL) {
+        GpcType *ansistring_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(ansistring_type != NULL && "Failed to create AnsiString type");
+        AddBuiltinType_Typed(symtab, ansistring_name, ansistring_type);
+        destroy_gpc_type(ansistring_type);
+        free(ansistring_name);
+    }
     }
     char *unicode_name = strdup("UnicodeString");
     if (unicode_name != NULL) {
@@ -2485,6 +2510,9 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     /* TODO: Fix line number bug here */
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
+#endif
 
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     if (getenv("GPC_DEBUG_GENERIC_CLONES") != NULL)
@@ -2506,12 +2534,29 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         }
     }
     return_val += semcheck_const_decls(symtab, tree->tree_data.program_data.const_declaration);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
+#endif
+
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
+#endif
+
     return_val += semcheck_decls(symtab, tree->tree_data.program_data.var_declaration);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
+#endif
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
+#endif
 
-    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, 0);
+    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
+#endif
 
     // Semantic check finalization statements from units
     if (tree->tree_data.program_data.finalization_statements != NULL) {
@@ -2519,7 +2564,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         while (final_node != NULL) {
             if (final_node->type == LIST_STMT && final_node->cur != NULL) {
                 struct Statement *final_stmt = (struct Statement *)final_node->cur;
-                return_val += semcheck_stmt(symtab, final_stmt, 0);
+                return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
             }
             final_node = final_node->next;
         }
@@ -2527,7 +2572,23 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     if(optimize_flag() > 0 && return_val == 0)
     {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] Before optimize: body_statement = %p\n", 
+                    (void*)tree->tree_data.program_data.body_statement);
+            if (tree->tree_data.program_data.body_statement != NULL) {
+                fprintf(stderr, "[GPC] Body statement type: %d\n", 
+                        tree->tree_data.program_data.body_statement->type);
+                if (tree->tree_data.program_data.body_statement->type == STMT_COMPOUND_STATEMENT) {
+                    fprintf(stderr, "[GPC] Compound statement list: %p\n",
+                            (void*)tree->tree_data.program_data.body_statement->stmt_data.compound_statement);
+                }
+            }
+        }
         optimize(symtab, tree);
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] After optimize: body_statement = %p\n", 
+                    (void*)tree->tree_data.program_data.body_statement);
+        }
     }
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
@@ -2628,6 +2689,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Variable declarations */
             if(tree->type == TREE_VAR_DECL)
             {
+                if (ids->cur != NULL && strcmp((char *)ids->cur, "Sock") == 0) {
+#ifdef DEBUG
+                     fprintf(stderr, "DEBUG: semcheck_decls processing Sock. type_id=%s resolved_type=%p\n",
+                         tree->tree_data.var_decl_data.type_id ? tree->tree_data.var_decl_data.type_id : "<null>",
+                         resolved_type);
+#endif
+                }
+
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
                     HashNode_t *type_node = resolved_type;
@@ -3251,7 +3320,19 @@ next_identifier:
                         else
                         {
                             enum VarType current_var_type = get_var_type_from_node(var_node);
-                            if (inferred_var_type != current_var_type)
+                            int compatible = (inferred_var_type == current_var_type);
+                            
+                            /* Allow mixing Integer and LongInt for initializers */
+                            if (!compatible)
+                            {
+                                if ((inferred_var_type == HASHVAR_INTEGER || inferred_var_type == HASHVAR_LONGINT) &&
+                                    (current_var_type == HASHVAR_INTEGER || current_var_type == HASHVAR_LONGINT))
+                                {
+                                    compatible = 1;
+                                }
+                            }
+
+                            if (!compatible)
                             {
                                 fprintf(stderr, "Error on line %d, initializer type mismatch for %s.\n",
                                     tree->line_num, var_name);
@@ -3285,6 +3366,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     assert(symtab != NULL);
     assert(subprogram != NULL);
+    
+#ifdef DEBUG
+    fprintf(stderr, "DEBUG: semcheck_subprogram called for %s\n", subprogram->tree_data.subprogram_data.id);
+#endif
+
     assert(subprogram->type == TREE_SUBPROGRAM);
 
     /* Record lexical nesting depth so codegen can reason about static links accurately.
@@ -3372,16 +3458,28 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         /* Create GpcType for the procedure */
-        GpcType *proc_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            NULL  /* procedures have no return type */
-        );
-        if (proc_type != NULL)
+        /* Create GpcType for the procedure */
+        GpcType *proc_type = NULL;
+        int created_new_type = 0;
+
+        if (already_declared && existing_decl != NULL && existing_decl->type != NULL)
         {
-            proc_type->info.proc_info.definition = subprogram;
-            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
-                proc_type->info.proc_info.return_type_id =
-                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            proc_type = existing_decl->type;
+        }
+        else
+        {
+            proc_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                NULL  /* procedures have no return type */
+            );
+            if (proc_type != NULL)
+            {
+                proc_type->info.proc_info.definition = subprogram;
+                if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                    proc_type->info.proc_info.return_type_id =
+                        strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            }
+            created_new_type = 1;
         }
         
         /* ARCHITECTURAL FIX: Resolve array bounds in parameter types now that constants are in scope */
@@ -3427,6 +3525,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         else
         {
             func_return = 0;  /* No error since it's expected to be already declared */
+            
+            /* If we created a new type but it was already declared (e.g. existing had no type), update it */
+            if (created_new_type && existing_decl != NULL && existing_decl->type == NULL)
+            {
+                existing_decl->type = proc_type;
+            }
+            else if (created_new_type)
+            {
+                /* We created a type but didn't use it (shouldn't happen if logic is correct, but for safety) */
+                destroy_gpc_type(proc_type);
+            }
         }
 
         PushScope(symtab);
@@ -3459,11 +3568,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* If the predeclare step could not resolve the type (e.g., inline array),
          * build it now and update the existing declaration. */
         if (return_gpc_type == NULL)
+        {
             return_gpc_type = build_function_return_type(subprogram, symtab, &return_val);
+#ifdef DEBUG
+            if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
+        }
 
         GpcType *func_type = NULL;
         if (!already_declared)
         {
+#ifdef DEBUG
+            fprintf(stderr, "DEBUG: semcheck_subprogram %s NOT already declared in Pass 2!\n", subprogram->tree_data.subprogram_data.id);
+#endif
             func_type = create_procedure_type(
                 subprogram->tree_data.subprogram_data.args_var,
                 return_gpc_type
@@ -3522,6 +3639,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             /* "Result" is not already declared, so we can add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_gpc_type);
         }
+
+        /* For class methods, also add an alias using the unmangled method name (suffix after __) */
+        const char *alias_suffix = NULL;
+        if (subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *sep = strstr(subprogram->tree_data.subprogram_data.id, "__");
+            if (sep != NULL && sep[2] != '\0')
+                alias_suffix = sep + 2;
+        }
+        if (alias_suffix != NULL && alias_suffix[0] != '\0')
+        {
+            size_t alias_len = strcspn(alias_suffix, "_");
+            if (alias_len > 0 && alias_len < 128)
+            {
+                char alias_buf[128];
+                memcpy(alias_buf, alias_suffix, alias_len);
+                alias_buf[alias_len] = '\0';
+
+                HashNode_t *suffix_check = NULL;
+                if (FindIdent(&suffix_check, symtab, alias_buf) == -1)
+                    PushFuncRetOntoScope_Typed(symtab, alias_buf, return_gpc_type);
+            }
+        }
         /* Note: We don't check for "result" anymore since it conflicts with built-in Result alias */
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
@@ -3542,11 +3682,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     /* These arguments are themselves like declarations */
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.args_var);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after args: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
 
     return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
     return_val += semcheck_type_decls(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after decls: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
 
     return_val += semcheck_subprograms(symtab, subprogram->tree_data.subprogram_data.subprograms,
                     new_max_scope, subprogram);
@@ -3559,6 +3705,9 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         g_semcheck_current_subprogram = prev_current_subprogram;
         PopScope(symtab);
+#ifdef DEBUG
+        fprintf(stderr, "DEBUG: semcheck_subprogram %s returning (no body): %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
         return return_val;
     }
 
@@ -3575,13 +3724,30 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     == 0);
 
         ResetHashNodeStatus(hash_return);
-        return_val += semcheck_func_stmt(symtab,
+        int func_stmt_ret = semcheck_func_stmt(symtab,
                 body, new_max_scope);
+        return_val += func_stmt_ret;
+#ifdef DEBUG
+        if (func_stmt_ret > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after semcheck_func_stmt: %d\n", subprogram->tree_data.subprogram_data.id, func_stmt_ret);
+#endif
+
         /* Allow functions with asm blocks to skip explicit return assignment */
         int has_asm = statement_contains_asm_block(body);
         
+        /* Constructors implicitly yield the constructed instance, so do not
+         * require an explicit assignment to the return variable. */
+        int is_constructor = 0;
+        if (subprogram->tree_data.subprogram_data.id != NULL) {
+            const char *suffix = strstr(subprogram->tree_data.subprogram_data.id, "__");
+            const char *name = (suffix != NULL && suffix[2] != '\0') ? suffix + 2
+                                                                     : subprogram->tree_data.subprogram_data.id;
+            if (strcasecmp(name, "create") == 0) {
+                is_constructor = 1;
+            }
+        }
+
         /* Check if either the function name or "Result" was assigned to */
-        int return_was_assigned = (hash_return->mutated != NO_MUTATE);
+        int return_was_assigned = is_constructor ? 1 : (hash_return->mutated != NO_MUTATE);
         if (!return_was_assigned)
         {
             /* Also check if "Result" was mutated */
@@ -3591,13 +3757,45 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 return_was_assigned = (result_node->mutated != NO_MUTATE);
             }
         }
+
+        /* Methods use mangled identifiers like Class__Func; allow assignments to the
+         * unmangled function name (after the final '__') to satisfy the return check. */
+        if (!return_was_assigned && subprogram->tree_data.subprogram_data.id != NULL) {
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            const char *sep = strstr(id, "__");
+            if (sep != NULL && sep[2] != '\0') {
+                HashNode_t *suffix_node = NULL;
+                if (FindIdent(&suffix_node, symtab, (char *)(sep + 2)) == 0 && suffix_node != NULL) {
+                    return_was_assigned = (suffix_node->mutated != NO_MUTATE);
+                }
+            }
+        }
         
         if(!return_was_assigned && !has_asm)
         {
-            fprintf(stderr,
-                "Error in function %s: no return statement declared in function body!\n\n",
-                subprogram->tree_data.subprogram_data.id);
-            ++return_val;
+#ifdef DEBUG
+            fprintf(stderr, "DEBUG: Checking return for %s. cname_override=%s cname_flag=%d return_was_assigned=%d\n",
+                subprogram->tree_data.subprogram_data.id,
+                subprogram->tree_data.subprogram_data.cname_override ? subprogram->tree_data.subprogram_data.cname_override : "<null>",
+                subprogram->tree_data.subprogram_data.cname_flag,
+                return_was_assigned);
+#endif
+
+            /* Skip check for external functions (cname_flag or cname_override) or declarations without bodies */
+            int is_external = (subprogram->tree_data.subprogram_data.cname_override != NULL) ||
+                              (subprogram->tree_data.subprogram_data.cname_flag != 0);
+            int has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
+            if (is_external || !has_body)
+            {
+                /* External function, no body expected */
+            }
+            else
+            {
+                fprintf(stderr,
+                    "Error in function %s: no return statement declared in function body!\n\n",
+                    subprogram->tree_data.subprogram_data.id);
+                ++return_val;
+            }
         }
     }
 
@@ -3631,6 +3829,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     g_semcheck_current_subprogram = prev_current_subprogram;
     PopScope(symtab);
+
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
     return return_val;
 }
 
@@ -3701,6 +3903,9 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     else // Function
     {
         GpcType *return_gpc_type = build_function_return_type(subprogram, symtab, &return_val);
+#ifdef DEBUG
+        if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
         
         /* Create function GpcType */
         GpcType *func_type = create_procedure_type(
@@ -3727,6 +3932,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         }
     }
     
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s returning error: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
+#endif
+
     return return_val;
 }
 
@@ -3743,6 +3952,10 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     ListNode_t *cur;
     int return_val;
     assert(symtab != NULL);
+
+#ifdef DEBUG
+    fprintf(stderr, "DEBUG: semcheck_subprograms called. subprograms=%p\n", subprograms);
+#endif
 
     return_val = 0;
     
@@ -3765,6 +3978,10 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
         cur = cur->next;
     }
     
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprograms error after Pass 1: %d\n", return_val);
+#endif
+
     /* Pass 2: Process full semantic checking including bodies */
     cur = subprograms;
     while(cur != NULL)

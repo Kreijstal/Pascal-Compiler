@@ -39,6 +39,7 @@
 #include "CodeGenerator/Intel_x86-64/codegen.h"
 #include "stacktrace.h"
 #include "unit_paths.h"
+#include "arena.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -767,6 +768,10 @@ int main(int argc, char **argv)
 {
     install_stack_trace_handler();
 
+    // Initialize global arena with 1MB blocks
+    arena_t* arena = arena_create(1024 * 1024);
+    arena_set_global(arena);
+
     if (argc < 3)
     {
         print_usage(argv[0]);
@@ -793,6 +798,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Error: Unable to locate stdlib.p. Set GPC_STDLIB or run from the project root.\n");
         clear_dump_ast_path();
         unit_search_paths_destroy(&g_unit_paths);
+        arena_destroy(arena);
         return 1;
     }
 
@@ -914,6 +920,12 @@ int main(int argc, char **argv)
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
     UnitSet visited_units;
     unit_set_init(&visited_units);
+    ListNode_t *user_types = user_tree->tree_data.program_data.type_declaration;
+    ListNode_t *user_consts = user_tree->tree_data.program_data.const_declaration;
+    ListNode_t *user_vars = user_tree->tree_data.program_data.var_declaration;
+    user_tree->tree_data.program_data.type_declaration = NULL;
+    user_tree->tree_data.program_data.const_declaration = NULL;
+    user_tree->tree_data.program_data.var_declaration = NULL;
     if (prelude_subs != NULL)
         mark_stdlib_var_params(prelude_subs);
     if (prelude_subs != NULL)
@@ -932,6 +944,12 @@ int main(int argc, char **argv)
 
     load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    user_tree->tree_data.program_data.type_declaration =
+        ConcatList(user_tree->tree_data.program_data.type_declaration, user_types);
+    user_tree->tree_data.program_data.const_declaration =
+        ConcatList(user_tree->tree_data.program_data.const_declaration, user_consts);
+    user_tree->tree_data.program_data.var_declaration =
+        ConcatList(user_tree->tree_data.program_data.var_declaration, user_vars);
     resolve_pending_generic_aliases(user_tree);
 
     unit_set_destroy(&visited_units);
@@ -965,7 +983,7 @@ int main(int argc, char **argv)
         ctx.symtab = symtab;
         ctx.target_abi = current_target_abi();
         ctx.had_error = 0;
-        ctx.loop_exit_labels = NULL;
+        ctx.loop_frames = NULL;
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
 
@@ -1008,11 +1026,13 @@ int main(int argc, char **argv)
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        arena_destroy(arena);
         return exit_code > 0 ? exit_code : 1;
     }
 
     clear_dump_ast_path();
     pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
+    arena_destroy(arena);
     return exit_code;
 }

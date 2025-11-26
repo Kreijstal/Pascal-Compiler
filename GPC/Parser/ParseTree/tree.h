@@ -255,6 +255,7 @@ struct Statement *mk_asmblock(int line_num, char *code);
 struct Statement *mk_exit(int line_num);
 
 struct Statement *mk_break(int line_num);
+struct Statement *mk_continue(int line_num);
 
 struct Statement *mk_case(int line_num, struct Expression *selector, ListNode_t *branches, struct Statement *else_stmt);
 
@@ -262,7 +263,8 @@ struct Statement *mk_with(int line_num, struct Expression *context, struct State
 
 struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t *finally_stmts);
 
-struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts);
+struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
+                               char *exception_var_name, char *exception_type_name);
 
 struct Statement *mk_raise(int line_num, struct Expression *expr);
 

@@ -9,6 +9,7 @@ typedef enum statement_keyword_id {
     STMT_KW_RAISE,
     STMT_KW_INHERITED,
     STMT_KW_BREAK,
+    STMT_KW_CONTINUE,
     STMT_KW_EXIT,
     STMT_KW_ASM,
     STMT_KW_IF,

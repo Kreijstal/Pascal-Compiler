@@ -31,6 +31,8 @@ var
   Base: TMyClass;
   Desc: TMyClassDescendant;
 begin
+  Base := TMyClass.Create;
+  Desc := TMyClassDescendant.Create;
   Base.Value := 5;
   Desc.Value := 42;
   Desc.Extra := 7;

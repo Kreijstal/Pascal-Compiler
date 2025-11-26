@@ -462,7 +462,9 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     struct Expression *array_expr = (struct Expression *)args->cur;
     struct Expression *length_expr = (struct Expression *)args->next->cur;
     
+#ifdef DEBUG
     fprintf(stderr, "DEBUG: semcheck_builtin_setlength length_expr=%p\n", length_expr);
+#endif
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
@@ -1105,6 +1107,18 @@ static int semcheck_break_stmt(struct Statement *stmt)
     return 0;
 }
 
+static int semcheck_continue_stmt(struct Statement *stmt)
+{
+    if (semcheck_loop_depth <= 0)
+    {
+        if (stmt != NULL)
+            fprintf(stderr, "Error on line %d, Continue is only valid inside a loop.\n", stmt->line_num);
+        return 1;
+    }
+    return 0;
+}
+
+
 /* Main semantic checking */
 
 int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -1189,7 +1203,10 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_BREAK:
-            return_val += semcheck_break_stmt(stmt);
+            return_val = semcheck_break_stmt(stmt);
+            break;
+        case STMT_CONTINUE:
+            return_val = semcheck_continue_stmt(stmt);
             break;
 
         case STMT_ASM_BLOCK:
@@ -1302,7 +1319,49 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_TRY_EXCEPT:
             return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.try_statements, max_scope_lev);
-            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            
+            /* If there's an 'on E: Exception do' clause, create a local scope for the exception variable */
+            if (stmt->stmt_data.try_except_data.has_on_clause && 
+                stmt->stmt_data.try_except_data.exception_var_name != NULL) {
+                
+                /* Push a new scope for the exception variable */
+                PushScope(symtab);
+                
+                /* Add the exception variable to the symbol table */
+                char *var_name = stmt->stmt_data.try_except_data.exception_var_name;
+                char *type_name = stmt->stmt_data.try_except_data.exception_type_name;
+                
+                /* Look up the type if specified, otherwise use NULL (defaults to integer) */
+                GpcType *var_gpc_type = NULL;
+                if (type_name != NULL) {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, type_name) >= 0 && type_node != NULL) {
+                        if (type_node->hash_type == HASHTYPE_TYPE) {
+                            var_gpc_type = type_node->type;
+                        } else {
+                            fprintf(stderr, "Error: '%s' is not a type at line %d\n", 
+                                    type_name, stmt->line_num);
+                            return_val++;
+                        }
+                    } else {
+                        fprintf(stderr, "Error: Unknown exception type '%s' at line %d\n", 
+                                type_name, stmt->line_num);
+                        return_val++;
+                    }
+                }
+                
+                /* Push the exception variable onto the scope (NULL type defaults to integer) */
+                PushVarOntoScope_Typed(symtab, var_name, var_gpc_type);
+                
+                /* Semantic check the except statements in the new scope */
+                return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+                
+                /* Pop the scope */
+                PopScope(symtab);
+            } else {
+                /* No exception variable - just check the except statements normally */
+                return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            }
             break;
 
         case STMT_RAISE:
@@ -1351,11 +1410,13 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         /* For inherited procedure calls, check if we need to handle Create/Destroy with no parent */
                         const char *method_name = call_expr->expr_data.function_call_data.id;
                         HashNode_t *self_node = NULL;
+                        const char *parent_class_name = NULL;
                         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
                             self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
                             self_node->type->info.record_info != NULL)
                         {
                             struct RecordType *current_class = self_node->type->info.record_info;
+                            parent_class_name = current_class->parent_class_name;
                             
                             /* Check if there's no parent class and this is Create or Destroy */
                             if (current_class->parent_class_name == NULL && method_name != NULL &&
@@ -1373,6 +1434,17 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 /* No errors */
                                 break;
                             }
+                        }
+
+                        /* If a parent exists, direct the call to the parent's mangled name */
+                        if (parent_class_name != NULL && method_name != NULL)
+                        {
+                            char parent_mangled[512];
+                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
+                                parent_class_name, method_name);
+                            if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+                                free(call_expr->expr_data.function_call_data.mangled_id);
+                            call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled);
                         }
                         
                         struct Statement temp_call;
@@ -1497,6 +1569,20 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     return_val += semcheck_expr_main(&type_first, symtab, var, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
 
+    if (getenv("GPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.id != NULL &&
+        strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
+        fprintf(stderr, "[SemCheck] semcheck_varassign calling semcheck_resolve_expression_gpc_type:\n");
+        fprintf(stderr, "[SemCheck]   expr=%p type=%d\n", (void*)expr, expr->type);
+        fprintf(stderr, "[SemCheck]   expr->resolved_gpc_type=%p\n", (void*)expr->resolved_gpc_type);
+    }
+    
+    if (getenv("GPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_RECORD_ACCESS) {
+        fprintf(stderr, "[SemCheck] semcheck_varassign: expr is EXPR_RECORD_ACCESS\n");
+        fprintf(stderr, "[SemCheck]   expr=%p\n", (void*)expr);
+        fprintf(stderr, "[SemCheck]   expr->resolved_gpc_type=%p\n", (void*)expr->resolved_gpc_type);
+    }
+
     int lhs_owned = 0, rhs_owned = 0;
     GpcType *lhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, var, max_scope_lev, MUTATE, &lhs_owned);
     GpcType *rhs_gpctype = semcheck_resolve_expression_gpc_type(symtab, expr, INT_MAX, NO_MUTATE, &rhs_owned);
@@ -1505,6 +1591,28 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     if (lhs_gpctype != NULL && rhs_gpctype != NULL)
     {
         handled_by_gpctype = 1;
+        
+        if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+            fprintf(stderr, "[SemCheck] Type compatibility check:\n");
+            fprintf(stderr, "[SemCheck]   lhs_gpctype=%p kind=%d\n", (void*)lhs_gpctype, lhs_gpctype->kind);
+            fprintf(stderr, "[SemCheck]   rhs_gpctype=%p kind=%d\n", (void*)rhs_gpctype, rhs_gpctype->kind);
+            if (lhs_gpctype->kind == TYPE_KIND_POINTER && lhs_gpctype->info.points_to != NULL) {
+                fprintf(stderr, "[SemCheck]   lhs points_to=%p kind=%d\n", 
+                    (void*)lhs_gpctype->info.points_to, lhs_gpctype->info.points_to->kind);
+                if (lhs_gpctype->info.points_to->kind == TYPE_KIND_RECORD) {
+                    fprintf(stderr, "[SemCheck]   lhs record_info=%p\n", 
+                        (void*)lhs_gpctype->info.points_to->info.record_info);
+                }
+            }
+            if (rhs_gpctype->kind == TYPE_KIND_POINTER && rhs_gpctype->info.points_to != NULL) {
+                fprintf(stderr, "[SemCheck]   rhs points_to=%p kind=%d\n", 
+                    (void*)rhs_gpctype->info.points_to, rhs_gpctype->info.points_to->kind);
+                if (rhs_gpctype->info.points_to->kind == TYPE_KIND_RECORD) {
+                    fprintf(stderr, "[SemCheck]   rhs record_info=%p\n", 
+                        (void*)rhs_gpctype->info.points_to->info.record_info);
+                }
+            }
+        }
         
         if (!are_types_compatible_for_assignment(lhs_gpctype, rhs_gpctype, symtab))
         {
@@ -1926,14 +2034,24 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             
             /* Get the first argument (should be the object/Self parameter) */
             struct Expression *first_arg = (struct Expression *)args_given->cur;
-            if (first_arg != NULL && first_arg->type == EXPR_VAR_ID) {
-                /* Look up the object's type in the symbol table */
-                HashNode_t *obj_node = NULL;
-                if (FindIdent(&obj_node, symtab, first_arg->expr_data.id) != -1 &&
-                    obj_node != NULL && obj_node->type != NULL &&
-                    obj_node->type->kind == TYPE_KIND_RECORD) {
-                    /* Found the object with a record type. Now find the class name for this type. */
-                    struct RecordType *obj_record_type = obj_node->type->info.record_info;
+            if (first_arg != NULL) {
+                /* Resolve the type of the first argument */
+                int arg_type_owned = 0;
+                GpcType *arg_type = semcheck_resolve_expression_gpc_type(symtab, first_arg, INT_MAX, NO_MUTATE, &arg_type_owned);
+                
+                if (arg_type != NULL) {
+                    struct RecordType *obj_record_type = NULL;
+                    
+                    if (arg_type->kind == TYPE_KIND_RECORD) {
+                        obj_record_type = arg_type->info.record_info;
+                    } else if (arg_type->kind == TYPE_KIND_POINTER && 
+                               arg_type->info.points_to != NULL &&
+                               arg_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                        obj_record_type = arg_type->info.points_to->info.record_info;
+                    }
+                    
+                    if (obj_record_type != NULL) {
+                        /* Found the object with a record type. Now find the class name for this type. */
                     
                     /* Search for a type declaration with this RecordType */
                     /* We need to iterate through all identifiers in the symbol table */
@@ -1948,14 +2066,21 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 ListNode_t *bucket = hash_table->table[i];
                                 while (bucket != NULL && correct_class_name == NULL) {
                                     HashNode_t *node = (HashNode_t *)bucket->cur;
-                                    if (node != NULL &&
-                                        node->hash_type == HASHTYPE_TYPE &&
-                                        node->type != NULL &&
-                                        node->type->kind == TYPE_KIND_RECORD &&
-                                        node->type->info.record_info == obj_record_type) {
-                                        /* Found it! */
-                                        correct_class_name = node->id;
-                                        break;
+                                    if (node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL) {
+                                        /* Check direct record type */
+                                        if (node->type->kind == TYPE_KIND_RECORD &&
+                                            node->type->info.record_info == obj_record_type) {
+                                            correct_class_name = node->id;
+                                            break;
+                                        }
+                                        /* Check class type (pointer to record) */
+                                        else if (node->type->kind == TYPE_KIND_POINTER &&
+                                                 node->type->info.points_to != NULL &&
+                                                 node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                                 node->type->info.points_to->info.record_info == obj_record_type) {
+                                            correct_class_name = node->id;
+                                            break;
+                                        }
                                     }
                                     bucket = bucket->next;
                                 }
@@ -1964,22 +2089,81 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         scope_list = scope_list->next;
                     }
                     
+                    
                     if (correct_class_name != NULL) {
-                        /* Build the correct mangled name */
-                        size_t class_len = strlen(correct_class_name);
-                        size_t method_len = strlen(method_name_part);
-                        char *correct_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
-                        if (correct_proc_id != NULL) {
-                            snprintf(correct_proc_id, class_len + 2 + method_len + 1,
-                                    "%s__%s", correct_class_name, method_name_part);
+                        /* Walk up the inheritance chain to find the method */
+                        struct RecordType *current_record = obj_record_type;
+                        char *current_class_name = correct_class_name;
+                        int method_found = 0;
+                        
+                        while (current_record != NULL && current_class_name != NULL) {
+                            /* Build the mangled name for the current class */
+                            size_t class_len = strlen(current_class_name);
+                            size_t method_len = strlen(method_name_part);
+                            char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
+                            sprintf(mangled_name, "%s__%s", current_class_name, method_name_part);
                             
-                            /* Update proc_id to use the correct class */
-                            free(stmt->stmt_data.procedure_call_data.id);
-                            stmt->stmt_data.procedure_call_data.id = correct_proc_id;
-                            proc_id = correct_proc_id;
+                            /* Check if this mangled name exists in the symbol table */
+                            HashNode_t *proc_node = NULL;
+                            if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
+                                /* Found it! Update the procedure ID */
+                                free(proc_id);
+                                proc_id = mangled_name;
+                                stmt->stmt_data.procedure_call_data.id = proc_id;
+                                stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
+                                method_found = 1;
+                                break;
+                            }
+                            
+                            free(mangled_name);
+                            
+                            /* Not found in this class, try parent */
+                            if (current_record->parent_class_name != NULL) {
+                                char *parent_name = current_record->parent_class_name;
+                                
+                                /* Look up parent class record type */
+                                HashNode_t *parent_node = NULL;
+                                if (FindIdent(&parent_node, symtab, parent_name) != -1 && 
+                                    parent_node != NULL && parent_node->type != NULL) {
+                                    
+                                    if (parent_node->type->kind == TYPE_KIND_RECORD) {
+                                        current_record = parent_node->type->info.record_info;
+                                    } else if (parent_node->type->kind == TYPE_KIND_POINTER && 
+                                               parent_node->type->info.points_to != NULL &&
+                                               parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                        current_record = parent_node->type->info.points_to->info.record_info;
+                                    } else {
+                                        current_record = NULL;
+                                    }
+                                    current_class_name = parent_name;
+                                } else {
+                                    /* Parent not found in symbol table (shouldn't happen for valid code) */
+                                    current_record = NULL;
+                                }
+                            } else {
+                                /* No parent */
+                                current_record = NULL;
+                            }
+                        }
+                        
+                        if (!method_found) {
+                            /* If we didn't find it in the hierarchy, fallback to the original class name 
+                             * so the error message makes sense (or maybe it's a virtual method that will be resolved later?)
+                             * Actually, if we don't find it, we should probably leave it as is or try to construct
+                             * the name for the base class to let the standard check fail with a clear message.
+                             */
+                             size_t class_len = strlen(correct_class_name);
+                             size_t method_len = strlen(method_name_part);
+                             char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
+                             sprintf(mangled_name, "%s__%s", correct_class_name, method_name_part);
+                             free(proc_id);
+                             proc_id = mangled_name;
+                             stmt->stmt_data.procedure_call_data.id = proc_id;
+                             stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -2437,7 +2621,9 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
             fprintf(stderr, "CRITICAL: g_debug_watch_stmt corrupted at end of compoundstmt! Changed from %p to %p\n",
                     g_debug_watch_to_expr, g_debug_watch_stmt->stmt_data.for_data.to);
         } else {
+#ifdef DEBUG
             fprintf(stderr, "DEBUG: g_debug_watch_stmt OK at end of compoundstmt. to=%p\n", g_debug_watch_stmt->stmt_data.for_data.to);
+#endif
         }
     }
 
@@ -2662,13 +2848,12 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     semcheck_loop_depth++;
     
-    fprintf(stderr, "DEBUG: semcheck_for stmt=%p line=%d to_expr=%p current_to=%p\n", 
-            stmt, stmt->line_num, to_expr, stmt->stmt_data.for_data.to);
-
     if (stmt->line_num == 42) {
         g_debug_watch_stmt = stmt;
         g_debug_watch_to_expr = stmt->stmt_data.for_data.to;
+#ifdef DEBUG
         fprintf(stderr, "DEBUG: Watching stmt at line 42\n");
+#endif
     }
 
     if (to_expr != NULL && ((uintptr_t)to_expr == 0x686374616d || (uintptr_t)to_expr == 0x1db2)) {

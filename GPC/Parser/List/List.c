@@ -8,12 +8,15 @@
 #include <assert.h>
 
 #include "List.h"
+#include "arena.h"
 
 /* Creates a list node */
 ListNode_t *CreateListNode(void *new_obj, enum ListType type)
 {
     ListNode_t *new_node;
 
+    // Arena allocation disabled for ListNodes due to temporal mismatch
+    // between allocation (with arena) and deallocation (after arena destroyed)
     new_node = (ListNode_t *)malloc(sizeof(ListNode_t));
     assert(new_node != NULL);
 
@@ -138,4 +141,24 @@ int ListLength(ListNode_t *head_node)
         cur = cur->next;
     }
     return length;
+}
+
+ListNode_t *CopyListShallow(ListNode_t *head_node)
+{
+    if (head_node == NULL)
+        return NULL;
+
+    ListNode_t *new_head = CreateListNode(head_node->cur, head_node->type);
+    ListNode_t *cur_old = head_node->next;
+    ListNode_t *cur_new = new_head;
+
+    while (cur_old != NULL)
+    {
+        ListNode_t *new_node = CreateListNode(cur_old->cur, cur_old->type);
+        cur_new->next = new_node;
+        cur_new = new_node;
+        cur_old = cur_old->next;
+    }
+
+    return new_head;
 }

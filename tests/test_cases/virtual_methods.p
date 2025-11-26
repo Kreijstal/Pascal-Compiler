@@ -14,6 +14,7 @@ end;
 var
   C: TMyClass;
 begin
+  C := TMyClass.Create;
   C.MyInt := 0;
   C.MyVirtualMethod;
   

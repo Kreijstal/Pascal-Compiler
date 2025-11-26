@@ -2,14 +2,20 @@
 
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MAX_INCLUDE_DEPTH 32
 
+typedef struct {
+    char *name;
+    char *value;
+} DefineEntry;
+
 struct PascalPreprocessor {
-    char **defines;
+    DefineEntry *defines;
     size_t define_count;
     size_t define_capacity;
 };
@@ -77,22 +83,25 @@ static bool evaluate_if_directive(PascalPreprocessor *pp,
                                   const char *expression,
                                   bool *result,
                                   char **error_message);
-static bool parse_defined_expression(const char **cursor,
-                                     bool *value,
-                                     PascalPreprocessor *pp,
-                                     char **error_message);
-static bool parse_if_expression(const char **cursor,
-                                bool *value,
-                                PascalPreprocessor *pp,
-                                char **error_message);
-static bool parse_if_term(const char **cursor,
-                          bool *value,
-                          PascalPreprocessor *pp,
-                          char **error_message);
-static bool parse_if_factor(const char **cursor,
-                            bool *value,
-                            PascalPreprocessor *pp,
-                            char **error_message);
+
+// Expression parser functions returning int64_t
+static bool parse_expression(const char **cursor,
+                             int64_t *value,
+                             PascalPreprocessor *pp,
+                             char **error_message);
+static bool parse_simple_expression(const char **cursor,
+                                    int64_t *value,
+                                    PascalPreprocessor *pp,
+                                    char **error_message);
+static bool parse_term(const char **cursor,
+                       int64_t *value,
+                       PascalPreprocessor *pp,
+                       char **error_message);
+static bool parse_factor(const char **cursor,
+                         int64_t *value,
+                         PascalPreprocessor *pp,
+                         char **error_message);
+static const char *get_symbol_value(const PascalPreprocessor *pp, const char *symbol);
 
 PascalPreprocessor *pascal_preprocessor_create(void) {
     PascalPreprocessor *pp = calloc(1, sizeof(*pp));
@@ -107,7 +116,8 @@ void pascal_preprocessor_free(PascalPreprocessor *pp) {
         return;
     }
     for (size_t i = 0; i < pp->define_count; ++i) {
-        free(pp->defines[i]);
+        free(pp->defines[i].name);
+        free(pp->defines[i].value);
     }
     free(pp->defines);
     free(pp);
@@ -461,15 +471,29 @@ static bool handle_directive(PascalPreprocessor *pp,
     } else if (strcmp(keyword, "DEFINE") == 0) {
         handled = true;
         if (branch_active) {
-            char *symbol = NULL;
-            if (!parse_identifier(rest, content_end, &symbol) || symbol[0] == '\0') {
-                free(symbol);
+            // The rest of the line is the definition, which might include :=
+            // We don't parse just an identifier, we take the whole rest
+            char *def_content = duplicate_range(rest, content_end);
+            if (!def_content) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            
+            // trim
+            char *def_begin = def_content;
+            char *def_end = def_content + strlen(def_content);
+            trim(&def_begin, &def_end);
+
+            if (def_begin[0] == '\0') {
+                free(def_content);
                 free(keyword);
                 free(content);
                 return set_error(error_message, "malformed define directive in '%s'", filename ? filename : "<buffer>");
             }
-            define_symbol(pp, symbol);
-            free(symbol);
+
+            define_symbol(pp, def_begin);
+            free(def_content);
         }
     } else if (strcmp(keyword, "UNDEF") == 0 || strcmp(keyword, "UNDEFINE") == 0) {
         handled = true;
@@ -511,8 +535,20 @@ static bool handle_directive(PascalPreprocessor *pp,
         if (!evaluate_if_directive(pp, rest, &cond_value, error_message)) {
             free(keyword);
             free(content);
-            bool has_specific_error = error_message != NULL && *error_message != NULL;
-            if (!has_specific_error) {
+            // Wrap any specific error with the expected prefix
+            if (error_message && *error_message) {
+                char *specific_error = *error_message;
+                char *wrapped_error = NULL;
+                int len = snprintf(NULL, 0, "unsupported {$IF} expression: %s", specific_error);
+                if (len > 0) {
+                    wrapped_error = malloc(len + 1);
+                    if (wrapped_error) {
+                        snprintf(wrapped_error, len + 1, "unsupported {$IF} expression: %s", specific_error);
+                        free(specific_error);
+                        *error_message = wrapped_error;
+                    }
+                }
+            } else {
                 return set_error(
                     error_message,
                     "unsupported {$IF} expression in '%s'",
@@ -812,18 +848,70 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
     if (!pp || !symbol || symbol[0] == '\0') {
         return false;
     }
-    if (symbol_is_defined(pp, symbol)) {
-        return true;
+
+    // Parse symbol for optional value assignment :=
+    // Format: NAME [:= VALUE]
+    char *name_part = NULL;
+    char *value_part = NULL;
+
+    const char *assign_pos = strstr(symbol, ":=");
+    if (assign_pos) {
+        size_t name_len = (size_t)(assign_pos - symbol);
+        char *temp_name = malloc(name_len + 1);
+        if (!temp_name) return false;
+        memcpy(temp_name, symbol, name_len);
+        temp_name[name_len] = '\0';
+        
+        char *trimmed_name_begin = temp_name;
+        char *trimmed_name_end = temp_name + name_len;
+        trim(&trimmed_name_begin, &trimmed_name_end);
+        name_part = strdup(trimmed_name_begin);
+        free(temp_name);
+
+        const char *val_start = assign_pos + 2;
+        char *temp_val = strdup(val_start);
+        if (!temp_val) {
+            free(name_part);
+            return false;
+        }
+        char *trimmed_val_begin = temp_val;
+        char *trimmed_val_end = temp_val + strlen(temp_val);
+        trim(&trimmed_val_begin, &trimmed_val_end);
+        value_part = strdup(trimmed_val_begin);
+        free(temp_val);
+    } else {
+        name_part = strdup(symbol);
+        // Default value for simple defines is "1"
+        value_part = strdup("1"); 
     }
-    if (!ensure_capacity((void **)&pp->defines, sizeof(char *), &pp->define_capacity, pp->define_count + 1)) {
+
+    if (!name_part || !value_part) {
+        free(name_part);
+        free(value_part);
         return false;
     }
-    char *copy = strdup(symbol);
-    if (!copy) {
+
+    uppercase(name_part);
+
+    // Check if already defined, if so update value
+    for (size_t i = 0; i < pp->define_count; ++i) {
+        if (strcmp(pp->defines[i].name, name_part) == 0) {
+            free(pp->defines[i].value);
+            pp->defines[i].value = value_part;
+            free(name_part);
+            return true;
+        }
+    }
+
+    if (!ensure_capacity((void **)&pp->defines, sizeof(DefineEntry), &pp->define_capacity, pp->define_count + 1)) {
+        free(name_part);
+        free(value_part);
         return false;
     }
-    uppercase(copy);
-    pp->defines[pp->define_count++] = copy;
+
+    pp->defines[pp->define_count].name = name_part;
+    pp->defines[pp->define_count].value = value_part;
+    pp->define_count++;
     return true;
 }
 
@@ -837,10 +925,13 @@ static bool undefine_symbol(PascalPreprocessor *pp, const char *symbol) {
     }
     uppercase(upper);
     for (size_t i = 0; i < pp->define_count; ++i) {
-        if (strcmp(pp->defines[i], upper) == 0) {
-            free(pp->defines[i]);
+        if (strcmp(pp->defines[i].name, upper) == 0) {
+            free(pp->defines[i].name);
+            free(pp->defines[i].value);
             pp->defines[i] = pp->defines[pp->define_count - 1];
-            pp->defines[pp->define_count - 1] = NULL;
+            // Zero out the moved-from slot to be safe, though count decrement handles it
+            pp->defines[pp->define_count - 1].name = NULL;
+            pp->defines[pp->define_count - 1].value = NULL;
             --pp->define_count;
             free(upper);
             return true;
@@ -860,7 +951,7 @@ static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol) 
     }
     uppercase(upper);
     for (size_t i = 0; i < pp->define_count; ++i) {
-        if (strcmp(pp->defines[i], upper) == 0) {
+        if (strcmp(pp->defines[i].name, upper) == 0) {
             free(upper);
             return true;
         }
@@ -993,206 +1084,336 @@ static bool resolve_include_path(const char *current_file, const char *directive
     return true;
 }
 
+static const char *get_symbol_value(const PascalPreprocessor *pp, const char *symbol) {
+    if (!pp || !symbol) return NULL;
+    char *upper = strdup(symbol);
+    if (!upper) return NULL;
+    uppercase(upper);
+    for (size_t i = 0; i < pp->define_count; ++i) {
+        if (strcmp(pp->defines[i].name, upper) == 0) {
+            free(upper);
+            return pp->defines[i].value;
+        }
+    }
+    free(upper);
+    return NULL;
+}
+
 static bool evaluate_if_directive(PascalPreprocessor *pp,
                                   const char *expression,
                                   bool *result,
                                   char **error_message) {
     const char *cursor = expression;
-    if (!parse_if_expression(&cursor, result, pp, error_message)) {
+    int64_t value = 0;
+    if (!parse_expression(&cursor, &value, pp, error_message)) {
         return false;
     }
     while (*cursor && isspace((unsigned char)*cursor)) {
         ++cursor;
     }
-    return *cursor == '\0';
-}
-
-static bool parse_if_expression(const char **cursor,
-                                bool *value,
-                                PascalPreprocessor *pp,
-                                char **error_message) {
-    if (!parse_if_term(cursor, value, pp, error_message)) {
-        return false;
+    if (*cursor != '\0') {
+        return set_error(error_message, "unexpected characters after expression");
     }
-    while (1) {
-        const char *start = *cursor;
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
-        if (ascii_strncasecmp(*cursor, "OR", 2) == 0 && !isalnum((unsigned char)(*cursor)[2]) && (*cursor)[2] != '_') {
-            *cursor += 2;
-            bool rhs = false;
-            if (!parse_if_term(cursor, &rhs, pp, error_message)) {
-                return false;
-            }
-            *value = *value || rhs;
-            continue;
-        }
-        *cursor = start;
-        break;
-    }
+    *result = (value != 0);
     return true;
 }
 
-static bool parse_if_term(const char **cursor,
-                          bool *value,
-                          PascalPreprocessor *pp,
-                          char **error_message) {
-    if (!parse_if_factor(cursor, value, pp, error_message)) {
+// Expression = SimpleExpression [ RelOp SimpleExpression ]
+static bool parse_expression(const char **cursor,
+                             int64_t *value,
+                             PascalPreprocessor *pp,
+                             char **error_message) {
+    if (!parse_simple_expression(cursor, value, pp, error_message)) {
         return false;
     }
-    while (1) {
-        const char *start = *cursor;
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
-        if (ascii_strncasecmp(*cursor, "AND", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
-            *cursor += 3;
-            bool rhs = false;
-            if (!parse_if_factor(cursor, &rhs, pp, error_message)) {
-                return false;
-            }
-            *value = *value && rhs;
-            continue;
-        }
-        *cursor = start;
-        break;
-    }
-    return true;
-}
 
-static bool parse_if_factor(const char **cursor,
-                            bool *value,
-                            PascalPreprocessor *pp,
-                            char **error_message) {
     while (**cursor && isspace((unsigned char)**cursor)) {
         ++(*cursor);
     }
-    if (ascii_strncasecmp(*cursor, "NOT", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
-        *cursor += 3;
-        bool inner = false;
-        if (!parse_if_factor(cursor, &inner, pp, error_message)) {
+
+    // Check for relational operators
+    // =, <>, <, <=, >, >=
+    enum { OP_NONE, OP_EQ, OP_NE, OP_LT, OP_LE, OP_GT, OP_GE } op = OP_NONE;
+
+    if (**cursor == '=') {
+        op = OP_EQ;
+        ++(*cursor);
+    } else if (**cursor == '<') {
+        ++(*cursor);
+        if (**cursor == '>') {
+            op = OP_NE;
+            ++(*cursor);
+        } else if (**cursor == '=') {
+            op = OP_LE;
+            ++(*cursor);
+        } else {
+            op = OP_LT;
+        }
+    } else if (**cursor == '>') {
+        ++(*cursor);
+        if (**cursor == '=') {
+            op = OP_GE;
+            ++(*cursor);
+        } else {
+            op = OP_GT;
+        }
+    }
+
+    if (op != OP_NONE) {
+        int64_t rhs = 0;
+        if (!parse_simple_expression(cursor, &rhs, pp, error_message)) {
             return false;
         }
+        switch (op) {
+            case OP_EQ: *value = (*value == rhs); break;
+            case OP_NE: *value = (*value != rhs); break;
+            case OP_LT: *value = (*value < rhs); break;
+            case OP_LE: *value = (*value <= rhs); break;
+            case OP_GT: *value = (*value > rhs); break;
+            case OP_GE: *value = (*value >= rhs); break;
+            default: break;
+        }
+    }
+
+    return true;
+}
+
+// SimpleExpression = Term { AddOp Term }
+// AddOp = +, -, OR, XOR
+static bool parse_simple_expression(const char **cursor,
+                                    int64_t *value,
+                                    PascalPreprocessor *pp,
+                                    char **error_message) {
+    if (!parse_term(cursor, value, pp, error_message)) {
+        return false;
+    }
+
+    while (1) {
+        const char *start = *cursor;
+        while (**cursor && isspace((unsigned char)**cursor)) {
+            ++(*cursor);
+        }
+
+        enum { OP_NONE, OP_ADD, OP_SUB, OP_OR, OP_XOR } op = OP_NONE;
+
+        if (**cursor == '+') {
+            op = OP_ADD;
+            ++(*cursor);
+        } else if (**cursor == '-') {
+            op = OP_SUB;
+            ++(*cursor);
+        } else if (ascii_strncasecmp(*cursor, "OR", 2) == 0 && !isalnum((unsigned char)(*cursor)[2]) && (*cursor)[2] != '_') {
+            op = OP_OR;
+            *cursor += 2;
+        } else if (ascii_strncasecmp(*cursor, "XOR", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+            op = OP_XOR;
+            *cursor += 3;
+        }
+
+        if (op == OP_NONE) {
+            *cursor = start;
+            break;
+        }
+
+        int64_t rhs = 0;
+        if (!parse_term(cursor, &rhs, pp, error_message)) {
+            return false;
+        }
+
+        switch (op) {
+            case OP_ADD: *value += rhs; break;
+            case OP_SUB: *value -= rhs; break;
+            case OP_OR:  *value = (*value | rhs); break;
+            case OP_XOR: *value = (*value ^ rhs); break;
+            default: break;
+        }
+    }
+    return true;
+}
+
+// Term = Factor { MulOp Factor }
+// MulOp = *, /, DIV, MOD, AND
+static bool parse_term(const char **cursor,
+                       int64_t *value,
+                       PascalPreprocessor *pp,
+                       char **error_message) {
+    if (!parse_factor(cursor, value, pp, error_message)) {
+        return false;
+    }
+
+    while (1) {
+        const char *start = *cursor;
+        while (**cursor && isspace((unsigned char)**cursor)) {
+            ++(*cursor);
+        }
+
+        enum { OP_NONE, OP_MUL, OP_DIV, OP_INTDIV, OP_MOD, OP_AND } op = OP_NONE;
+
+        if (**cursor == '*') {
+            op = OP_MUL;
+            ++(*cursor);
+        } else if (**cursor == '/') {
+            op = OP_DIV; // Treat / as integer division for preprocessor? Or error? Pascal / is float.
+            // For preprocessor, usually integer math. Let's assume integer div.
+            ++(*cursor);
+        } else if (ascii_strncasecmp(*cursor, "DIV", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+            op = OP_INTDIV;
+            *cursor += 3;
+        } else if (ascii_strncasecmp(*cursor, "MOD", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+            op = OP_MOD;
+            *cursor += 3;
+        } else if (ascii_strncasecmp(*cursor, "AND", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+            op = OP_AND;
+            *cursor += 3;
+        }
+
+        if (op == OP_NONE) {
+            *cursor = start;
+            break;
+        }
+
+        int64_t rhs = 0;
+        if (!parse_factor(cursor, &rhs, pp, error_message)) {
+            return false;
+        }
+
+        switch (op) {
+            case OP_MUL: *value *= rhs; break;
+            case OP_DIV: 
+            case OP_INTDIV:
+                if (rhs == 0) return set_error(error_message, "division by zero");
+                *value /= rhs; 
+                break;
+            case OP_MOD:
+                if (rhs == 0) return set_error(error_message, "division by zero");
+                *value %= rhs;
+                break;
+            case OP_AND: *value = (*value & rhs); break;
+            default: break;
+        }
+    }
+    return true;
+}
+
+// Factor = Atom | NOT Factor | ( Expression ) | + Factor | - Factor
+// Atom = Identifier | Number | DEFINED(...) | DECLARED(...)
+static bool parse_factor(const char **cursor,
+                         int64_t *value,
+                         PascalPreprocessor *pp,
+                         char **error_message) {
+    while (**cursor && isspace((unsigned char)**cursor)) {
+        ++(*cursor);
+    }
+
+    // Unary operators
+    if (ascii_strncasecmp(*cursor, "NOT", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+        *cursor += 3;
+        int64_t inner = 0;
+        if (!parse_factor(cursor, &inner, pp, error_message)) return false;
         *value = !inner;
         return true;
     }
+    if (**cursor == '+') {
+        ++(*cursor);
+        return parse_factor(cursor, value, pp, error_message);
+    }
+    if (**cursor == '-') {
+        ++(*cursor);
+        int64_t inner = 0;
+        if (!parse_factor(cursor, &inner, pp, error_message)) return false;
+        *value = -inner;
+        return true;
+    }
+
+    // Parentheses
     if (**cursor == '(') {
         ++(*cursor);
-        if (!parse_if_expression(cursor, value, pp, error_message)) {
-            return false;
-        }
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
-        if (**cursor != ')') {
-            return false;
-        }
+        if (!parse_expression(cursor, value, pp, error_message)) return false;
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        if (**cursor != ')') return set_error(error_message, "missing ')'");
         ++(*cursor);
         return true;
     }
-    return parse_defined_expression(cursor, value, pp, error_message);
-}
 
-static bool parse_defined_expression(const char **cursor,
-                                     bool *value,
-                                     PascalPreprocessor *pp,
-                                     char **error_message) {
-    while (**cursor && isspace((unsigned char)**cursor)) {
-        ++(*cursor);
-    }
-    if (ascii_strncasecmp(*cursor, "DECLARED", 8) == 0) {
-        *cursor += 8;
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
-        bool expect_paren = false;
+    // DEFINED / DECLARED
+    if (ascii_strncasecmp(*cursor, "DEFINED", 7) == 0 || ascii_strncasecmp(*cursor, "DECLARED", 8) == 0) {
+        bool is_declared = (ascii_strncasecmp(*cursor, "DECLARED", 8) == 0);
+        *cursor += (is_declared ? 8 : 7);
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        
+        bool paren = false;
         if (**cursor == '(') {
-            expect_paren = true;
+            paren = true;
             ++(*cursor);
         }
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        
         const char *start = *cursor;
-        if (!isalpha((unsigned char)**cursor) && **cursor != '_') {
-            return false;
+        if (!isalpha((unsigned char)**cursor) && **cursor != '_') return set_error(error_message, "expected identifier");
+        while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_' || **cursor == '.')) ++(*cursor);
+        
+        char *sym = duplicate_range(start, *cursor);
+        if (!sym) return set_error(error_message, "out of memory");
+        
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        if (paren) {
+            if (**cursor != ')') {
+                free(sym);
+                return set_error(error_message, "missing ')'");
+            }
+            ++(*cursor);
         }
+        
+        *value = symbol_is_defined(pp, sym) ? 1 : 0;
+        free(sym);
+        return true;
+    }
+
+    // Number
+    if (isdigit((unsigned char)**cursor)) {
+        char *end;
+        *value = strtoll(*cursor, &end, 0);
+        *cursor = end;
+        return true;
+    }
+
+    // Identifier (resolve to value)
+    const char *start = *cursor;
+    if (isalpha((unsigned char)**cursor) || **cursor == '_') {
         while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_' || **cursor == '.')) {
             ++(*cursor);
         }
-        char *symbol = duplicate_range(start, *cursor);
-        if (!symbol) {
-            return false;
-        }
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
-        if (expect_paren) {
-            if (**cursor != ')') {
-                free(symbol);
-                return false;
+        char *sym = duplicate_range(start, *cursor);
+        if (!sym) return set_error(error_message, "out of memory");
+        
+        const char *val_str = get_symbol_value(pp, sym);
+        if (val_str) {
+            // Try to parse value as integer
+            char *end;
+            int64_t parsed_val = strtoll(val_str, &end, 0);
+            if (*end == '\0') {
+                *value = parsed_val;
+            } else {
+                // If not a pure number, treat as 1 (true) if defined? 
+                // Or maybe 0?
+                // For now, if it has a value but not number, let's say 0 unless it's "TRUE"
+                if (ascii_strncasecmp(val_str, "TRUE", 4) == 0) *value = 1;
+                else if (ascii_strncasecmp(val_str, "FALSE", 5) == 0) *value = 0;
+                else *value = parsed_val; // Best effort
             }
-            ++(*cursor);
+        } else {
+            // Undefined symbol -> error (backward compatibility)
+            bool err = set_error(
+                error_message,
+                "undefined macro '%s' in conditional expression",
+                sym
+            );
+            free(sym);
+            return err;
         }
-        bool defined = symbol_is_defined(pp, symbol);
-        *value = defined;
-        free(symbol);
+        free(sym);
         return true;
     }
-    if (ascii_strncasecmp(*cursor, "DEFINED", 7) == 0) {
-        *cursor += 7;
-        while (**cursor && isspace((unsigned char)**cursor)) {
-            ++(*cursor);
-        }
-        if (**cursor == '(') {
-            ++(*cursor);
-            char *symbol = NULL;
-            const char *start = *cursor;
-            while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_')) {
-                ++(*cursor);
-            }
-            symbol = duplicate_range(start, *cursor);
-            if (!symbol) {
-                return false;
-            }
-            while (**cursor && isspace((unsigned char)**cursor)) {
-                ++(*cursor);
-            }
-            if (**cursor != ')') {
-                free(symbol);
-                return false;
-            }
-            ++(*cursor);
-            bool defined = symbol_is_defined(pp, symbol);
-            *value = defined;
-            free(symbol);
-            return true;
-        }
-    }
-    // Fallback: treat bare identifiers as defined/undefined checks
-    const char *start = *cursor;
-    if (!isalpha((unsigned char)**cursor) && **cursor != '_') {
-        return false;
-    }
-    while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_')) {
-        ++(*cursor);
-    }
-    char *symbol = duplicate_range(start, *cursor);
-    if (!symbol) {
-        return false;
-    }
-    bool defined = symbol_is_defined(pp, symbol);
-    if (!defined) {
-        bool err = set_error(
-            error_message,
-            "undefined macro '%s' in conditional expression",
-            symbol
-        );
-        free(symbol);
-        return err;
-    }
-    *value = true;
-    free(symbol);
-    return true;
+
+    return set_error(error_message, "syntax error in expression");
 }

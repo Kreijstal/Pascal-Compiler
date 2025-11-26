@@ -19,7 +19,7 @@ struct RecordType;
 /* Enums for readability with types */
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_COMPOUND_STATEMENT,
     STMT_LABEL, STMT_GOTO, STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR,
-    STMT_FOR_ASSIGN_VAR, STMT_FOR_IN, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CASE, STMT_WITH,
+    STMT_FOR_ASSIGN_VAR, STMT_FOR_IN, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CONTINUE, STMT_CASE, STMT_WITH,
     STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DECL_GENERIC };
@@ -47,6 +47,12 @@ struct TypeAlias
     int is_file;
     int file_type;
     char *file_type_id;
+    /* Range/size metadata for scalar aliases */
+    int is_range;
+    int range_known;
+    long long range_start;
+    long long range_end;
+    long long storage_size;
     
     /* GpcType for this type alias - used for enums and sets to provide a shared
      * type that all literals/members reference. Owned by this structure. */
@@ -301,6 +307,9 @@ struct Statement
         {
             ListNode_t *try_statements;   /* List of Statement */
             ListNode_t *except_statements; /* List of Statement */
+            char *exception_var_name;     /* Variable name from 'on E: Exception do' (optional) */
+            char *exception_type_name;    /* Type name from 'on E: Exception do' (optional) */
+            int has_on_clause;            /* 1 if 'on' clause present, 0 otherwise */
         } try_except_data;
 
         /* RAISE */
@@ -350,6 +359,7 @@ struct Expression
 {
     int line_num;
     int col_num;
+    struct RecordType *record_type; /* MOVED HERE */
     enum ExprType type;
     union expr_data
     {
@@ -511,7 +521,7 @@ struct Expression
     
     int pointer_subtype;
     char *pointer_subtype_id;
-    struct RecordType *record_type;
+    /* struct RecordType *record_type; MOVED */
     int is_array_expr;
     int array_element_type;
     char *array_element_type_id;
