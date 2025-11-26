@@ -1,13 +1,13 @@
 program test_eof_hang_bug;
 {
-  Unit test to reproduce the EOF hanging bug in GPC runtime.
+  Unit test to reproduce the EOF hanging bug in KGPC runtime.
   
   This test reproduces the bug where the EOF function in runtime.c
   incorrectly handles the ungetc() return value, causing infinite loops
   and segmentation faults when parsing invalid input.
   
   Bug description:
-  - gpc_text_eof() calls fgetc() to check for EOF
+  - kgpc_text_eof() calls fgetc() to check for EOF
   - Then calls ungetc() to put the character back
   - If ungetc() fails (returns EOF), the function incorrectly reports EOF
   - This causes ReadChar procedures to think they're at EOF when data is still available

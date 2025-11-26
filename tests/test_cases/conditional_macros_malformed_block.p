@@ -1,7 +1,7 @@
 program ConditionalMacrosMalformed;
 
 begin
-{$if defined(GPC)}
+{$if defined(KGPC)}
   writeln('hello');
   writeln('still inside conditional');
 (* missing ENDIF on purpose *)

@@ -1,14 +1,14 @@
 program OsRuntimeDynlib;
 
-{$if defined(GPC)}
-  {$define GPC_COMPILER}
+{$if defined(KGPC)}
+  {$define KGPC_COMPILER}
 {$endif}
 
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
 {$mode objfpc}{$H+}
 {$endif}
 
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
   {$ifdef MSWINDOWS}
   uses SysUtils, DynLibs, Windows;
   {$else}
@@ -33,7 +33,7 @@ end;
 
 function LoadUnixLibrary: NativeUInt;
 begin
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
     Result := NativeUInt(LoadLibrary('libc.so.6'));
     if Result = 0 then
         Result := NativeUInt(LoadLibrary('libc.so'));
@@ -61,7 +61,7 @@ begin
 end;
 
 var
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
     Handle: TLibHandle;
     ProcPtr: Pointer;
 {$else}
@@ -73,7 +73,7 @@ begin
 {$ifdef MSWINDOWS}
     Handle := LoadLibrary(TestLib);
 {$else}
-    {$if defined(FPC) and not defined(GPC_COMPILER)}
+    {$if defined(FPC) and not defined(KGPC_COMPILER)}
     Handle := TLibHandle(LoadUnixLibrary());
     {$else}
     Handle := LoadUnixLibrary();
@@ -87,7 +87,7 @@ begin
 {$else}
         ProcPtr := GetProcedureAddress(Handle, 'strlen');
 {$endif}
-{$if defined(FPC) and not defined(GPC_COMPILER)}
+{$if defined(FPC) and not defined(KGPC_COMPILER)}
         DynLibOK := (ProcPtr <> nil) and FreeLibrary(Handle);
 {$else}
         DynLibOK := (ProcPtr <> 0) and FreeLibrary(Handle);

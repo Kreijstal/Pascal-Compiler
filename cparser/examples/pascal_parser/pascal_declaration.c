@@ -865,7 +865,7 @@ static ast_t* wrap_program_params(ast_t* params) {
 // Custom parser for main block content that parses statements properly
 static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_name) {
     main_block_args_t* mb_args = (main_block_args_t*)args;
-    const char* debug_flag = getenv("GPC_DEBUG_MAIN_BLOCK");
+    const char* debug_flag = getenv("KGPC_DEBUG_MAIN_BLOCK");
     if (debug_flag != NULL) {
         fprintf(stderr, "[pascal_parser] main block parse start at %d\n", in ? in->start : -1);
     }
@@ -962,7 +962,7 @@ static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
 
 // Helper function to wrap the content of a begin-end block in a PASCAL_T_MAIN_BLOCK node
 static ast_t* build_main_block_ast(ast_t* ast) {
-    const char* debug_flag = getenv("GPC_DEBUG_MAIN_BLOCK");
+    const char* debug_flag = getenv("KGPC_DEBUG_MAIN_BLOCK");
     if (debug_flag != NULL) {
         fprintf(stderr, "[build_main_block_ast] input ast=%p\n", (void*)ast);
         if (ast && ast != ast_nil) {
@@ -2787,8 +2787,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     ));
 
-    bool disable_skip_period = getenv("GPC_DEBUG_NO_SKIP_PERIOD") != NULL;
-    if (disable_skip_period && getenv("GPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
+    bool disable_skip_period = getenv("KGPC_DEBUG_NO_SKIP_PERIOD") != NULL;
+    if (disable_skip_period && getenv("KGPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
         fprintf(stderr, "[pascal_parser] strict final period enabled\n");
     }
     combinator_t* final_period = disable_skip_period

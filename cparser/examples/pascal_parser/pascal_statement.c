@@ -165,7 +165,7 @@ static ast_t* discard_ast_stmt(ast_t* ast) {
 // We keep only the final statement node so downstream consumers treat
 // handlers like regular except-body statements.
 static ast_t* wrap_except_on_handler(ast_t* parsed) {
-    const char* debug_flag = getenv("GPC_DEBUG_ON_HANDLER");
+    const char* debug_flag = getenv("KGPC_DEBUG_ON_HANDLER");
     if (debug_flag != NULL) {
         fprintf(stderr, "[pascal_parser] on-handler wrapper invoked\n");
     }
@@ -266,7 +266,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         }
         memcpy(keyword_buf, slice, ident_len);
         keyword_buf[ident_len] = '\0';
-        if (getenv("GPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
+        if (getenv("KGPC_DEBUG_STATEMENT_DISPATCH") != NULL) {
             fprintf(stderr, "[statement_dispatch] leading identifier '%s'\n", keyword_buf);
         }
         for (size_t i = 0; i < ident_len; ++i) {

@@ -5,13 +5,13 @@
 *.exe
 
 # Compiled binary
-GPC/gpc
+KGPC/kgpc
 
 # Generated parser files
-GPC/Parser/LexAndYacc/lex.yy.c
-GPC/Parser/LexAndYacc/Grammar.tab.c
-GPC/Parser/LexAndYacc/Grammar.tab.h
-GPC/Parser/LexAndYacc/Grammar.output
+KGPC/Parser/LexAndYacc/lex.yy.c
+KGPC/Parser/LexAndYacc/Grammar.tab.c
+KGPC/Parser/LexAndYacc/Grammar.tab.h
+KGPC/Parser/LexAndYacc/Grammar.output
 
 # Test output
 tests/output/

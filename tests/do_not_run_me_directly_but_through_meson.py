@@ -25,14 +25,14 @@ IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
 # Get the build directory from the environment variable set by Meson.
 # Default to "build" for local testing.
 build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
-GPC_PATH = os.path.join(build_dir, "GPC/gpc.exe" if IS_WINDOWS_ABI else "GPC/gpc")
+KGPC_PATH = os.path.join(build_dir, "KGPC/kgpc.exe" if IS_WINDOWS_ABI else "KGPC/kgpc")
 TEST_CASES_DIR = "tests/test_cases"
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 # Default execution timeout per compiled test program (seconds).
-# Can be overridden via environment variable GPC_TEST_TIMEOUT for slower machines.
+# Can be overridden via environment variable KGPC_TEST_TIMEOUT for slower machines.
 try:
-    EXEC_TIMEOUT = int(os.environ.get("GPC_TEST_TIMEOUT", "10"))
+    EXEC_TIMEOUT = int(os.environ.get("KGPC_TEST_TIMEOUT", "10"))
 except ValueError:
     EXEC_TIMEOUT = 10
 
@@ -53,7 +53,7 @@ VALGRIND_MODE = os.environ.get("VALGRIND", "false").lower() in ("1", "true", "ye
 # intact.
 COMPILER_RUNS = []
 
-FAILURE_ARTIFACT_DIR_ENV = os.environ.get("GPC_CI_FAILURE_DIR")
+FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")
 FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
 
 
@@ -200,7 +200,7 @@ def run_executable_with_valgrind(executable_args, **kwargs):
 
 
 def run_compiler(input_file, output_file, flags=None):
-    """Runs the GPC compiler with the given arguments."""
+    """Runs the KGPC compiler with the given arguments."""
     if flags is None:
         flags = []
     else:
@@ -209,7 +209,7 @@ def run_compiler(input_file, output_file, flags=None):
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    command = [GPC_PATH, input_file, output_file]
+    command = [KGPC_PATH, input_file, output_file]
     if IS_WINDOWS_ABI and not _has_explicit_target_flag(flags):
         command.append("--target-windows")
     command.extend(flags)
@@ -512,32 +512,32 @@ class TestCompiler(unittest.TestCase):
                 cls.c_compiler_display = f"{cc_raw} (using Wine-compatible gcc.exe from PATH)"
                 print(f"Wine detected: Using gcc.exe from PATH (searched: {msys2_search_paths})", file=sys.stderr)
 
-        cls.runtime_library = os.environ.get("GPC_RUNTIME_LIB")
+        cls.runtime_library = os.environ.get("KGPC_RUNTIME_LIB")
         if not cls.runtime_library:
             # Try to infer the runtime library from the Meson build tree so that
             # tests can be run via pytest without Meson explicitly setting env.
-            candidate = os.path.join(build_dir, "GPC", "libgpc_runtime.a")
+            candidate = os.path.join(build_dir, "KGPC", "libkgpc_runtime.a")
             if os.path.exists(candidate):
                 cls.runtime_library = candidate
-                os.environ["GPC_RUNTIME_LIB"] = candidate
+                os.environ["KGPC_RUNTIME_LIB"] = candidate
         if not cls.runtime_library:
             raise RuntimeError(
-                "GPC_RUNTIME_LIB environment variable is required to link generated code"
+                "KGPC_RUNTIME_LIB environment variable is required to link generated code"
             )
         if not os.path.exists(cls.runtime_library):
             raise RuntimeError(
-                f"Runtime library path from GPC_RUNTIME_LIB does not exist: {cls.runtime_library}"
+                f"Runtime library path from KGPC_RUNTIME_LIB does not exist: {cls.runtime_library}"
             )
 
-        cls.ctypes_helper_library = os.environ.get("GPC_CTYPES_HELPER")
+        cls.ctypes_helper_library = os.environ.get("KGPC_CTYPES_HELPER")
         if not cls.ctypes_helper_library:
             # Fallback for local runs: look for ctypes_helper in Meson build dir
-            # matching the name produced in GPC/meson.build.
+            # matching the name produced in KGPC/meson.build.
             for name in ("ctypes_helper.so", "libctypes_helper.so", "ctypes_helper.dylib", "libctypes_helper.dylib"):
-                candidate = os.path.join(build_dir, "GPC", name)
+                candidate = os.path.join(build_dir, "KGPC", name)
                 if os.path.exists(candidate):
                     cls.ctypes_helper_library = candidate
-                    os.environ["GPC_CTYPES_HELPER"] = candidate
+                    os.environ["KGPC_CTYPES_HELPER"] = candidate
                     break
         if cls.ctypes_helper_library is not None and not os.path.exists(
             cls.ctypes_helper_library
@@ -547,11 +547,11 @@ class TestCompiler(unittest.TestCase):
                 f"{cls.ctypes_helper_library}"
             )
 
-        raw_ctypes_helper_link = os.environ.get("GPC_CTYPES_HELPER_LINK")
+        raw_ctypes_helper_link = os.environ.get("KGPC_CTYPES_HELPER_LINK")
         if raw_ctypes_helper_link is None and cls.ctypes_helper_library is not None:
             # Default to using the helper library itself when invoked locally.
             raw_ctypes_helper_link = cls.ctypes_helper_library
-            os.environ["GPC_CTYPES_HELPER_LINK"] = raw_ctypes_helper_link
+            os.environ["KGPC_CTYPES_HELPER_LINK"] = raw_ctypes_helper_link
         cls.ctypes_helper_link = cls._resolve_ctypes_helper_link(
             raw_ctypes_helper_link,
             cls.ctypes_helper_library,
@@ -588,12 +588,12 @@ class TestCompiler(unittest.TestCase):
                 os.environ[path_var] = (
                     cls.ctypes_helper_dir + (os.pathsep + current if current else "")
                 )
-        cls.have_gmp = os.environ.get("GPC_HAVE_GMP", "0") == "1"
+        cls.have_gmp = os.environ.get("KGPC_HAVE_GMP", "0") == "1"
 
     @classmethod
     def _ensure_compiler_built(cls):
-        """Builds the compiler via Meson if the gpc binary is missing."""
-        if os.path.exists(GPC_PATH):
+        """Builds the compiler via Meson if the kgpc binary is missing."""
+        if os.path.exists(KGPC_PATH):
             return
 
         meson = shutil.which("meson")
@@ -638,9 +638,9 @@ class TestCompiler(unittest.TestCase):
                 f"Meson compile failed:\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}"
             )
 
-        if not os.path.exists(GPC_PATH):
+        if not os.path.exists(KGPC_PATH):
             raise RuntimeError(
-                f"Meson build completed but did not produce compiler at {GPC_PATH}"
+                f"Meson build completed but did not produce compiler at {KGPC_PATH}"
             )
 
     @classmethod
@@ -839,8 +839,8 @@ class TestCompiler(unittest.TestCase):
         # In the unoptimized version, we expect the variables x and y to be allocated.
         # Global variables are allocated in the BSS section, not on the stack.
         # We should see .comm directives for both variables.
-        self.assertIn(".comm\t__gpc_program_var_x_1", unoptimized_asm)
-        self.assertIn(".comm\t__gpc_program_var_y_2", unoptimized_asm)
+        self.assertIn(".comm\t__kgpc_program_var_x_1", unoptimized_asm)
+        self.assertIn(".comm\t__kgpc_program_var_y_2", unoptimized_asm)
 
         # --- Run with -O2 optimization ---
         optimized_output_file = os.path.join(
@@ -855,7 +855,7 @@ class TestCompiler(unittest.TestCase):
         self.assertLess(len(optimized_asm), len(unoptimized_asm))
         
         # Additionally, we should not see the unused variable y in the optimized version
-        self.assertNotIn(".comm\t__gpc_program_var_y_2", optimized_asm)
+        self.assertNotIn(".comm\t__kgpc_program_var_y_2", optimized_asm)
 
     def test_parser_ast_dump_matches_golden(self):
         """Ensures the AST dump matches the golden files for representative programs."""
@@ -1036,7 +1036,7 @@ class TestCompiler(unittest.TestCase):
             "valgrind",
             "--leak-check=full",
             "--error-exitcode=1",
-            GPC_PATH,
+            KGPC_PATH,
             input_file,
             asm_file,
             "-parse-only",
@@ -1082,7 +1082,7 @@ class TestCompiler(unittest.TestCase):
         existing = env.get(path_var, "")
         helper_dir = self.ctypes_helper_dir
         if helper_dir is None:
-            self.fail("GPC_CTYPES_HELPER must be provided to run ctypes demo")
+            self.fail("KGPC_CTYPES_HELPER must be provided to run ctypes demo")
         env[path_var] = helper_dir + (os.pathsep + existing if existing else "")
 
         result = subprocess.run(
@@ -1211,7 +1211,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_sign_function(self):
         """Tests the sign function with positive, negative, and zero inputs."""
-        input_file = "GPC/TestPrograms/sign_test.p"
+        input_file = "KGPC/TestPrograms/sign_test.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "sign_test.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "sign_test")
 
@@ -1548,22 +1548,22 @@ class TestCompiler(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
 
         asm_source = read_file_content(asm_file)
-        self.assertIn("call\tgpc_move", asm_source)
+        self.assertIn("call\tkgpc_move", asm_source)
         self.assertIn("call\tsucc_i", asm_source)
 
     def test_register_spill_restores_value(self):
         """Ensures spilled registers are correctly reloaded when register pressure is high."""
         input_file, asm_file, executable_file = self._get_test_paths("register_spill_limit")
 
-        prev_limit = os.environ.get("GPC_FORCE_REGISTER_LIMIT")
-        os.environ["GPC_FORCE_REGISTER_LIMIT"] = "2"
+        prev_limit = os.environ.get("KGPC_FORCE_REGISTER_LIMIT")
+        os.environ["KGPC_FORCE_REGISTER_LIMIT"] = "2"
         try:
             run_compiler(input_file, asm_file)
         finally:
             if prev_limit is None:
-                os.environ.pop("GPC_FORCE_REGISTER_LIMIT", None)
+                os.environ.pop("KGPC_FORCE_REGISTER_LIMIT", None)
             else:
-                os.environ["GPC_FORCE_REGISTER_LIMIT"] = prev_limit
+                os.environ["KGPC_FORCE_REGISTER_LIMIT"] = prev_limit
 
         self.compile_executable(asm_file, executable_file)
 
@@ -1979,7 +1979,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_for_program(self):
         """Tests the for program, including edge cases."""
-        input_file = "GPC/TestPrograms/CodeGeneration/for.p"
+        input_file = "KGPC/TestPrograms/CodeGeneration/for.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "for")
 
@@ -2173,7 +2173,7 @@ def main():
     parser.add_argument("--tap", action="store_true")
     args, remaining = parser.parse_known_args()
 
-    if args.tap or os.environ.get("GPC_TEST_PROTOCOL", "").lower() == "tap":
+    if args.tap or os.environ.get("KGPC_TEST_PROTOCOL", "").lower() == "tap":
         suite = _load_suite()
         runner = TAPTestRunner()
         result = runner.run(suite)

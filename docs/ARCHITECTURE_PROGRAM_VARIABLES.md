@@ -225,9 +225,9 @@ if (callee_depth == 1) {
 ## Affected Files
 
 ### Core Changes
-- `GPC/CodeGenerator/Intel_x86-64/codegen.c` (codegen_program, codegen_function_locals)
-- `GPC/CodeGenerator/Intel_x86-64/codegen_statement.c` (variable access)
-- `GPC/CodeGenerator/Intel_x86-64/stackmng.c` (stack management)
+- `KGPC/CodeGenerator/Intel_x86-64/codegen.c` (codegen_program, codegen_function_locals)
+- `KGPC/CodeGenerator/Intel_x86-64/codegen_statement.c` (variable access)
+- `KGPC/CodeGenerator/Intel_x86-64/stackmng.c` (stack management)
 
 ### Testing
 - Add test cases for program variable access patterns
