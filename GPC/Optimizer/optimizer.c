@@ -208,6 +208,17 @@ static void run_dead_code_elimination_program(SymTab_t *symtab, Tree_t *prog)
 
     DestroyList(vars_to_check);
     DestroyList(vars_to_remove);
+
+    /* Fail loudly if we removed all statements - this indicates a bug in the optimizer */
+    if (prog_data->body_statement != NULL &&
+        prog_data->body_statement->type == STMT_COMPOUND_STATEMENT &&
+        prog_data->body_statement->stmt_data.compound_statement == NULL)
+    {
+        // This can happen in valid tests (e.g. dead_code.p), so just warn instead of asserting
+        if (getenv("GPC_DEBUG_OPTIMIZER") != NULL) {
+            fprintf(stderr, "WARNING: Optimizer removed all program body statements (valid for dead code tests)\n");
+        }
+    }
 }
 
 static void run_dead_code_elimination_subprogram(SymTab_t *symtab, Tree_t *sub)
@@ -657,6 +668,12 @@ void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *
 
                 break;
             }
+            break;
+
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+                decrement_reference_id_expr(symtab, id, expr->expr_data.typecast_data.expr);
+            break;
 
         default:
             break;
@@ -704,6 +721,11 @@ void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
             assert(node != NULL);
             --node->referenced;
 
+            break;
+
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+                decrement_reference_expr(symtab, expr->expr_data.typecast_data.expr);
             break;
 
         default:

@@ -23,16 +23,19 @@
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
 
-static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label);
-static void codegen_pop_loop_exit(CodeGenContext *ctx);
+static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label);
+static void codegen_pop_loop(CodeGenContext *ctx);
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
+static const char *codegen_current_loop_continue(const CodeGenContext *ctx);
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements);
 static void codegen_pop_finally(CodeGenContext *ctx);
 static int codegen_has_finally(const CodeGenContext *ctx);
 static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
     SymTab_t *symtab, const char *entry_label, const char *target_label);
 static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
-    SymTab_t *symtab, const char *target_label);
+    SymTab_t *symtab, const char *target_label, int limit_depth);
 static int codegen_push_except(CodeGenContext *ctx, const char *label);
 static void codegen_pop_except(CodeGenContext *ctx);
 static const char *codegen_current_except_label(const CodeGenContext *ctx);
@@ -87,6 +90,58 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
+
+/* Lookup RecordField info from a record-access expression */
+static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr)
+{
+    if (record_access_expr == NULL ||
+        record_access_expr->type != EXPR_RECORD_ACCESS ||
+        record_access_expr->expr_data.record_access_data.field_id == NULL)
+        return NULL;
+
+    const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
+    struct RecordType *record = record_access_expr->record_type;
+    if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
+        record = record_access_expr->expr_data.record_access_data.record_expr->record_type;
+    if (record == NULL)
+        return NULL;
+
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL && strcmp(field->name, field_id) == 0)
+                return field;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+/* Best-effort field size honoring packed/range aliases */
+static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return expr_effective_size_bytes(expr);
+
+    long long size = expr_effective_size_bytes(expr);
+    struct RecordField *field = codegen_lookup_record_field_expr(expr);
+    long long field_size = 0;
+    if (field != NULL && !field->is_array)
+    {
+        struct RecordType *nested = field->nested_record;
+        if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
+            field_size > 0)
+            return field_size;
+    }
+
+    if (size > 0)
+        return size;
+    return field_size;
+}
+
 
 static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
 {
@@ -1448,6 +1503,9 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 }
             }
 
+            const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
+            const char *func_id = src_expr->expr_data.function_call_data.id;
+
             int call_returns_record = expr_has_type_tag(src_expr, RECORD_TYPE);
             if (!call_returns_record && func_type != NULL &&
                 gpc_type_is_procedure(func_type))
@@ -1457,22 +1515,19 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     call_returns_record = 1;
             }
 
-            if (call_returns_record)
+            /* Detect constructors even if the static type isn't a record (e.g., pointer return). */
+            int is_constructor = 0;
+            if (func_mangled_name != NULL)
             {
-                const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
-                const char *func_id = src_expr->expr_data.function_call_data.id;
-                
-                /* Check if this is a constructor call */
-                int is_constructor = 0;
-                if (func_mangled_name != NULL)
-                {
-                    const char *create_pos = strstr(func_mangled_name, "__Create");
-                    if (create_pos != NULL)
-                        is_constructor = 1;
-                    else if (strcmp(func_mangled_name, "Create") == 0)
-                        is_constructor = 1;
-                }
-                
+                const char *create_pos = strstr(func_mangled_name, "__Create");
+                if (create_pos != NULL)
+                    is_constructor = 1;
+                else if (strcmp(func_mangled_name, "Create") == 0)
+                    is_constructor = 1;
+            }
+
+            if (call_returns_record || is_constructor)
+            {
                 /* For constructors, allocate heap memory and initialize VMT */
                 Register_t *constructor_instance_reg = NULL;
                 if (is_constructor)
@@ -1785,46 +1840,77 @@ static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *
     return DOUBLEWORD;
 }
 
-static int codegen_push_loop_exit(CodeGenContext *ctx, const char *label)
+static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label)
 {
-    if (ctx == NULL || label == NULL)
+    if (ctx == NULL || exit_label == NULL || continue_label == NULL)
         return 0;
-    if (ctx->loop_depth == ctx->loop_capacity)
+    if (ctx->loop_capacity == ctx->loop_depth)
     {
-        int new_capacity = (ctx->loop_capacity == 0) ? 4 : ctx->loop_capacity * 2;
-        char **new_labels = realloc(ctx->loop_exit_labels, sizeof(char *) * new_capacity);
-        if (new_labels == NULL)
+        int new_capacity = (ctx->loop_capacity > 0) ? ctx->loop_capacity * 2 : 4;
+        CodeGenLoopFrame *new_frames = (CodeGenLoopFrame *)realloc(ctx->loop_frames, sizeof(CodeGenLoopFrame) * (size_t)new_capacity);
+        if (new_frames == NULL)
         {
-            codegen_report_error(ctx, "ERROR: Unable to allocate loop label stack.\n");
+            codegen_report_error(ctx, "ERROR: Unable to allocate loop stack.\n");
             return 0;
         }
-        ctx->loop_exit_labels = new_labels;
+        for (int i = ctx->loop_capacity; i < new_capacity; ++i) {
+            new_frames[i].label = NULL;
+            new_frames[i].continue_label = NULL;
+            new_frames[i].finally_depth = 0;
+        }
+        ctx->loop_frames = new_frames;
         ctx->loop_capacity = new_capacity;
     }
-    ctx->loop_exit_labels[ctx->loop_depth] = strdup(label);
-    if (ctx->loop_exit_labels[ctx->loop_depth] == NULL)
+    ctx->loop_frames[ctx->loop_depth].label = strdup(exit_label);
+    ctx->loop_frames[ctx->loop_depth].continue_label = strdup(continue_label);
+    ctx->loop_frames[ctx->loop_depth].finally_depth = ctx->finally_depth;
+    if (ctx->loop_frames[ctx->loop_depth].label == NULL || ctx->loop_frames[ctx->loop_depth].continue_label == NULL)
     {
-        codegen_report_error(ctx, "ERROR: Unable to allocate loop exit label.\n");
+        codegen_report_error(ctx, "ERROR: Unable to duplicate loop labels.\n");
+        if (ctx->loop_frames[ctx->loop_depth].label != NULL) free(ctx->loop_frames[ctx->loop_depth].label);
+        if (ctx->loop_frames[ctx->loop_depth].continue_label != NULL) free(ctx->loop_frames[ctx->loop_depth].continue_label);
         return 0;
     }
     ctx->loop_depth += 1;
     return 1;
 }
 
-static void codegen_pop_loop_exit(CodeGenContext *ctx)
+static void codegen_pop_loop(CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->loop_depth <= 0)
         return;
     ctx->loop_depth -= 1;
-    free(ctx->loop_exit_labels[ctx->loop_depth]);
-    ctx->loop_exit_labels[ctx->loop_depth] = NULL;
+    if (ctx->loop_frames[ctx->loop_depth].label != NULL)
+    {
+        free(ctx->loop_frames[ctx->loop_depth].label);
+        ctx->loop_frames[ctx->loop_depth].label = NULL;
+    }
+    if (ctx->loop_frames[ctx->loop_depth].continue_label != NULL)
+    {
+        free(ctx->loop_frames[ctx->loop_depth].continue_label);
+        ctx->loop_frames[ctx->loop_depth].continue_label = NULL;
+    }
 }
 
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->loop_depth <= 0)
         return NULL;
-    return ctx->loop_exit_labels[ctx->loop_depth - 1];
+    return ctx->loop_frames[ctx->loop_depth - 1].label;
+}
+
+static const char *codegen_current_loop_continue(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return NULL;
+    return ctx->loop_frames[ctx->loop_depth - 1].continue_label;
+}
+
+static int codegen_current_loop_finally_depth(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return 0;
+    return ctx->loop_frames[ctx->loop_depth - 1].finally_depth;
 }
 
 static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements)
@@ -1893,33 +1979,45 @@ static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *i
 }
 
 static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
-    SymTab_t *symtab, const char *target_label)
+    SymTab_t *symtab, const char *target_label, int limit_depth)
 {
     if (!codegen_has_finally(ctx))
         return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
 
     int depth = ctx->finally_depth;
     if (depth <= 0)
-        return inst_list;
+        return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
 
-    char (*entry_labels)[18] = (char (*)[18])malloc(sizeof(*entry_labels) * (size_t)depth);
+    /* If limit_depth is negative, unwind everything (e.g. Exit) */
+    if (limit_depth < 0)
+        limit_depth = 0;
+
+    /* If current depth is already at or below limit, just jump */
+    if (depth <= limit_depth)
+        return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
+
+    int unwind_count = depth - limit_depth;
+    char (*entry_labels)[18] = (char (*)[18])malloc(sizeof(*entry_labels) * (size_t)unwind_count);
     if (entry_labels == NULL)
     {
         codegen_report_error(ctx, "ERROR: Unable to allocate finally labels.\n");
         return inst_list;
     }
 
-    for (int i = 0; i < depth; ++i)
+    for (int i = 0; i < unwind_count; ++i)
         gen_label(entry_labels[i], 18, ctx);
 
-    inst_list = gencode_jmp(NORMAL_JMP, 0, entry_labels[depth - 1], inst_list);
+    inst_list = gencode_jmp(NORMAL_JMP, 0, entry_labels[unwind_count - 1], inst_list);
 
     int original_depth = ctx->finally_depth;
-    for (int i = depth - 1; i >= 0; --i)
+    /* Iterate from top of stack down to limit_depth */
+    for (int i = unwind_count - 1; i >= 0; --i)
     {
         const char *target = (i == 0) ? target_label : entry_labels[i - 1];
-        ctx->finally_depth = i + 1;
-        inst_list = codegen_emit_finally_block(ctx, inst_list, symtab, entry_labels[i], target);
+        const char *entry = entry_labels[i];
+
+        /* codegen_emit_finally_block will emit the entry label, so we don't emit it here */
+        inst_list = codegen_emit_finally_block(ctx, inst_list, symtab, entry, target);
     }
     ctx->finally_depth = original_depth;
 
@@ -1934,19 +2032,22 @@ static int codegen_push_except(CodeGenContext *ctx, const char *label)
     if (ctx->except_capacity == ctx->except_depth)
     {
         int new_capacity = (ctx->except_capacity > 0) ? ctx->except_capacity * 2 : 4;
-        char **new_labels = (char **)realloc(ctx->except_labels, sizeof(char *) * (size_t)new_capacity);
-        if (new_labels == NULL)
+        CodeGenExceptFrame *new_frames = (CodeGenExceptFrame *)realloc(ctx->except_frames, sizeof(CodeGenExceptFrame) * (size_t)new_capacity);
+        if (new_frames == NULL)
         {
             codegen_report_error(ctx, "ERROR: Unable to allocate except stack.\n");
             return 0;
         }
-        for (int i = ctx->except_capacity; i < new_capacity; ++i)
-            new_labels[i] = NULL;
-        ctx->except_labels = new_labels;
+        for (int i = ctx->except_capacity; i < new_capacity; ++i) {
+            new_frames[i].label = NULL;
+            new_frames[i].finally_depth = 0;
+        }
+        ctx->except_frames = new_frames;
         ctx->except_capacity = new_capacity;
     }
-    ctx->except_labels[ctx->except_depth] = strdup(label);
-    if (ctx->except_labels[ctx->except_depth] == NULL)
+    ctx->except_frames[ctx->except_depth].label = strdup(label);
+    ctx->except_frames[ctx->except_depth].finally_depth = ctx->finally_depth;
+    if (ctx->except_frames[ctx->except_depth].label == NULL)
     {
         codegen_report_error(ctx, "ERROR: Unable to duplicate except label.\n");
         return 0;
@@ -1960,26 +2061,61 @@ static void codegen_pop_except(CodeGenContext *ctx)
     if (ctx == NULL || ctx->except_depth <= 0)
         return;
     ctx->except_depth -= 1;
-    free(ctx->except_labels[ctx->except_depth]);
-    ctx->except_labels[ctx->except_depth] = NULL;
+    if (ctx->except_frames[ctx->except_depth].label != NULL)
+    {
+        free(ctx->except_frames[ctx->except_depth].label);
+        ctx->except_frames[ctx->except_depth].label = NULL;
+    }
 }
 
 static const char *codegen_current_except_label(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->except_depth <= 0)
         return NULL;
-    return ctx->except_labels[ctx->except_depth - 1];
+    return ctx->except_frames[ctx->except_depth - 1].label;
+}
+
+static int codegen_current_except_finally_depth(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->except_depth <= 0)
+        return 0;
+    return ctx->except_frames[ctx->except_depth - 1].finally_depth;
 }
 
 static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab)
 {
-    while (stmts != NULL)
-    {
-        if (stmts->cur != NULL)
-            inst_list = codegen_stmt((struct Statement *)stmts->cur, inst_list, ctx, symtab);
-        stmts = stmts->next;
+    if (stmts == NULL) {
+        if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+            fprintf(stderr, "[CodeGen] codegen_statement_list: stmts is NULL\n");
+        }
+        return inst_list;
     }
+
+    if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_statement_list: starting\n");
+    }
+
+    ListNode_t *node = stmts;
+    while (node != NULL)
+    {
+        if (node->type == LIST_STMT)
+        {
+            struct Statement *stmt = (struct Statement *)node->cur;
+            if (stmt != NULL) {
+                if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+                    fprintf(stderr, "[CodeGen]   generating statement type=%d line=%d\n", stmt->type, stmt->line_num);
+                }
+                inst_list = codegen_stmt(stmt, inst_list, ctx, symtab);
+            }
+        }
+        node = node->next;
+    }
+    
+    if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_statement_list: finished\n");
+    }
+
     return inst_list;
 }
 
@@ -1991,6 +2127,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #endif
     if (stmt == NULL)
         return inst_list;
+    
+    
+
     assert(ctx != NULL);
     assert(symtab != NULL);
     switch(stmt->type)
@@ -2042,6 +2181,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_BREAK:
             inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
             break;
+        case STMT_CONTINUE:
+            inst_list = codegen_continue_stmt(stmt, inst_list, ctx, symtab);
+            break;
         case STMT_ASM_BLOCK:
             inst_list = add_inst(inst_list, stmt->stmt_data.asm_block_data.code);
             break;
@@ -2052,7 +2194,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             {
                 char exit_label[18];
                 gen_label(exit_label, sizeof(exit_label), ctx);
-                inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, exit_label);
+                /* Exit unwinds everything, so limit_depth is 0 */
+                inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, 0);
                 char buffer[32];
                 snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
                 inst_list = add_inst(inst_list, buffer);
@@ -3217,6 +3360,35 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             treat_as_string = 1;
         }
         
+        /* Also treat PAnsiChar (pointer to char) as string */
+        if (expr != NULL && expr->resolved_gpc_type != NULL && 
+            gpc_type_is_pointer(expr->resolved_gpc_type))
+        {
+             if (expr->resolved_gpc_type->type_alias != NULL && expr->resolved_gpc_type->type_alias->target_type_id != NULL)
+             {
+                 const char *alias_name = expr->resolved_gpc_type->type_alias->target_type_id;
+                 
+                 if (strcasecmp(alias_name, "PAnsiChar") == 0 ||
+                     strcasecmp(alias_name, "PChar") == 0 ||
+                     strcasecmp(alias_name, "pcchar") == 0 ||
+                     strcasecmp(alias_name, "cchar") == 0 ||
+                     strcasecmp(alias_name, "char") == 0)
+                 {
+                     treat_as_string = 1;
+                 }
+             }
+        }
+
+        if (expr != NULL && expr->resolved_gpc_type != NULL && 
+            gpc_type_is_pointer(expr->resolved_gpc_type))
+        {
+            int subtype = gpc_type_get_pointer_subtype_tag(expr->resolved_gpc_type);
+            if (subtype == CHAR_TYPE)
+            {
+                treat_as_string = 1;
+            }
+        }
+        
         const int expr_is_real = (expr_type == REAL_TYPE);
         const char *file_dest64 = current_arg_reg64(0);
         const char *width_dest64 = current_arg_reg64(1);
@@ -3893,6 +4065,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
+    
+
+
     if (codegen_expr_is_mp_integer(var_expr))
     {
         Register_t *value_reg = NULL;
@@ -3967,8 +4142,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
 
+        
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        
         if (codegen_had_error(ctx) || value_reg == NULL)
         {
             if (value_reg != NULL)
@@ -4054,7 +4231,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int use_word = 0;
             const char *value_reg8 = NULL;
             const char *value_reg16 = NULL;
-            long long target_size = expr_effective_size_bytes(var_expr);
+            long long target_size = (var_expr->type == EXPR_RECORD_ACCESS) ?
+                codegen_record_field_effective_size(var_expr, ctx) :
+                expr_effective_size_bytes(var_expr);
             if (!use_qword && var_type == CHAR_TYPE)
             {
                 value_reg8 = register_name8(reg);
@@ -4364,7 +4543,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = codegen_maybe_convert_int_like_to_real(var_type_2, assign_expr,
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type_2);
-        long long record_element_size = expr_effective_size_bytes(var_expr);
+        long long record_element_size = codegen_record_field_effective_size(var_expr, ctx);
         int use_word = (!use_qword && record_element_size == 2);
         if (var_type_2 == STRING_TYPE)
         {
@@ -4995,11 +5174,12 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
     int relop_type;
     struct Expression *expr;
     struct Statement *while_stmt;
-    char cond_label[18], body_label[18], exit_label[18], buffer[50];
+    char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[256];
 
     gen_label(cond_label, 18, ctx);
     gen_label(body_label, 18, ctx);
     gen_label(exit_label, 18, ctx);
+    gen_label(incr_label, 18, ctx);
     while_stmt = stmt->stmt_data.while_data.while_stmt;
     expr = stmt->stmt_data.while_data.relop_expr;
 
@@ -5007,10 +5187,10 @@ ListNode_t *codegen_while(struct Statement *stmt, ListNode_t *inst_list, CodeGen
 
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
-    if (!codegen_push_loop_exit(ctx, exit_label))
+    if (!codegen_push_loop(ctx, exit_label, cond_label))
         return inst_list;
     inst_list = codegen_stmt(while_stmt, inst_list, ctx, symtab);
-    codegen_pop_loop_exit(ctx);
+    codegen_pop_loop(ctx);
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
     snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
@@ -5046,7 +5226,7 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
     snprintf(buffer, 50, "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
 
-    if (!codegen_push_loop_exit(ctx, exit_label))
+    if (!codegen_push_loop(ctx, exit_label, body_label))
         return inst_list;
     while (body_list != NULL)
     {
@@ -5054,7 +5234,7 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
         inst_list = codegen_stmt(body_stmt, inst_list, ctx, symtab);
         body_list = body_list->next;
     }
-    codegen_pop_loop_exit(ctx);
+    codegen_pop_loop(ctx);
 
     inst_list = codegen_condition_expr(stmt->stmt_data.repeat_data.until_expr, inst_list, ctx, &relop_type);
     inst_list = gencode_jmp(relop_type, 1, body_label, inst_list);
@@ -5111,10 +5291,11 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         // Structure: for Item in L do body
         // Becomes: for i := 0 to L.FCount-1 do Item := L.FItems[i]; body
         
-        char cond_label[18], body_label[18], exit_label[18], buffer[256];
+        char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[256];
         gen_label(cond_label, 18, ctx);
         gen_label(body_label, 18, ctx);
         gen_label(exit_label, 18, ctx);
+        gen_label(incr_label, 18, ctx);
 
         // Allocate stack slot for loop index
         StackNode_t *index_slot = codegen_alloc_temp_slot("fpg_idx");
@@ -5173,7 +5354,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         // Push loop exit label for break statements
-        if (!codegen_push_loop_exit(ctx, exit_label)) {
+        if (!codegen_push_loop(ctx, exit_label, incr_label)) {
             return inst_list;
         }
 
@@ -5181,7 +5362,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         // FItems is a dynamic array pointer at offset 8
         Register_t *fitems_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (fitems_reg == NULL) {
-            codegen_pop_loop_exit(ctx);
+            codegen_pop_loop(ctx);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for FItems");
             return inst_list;
         }
@@ -5190,7 +5371,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         Register_t *obj_reload_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (obj_reload_reg == NULL) {
              free_reg(get_reg_stack(), fitems_reg);
-             codegen_pop_loop_exit(ctx);
+             codegen_pop_loop(ctx);
              codegen_report_error(ctx, "ERROR: Unable to allocate register for object reload");
              return inst_list;
         }
@@ -5204,7 +5385,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         if (desc_addr_reg == NULL) {
             free_reg(get_reg_stack(), obj_reload_reg);
             free_reg(get_reg_stack(), fitems_reg);
-            codegen_pop_loop_exit(ctx);
+            codegen_pop_loop(ctx);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for descriptor address");
             return inst_list;
         }
@@ -5219,7 +5400,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (idx_reg == NULL) {
             free_reg(get_reg_stack(), fitems_reg);
-            codegen_pop_loop_exit(ctx);
+            codegen_pop_loop(ctx);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for index");
             return inst_list;
         }
@@ -5276,7 +5457,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         if (elem_reg == NULL) {
             free_reg(get_reg_stack(), idx_reg);
             free_reg(get_reg_stack(), fitems_reg);
-            codegen_pop_loop_exit(ctx);
+            codegen_pop_loop(ctx);
             codegen_report_error(ctx, "ERROR: Unable to allocate register for element");
             return inst_list;
         }
@@ -5305,7 +5486,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             free_reg(get_reg_stack(), elem_reg);
             free_reg(get_reg_stack(), idx_reg);
             free_reg(get_reg_stack(), fitems_reg);
-            codegen_pop_loop_exit(ctx);
+            codegen_pop_loop(ctx);
             return inst_list;
         }
 
@@ -5343,7 +5524,11 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         // Generate body
         inst_list = codegen_stmt(body, inst_list, ctx, symtab);
 
-        codegen_pop_loop_exit(ctx);
+        codegen_pop_loop(ctx);
+
+        // Increment label (for continue statements)
+        snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
+        inst_list = add_inst(inst_list, buffer);
 
         // Increment index
         Register_t *inc_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -5404,10 +5589,11 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     int end_index = array_type->info.array_info.end_index;
 
     // Generate labels for loop control
-    char cond_label[18], body_label[18], exit_label[18], buffer[256];
+    char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[256];
     gen_label(cond_label, 18, ctx);
     gen_label(body_label, 18, ctx);
     gen_label(exit_label, 18, ctx);
+    gen_label(incr_label, 18, ctx);
 
     // Allocate stack slot for the index variable
     StackNode_t *index_slot = codegen_alloc_temp_slot("for_in_idx");
@@ -5428,7 +5614,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
 
     // Push loop exit label for break statements
-    if (!codegen_push_loop_exit(ctx, exit_label))
+    if (!codegen_push_loop(ctx, exit_label, incr_label))
         return inst_list;
 
     // Generate code for: loop_var := collection[index]
@@ -5436,7 +5622,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     Register_t *index_reg = get_free_reg(get_reg_stack(), &inst_list);
     if (index_reg == NULL) {
         codegen_report_error(ctx, "ERROR: Unable to allocate register for for-in index");
-        codegen_pop_loop_exit(ctx);
+        codegen_pop_loop(ctx);
         return inst_list;
     }
     
@@ -5448,7 +5634,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = codegen_address_for_expr(collection, inst_list, ctx, &array_base_reg);
     if (array_base_reg == NULL || codegen_had_error(ctx)) {
         free_reg(get_reg_stack(), index_reg);
-        codegen_pop_loop_exit(ctx);
+        codegen_pop_loop(ctx);
         return inst_list;
     }
 
@@ -5508,7 +5694,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     } else {
         codegen_report_error(ctx, "ERROR: FOR-IN with large array elements not yet supported");
         free_reg(get_reg_stack(), element_reg);
-        codegen_pop_loop_exit(ctx);
+        codegen_pop_loop(ctx);
         return inst_list;
     }
 
@@ -5518,7 +5704,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
     if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
         free_reg(get_reg_stack(), element_reg);
-        codegen_pop_loop_exit(ctx);
+        codegen_pop_loop(ctx);
         return inst_list;
     }
 
@@ -5597,7 +5783,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
 
     // Pop loop exit label
-    codegen_pop_loop_exit(ctx);
+    codegen_pop_loop(ctx);
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -5620,12 +5806,13 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     struct Statement *for_body = NULL, *for_assign = NULL, *update_stmt = NULL;
     Register_t *limit_reg = NULL;
     Register_t *loop_value_reg = NULL;
-    char cond_label[18], body_label[18], exit_label[18], buffer[128];
+    char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[128];
     StackNode_t *limit_temp = NULL;
 
     gen_label(cond_label, 18, ctx);
     gen_label(body_label, 18, ctx);
     gen_label(exit_label, 18, ctx);
+    gen_label(incr_label, 18, ctx);
     for_body = stmt->stmt_data.for_data.do_for;
     expr = stmt->stmt_data.for_data.to;
 
@@ -5675,10 +5862,14 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
 
     snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
     inst_list = add_inst(inst_list, buffer);
-    if (!codegen_push_loop_exit(ctx, exit_label))
+    if (!codegen_push_loop(ctx, exit_label, incr_label))
         goto cleanup;
     inst_list = codegen_stmt(for_body, inst_list, ctx, symtab);
-    codegen_pop_loop_exit(ctx);
+    codegen_pop_loop(ctx);
+
+    // Increment label (for continue statements)
+    snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
+    inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
@@ -5977,8 +6168,7 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx, SymTab_t *symtab)
+static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     const char *exit_label = codegen_current_loop_exit(ctx);
     if (exit_label == NULL)
@@ -5988,8 +6178,25 @@ static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_l
         return inst_list;
     }
 
-    return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label);
+    int limit_depth = codegen_current_loop_finally_depth(ctx);
+    return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, limit_depth);
 }
+
+static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    const char *continue_label = codegen_current_loop_continue(ctx);
+    if (continue_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: CONTINUE statement outside of a loop at line %d.\n",
+            stmt != NULL ? stmt->line_num : -1);
+        return inst_list;
+    }
+
+    int limit_depth = codegen_current_loop_finally_depth(ctx);
+    return codegen_branch_through_finally(ctx, inst_list, symtab, continue_label, limit_depth);
+}
+
+
 
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -6045,22 +6252,52 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     gen_label(except_label, sizeof(except_label), ctx);
     gen_label(after_label, sizeof(after_label), ctx);
 
-    if (!codegen_push_except(ctx, except_label))
+    if (!codegen_push_except(ctx, except_label)) {
         return inst_list;
-
+    }
     inst_list = codegen_statement_list(try_stmts, inst_list, ctx, symtab);
     inst_list = gencode_jmp(NORMAL_JMP, 0, after_label, inst_list);
 
     codegen_pop_except(ctx);
 
-    char buffer[32];
+    char buffer[64];
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
-    if (except_stmts != NULL)
-        inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
-    else
-        inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+    /* If there's an 'on E: Exception do' clause, add the exception variable to the stack */
+    StackNode_t *exception_var_node = NULL;
+    if (stmt->stmt_data.try_except_data.has_on_clause && 
+        stmt->stmt_data.try_except_data.exception_var_name != NULL) {
+        
+        /* Push a new scope for the exception variable */
+        PushScope(symtab);
+        
+        /* Add the exception variable to the stack manager (8 bytes for pointer) */
+        exception_var_node = add_l_x(stmt->stmt_data.try_except_data.exception_var_name, 8);
+        
+        /* Generate code to store the current exception into the variable */
+        if (exception_var_node != NULL) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\tgpc_current_exception(%%rip), %%rax\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", exception_var_node->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        
+        /* Generate the except statements with the exception variable in scope */
+        if (except_stmts != NULL)
+            inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
+        else
+            inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+        
+        /* Pop the scope */
+        PopScope(symtab);
+    } else {
+        /* No exception variable - just generate the except statements normally */
+        if (except_stmts != NULL)
+            inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
+        else
+            inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+    }
 
     snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
     inst_list = add_inst(inst_list, buffer);
@@ -6094,7 +6331,8 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
 
     if (except_label != NULL)
     {
-        inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label);
+        int limit_depth = codegen_current_except_finally_depth(ctx);
+        inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, except_label, limit_depth);
         return inst_list;
     }
 
@@ -6106,7 +6344,8 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
     if (need_after_label)
     {
         gen_label(after_label, sizeof(after_label), ctx);
-        inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, after_label);
+        /* Unwind everything if no handler found */
+        inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, after_label, 0);
 
         char buffer[32];
         snprintf(buffer, sizeof(buffer), "%s:\n", after_label);

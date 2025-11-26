@@ -886,6 +886,10 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
         NULL
     );
 
+    if (debug_flag != NULL) {
+        fprintf(stderr, "[pascal_parser] about to parse main block statements\n");
+    }
+
     ParseResult stmt_result = parse(in, stmt_sequence);
 
     free_combinator(stmt_sequence);
@@ -893,12 +897,56 @@ static ParseResult main_block_content_fn(input_t* in, void* args, char* parser_n
     if (debug_flag != NULL) {
         if (stmt_result.is_success) {
             fprintf(stderr, "[pascal_parser] main block parse ok, consumed up to %d\n", in ? in->start : -1);
+            if (stmt_result.value.ast) {
+                fprintf(stderr, "[pascal_parser]   result ast typ=%d\n", stmt_result.value.ast->typ);
+                if (stmt_result.value.ast == ast_nil) {
+                    fprintf(stderr, "[pascal_parser]   result ast is ast_nil!\n");
+                }
+                if (stmt_result.value.ast->child) {
+                    fprintf(stderr, "[pascal_parser]   result ast has child typ=%d\n", 
+                            stmt_result.value.ast->child->typ);
+                    // Check if the child is the sep_by result
+                    if (stmt_result.value.ast->child->next) {
+                        ast_t* sep_by_result = stmt_result.value.ast->child->next;
+                        fprintf(stderr, "[pascal_parser]   sep_by result (second child) typ=%d\n", sep_by_result->typ);
+                        if (sep_by_result == ast_nil) {
+                            fprintf(stderr, "[pascal_parser]   sep_by result is ast_nil!\n");
+                        } else if (sep_by_result->child) {
+                            fprintf(stderr, "[pascal_parser]   sep_by has children, first child typ=%d\n", 
+                                    sep_by_result->child->typ);
+                        } else {
+                            fprintf(stderr, "[pascal_parser]   sep_by result has NO children\n");
+                        }
+                    }
+                } else {
+                    fprintf(stderr, "[pascal_parser]   result ast child is NULL\n");
+                }
+            } else {
+                fprintf(stderr, "[pascal_parser]   result ast is NULL\n");
+            }
         } else {
             fprintf(stderr, "[pascal_parser] main block parse FAILED at %d (%s)\n",
                 in ? in->start : -1,
                 (stmt_result.value.error && stmt_result.value.error->message) ? stmt_result.value.error->message : "unknown");
         }
     }
+    
+    // CRITICAL FIX: Extract the statement list from the seq result
+    // The seq has: leading_semicolons, sep_by(statements), optional(semicolon)
+    // We want to return just the sep_by result (second child)
+    if (stmt_result.is_success && stmt_result.value.ast != ast_nil && stmt_result.value.ast != NULL) {
+        if (stmt_result.value.ast->typ == PASCAL_T_NONE && stmt_result.value.ast->child != NULL) {
+            // Extract the sep_by result (second child)
+            ast_t* sep_by_result = stmt_result.value.ast->child->next;
+            if (sep_by_result != NULL && sep_by_result != ast_nil) {
+                if (debug_flag != NULL) {
+                    fprintf(stderr, "[pascal_parser] Extracting sep_by result from seq\n");
+                }
+                stmt_result.value.ast = sep_by_result;
+            }
+        }
+    }
+    
     return stmt_result;
 }
 
@@ -914,10 +962,54 @@ static combinator_t* main_block_content(combinator_t** stmt_parser_ref) {
 
 // Helper function to wrap the content of a begin-end block in a PASCAL_T_MAIN_BLOCK node
 static ast_t* build_main_block_ast(ast_t* ast) {
+    const char* debug_flag = getenv("GPC_DEBUG_MAIN_BLOCK");
+    if (debug_flag != NULL) {
+        fprintf(stderr, "[build_main_block_ast] input ast=%p\n", (void*)ast);
+        if (ast && ast != ast_nil) {
+            fprintf(stderr, "[build_main_block_ast]   ast->typ=%d\n", ast->typ);
+            fprintf(stderr, "[build_main_block_ast]   ast->child=%p\n", (void*)ast->child);
+            if (ast->child && ast->child != ast_nil) {
+                fprintf(stderr, "[build_main_block_ast]     child->typ=%d\n", ast->child->typ);
+                fprintf(stderr, "[build_main_block_ast]     child->next=%p\n", (void*)ast->child->next);
+                if (ast->child->next && ast->child->next != ast_nil) {
+                    fprintf(stderr, "[build_main_block_ast]       next->typ=%d\n", ast->child->next->typ);
+                }
+            }
+        } else if (ast == ast_nil) {
+            fprintf(stderr, "[build_main_block_ast]   ast is ast_nil\n");
+        }
+    }
+    
     ast_t* block_node = new_ast();
     block_node->typ = PASCAL_T_MAIN_BLOCK;
-    // If the parsed content is the nil sentinel, the block is empty.
-    block_node->child = (ast == ast_nil) ? NULL : ast;
+    
+    // CRITICAL FIX: The issue is that when sep_by returns an empty list, the entire
+    // seq result becomes ast_nil. But we actually want to preserve the statement list
+    // even if it's empty. The problem is that main_block_content_fn wraps everything
+    // in a seq(PASCAL_T_NONE, ...) and when all children are ast_nil, seq returns ast_nil.
+    //
+    // The real fix is: don't use seq with PASCAL_T_NONE for the main block content.
+    // Instead, just return the sep_by result directly. But since we can't change that
+    // without potentially breaking other things, we need to handle it here.
+    //
+    // For now, if we get ast_nil, we'll just set child to NULL (empty block).
+    // The real statements should be coming through in the non-ast_nil case.
+    
+    if (ast == ast_nil || ast == NULL) {
+        block_node->child = NULL;
+        if (debug_flag != NULL) {
+            fprintf(stderr, "[build_main_block_ast] result: child=NULL (ast was nil/NULL)\n");
+        }
+        return block_node;
+    }
+    
+    // If we have a real AST node, use it directly as the child
+    // This will be the statement list from sep_by
+    block_node->child = ast;
+    if (debug_flag != NULL) {
+        fprintf(stderr, "[build_main_block_ast] result: child=%p (used ast directly)\n", (void*)ast);
+    }
+    
     return block_node;
 }
 
@@ -1276,21 +1368,21 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     // Routine directives like inline; overload; etc.
     combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("register")),
-        token(keyword_ci("export")),
-        token(keyword_ci("external")),
-        token(keyword_ci("assembler")),
-        token(keyword_ci("far")),
-        token(keyword_ci("near")),
-        token(keyword_ci("platform")),
-        token(keyword_ci("deprecated")),
-        token(keyword_ci("library")),
-        token(keyword_ci("local")),
-        token(keyword_ci("forward")),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
         NULL
     );
 
@@ -2316,21 +2408,21 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Routine directives like inline; overload; forward; etc.
     // Use custom parser for directive keywords since they are context-sensitive, not reserved
     combinator_t* directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
-        token(keyword_ci("inline")),
-        token(keyword_ci("overload")),
-        token(keyword_ci("cdecl")),
-        token(keyword_ci("stdcall")),
-        token(keyword_ci("register")),
-        token(keyword_ci("export")),
-        token(keyword_ci("external")),
-        token(keyword_ci("assembler")),
-        token(keyword_ci("far")),
-        token(keyword_ci("near")),
-        token(keyword_ci("platform")),
-        token(keyword_ci("deprecated")),
-        token(keyword_ci("library")),
-        token(keyword_ci("local")),
-        token(keyword_ci("forward")),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("cdecl", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("stdcall", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("register", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("export", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("external", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("assembler", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("far", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("near", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("local", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("forward", PASCAL_T_IDENTIFIER)),
         NULL
     );
 
@@ -2445,14 +2537,31 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Working function parser: function name [(params)] : return_type ; [directives] body ;
     // Does NOT support forward (that's handled by forward_function)
     combinator_t* working_function_param_list = create_simple_param_list();
-    // Guard: implementation must not start if next directive is 'forward'/'external'/'assembler'
+    // Guard: implementation must not start if there's a forward/external/assembler directive
+    // in the upcoming directive sequence (not just the immediate next token)
+    // This handles cases like: function foo: Integer; cdecl; external libc;
     combinator_t* no_body_directive = multi(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("forward")),
         token(keyword_ci("external")),
         token(keyword_ci("assembler")),
         NULL
     );
-    combinator_t* forbid_no_body = pnot(peek(no_body_directive));
+    
+    // Check if there's a sequence of directives containing a no-body directive
+    // Pattern: [directive; directive; ...] no_body_directive
+    combinator_t* has_no_body_directive = seq(new_combinator(), PASCAL_T_NONE,
+        many(seq(new_combinator(), PASCAL_T_NONE,
+            pnot(peek(no_body_directive)),  // Not a no-body directive
+            directive_keyword,
+            directive_argument,
+            token(match(";")),
+            NULL
+        )),
+        peek(no_body_directive),  // Ends with a no-body directive
+        NULL
+    );
+    
+    combinator_t* forbid_no_body = pnot(has_no_body_directive);
 
     combinator_t* working_function = seq(new_combinator(), PASCAL_T_FUNCTION_DECL,
         token(keyword_ci("function")),               // function keyword (with word boundary check)
@@ -2537,6 +2646,20 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    combinator_t* method_function_param_list = create_simple_param_list();
+    combinator_t* method_function_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class keyword
+        token(keyword_ci("function")),               // function keyword (with word boundary check)
+        method_name_with_class,                      // ClassName.MethodName
+        method_function_param_list,                  // optional parameter list
+        return_type,                                 // return type
+        token(match(";")),                           // semicolon
+        program_routine_directives,                  // routine directives (inline, overload, etc.)
+        method_body,                                 // method body with var section support
+        optional(token(match(";"))),                 // optional terminating semicolon
+        NULL
+    );
+
     // Operator name with class qualification (Class.+ or Class.Add)
     combinator_t* operator_name_with_class = seq(new_combinator(), PASCAL_T_QUALIFIED_IDENTIFIER,
         token(cident(PASCAL_T_IDENTIFIER)),          // class/record name
@@ -2584,6 +2707,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         constructor_impl,
         destructor_impl,
         procedure_impl,
+        method_function_impl,
         headeronly_method_procedure,
         headeronly_method_function,
         operator_impl,

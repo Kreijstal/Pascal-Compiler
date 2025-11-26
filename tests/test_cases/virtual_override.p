@@ -29,6 +29,7 @@ var
   D: TDerived;
 begin
   { Test with derived class - override method should be called }
+  D := TDerived.Create;
   D.Value := 20;
   D.Extra := 30;
   D.Show;

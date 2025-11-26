@@ -793,6 +793,38 @@ class TestCompiler(unittest.TestCase):
         # And we should not see the `add` instruction.
         self.assertNotIn("addl", optimized_asm)
 
+    def test_dateutils_custom(self):
+        """Tests DateUtils with custom regex verification."""
+        input_file = os.path.join(TEST_CASES_DIR, "missing_dateutils.p")
+        output_file = os.path.join(TEST_OUTPUT_DIR, "missing_dateutils.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "missing_dateutils")
+
+        # Compile
+        run_compiler(input_file, output_file)
+        
+        # Assemble and Link
+        self.compile_executable(output_file, executable_file)
+        
+        # Run
+        result = subprocess.run(
+            [executable_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT
+        )
+        
+        # Verify output matches date format (e.g. 24-11-25 16:27:34)
+        # We'll be lenient with the exact format for now, just checking for numbers and separators
+        import re
+        # Expecting something like: Current time: YY-MM-DD HH:MM:SS
+        output = result.stdout.strip()
+        # Simple regex for date-like string
+        date_pattern = r"Current time: \d{1,4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}:\d{1,2}"
+        
+        if not re.search(date_pattern, output):
+            self.fail(f"Output '{output}' does not match date pattern '{date_pattern}'")
+
     def test_dead_code_elimination_o2(self):
         """Tests the -O2 dead code elimination optimization."""
         input_file = os.path.join(TEST_CASES_DIR, "dead_code.p")

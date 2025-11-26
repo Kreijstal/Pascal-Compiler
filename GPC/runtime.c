@@ -1317,6 +1317,26 @@ void gpc_dispose(void **target)
     }
 }
 
+/* Generic default constructor for classes without explicit constructors */
+void *__gpc_default_create(size_t class_size, const void *vmt_ptr)
+{
+    /* Allocate and zero-initialize the class instance */
+    void *instance = calloc(1, class_size);
+    if (instance == NULL)
+    {
+        fprintf(stderr, "GPC runtime: failed to allocate %zu bytes for class instance.\\n", class_size);
+        exit(EXIT_FAILURE);
+    }
+    
+    /* Set the VMT pointer (first field of the instance) */
+    if (vmt_ptr != NULL)
+    {
+        *(const void **)instance = vmt_ptr;
+    }
+    
+    return instance;
+}
+
 typedef struct GpcStringNode
 {
     char *ptr;

@@ -139,7 +139,10 @@ static ListNode_t *codegen_load_class_typeinfo(struct Expression *expr,
         /* Class variables are pointers: first load the pointer, then dereference it */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, typeinfo_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        /* Now typeinfo_reg contains the pointer to the instance, dereference to get typeinfo */
+        /* Now typeinfo_reg contains the pointer to the instance, dereference to get VMT */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        /* Now typeinfo_reg contains the VMT pointer, dereference to get TypeInfo (offset 0) */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", typeinfo_reg->bit_64, typeinfo_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
@@ -197,6 +200,19 @@ static int formal_decl_expects_string(Tree_t *decl)
             return 1;
     }
 
+    return 0;
+}
+
+static int builtin_arg_expects_string(const char *procedure_name, int arg_index)
+{
+    if (procedure_name == NULL || arg_index != 0)
+        return 0;
+    if (pascal_identifier_equals(procedure_name, "Pos") ||
+        pascal_identifier_equals(procedure_name, "AnsiPos") ||
+        pascal_identifier_equals(procedure_name, "gpc_string_pos"))
+    {
+        return 1;
+    }
     return 0;
 }
 
@@ -1737,6 +1753,57 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
 ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg);
 
+/* Lookup the RecordField metadata for a record access expression */
+static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr)
+{
+    if (record_access_expr == NULL ||
+        record_access_expr->type != EXPR_RECORD_ACCESS ||
+        record_access_expr->expr_data.record_access_data.field_id == NULL)
+        return NULL;
+
+    const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
+    struct RecordType *record = record_access_expr->record_type;
+    if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
+        record = record_access_expr->expr_data.record_access_data.record_expr->record_type;
+    if (record == NULL)
+        return NULL;
+
+    ListNode_t *cur = record->fields;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)cur->cur;
+            if (field->name != NULL && strcmp(field->name, field_id) == 0)
+                return field;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+/* Best-effort size for a record field, respecting packed/range aliases */
+static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return expr_effective_size_bytes(expr);
+
+    long long size = expr_effective_size_bytes(expr);
+    struct RecordField *field = codegen_lookup_record_field_expr(expr);
+    long long field_size = 0;
+    if (field != NULL && !field->is_array)
+    {
+        struct RecordType *nested = field->nested_record;
+        if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
+            field_size > 0)
+            return field_size;
+    }
+
+    if (size > 0)
+        return size;
+    return field_size;
+}
+
 
 /* Code generation for expressions */
 static const char *describe_expression_kind(const struct Expression *expr)
@@ -1780,6 +1847,8 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
 static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
+
+    
     if (expr != NULL)
     {
         if (expr->type == EXPR_IS)
@@ -1804,20 +1873,28 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         }
     }
 
+
     codegen_begin_expression(ctx);
+
     expr_node_t *expr_tree = build_expr_tree(expr);
+
     Register_t *target_reg = codegen_try_get_reg(&inst_list, ctx, describe_expression_kind(expr));
     if (target_reg == NULL)
     {
+
         free_expr_tree(expr_tree);
+
         if (out_reg != NULL)
             *out_reg = NULL;
         codegen_end_expression(ctx);
         return inst_list;
     }
 
+
     inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, target_reg);
+
     free_expr_tree(expr_tree);
+
 
     if (out_reg != NULL)
     {
@@ -1829,6 +1906,7 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         codegen_end_expression(ctx);
         free_reg(get_reg_stack(), target_reg);
     }
+
     return inst_list;
 }
 
@@ -2078,15 +2156,15 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
         return inst_list;
 
     char buffer[64];
-    if (expr_uses_qword_gpctype(expr))
+    long long field_size = codegen_record_field_effective_size(expr, ctx);
+    if (expr_uses_qword_gpctype(expr) || field_size == 8)
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
+    else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE))
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+    else if (field_size == 2)
+        snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     else
-    {
-        if (expr_has_type_tag(expr, CHAR_TYPE))
-            snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-        else
-            snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
-    }
+        snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
     free_reg(get_reg_stack(), addr_reg);
@@ -2704,7 +2782,11 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     assert(out_reg != NULL);
+    
+
     inst_list = codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
+
+    
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
@@ -3516,6 +3598,12 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * 
                  * However, for class methods, Self (first parameter) needs to be dereferenced to pass the
                  * instance pointer, even though it's technically a var parameter internally. */
+                 
+                if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+                    fprintf(stderr, "[CodeGen] Checking var param arg %d: expr=%p, type=%d, record_type=%p\n", 
+                        arg_num, arg_expr, arg_expr ? arg_expr->type : -1, arg_expr ? arg_expr->record_type : NULL);
+                }
+
                 if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
                     arg_expr->record_type != NULL && record_type_is_class(arg_expr->record_type))
                 {
@@ -3655,8 +3743,69 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 return inst_list;
             }
 
-            snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
-            inst_list = add_inst(inst_list, copy_buffer);
+            /* For external C functions (cdecl), small structs (≤8 bytes) are passed by VALUE,
+             * but Pascal passes them by reference (pointer). We automatically dereference
+             * the pointer here so Pascal code doesn't need to change.
+             * 
+             * Example: inet_ntoa(in_addr: TInAddr) where TInAddr is 4 bytes
+             * - Pascal passes pointer to TInAddr
+             * - C expects TInAddr value in register
+             * - We dereference: load the 4-byte value from the pointer
+             * 
+             * CRITICAL FIX: Check the GpcType's procedure definition for cname_flag
+             * instead of checking if the procedure name contains "cdecl" or "external".
+             * The procedure name is just "inet_ntoa", not "inet_ntoa_cdecl_external".
+             */
+            int is_external_c_function = 0;
+            if (proc_type != NULL && proc_type->kind == TYPE_KIND_PROCEDURE &&
+                proc_type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = proc_type->info.proc_info.definition;
+                /* External function declarations use TREE_SUBPROGRAM, while full definitions
+                 * use TREE_SUBPROGRAM_PROC or TREE_SUBPROGRAM_FUNC. We need to check all three. */
+                if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
+                {
+                    is_external_c_function = def->tree_data.subprogram_data.cname_flag;
+                }
+            }
+
+            
+            if (is_external_c_function && record_size <= 8)
+            {
+                /* Load address of the record copy */
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", 
+                    temp_slot->offset, result_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+                
+                /* Dereference: load the value from the address */
+                if (record_size == 1)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzbl\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_32);
+                }
+                else if (record_size == 2)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovzwl\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_32);
+                }
+                else if (record_size <= 4)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovl\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_32);
+                }
+                else /* record_size <= 8 */
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t(%s), %s\n", 
+                        result_reg->bit_64, result_reg->bit_64);
+                }
+                inst_list = add_inst(inst_list, copy_buffer);
+            }
+            else
+            {
+                /* Normal case: pass pointer to struct */
+                snprintf(copy_buffer, sizeof(copy_buffer), "\tleaq\t-%d(%%rbp), %s\n", temp_slot->offset, result_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+            }
 
             /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
             StackNode_t *arg_spill = add_l_t("arg_eval");
@@ -3705,7 +3854,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     arg_expr, top_reg, inst_list);
 
             /* Promote char arguments to strings when the formal parameter expects string. */
-            if (formal_decl_expects_string(formal_arg_decl) && expr_has_type_tag(arg_expr, CHAR_TYPE))
+            if ((formal_decl_expects_string(formal_arg_decl) ||
+                 builtin_arg_expects_string(procedure_name, arg_num)) &&
+                expr_has_type_tag(arg_expr, CHAR_TYPE))
             {
                 const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
                 snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);

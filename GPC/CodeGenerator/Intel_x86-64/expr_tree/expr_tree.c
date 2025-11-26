@@ -672,6 +672,8 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
     assert(ctx != NULL);
     assert(target_reg != NULL);
 
+
+
     #ifdef DEBUG_CODEGEN
     fprintf(stderr, "gencode_expr_tree: node->expr->type = %d\n", node->expr->type);
     #endif
@@ -785,14 +787,19 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg)
 {
+
+    
     if (node == NULL || node->left_expr == NULL || node->right_expr == NULL)
         return inst_list;
 
     char buffer[128];
+
     Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
+
 
     if (rhs_reg == NULL)
     {
+
         StackNode_t *spill_loc = add_l_t("str_concat_rhs");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
@@ -856,7 +863,9 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     inst_list = add_inst(inst_list, buffer);
 
     if (rhs_reg != NULL)
+    {
         free_reg(get_reg_stack(), rhs_reg);
+    }
     free_arg_regs();
     return inst_list;
 }
@@ -1017,7 +1026,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (func_mangled_name != NULL && strcmp(func_mangled_name, "__gpc_dynarray_length") == 0)
         {
             inst_list = codegen_builtin_dynarray_length(expr, inst_list, ctx, target_reg);
-            codegen_release_function_call_mangled_id(expr);
+            // NOTE: Don't free mangled_id here - it will be freed when the AST is destroyed
+            // codegen_release_function_call_mangled_id(expr);
             return inst_list;
         }
 
@@ -1085,6 +1095,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
          * Constructors need special handling: allocate memory and initialize VMT */
         int is_constructor = 0;
         Register_t *constructor_instance_reg = NULL;
+        StackNode_t *constructor_instance_slot = NULL;
         
         if (func_mangled_name != NULL)
         {
@@ -1098,6 +1109,27 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n", 
                 func_mangled_name, is_constructor);
         }
+
+        /* Avoid infinite recursion when a constructor ends up calling itself (e.g., inherited calls with
+         * no parent implementation). In that case, just reuse Self instead of re-entering the constructor. */
+        if (is_constructor && func_mangled_name != NULL &&
+            ctx->current_subprogram_mangled != NULL &&
+            strcmp(func_mangled_name, ctx->current_subprogram_mangled) == 0)
+        {
+            StackNode_t *self_slot = find_label("Self");
+            if (self_slot != NULL && target_reg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    self_slot->offset, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+        }
+
+        /* Constructors for classes return the constructed instance by value,
+         * which uses a hidden sret pointer in the first argument slot. */
+        int has_record_return = expr_has_type_tag(expr, RECORD_TYPE);
+        int ctor_has_record_return = (is_constructor && has_record_return);
         
         /* For constructors, allocate memory for the instance */
         if (is_constructor)
@@ -1126,6 +1158,12 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 CODEGEN_DEBUG("DEBUG Constructor: class_record=%p, is_class=%d, properties=%p\n",
                     (void *)class_record, class_record->is_class, (void *)class_record->properties);
+                
+                if (getenv("GPC_DEBUG_CODEGEN") != NULL) {
+                    struct Expression *cexpr = (struct Expression*)expr->expr_data.function_call_data.args_expr->cur;
+                    fprintf(stderr, "[CodeGen] gencode_case0: Checking class_record %p from class_expr %p (type=%d line=%d)\n", 
+                        class_record, (void*)cexpr, cexpr->type, cexpr->line_num);
+                }
             }
             
             if (class_record != NULL && record_type_is_class(class_record))
@@ -1162,18 +1200,29 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
                         constructor_instance_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
-                    
-                    /* Get VMT pointer from first argument (if exists) */
-                    ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
-                    if (first_arg != NULL && first_arg->cur != NULL)
+
+                    /* Spill the instance pointer to a temporary stack slot to survive the call. */
+                    constructor_instance_slot = add_l_t("ctor_instance");
+                    if (constructor_instance_slot != NULL)
                     {
-                        struct Expression *vmt_expr = (struct Expression *)first_arg->cur;
-                        Register_t *vmt_reg = NULL;
-                        
-                        inst_list = codegen_expr_with_result(vmt_expr, inst_list, ctx, &vmt_reg);
-                        if (vmt_reg != NULL)
-                        {
-                            /* Initialize VMT pointer in the allocated instance */
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            constructor_instance_reg->bit_64, constructor_instance_slot->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    
+                    /* Initialize VMT pointer using the class' static VMT label */
+                    const char *vmt_label = NULL;
+                    if (class_record->type_id != NULL) {
+                        static char vmt_buf[256];
+                        snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", class_record->type_id);
+                        vmt_label = vmt_buf;
+                    }
+                    if (vmt_label != NULL) {
+                        Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (vmt_reg != NULL) {
+                            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                                vmt_label, vmt_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
                                 vmt_reg->bit_64, constructor_instance_reg->bit_64);
                             inst_list = add_inst(inst_list, buffer);
@@ -1184,19 +1233,78 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
-        /* Pass arguments, shifted by 1 if static link is passed */
-        int arg_start_index = should_pass_static_link ? 1 : 0;
+        /* Pass arguments, shifted by hidden return pointer and/or static link */
+        int arg_start_index = (has_record_return ? 1 : 0) +
+            (should_pass_static_link ? 1 : 0);
+        int self_index = -1;
         
-        /* For constructors, skip the first argument (class type) and pass instance instead */
+        /* For constructors, we need to:
+         * 1. Skip the first argument in the list (class type)
+         * 2. Shift register allocation by 1 to make room for Self */
+        ListNode_t *args_to_pass = expr->expr_data.function_call_data.args_expr;
         if (is_constructor && constructor_instance_reg != NULL)
+        {
+            /* Place the hidden return pointer (sret) in the first argument slot */
+            if (ctor_has_record_return)
+            {
+                const char *ret_reg = current_arg_reg64(0);
+                if (ret_reg != NULL)
+                {
+                    if (constructor_instance_slot != NULL) {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            constructor_instance_slot->offset, ret_reg);
+                    } else {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                            constructor_instance_reg->bit_64, ret_reg);
+                    }
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+
+            /* Move the newly allocated instance pointer into the correct argument register slot
+             * for the implicit Self parameter, accounting for a possible static-link argument. */
+            self_index = arg_start_index;
+            const char *sysv_int_args[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9" };
+            const char *win_int_args[]  = { "%rcx", "%rdx", "%r8", "%r9" };
+            const char *self_reg = NULL;
+            if (codegen_target_is_windows()) {
+                if (self_index < (int)(sizeof(win_int_args) / sizeof(win_int_args[0])))
+                    self_reg = win_int_args[self_index];
+            } else {
+                if (self_index < (int)(sizeof(sysv_int_args) / sizeof(sysv_int_args[0])))
+                    self_reg = sysv_int_args[self_index];
+            }
+            if (self_reg != NULL) {
+                if (constructor_instance_slot != NULL) {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        constructor_instance_slot->offset, self_reg);
+                } else {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                        constructor_instance_reg->bit_64, self_reg);
+                }
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            /* Skip the first argument (class type) in the argument list */
+            if (args_to_pass != NULL)
+                args_to_pass = args_to_pass->next;
+            /* Shift register allocation by 1 for Self parameter */
             arg_start_index += 1;
+        }
         
         const char *proc_name_hint = expr->expr_data.function_call_data.id;
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
             proc_name_hint = mangled_name_hint;
 
-        inst_list = codegen_pass_arguments(expr->expr_data.function_call_data.args_expr,
+        if (is_constructor) {
+            int args_count = 0;
+            for (ListNode_t *c = args_to_pass; c != NULL; c = c->next) args_count++;
+            fprintf(stderr, "[CODEGEN] Constructor %s: args_to_pass has %d arguments, arg_start_index=%d\n",
+                proc_name_hint ? proc_name_hint : "(null)", args_count, arg_start_index);
+        }
+
+        inst_list = codegen_pass_arguments(args_to_pass,
             inst_list, ctx, func_type, proc_name_hint, arg_start_index);
 
         /* Invalidate static link cache after argument evaluation
@@ -1222,8 +1330,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         if (should_pass_static_link)
         {
-            const char *dest_reg = current_arg_reg64(0);
-            assert(dest_reg != NULL && "current_arg_reg64(0) should never return NULL");
+            const char *dest_reg = current_arg_reg64(has_record_return ? 1 : 0);
+            assert(dest_reg != NULL && "current_arg_reg64(..) should never return NULL");
             char link_buffer[64];
             switch (static_link_source)
             {
@@ -1252,12 +1360,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         
         /* For constructors, pass the allocated instance as the first argument (Self) */
-        if (is_constructor && constructor_instance_reg != NULL)
+        if (is_constructor && constructor_instance_reg != NULL && self_index >= 0)
         {
-            const char *self_arg_reg = should_pass_static_link ? 
-                current_arg_reg64(1) : current_arg_reg64(0);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
-                constructor_instance_reg->bit_64, self_arg_reg);
+            const char *self_arg_reg = current_arg_reg64(self_index);
+            if (constructor_instance_slot != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    constructor_instance_slot->offset, self_arg_reg);
+            }
+            else
+            {
+                const char *source_reg = constructor_instance_reg->bit_64;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    source_reg, self_arg_reg);
+            }
             inst_list = add_inst(inst_list, buffer);
         }
 
@@ -1281,19 +1397,29 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-        codegen_release_function_call_mangled_id(expr);
+        // NOTE: Don't free mangled_id here - it will be freed when the AST is destroyed
+        // This was causing double-free errors in nested function calls within string concatenations
+        // codegen_release_function_call_mangled_id(expr);
         
         /* For constructors, use the return value from the constructor (Self in %rax).
          * Constructors now properly return Self, so we don't need to rely on the
          * saved instance register which could be clobbered during the call. */
         if (is_constructor && constructor_instance_reg != NULL)
         {
-            /* Free the constructor_instance_reg as we won't use it */
+            /* Use the allocated instance pointer as the result, regardless of what the callee returns. */
+            if (constructor_instance_slot != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    constructor_instance_slot->offset, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    constructor_instance_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
             free_reg(get_reg_stack(), constructor_instance_reg);
-            
-            /* Get the constructor return value from %rax */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
@@ -1451,6 +1577,18 @@ cleanup_constructor:
         HashNode_t *symbol_node = NULL;
         if (ctx != NULL && ctx->symtab != NULL)
             FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+        /* Check if this is a VMT label - need address, not value */
+        const char *var_name = expr->expr_data.id;
+        size_t name_len = var_name != NULL ? strlen(var_name) : 0;
+        int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
+        
+        if (is_vmt_label)
+        {
+            /* For VMT labels, use leaq to get the address instead of loading the value */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
 
         int treat_as_reference = 0;
         if (stack_node != NULL && stack_node->is_reference)
@@ -1757,9 +1895,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
-                if (ctx != NULL && ctx->symtab != NULL &&
+                int found = (ctx != NULL && ctx->symtab != NULL &&
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
-                    node != NULL && node->hash_type == HASHTYPE_CONST)
+                    node != NULL);
+
+                if (found && node->hash_type == HASHTYPE_CONST)
                 {
                     /* Check if this is a real constant */
                     if (node->type != NULL && gpc_type_equals_tag(node->type, REAL_TYPE))
@@ -1777,6 +1917,16 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         /* Integer constant */
                         snprintf(buffer, buf_len, "$%lld", node->const_int_value);
                     }
+                }
+                else if (found && node->hash_type == HASHTYPE_TYPE &&
+                         node->type != NULL && node->type->kind == TYPE_KIND_POINTER &&
+                         node->type->info.points_to != NULL &&
+                         node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                         node->type->info.points_to->info.record_info != NULL &&
+                         record_type_is_class(node->type->info.points_to->info.record_info))
+                {
+                     /* Class type used as value -> Address of VMT */
+                     snprintf(buffer, buf_len, "$%s_VMT", expr->expr_data.id);
                 }
                 else if(stack_node != NULL)
                 {
@@ -1812,12 +1962,24 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 }
                 else
                 {
+                    /* Check if this is a VMT label (global symbol ending with "_VMT") */
                     const char *var_name = expr != NULL ? expr->expr_data.id : "<unknown>";
-                    fprintf(stderr,
-                        "ERROR: Non-local codegen support disabled while accessing %s.\n",
-                        var_name != NULL ? var_name : "<unknown>");
-                    fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
-                    exit(1);
+                    size_t name_len = var_name != NULL ? strlen(var_name) : 0;
+                    int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
+                    
+                    if (is_vmt_label)
+                    {
+                        /* VMT is a global label - use RIP-relative addressing */
+                        snprintf(buffer, buf_len, "%s(%%rip)", var_name);
+                    }
+                    else
+                    {
+                        fprintf(stderr,
+                            "ERROR: Non-local codegen support disabled while accessing %s.\n",
+                            var_name != NULL ? var_name : "<unknown>");
+                        fprintf(stderr, "Enable with flag '-non-local' after required flags\n");
+                        exit(1);
+                    }
                 }
             }
 

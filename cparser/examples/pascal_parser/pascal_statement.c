@@ -273,9 +273,15 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             keyword_buf[i] = (char)tolower((unsigned char)keyword_buf[i]);
         }
         const struct statement_keyword_record* keyword_record = statement_keyword_lookup(keyword_buf, ident_len);
-        if (heap_keyword) {
-            free(keyword_buf);
+        
+        // Manual fallback for 'continue' which collides with 'asm' in the perfect hash
+        static const struct statement_keyword_record continue_record = {"continue", STMT_KW_CONTINUE};
+        if (keyword_record == NULL && ident_len == 8 && strcmp(keyword_buf, "continue") == 0) {
+            keyword_record = &continue_record;
         }
+        bool reserved_keyword = is_reserved_keyword_slice(slice, ident_len);
+        bool keyword_allowed_as_expr = pascal_keyword_allowed_in_expression(keyword_buf);
+        if (heap_keyword) free(keyword_buf);
         if (keyword_record != NULL &&
             dispatch->keyword_parsers != NULL &&
             (size_t)keyword_record->id < dispatch->keyword_count) {
@@ -293,7 +299,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return parse(in, dispatch->label_parser);
         }
 
-        if (is_reserved_keyword_slice(slice, ident_len)) {
+        if (reserved_keyword && !keyword_allowed_as_expr) {
             return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
         }
 
@@ -855,15 +861,24 @@ void init_pascal_statement_parser(combinator_t** p) {
     );
 
     // On-exception handler: "on <id>[:<type>] do <statement>"
+    // Parse the variable name and optional type specification
+    combinator_t* exception_var = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
+    combinator_t* exception_type_spec = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        token(pascal_expression_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+    
     combinator_t* optional_handler_semicolon = map(optional(token(match(";"))), discard_ast_stmt);
-    combinator_t* on_exception_handler = map(seq(new_combinator(), PASCAL_T_EXCEPT_BLOCK,
+    combinator_t* on_exception_handler = seq(new_combinator(), PASCAL_T_ON_CLAUSE,
         token(keyword_ci("on")),
-        map(until(token(keyword_ci("do")), PASCAL_T_NONE), discard_ast_stmt),
+        exception_var,
+        exception_type_spec,
         token(keyword_ci("do")),
         lazy(stmt_parser),
         optional_handler_semicolon,
         NULL
-    ), wrap_except_on_handler);
+    );
 
     // Try-except block: try statements except statements end
     combinator_t* try_except = seq(new_combinator(), PASCAL_T_TRY_BLOCK,
@@ -914,6 +929,9 @@ void init_pascal_statement_parser(combinator_t** p) {
 
     // Break statement: break
     combinator_t* break_stmt = token(create_keyword_parser("break", PASCAL_T_BREAK_STMT));
+
+    // Continue statement: continue
+    combinator_t* continue_stmt = token(create_keyword_parser("continue", PASCAL_T_CONTINUE_STMT));
 
     // Case statement: case expression of label1: stmt1; label2: stmt2; [else stmt;] end
     // Case labels should handle constant expressions, not just simple values
@@ -1004,6 +1022,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     dispatch_args->keyword_parsers[STMT_KW_RAISE] = raise_stmt;
     dispatch_args->keyword_parsers[STMT_KW_INHERITED] = inherited_stmt;
     dispatch_args->keyword_parsers[STMT_KW_BREAK] = break_stmt;
+    dispatch_args->keyword_parsers[STMT_KW_CONTINUE] = continue_stmt;
     dispatch_args->keyword_parsers[STMT_KW_EXIT] = exit_stmt;
     dispatch_args->keyword_parsers[STMT_KW_ASM] = asm_stmt;
     dispatch_args->keyword_parsers[STMT_KW_IF] = if_stmt;

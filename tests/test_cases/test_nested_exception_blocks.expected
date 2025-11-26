@@ -1,0 +1,7 @@
+Before outer try
+Inside inner try
+x=42, y=100
+After inner except
+In finally block, x=42, y=100
+After outer finally
+Done

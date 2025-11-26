@@ -129,8 +129,24 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
 /* Helper function to get RecordType from HashNode */
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
+    if (node == NULL) return NULL;
+    
     /* Use hashnode helper which handles NULL GpcType */
-    return hashnode_get_record_type(node);
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record != NULL)
+        return record;
+        
+    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
+    if (node->type != NULL && gpc_type_is_pointer(node->type))
+    {
+        GpcType *pointed_to = node->type->info.points_to;
+        if (pointed_to != NULL && gpc_type_is_record(pointed_to))
+        {
+            return gpc_type_get_record(pointed_to);
+        }
+    }
+    
+    return NULL;
 }
 
 /* Helper function to get VarType from HashNode */
@@ -1071,7 +1087,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 line_num, record_info->parent_class_name);
         return 1;
     }
-    
+
     /* Get parent's RecordType */
     struct RecordType *parent_record = get_record_type_from_node(parent_node);
     if (parent_record == NULL)
@@ -1307,7 +1323,7 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
-                    new_method->vmt_index = vmt_size;
+                    new_method->vmt_index = vmt_size + 1;
                     
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {
@@ -1798,15 +1814,20 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     resolve_array_bounds_in_gpctype(symtab, gpc_type, alias_info);
                 }
             }
-            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && gpc_type->kind == TYPE_KIND_RECORD)
                 gpc_type->info.record_info = record_info;
             
+            if (getenv("GPC_DEBUG_SEMCHECK") != NULL) {
+                fprintf(stderr, "[SemCheck] Pushing type '%s' onto scope, gpc_type=%p kind=%d\n", 
+                    tree->tree_data.type_decl_data.id, (void*)gpc_type, gpc_type ? gpc_type->kind : -1);
+            }
             func_return = PushTypeOntoScope_Typed(symtab, tree->tree_data.type_decl_data.id, gpc_type);
             if (func_return == 0)
             {
                 /* GpcType ownership transferred to symbol table */
                 tree->tree_data.type_decl_data.gpc_type = NULL;
                 /* Note: var_type is automatically set from GpcType in HashTable.c via set_var_type_from_gpctype() */
+                
             }
         } else {
         /* Fall back to legacy API for types we can't convert yet */
@@ -2098,6 +2119,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, string_name, string_type);
         destroy_gpc_type(string_type);
         free(string_name);
+    char *ansistring_name = strdup("AnsiString");
+    if (ansistring_name != NULL) {
+        GpcType *ansistring_type = gpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(ansistring_type != NULL && "Failed to create AnsiString type");
+        AddBuiltinType_Typed(symtab, ansistring_name, ansistring_type);
+        destroy_gpc_type(ansistring_type);
+        free(ansistring_name);
+    }
     }
     char *unicode_name = strdup("UnicodeString");
     if (unicode_name != NULL) {
@@ -2524,7 +2553,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
 
-    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, 0);
+    return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
@@ -2535,7 +2564,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         while (final_node != NULL) {
             if (final_node->type == LIST_STMT && final_node->cur != NULL) {
                 struct Statement *final_stmt = (struct Statement *)final_node->cur;
-                return_val += semcheck_stmt(symtab, final_stmt, 0);
+                return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
             }
             final_node = final_node->next;
         }
@@ -2543,7 +2572,23 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     if(optimize_flag() > 0 && return_val == 0)
     {
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] Before optimize: body_statement = %p\n", 
+                    (void*)tree->tree_data.program_data.body_statement);
+            if (tree->tree_data.program_data.body_statement != NULL) {
+                fprintf(stderr, "[GPC] Body statement type: %d\n", 
+                        tree->tree_data.program_data.body_statement->type);
+                if (tree->tree_data.program_data.body_statement->type == STMT_COMPOUND_STATEMENT) {
+                    fprintf(stderr, "[GPC] Compound statement list: %p\n",
+                            (void*)tree->tree_data.program_data.body_statement->stmt_data.compound_statement);
+                }
+            }
+        }
         optimize(symtab, tree);
+        if (getenv("GPC_DEBUG_BODY") != NULL) {
+            fprintf(stderr, "[GPC] After optimize: body_statement = %p\n", 
+                    (void*)tree->tree_data.program_data.body_statement);
+        }
     }
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
@@ -3413,16 +3458,28 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         /* Create GpcType for the procedure */
-        GpcType *proc_type = create_procedure_type(
-            subprogram->tree_data.subprogram_data.args_var,
-            NULL  /* procedures have no return type */
-        );
-        if (proc_type != NULL)
+        /* Create GpcType for the procedure */
+        GpcType *proc_type = NULL;
+        int created_new_type = 0;
+
+        if (already_declared && existing_decl != NULL && existing_decl->type != NULL)
         {
-            proc_type->info.proc_info.definition = subprogram;
-            if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
-                proc_type->info.proc_info.return_type_id =
-                    strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            proc_type = existing_decl->type;
+        }
+        else
+        {
+            proc_type = create_procedure_type(
+                subprogram->tree_data.subprogram_data.args_var,
+                NULL  /* procedures have no return type */
+            );
+            if (proc_type != NULL)
+            {
+                proc_type->info.proc_info.definition = subprogram;
+                if (subprogram->tree_data.subprogram_data.return_type_id != NULL)
+                    proc_type->info.proc_info.return_type_id =
+                        strdup(subprogram->tree_data.subprogram_data.return_type_id);
+            }
+            created_new_type = 1;
         }
         
         /* ARCHITECTURAL FIX: Resolve array bounds in parameter types now that constants are in scope */
@@ -3468,6 +3525,17 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         else
         {
             func_return = 0;  /* No error since it's expected to be already declared */
+            
+            /* If we created a new type but it was already declared (e.g. existing had no type), update it */
+            if (created_new_type && existing_decl != NULL && existing_decl->type == NULL)
+            {
+                existing_decl->type = proc_type;
+            }
+            else if (created_new_type)
+            {
+                /* We created a type but didn't use it (shouldn't happen if logic is correct, but for safety) */
+                destroy_gpc_type(proc_type);
+            }
         }
 
         PushScope(symtab);
@@ -3571,6 +3639,29 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             /* "Result" is not already declared, so we can add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_gpc_type);
         }
+
+        /* For class methods, also add an alias using the unmangled method name (suffix after __) */
+        const char *alias_suffix = NULL;
+        if (subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            const char *sep = strstr(subprogram->tree_data.subprogram_data.id, "__");
+            if (sep != NULL && sep[2] != '\0')
+                alias_suffix = sep + 2;
+        }
+        if (alias_suffix != NULL && alias_suffix[0] != '\0')
+        {
+            size_t alias_len = strcspn(alias_suffix, "_");
+            if (alias_len > 0 && alias_len < 128)
+            {
+                char alias_buf[128];
+                memcpy(alias_buf, alias_suffix, alias_len);
+                alias_buf[alias_len] = '\0';
+
+                HashNode_t *suffix_check = NULL;
+                if (FindIdent(&suffix_check, symtab, alias_buf) == -1)
+                    PushFuncRetOntoScope_Typed(symtab, alias_buf, return_gpc_type);
+            }
+        }
         /* Note: We don't check for "result" anymore since it conflicts with built-in Result alias */
 
         /* Note: Type metadata now in GpcType, no post-creation writes needed */
@@ -3643,8 +3734,20 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* Allow functions with asm blocks to skip explicit return assignment */
         int has_asm = statement_contains_asm_block(body);
         
+        /* Constructors implicitly yield the constructed instance, so do not
+         * require an explicit assignment to the return variable. */
+        int is_constructor = 0;
+        if (subprogram->tree_data.subprogram_data.id != NULL) {
+            const char *suffix = strstr(subprogram->tree_data.subprogram_data.id, "__");
+            const char *name = (suffix != NULL && suffix[2] != '\0') ? suffix + 2
+                                                                     : subprogram->tree_data.subprogram_data.id;
+            if (strcasecmp(name, "create") == 0) {
+                is_constructor = 1;
+            }
+        }
+
         /* Check if either the function name or "Result" was assigned to */
-        int return_was_assigned = (hash_return->mutated != NO_MUTATE);
+        int return_was_assigned = is_constructor ? 1 : (hash_return->mutated != NO_MUTATE);
         if (!return_was_assigned)
         {
             /* Also check if "Result" was mutated */
@@ -3652,6 +3755,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (FindIdent(&result_node, symtab, "Result") == 0 && result_node != NULL)
             {
                 return_was_assigned = (result_node->mutated != NO_MUTATE);
+            }
+        }
+
+        /* Methods use mangled identifiers like Class__Func; allow assignments to the
+         * unmangled function name (after the final '__') to satisfy the return check. */
+        if (!return_was_assigned && subprogram->tree_data.subprogram_data.id != NULL) {
+            const char *id = subprogram->tree_data.subprogram_data.id;
+            const char *sep = strstr(id, "__");
+            if (sep != NULL && sep[2] != '\0') {
+                HashNode_t *suffix_node = NULL;
+                if (FindIdent(&suffix_node, symtab, (char *)(sep + 2)) == 0 && suffix_node != NULL) {
+                    return_was_assigned = (suffix_node->mutated != NO_MUTATE);
+                }
             }
         }
         

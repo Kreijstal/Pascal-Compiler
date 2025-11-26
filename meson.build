@@ -3,6 +3,7 @@ project('gpc-project', 'c')
 cparser_core_sources = [
   'cparser/parser.c',
   'cparser/combinators.c',
+  'common/arena.c',
 ]
 
 pascal_parser_sources = [
@@ -17,7 +18,7 @@ pascal_parser_sources = [
   'cparser/examples/pascal_parser/pascal_statement_keywords_hash.c',
 ]
 
-parser_inc = include_directories('cparser')
+parser_inc = include_directories('cparser', 'common')
 pascal_inc = include_directories('cparser/examples/pascal_parser')
 calculator_inc = include_directories('cparser/examples/calculator')
 

@@ -41,7 +41,7 @@ GpcType* create_procedure_type(ListNode_t *params, GpcType *return_type) {
     GpcType *type = (GpcType *)calloc(1, sizeof(GpcType));
     assert(type != NULL);
     type->kind = TYPE_KIND_PROCEDURE;
-    type->info.proc_info.params = params; // Takes ownership
+    type->info.proc_info.params = CopyListShallow(params); // Takes ownership of a copy
     type->info.proc_info.return_type = return_type; // Takes ownership
     type->info.proc_info.definition = NULL;
     type->info.proc_info.return_type_id = NULL;
@@ -236,6 +236,20 @@ void gpc_type_retain(GpcType *type) {
 
 void destroy_gpc_type(GpcType *type) {
     if (type == NULL) return;
+    
+    /* Defensive check: if ref_count is already 0, this indicates a double-free.
+     * This can happen when a GpcType is shared across multiple structures but
+     * not properly retained, or when the same pointer is destroyed multiple times.
+     * Instead of crashing, we log a warning and return safely. */
+    if (type->ref_count == 0) {
+        static int warn_once = 0;
+        if (!warn_once) {
+            fprintf(stderr, "Warning: Attempting to destroy GpcType with ref_count=0 (possible double-free)\n");
+            warn_once = 1;
+        }
+        return;
+    }
+    
     assert(type->ref_count > 0);
     type->ref_count--;
     if (type->ref_count > 0)
@@ -369,6 +383,25 @@ GpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int 
 }
 
 /* Helper function to check if a record type is a subclass of another */
+/* Helper to get RecordType from HashNode, handling pointer types (classes) */
+static struct RecordType* get_record_from_hashnode(HashNode_t *node) {
+    if (node == NULL || node->type == NULL)
+        return NULL;
+    
+    /* Direct record type */
+    if (node->type->kind == TYPE_KIND_RECORD)
+        return node->type->info.record_info;
+    
+    /* Pointer to record (class types) */
+    if (node->type->kind == TYPE_KIND_POINTER) {
+        GpcType *pointed_to = node->type->info.points_to;
+        if (pointed_to != NULL && pointed_to->kind == TYPE_KIND_RECORD)
+            return pointed_to->info.record_info;
+    }
+    
+    return NULL;
+}
+
 static int is_record_subclass(struct RecordType *subclass, struct RecordType *superclass, struct SymTab *symtab) {
     if (subclass == superclass)
         return 1;  /* Same type */
@@ -379,7 +412,7 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
-            struct RecordType *parent_record = hashnode_get_record_type(parent_node);
+            struct RecordType *parent_record = get_record_from_hashnode(parent_node);
             if (parent_record == superclass)
                 return 1;
             current = parent_record;
@@ -418,6 +451,21 @@ int are_types_compatible_for_assignment(GpcType *lhs_type, GpcType *rhs_type, st
         rhs_type->info.primitive_type_tag == CHAR_TYPE)
     {
         /* Single characters can be assigned to string variables */
+        return 1;
+    }
+
+    /* Allow PChar <-> String assignment */
+    /* PChar is ^Char */
+    int lhs_is_pchar = (lhs_type->kind == TYPE_KIND_POINTER && lhs_type->info.points_to != NULL &&
+                        lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                        lhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+    int rhs_is_pchar = (rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to != NULL &&
+                        rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                        rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+    int lhs_is_string = (lhs_type->kind == TYPE_KIND_PRIMITIVE && lhs_type->info.primitive_type_tag == STRING_TYPE);
+    int rhs_is_string = (rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == STRING_TYPE);
+
+    if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
         return 1;
     }
 

@@ -716,13 +716,16 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           expr_print(stmt->stmt_data.for_data.to, f, num_indent+1);
 
           print_indent(f, num_indent);
-          fprintf(f, "[DO]:\n");
+              fprintf(f, "[DO]:\n");
           stmt_print(stmt->stmt_data.for_data.do_for, f, num_indent+1);
           break;
 
         case STMT_BREAK:
           fprintf(f, "[BREAK]\n");
           break;
+        case STMT_CONTINUE:
+            fprintf(f, "[CONTINUE]\n");
+            break;
 
         case STMT_ASM_BLOCK:
           fprintf(f, "[ASM_BLOCK]:\n");
@@ -1320,6 +1323,7 @@ void destroy_stmt(struct Statement *stmt)
 
         case STMT_EXIT:
         case STMT_BREAK:
+        case STMT_CONTINUE:
           /* No data to free for simple control flow statements */
           break;
 
@@ -1356,6 +1360,10 @@ void destroy_stmt(struct Statement *stmt)
         case STMT_TRY_EXCEPT:
           destroy_list(stmt->stmt_data.try_except_data.try_statements);
           destroy_list(stmt->stmt_data.try_except_data.except_statements);
+          if (stmt->stmt_data.try_except_data.exception_var_name != NULL)
+              free(stmt->stmt_data.try_except_data.exception_var_name);
+          if (stmt->stmt_data.try_except_data.exception_type_name != NULL)
+              free(stmt->stmt_data.try_except_data.exception_type_name);
           break;
 
         case STMT_RAISE:
@@ -1806,7 +1814,11 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     new_tree->tree_data.program_data.var_declaration = var_decl;
     new_tree->tree_data.program_data.type_declaration = type_decl;
     new_tree->tree_data.program_data.subprograms = subprograms;
+    new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.body_statement = compound_statement;
+    if (getenv("GPC_DEBUG_BODY") != NULL) {
+        fprintf(stderr, "[GPC] mk_program: body_statement=%p\n", compound_statement);
+    }
     new_tree->tree_data.program_data.finalization_statements = NULL;
 
     return new_tree;
@@ -2139,6 +2151,20 @@ struct Statement *mk_break(int line_num)
     return new_stmt;
 }
 
+struct Statement *mk_continue(int line_num)
+{
+    struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = 0;
+    new_stmt->type = STMT_CONTINUE;
+    memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
+
+    return new_stmt;
+}
+
+
 struct Statement *mk_exit(int line_num)
 {
     struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
@@ -2351,7 +2377,8 @@ struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t 
     return new_stmt;
 }
 
-struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts)
+struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
+                               char *exception_var_name, char *exception_type_name)
 {
     struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
     assert(new_stmt != NULL);
@@ -2361,6 +2388,9 @@ struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *
     new_stmt->type = STMT_TRY_EXCEPT;
     new_stmt->stmt_data.try_except_data.try_statements = try_stmts;
     new_stmt->stmt_data.try_except_data.except_statements = except_stmts;
+    new_stmt->stmt_data.try_except_data.exception_var_name = exception_var_name;
+    new_stmt->stmt_data.try_except_data.exception_type_name = exception_type_name;
+    new_stmt->stmt_data.try_except_data.has_on_clause = (exception_var_name != NULL || exception_type_name != NULL) ? 1 : 0;
 
     return new_stmt;
 }
