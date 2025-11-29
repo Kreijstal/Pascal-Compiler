@@ -1,4 +1,4 @@
-unit const_unit_test;
+unit const_unit_comment;
 interface
 const
   FileMode : byte = 2;
