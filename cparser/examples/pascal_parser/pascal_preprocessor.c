@@ -1627,14 +1627,9 @@ static bool parse_factor(const char **cursor,
                 else *value = parsed_val; // Best effort
             }
         } else {
-            // Undefined symbol -> error (backward compatibility)
-            bool err = set_error(
-                error_message,
-                "undefined macro '%s' in conditional expression",
-                sym
-            );
-            free(sym);
-            return err;
+            // Undefined symbol -> treat as 0 (matching FPC behavior)
+            // FPC treats undefined symbols as 0 in conditional expressions
+            *value = 0;
         }
         free(sym);
         return true;

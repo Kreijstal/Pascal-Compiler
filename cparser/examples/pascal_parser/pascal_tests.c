@@ -622,6 +622,73 @@ void test_pascal_preprocessor_comment_mixing(void) {
     pascal_preprocessor_free(pp);
 }
 
+void test_pascal_preprocessor_numeric_comparisons(void) {
+    PascalPreprocessor *pp = pascal_preprocessor_create();
+    TEST_ASSERT(pp != NULL);
+    if (!pp) {
+        return;
+    }
+
+    // Test undefined macro treated as 0
+    const char *source1 = "{$if UNDEFINED_MACRO=0}yes{$else}no{$endif}";
+    char *error1 = NULL;
+    char *result1 = pascal_preprocess_buffer(pp, "<memory>", source1, strlen(source1), NULL, &error1);
+    TEST_ASSERT(result1 != NULL);
+    TEST_ASSERT(error1 == NULL);
+    if (result1) {
+        TEST_CHECK(strstr(result1, "yes") != NULL);
+        TEST_CHECK(strstr(result1, "no") == NULL);
+        free(result1);
+    }
+    if (error1) free(error1);
+
+    // Test numeric comparison with undefined macro
+    const char *source2 = "{$if FPC_FULLVERSION>30300}new{$else}old{$endif}";
+    char *error2 = NULL;
+    char *result2 = pascal_preprocess_buffer(pp, "<memory>", source2, strlen(source2), NULL, &error2);
+    TEST_ASSERT(result2 != NULL);
+    TEST_ASSERT(error2 == NULL);
+    if (result2) {
+        // FPC_FULLVERSION is undefined, so treated as 0, which is not > 30300
+        TEST_CHECK(strstr(result2, "old") != NULL);
+        TEST_CHECK(strstr(result2, "new") == NULL);
+        free(result2);
+    }
+    if (error2) free(error2);
+
+    // Test numeric comparison with defined macro
+    TEST_ASSERT(pascal_preprocessor_define(pp, "VERSION:=30400"));
+    const char *source3 = "{$if VERSION>30300}new{$else}old{$endif}";
+    char *error3 = NULL;
+    char *result3 = pascal_preprocess_buffer(pp, "<memory>", source3, strlen(source3), NULL, &error3);
+    TEST_ASSERT(result3 != NULL);
+    TEST_ASSERT(error3 == NULL);
+    if (result3) {
+        // VERSION is 30400, which is > 30300
+        TEST_CHECK(strstr(result3, "new") != NULL);
+        TEST_CHECK(strstr(result3, "old") == NULL);
+        free(result3);
+    }
+    if (error3) free(error3);
+
+    // Test less than comparison
+    const char *source4 = "{$if VERSION<40000}yes{$else}no{$endif}";
+    char *error4 = NULL;
+    char *result4 = pascal_preprocess_buffer(pp, "<memory>", source4, strlen(source4), NULL, &error4);
+    TEST_ASSERT(result4 != NULL);
+    TEST_ASSERT(error4 == NULL);
+    if (result4) {
+        // VERSION is 30400, which is < 40000
+        TEST_CHECK(strstr(result4, "yes") != NULL);
+        TEST_CHECK(strstr(result4, "no") == NULL);
+        free(result4);
+    }
+    if (error4) free(error4);
+
+    pascal_preprocessor_free(pp);
+}
+
+
 void test_pascal_function_call(void) {
     combinator_t* p = create_expression_parser();
     input_t* input = new_input();
@@ -4822,6 +4889,7 @@ TEST_LIST = {
     { "test_pascal_invalid_input", test_pascal_invalid_input },
     { "test_pascal_preprocessor_conditionals", test_pascal_preprocessor_conditionals },
     { "test_pascal_preprocessor_comment_mixing", test_pascal_preprocessor_comment_mixing },
+    { "test_pascal_preprocessor_numeric_comparisons", test_pascal_preprocessor_numeric_comparisons },
     { "test_pascal_function_call", test_pascal_function_call },
     { "test_pascal_function_call_with_escaped_quote", test_pascal_function_call_with_escaped_quote },
     { "test_pascal_string_literal", test_pascal_string_literal },
