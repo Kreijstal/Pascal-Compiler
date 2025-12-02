@@ -104,3 +104,9 @@ if build_integration_tests
 endif
 
 subdir('KGPC')
+
+# Standalone preprocessor tool
+kgpc_preprocess = executable('kgpc-preprocess',
+  'KGPC/preprocess_main.c',
+  dependencies: pascal_parser_dep
+)

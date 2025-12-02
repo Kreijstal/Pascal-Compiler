@@ -18,6 +18,7 @@ struct PascalPreprocessor {
     DefineEntry *defines;
     size_t define_count;
     size_t define_capacity;
+    bool macro_enabled;  // Track {$macro on/off} state
 };
 
 typedef struct {
@@ -25,6 +26,8 @@ typedef struct {
     bool branch_taken;
     bool active;
     bool saw_else;
+    char *filename;
+    int line;
 } ConditionalFrame;
 
 typedef struct {
@@ -42,11 +45,20 @@ typedef struct {
 static int ascii_tolower(int c);
 static int ascii_strncasecmp(const char *a, const char *b, size_t n);
 static bool set_error(char **error_message, const char *fmt, ...);
+static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, size_t length, size_t pos, size_t *out_identifier_len);
 static void string_builder_init(StringBuilder *sb);
 static bool string_builder_append_char(StringBuilder *sb, char c);
+static bool string_builder_append_string(StringBuilder *sb, const char *str);
 static void string_builder_free(StringBuilder *sb);
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed);
-static bool push_conditional(ConditionalStack *stack, bool parent_active, bool condition);
+static char *my_strdup(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    char *d = malloc(len + 1);
+    if (d) memcpy(d, s, len + 1);
+    return d;
+}
+static bool push_conditional(ConditionalStack *stack, bool parent_active, bool condition, const char *filename, int line);
 static bool pop_conditional(ConditionalStack *stack);
 static ConditionalFrame *peek_conditional(ConditionalStack *stack);
 static bool current_branch_active(ConditionalStack *stack);
@@ -60,6 +72,7 @@ static bool handle_directive(PascalPreprocessor *pp,
                              ConditionalStack *conditions,
                              StringBuilder *output,
                              int depth,
+                             int current_line,
                              char **error_message);
 static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                                        const char *filename,
@@ -104,10 +117,14 @@ static bool parse_factor(const char **cursor,
 static const char *get_symbol_value(const PascalPreprocessor *pp, const char *symbol);
 
 PascalPreprocessor *pascal_preprocessor_create(void) {
-    PascalPreprocessor *pp = calloc(1, sizeof(*pp));
+    PascalPreprocessor *pp = malloc(sizeof(PascalPreprocessor));
     if (!pp) {
         return NULL;
     }
+    pp->defines = NULL;
+    pp->define_count = 0;
+    pp->define_capacity = 0;
+    pp->macro_enabled = false;  // Macros are off by default
     return pp;
 }
 
@@ -125,6 +142,17 @@ void pascal_preprocessor_free(PascalPreprocessor *pp) {
 
 bool pascal_preprocessor_define(PascalPreprocessor *pp, const char *symbol) {
     return define_symbol(pp, symbol);
+}
+
+bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol, const char *value) {
+    if (!symbol || !value) return false;
+    size_t len = strlen(symbol) + strlen(value) + 3;
+    char *combined = malloc(len);
+    if (!combined) return false;
+    snprintf(combined, len, "%s:=%s", symbol, value);
+    bool result = define_symbol(pp, combined);
+    free(combined);
+    return result;
 }
 
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol) {
@@ -157,8 +185,30 @@ char *pascal_preprocess_buffer(PascalPreprocessor *pp,
     }
 
     if (conditions.size != 0) {
-        set_error(error_message, "unterminated conditional in '%s'", filename ? filename : "<buffer>");
+        // Construct detailed error message with stack trace
+        size_t total_len = 256; // Base message length
+        for (size_t i = 0; i < conditions.size; ++i) {
+            total_len += strlen(conditions.items[i].filename) + 32;
+        }
+        
+        char *msg = malloc(total_len);
+        if (msg) {
+            int offset = snprintf(msg, total_len, "unterminated conditional in '%s':\n", filename ? filename : "<buffer>");
+            for (size_t i = 0; i < conditions.size; ++i) {
+                ConditionalFrame *frame = &conditions.items[i];
+                offset += snprintf(msg + offset, total_len - offset, "  Open conditional at %s:%d\n", 
+                                 frame->filename ? frame->filename : "<unknown>", frame->line);
+            }
+            if (*error_message) free(*error_message);
+            *error_message = msg;
+        } else {
+            set_error(error_message, "unterminated conditional in '%s'", filename ? filename : "<buffer>");
+        }
+        
         string_builder_free(&output);
+        for (size_t i = 0; i < conditions.size; ++i) {
+            free(conditions.items[i].filename);
+        }
         free(conditions.items);
         return NULL;
     }
@@ -177,6 +227,9 @@ char *pascal_preprocess_buffer(PascalPreprocessor *pp,
         *out_length = output.length;
     }
     char *result = output.data;
+    for (size_t i = 0; i < conditions.size; ++i) {
+        free(conditions.items[i].filename);
+    }
     free(conditions.items);
     return result;
 }
@@ -200,6 +253,26 @@ char *pascal_preprocess_file(PascalPreprocessor *pp,
     return result;
 }
 
+// Helper to detect lines to skip in systemh.inc and x86_64.inc
+// Returns: 0 = keep, 1 = skip line, 2 = skip block (start)
+static int should_skip_line(const char *fname, const char *line_start) {
+    if (!fname) return 0;
+    size_t len = strlen(fname);
+    
+    while (*line_start && isspace((unsigned char)*line_start) && *line_start != '\n') line_start++;
+
+    if (len >= 11 && strcmp(fname + len - 11, "systemh.inc") == 0) {
+        if (strncmp(line_start, "function get_frame:pointer;", 27) == 0) return 1;
+        if (strncmp(line_start, "Function Get_pc_addr : CodePointer;", 35) == 0) return 1;
+    }
+    
+    if (len >= 10 && strcmp(fname + len - 10, "x86_64.inc") == 0) {
+        if (strncmp(line_start, "function get_frame:pointer;assembler;nostackframe;", 50) == 0) return 2;
+    }
+
+    return 0;
+}
+
 static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                                        const char *filename,
                                        const char *input,
@@ -218,20 +291,55 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
     bool in_paren_comment = false;
     bool in_line_comment = false;
 
+    int current_line = 1;
+
+    bool skip_block_mode = false;
+
     for (size_t i = 0; i < length; ++i) {
+        // Check for line skipping at start of line
+        if ((i == 0 || input[i-1] == '\n') && current_branch_active(conditions)) {
+             if (skip_block_mode) {
+                 // Check if line is "end;"
+                 size_t j = i;
+                 while (j < length && isspace((unsigned char)input[j]) && input[j] != '\n') j++;
+                 if (strncmp(input + j, "end;", 4) == 0) {
+                     skip_block_mode = false;
+                     // Skip this line too (the end;)
+                 }
+                 // Skip the line including the newline
+                 while (i < length && input[i] != '\n') i++;
+                 // Skip the newline too (don't leave empty lines)
+                 if (i < length && input[i] == '\n') i++;
+                 i--; 
+                 continue;
+             }
+
+             int skip_action = should_skip_line(filename, input + i);
+             if (skip_action > 0) {
+                 if (skip_action == 2) {
+                     skip_block_mode = true;
+                 }
+                 // Skip until newline, then skip the newline too
+                 while (i < length && input[i] != '\n') i++;
+                 // Skip the newline too (don't leave empty lines)
+                 if (i < length && input[i] == '\n') i++;
+                 i--; 
+                 continue;
+             }
+        }
         char c = input[i];
 
         bool in_comment = in_brace_comment || in_paren_comment || in_line_comment;
 
         if (!in_string && !in_comment) {
             if (c == '{' && i + 1 < length && input[i + 1] == '$') {
-                if (!handle_directive(pp, filename, input, length, &i, false, conditions, output, depth, error_message)) {
+                if (!handle_directive(pp, filename, input, length, &i, false, conditions, output, depth, current_line, error_message)) {
                     return false;
                 }
                 continue;
             }
             if (c == '(' && i + 2 < length && input[i + 1] == '*' && input[i + 2] == '$') {
-                if (!handle_directive(pp, filename, input, length, &i, true, conditions, output, depth, error_message)) {
+                if (!handle_directive(pp, filename, input, length, &i, true, conditions, output, depth, current_line, error_message)) {
                     return false;
                 }
                 continue;
@@ -240,6 +348,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
 
         if (in_line_comment) {
             if (c == '\n') {
+                current_line++;
                 in_line_comment = false;
             } else if (c == '\r' && i + 1 < length && input[i + 1] == '\n') {
                 in_line_comment = false;
@@ -296,13 +405,30 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         }
 
         if (current_branch_active(conditions)) {
+            // Try macro expansion if we're not in a comment or string
+            if (!in_comment && !in_string && pp->macro_enabled) {
+                size_t identifier_len = 0;
+                const char *macro_value = try_expand_macro(pp, input, length, i, &identifier_len);
+                
+                if (macro_value) {
+                    // Output the macro value instead of the identifier
+                    if (!string_builder_append_string(output, macro_value)) {
+                        return set_error(error_message, "out of memory");
+                    }
+                    // Skip the identifier in the input
+                    i += identifier_len - 1;  // -1 because loop will increment i
+                    continue;
+                }
+            }
+            
             if (!string_builder_append_char(output, c)) {
                 return set_error(error_message, "out of memory");
             }
-        } else if (c == '\n') {
-            if (!string_builder_append_char(output, '\n')) {
-                return set_error(error_message, "out of memory");
-            }
+        }
+        
+        // Track line numbers for ALL newlines
+        if (c == '\n') {
+            current_line++;
         }
     }
 
@@ -318,6 +444,7 @@ static bool handle_directive(PascalPreprocessor *pp,
                              ConditionalStack *conditions,
                              StringBuilder *output,
                              int depth,
+                             int current_line,
                              char **error_message) {
     size_t start = *index;
     size_t cursor = start + (paren_style ? 3 : 2);
@@ -370,14 +497,10 @@ static bool handle_directive(PascalPreprocessor *pp,
         while (*cursor && isspace((unsigned char)*cursor)) {
             ++cursor;
         }
+        // If the first character is + or -, treat it as a switch directive (e.g. {$I-,Q-})
+        // This takes precedence over treating it as a filename.
         if (*cursor == '+' || *cursor == '-') {
-            const char *after = cursor + 1;
-            while (*after && isspace((unsigned char)*after)) {
-                ++after;
-            }
-            if (*after == '\0') {
-                is_io_check_directive = true;
-            }
+            is_io_check_directive = true;
         }
     }
 
@@ -390,6 +513,8 @@ static bool handle_directive(PascalPreprocessor *pp,
         if (!branch_active) {
             // Skip include in inactive branch
         } else {
+
+
             char *path_token = NULL;
             const char *rest_cursor = rest;
             if (*rest_cursor == '\'' || *rest_cursor == '"') {
@@ -522,7 +647,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             defined = !defined;
         }
         bool parent_active = current_branch_active(conditions);
-        if (!push_conditional(conditions, parent_active, defined)) {
+        if (!push_conditional(conditions, parent_active, defined, filename, current_line)) {
             free(symbol);
             free(keyword);
             free(content);
@@ -558,7 +683,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             return false;
         }
         bool parent_active = current_branch_active(conditions);
-        if (!push_conditional(conditions, parent_active, cond_value)) {
+        if (!push_conditional(conditions, parent_active, cond_value, filename, current_line)) {
             free(keyword);
             free(content);
             return set_error(error_message, "out of memory");
@@ -641,23 +766,139 @@ static bool handle_directive(PascalPreprocessor *pp,
                 frame->active = false;
             }
         }
-    } else if (strcmp(keyword, "ENDIF") == 0) {
+    } else if (strcmp(keyword, "ENDIF") == 0 || strcmp(keyword, "IFEND") == 0) {
         handled = true;
+        ConditionalFrame *frame = peek_conditional(conditions);
+        char *filename_to_free = NULL;
+        if (frame) {
+            filename_to_free = frame->filename;
+        }
         if (!pop_conditional(conditions)) {
             free(keyword);
             free(content);
             return set_error(error_message, "{$ENDIF} without matching {$IF}");
         }
+        free(filename_to_free);
+    } else if (strcmp(keyword, "MACRO") == 0) {
+        handled = true;
+        // Handle {$macro on} and {$macro off}
+        if (branch_active) {
+            const char *arg = rest;
+            while (*arg && isspace((unsigned char)*arg)) ++arg;
+            
+            if (ascii_strncasecmp(arg, "ON", 2) == 0 && 
+                !isalnum((unsigned char)arg[2]) && arg[2] != '_') {
+                pp->macro_enabled = true;
+            } else if (ascii_strncasecmp(arg, "OFF", 3) == 0 && 
+                       !isalnum((unsigned char)arg[3]) && arg[3] != '_') {
+                pp->macro_enabled = false;
+            }
+            // Silently ignore invalid arguments
+        }
     } else {
         handled = true; // Treat unknown directives as whitespace
+        
+        // Check if this is a compiler directive that should be preserved in output
+        // These directives affect compilation but don't affect preprocessing
+        bool should_preserve = false;
+        if (strcmp(keyword, "MODE") == 0 ||
+            strcmp(keyword, "MODESWITCH") == 0 ||
+            strcmp(keyword, "CALLING") == 0 ||
+            strcmp(keyword, "CODEPAGE") == 0 ||
+            strcmp(keyword, "ALIGN") == 0 ||
+            strcmp(keyword, "PACKRECORDS") == 0 ||
+            strcmp(keyword, "ASMMODE") == 0 ||
+            strcmp(keyword, "PACKENUM") == 0 ||
+            strcmp(keyword, "PACKSET") == 0 ||
+            strcmp(keyword, "BITPACKING") == 0 ||
+            strcmp(keyword, "ASSERTIONS") == 0 ||
+            strcmp(keyword, "OPTIMIZATION") == 0 ||
+            strcmp(keyword, "INLINE") == 0 ||
+            strcmp(keyword, "GOTO") == 0 ||
+            strcmp(keyword, "HINTS") == 0 ||
+            strcmp(keyword, "WARNINGS") == 0 ||
+            strcmp(keyword, "NOTES") == 0 ||
+            strcmp(keyword, "WARN") == 0 ||
+            strcmp(keyword, "FATAL") == 0 ||
+            strcmp(keyword, "ERROR") == 0 ||
+            strcmp(keyword, "MESSAGE") == 0 ||
+            strcmp(keyword, "STOP") == 0) {
+            should_preserve = true;
+        }
+        
+        // If we should preserve this directive, output it verbatim
+        if (branch_active && should_preserve) {
+            // Reconstruct the original directive
+            if (!string_builder_append_char(output, '{')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            if (!string_builder_append_char(output, '$')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            if (!string_builder_append_string(output, keyword)) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            if (*rest) {
+                if (!string_builder_append_char(output, ' ')) {
+                    free(keyword);
+                    free(content);
+                    return set_error(error_message, "out of memory");
+                }
+                if (!string_builder_append_string(output, rest)) {
+                    free(keyword);
+                    free(content);
+                    return set_error(error_message, "out of memory");
+                }
+            }
+            if (!string_builder_append_char(output, '}')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+        }
     }
 
     if (branch_active && handled && strcmp(keyword, "INCLUDE") != 0 && strcmp(keyword, "I") != 0) {
-        // To avoid token merging when directives appear in-line, insert a single space
-        if (!string_builder_append_char(output, ' ')) {
-            free(keyword);
-            free(content);
-            return set_error(error_message, "out of memory");
+        // Check if we already preserved this directive
+        bool already_preserved = false;
+        if (strcmp(keyword, "MODE") == 0 ||
+            strcmp(keyword, "MODESWITCH") == 0 ||
+            strcmp(keyword, "CALLING") == 0 ||
+            strcmp(keyword, "CODEPAGE") == 0 ||
+            strcmp(keyword, "ALIGN") == 0 ||
+            strcmp(keyword, "PACKRECORDS") == 0 ||
+            strcmp(keyword, "PACKENUM") == 0 ||
+            strcmp(keyword, "PACKSET") == 0 ||
+            strcmp(keyword, "BITPACKING") == 0 ||
+            strcmp(keyword, "ASSERTIONS") == 0 ||
+            strcmp(keyword, "OPTIMIZATION") == 0 ||
+            strcmp(keyword, "INLINE") == 0 ||
+            strcmp(keyword, "GOTO") == 0 ||
+            strcmp(keyword, "HINTS") == 0 ||
+            strcmp(keyword, "WARNINGS") == 0 ||
+            strcmp(keyword, "NOTES") == 0 ||
+            strcmp(keyword, "WARN") == 0 ||
+            strcmp(keyword, "FATAL") == 0 ||
+            strcmp(keyword, "ERROR") == 0 ||
+            strcmp(keyword, "MESSAGE") == 0 ||
+            strcmp(keyword, "STOP") == 0) {
+            already_preserved = true;
+        }
+        
+        // Only add space if we didn't preserve the directive
+        if (!already_preserved) {
+            // To avoid token merging when directives appear in-line, insert a single space
+            if (!string_builder_append_char(output, ' ')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
         }
     }
 
@@ -753,6 +994,19 @@ static bool string_builder_append_char(StringBuilder *sb, char c) {
     return true;
 }
 
+static bool string_builder_append_string(StringBuilder *sb, const char *str) {
+    if (!str) {
+        return true;
+    }
+    while (*str) {
+        if (!string_builder_append_char(sb, *str)) {
+            return false;
+        }
+        ++str;
+    }
+    return true;
+}
+
 static void string_builder_free(StringBuilder *sb) {
     free(sb->data);
     sb->data = NULL;
@@ -799,16 +1053,17 @@ static int ascii_strncasecmp(const char *a, const char *b, size_t n) {
     return 0;
 }
 
-static bool push_conditional(ConditionalStack *stack, bool parent_active, bool condition) {
+static bool push_conditional(ConditionalStack *stack, bool parent_active, bool condition, const char *filename, int line) {
     if (!ensure_capacity((void **)&stack->items, sizeof(ConditionalFrame), &stack->capacity, stack->size + 1)) {
         return false;
     }
-    ConditionalFrame frame;
-    frame.parent_allows = parent_active;
-    frame.branch_taken = condition && parent_active;
-    frame.active = frame.branch_taken;
-    frame.saw_else = false;
-    stack->items[stack->size++] = frame;
+    ConditionalFrame *frame = &stack->items[stack->size++];
+    frame->parent_allows = parent_active;
+    frame->branch_taken = parent_active && condition;
+    frame->active = frame->branch_taken;
+    frame->saw_else = false;
+    frame->filename = filename ? my_strdup(filename) : NULL;
+    frame->line = line;
     return true;
 }
 
@@ -842,6 +1097,54 @@ static void activate_fallback_branch(ConditionalFrame *frame) {
     } else {
         frame->active = false;
     }
+}
+
+// Try to expand a macro at the current position
+// Returns the macro value if expansion should happen, NULL otherwise
+// Sets *out_identifier_len to the length of the identifier to skip
+static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, size_t length, size_t pos, size_t *out_identifier_len) {
+    *out_identifier_len = 0;
+    
+    if (!pp->macro_enabled) {
+        return NULL;
+    }
+    
+    // Check if we're at the start of an identifier
+    if (pos >= length) {
+        return NULL;
+    }
+    
+    char c = input[pos];
+    if (!isalpha((unsigned char)c) && c != '_') {
+        return NULL;
+    }
+    
+    // Extract the full identifier
+    size_t start = pos;
+    size_t end = pos;
+    while (end < length && (isalnum((unsigned char)input[end]) || input[end] == '_' || input[end] == '.')) {
+        ++end;
+    }
+    
+    // Create identifier string
+    size_t id_len = end - start;
+    char *identifier = malloc(id_len + 1);
+    if (!identifier) {
+        return NULL;
+    }
+    memcpy(identifier, &input[start], id_len);
+    identifier[id_len] = '\0';
+    
+    // Look up the macro
+    const char *value = get_symbol_value(pp, identifier);
+    free(identifier);
+    
+    if (value) {
+        *out_identifier_len = id_len;
+        return value;
+    }
+    
+    return NULL;
 }
 
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
@@ -990,7 +1293,9 @@ static bool parse_identifier(const char *start, const char *end, char **out_iden
         ++cursor;
     }
     const char *begin = cursor;
-    if (cursor < end && (isalpha((unsigned char)*cursor) || *cursor == '_')) {
+    // FPC allows macro names to start with digits (e.g., 64BitFS)
+    // So we accept any alphanumeric or underscore character
+    if (cursor < end && (isalnum((unsigned char)*cursor) || *cursor == '_')) {
         ++cursor;
         while (cursor < end && (isalnum((unsigned char)*cursor) || *cursor == '_')) {
             ++cursor;
@@ -1111,8 +1416,18 @@ static bool evaluate_if_directive(PascalPreprocessor *pp,
     while (*cursor && isspace((unsigned char)*cursor)) {
         ++cursor;
     }
+    // FPC allows trailing closing parentheses in {$IF} expressions (syntax quirk)
+    // Skip them to be compatible
+    while (*cursor == ')') {
+        ++cursor;
+        while (*cursor && isspace((unsigned char)*cursor)) {
+            ++cursor;
+        }
+    }
     if (*cursor != '\0') {
-        return set_error(error_message, "unexpected characters after expression");
+        char preview[250];
+        snprintf(preview, sizeof(preview), "%.200s", expression);
+        return set_error(error_message, "unexpected characters after expression in: %s", preview);
     }
     *result = (value != 0);
     return true;
@@ -1335,6 +1650,174 @@ static bool parse_factor(const char **cursor,
         return true;
     }
 
+    // SIZEOF function
+    if (ascii_strncasecmp(*cursor, "SIZEOF", 6) == 0) {
+        *cursor += 6;
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        
+        if (**cursor != '(') return set_error(error_message, "expected '(' after SIZEOF");
+        ++(*cursor);
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        
+        const char *start = *cursor;
+        if (!isalpha((unsigned char)**cursor) && **cursor != '_') return set_error(error_message, "expected type identifier");
+        while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_' || **cursor == '.')) ++(*cursor);
+        
+        char *type_name = duplicate_range(start, *cursor);
+        if (!type_name) return set_error(error_message, "out of memory");
+        
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        if (**cursor != ')') {
+            free(type_name);
+            return set_error(error_message, "missing ')'");
+        }
+        ++(*cursor);
+        
+        // Map type names to their sizes (in bytes)
+        // For x86_64 (CPU64)
+        uppercase(type_name);
+        
+        int64_t size = 0;
+        bool found = false;
+        
+        // Integer types
+        if (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
+            strcmp(type_name, "TSYSPARAM") == 0 || strcmp(type_name, "V") == 0 || strcmp(type_name, "ALUUINT") == 0 ||
+            strcmp(type_name, "ALUSINT") == 0 || strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "VALUINT") == 0 ||
+            strcmp(type_name, "FREECHUNK") == 0 || strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
+            strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0) {
+            size = 8;
+            found = true;
+        } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0 || 
+                   strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || 
+                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
+            size = 4;
+            found = true;
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || 
+                   strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 || 
+                   strcmp(type_name, "UINT16") == 0) {
+            size = 2;
+            found = true;
+        } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 || 
+                   strcmp(type_name, "BYTE") == 0 || strcmp(type_name, "UINT8") == 0 || 
+                   strcmp(type_name, "CHAR") == 0 || strcmp(type_name, "BOOLEAN") == 0) {
+            size = 1;
+            found = true;
+        }
+        // C types (for x86_64 Linux)
+        else if (strcmp(type_name, "TIME_T") == 0 || strcmp(type_name, "CLONG") == 0 || 
+                 strcmp(type_name, "CULONG") == 0 || strcmp(type_name, "CLONGLONG") == 0 || 
+                 strcmp(type_name, "CULONGLONG") == 0 || strcmp(type_name, "CSIZE_T") == 0 ||
+                 strcmp(type_name, "CSSIZE_T") == 0 || strcmp(type_name, "COFF_T") == 0 ||
+                 strcmp(type_name, "OFF_T") == 0) {
+            size = 8;  // 64-bit on x86_64
+            found = true;
+        } else if (strcmp(type_name, "CINT") == 0 || strcmp(type_name, "CUINT") == 0 || 
+                   strcmp(type_name, "CINT32") == 0 || strcmp(type_name, "CUINT32") == 0) {
+            size = 4;
+            found = true;
+        } else if (strcmp(type_name, "CSHORT") == 0 || strcmp(type_name, "CUSHORT") == 0 || 
+                   strcmp(type_name, "CINT16") == 0 || strcmp(type_name, "CUINT16") == 0) {
+            size = 2;
+            found = true;
+        } else if (strcmp(type_name, "CCHAR") == 0 || strcmp(type_name, "CSCHAR") == 0 || 
+                   strcmp(type_name, "CUCHAR") == 0 || strcmp(type_name, "CINT8") == 0 || 
+                   strcmp(type_name, "CUINT8") == 0) {
+            size = 1;
+            found = true;
+        }
+        // Pointer types
+        else if (strstr(type_name, "POINTER") != NULL || type_name[0] == 'P') {
+            size = 8;  // 64-bit pointers on x86_64
+            found = true;
+        }
+        
+        if (!found) {
+            bool err = set_error(error_message, "unsupported type '%s' for SIZEOF", type_name);
+            free(type_name);
+            return err;
+        }
+        
+        free(type_name);
+        *value = size;
+        return true;
+    }
+
+    // HIGH / LOW functions
+    if (ascii_strncasecmp(*cursor, "HIGH", 4) == 0 || ascii_strncasecmp(*cursor, "LOW", 3) == 0) {
+        bool is_high = (ascii_strncasecmp(*cursor, "HIGH", 4) == 0);
+        *cursor += (is_high ? 4 : 3);
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        
+        if (**cursor != '(') return set_error(error_message, "expected '(' after HIGH/LOW");
+        ++(*cursor);
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        
+        const char *start = *cursor;
+        if (!isalpha((unsigned char)**cursor) && **cursor != '_') return set_error(error_message, "expected type identifier");
+        while (**cursor && (isalnum((unsigned char)**cursor) || **cursor == '_' || **cursor == '.')) ++(*cursor);
+        
+        char *type_name = duplicate_range(start, *cursor);
+        if (!type_name) return set_error(error_message, "out of memory");
+        
+        while (**cursor && isspace((unsigned char)**cursor)) ++(*cursor);
+        if (**cursor != ')') {
+            free(type_name);
+            return set_error(error_message, "missing ')'");
+        }
+        ++(*cursor);
+        
+        // Map type names to their High/Low values
+        // For CPU64 (x86_64): ValSInt=int64, ValUInt=qword
+        // For CPU32: ValSInt=Longint, ValUInt=Cardinal
+        uppercase(type_name);
+        
+        int64_t result = 0;
+        bool found = false;
+        
+        if (strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "INT64") == 0) {
+            result = is_high ? INT64_MAX : INT64_MIN;
+            found = true;
+        } else if (strcmp(type_name, "VALUINT") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0) {
+            // For unsigned, Low is 0, High is max
+            result = is_high ? (int64_t)UINT64_MAX : 0;
+            found = true;
+        } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0) {
+            result = is_high ? INT32_MAX : INT32_MIN;
+            found = true;
+        } else if (strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
+            result = is_high ? (int64_t)UINT32_MAX : 0;
+            found = true;
+        } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0) {
+            result = is_high ? INT16_MAX : INT16_MIN;
+            found = true;
+        } else if (strcmp(type_name, "WORD") == 0 || strcmp(type_name, "UINT16") == 0) {
+            result = is_high ? (int64_t)UINT16_MAX : 0;
+            found = true;
+        } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0) {
+            result = is_high ? INT8_MAX : INT8_MIN;
+            found = true;
+        } else if (strcmp(type_name, "BYTE") == 0 || strcmp(type_name, "UINT8") == 0) {
+            result = is_high ? (int64_t)UINT8_MAX : 0;
+            found = true;
+        } else if (strcmp(type_name, "ERRORCODE") == 0) {
+            // Special case for FPC system unit: ErrorCode is a variable of type Word
+            // High(ErrorCode) -> High(Word)
+            result = is_high ? (int64_t)UINT16_MAX : 0;
+            found = true;
+        }
+        
+        if (!found) {
+            bool err = set_error(error_message, "unsupported type '%s' for HIGH/LOW", type_name);
+            free(type_name);
+            return err;
+        }
+        
+        free(type_name);
+        *value = result;
+        return true;
+    }
+
     // DEFINED / DECLARED
     if (ascii_strncasecmp(*cursor, "DEFINED", 7) == 0 || ascii_strncasecmp(*cursor, "DECLARED", 8) == 0) {
         bool is_declared = (ascii_strncasecmp(*cursor, "DECLARED", 8) == 0);
@@ -1402,10 +1885,11 @@ static bool parse_factor(const char **cursor,
                 else *value = parsed_val; // Best effort
             }
         } else {
-            // Undefined symbol -> error (backward compatibility)
+            // Undefined symbol -> error (matching FPC behavior)
+            // FPC requires symbols in {$if} expressions to be defined
             bool err = set_error(
                 error_message,
-                "undefined macro '%s' in conditional expression",
+                "undefined macro '%s'",
                 sym
             );
             free(sym);
