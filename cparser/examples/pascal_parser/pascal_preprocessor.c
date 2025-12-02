@@ -267,7 +267,7 @@ static int should_skip_line(const char *fname, const char *line_start) {
     }
     
     if (len >= 10 && strcmp(fname + len - 10, "x86_64.inc") == 0) {
-         if (strncmp(line_start, "function get_frame:pointer;assembler;nostackframe;", 50) == 0) return 2;
+        if (strncmp(line_start, "function get_frame:pointer;assembler;nostackframe;", 50) == 0) return 2;
     }
 
     return 0;
