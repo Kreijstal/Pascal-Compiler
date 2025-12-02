@@ -629,32 +629,29 @@ void test_pascal_preprocessor_numeric_comparisons(void) {
         return;
     }
 
-    // Test undefined macro treated as 0
+    // Test undefined macro in comparison causes error (matching FPC behavior)
     const char *source1 = "{$if UNDEFINED_MACRO=0}yes{$else}no{$endif}";
     char *error1 = NULL;
     char *result1 = pascal_preprocess_buffer(pp, "<memory>", source1, strlen(source1), NULL, &error1);
-    TEST_ASSERT(result1 != NULL);
-    TEST_ASSERT(error1 == NULL);
-    if (result1) {
-        TEST_CHECK(strstr(result1, "yes") != NULL);
-        TEST_CHECK(strstr(result1, "no") == NULL);
-        free(result1);
+    TEST_ASSERT(result1 == NULL);  // Should fail
+    TEST_ASSERT(error1 != NULL);   // Should have error message
+    if (error1) {
+        TEST_CHECK(strstr(error1, "undefined macro") != NULL);
+        free(error1);
     }
-    if (error1) free(error1);
+    if (result1) free(result1);
 
-    // Test numeric comparison with undefined macro
+    // Test undefined macro in comparison causes error (matching FPC behavior)
     const char *source2 = "{$if FPC_FULLVERSION>30300}new{$else}old{$endif}";
     char *error2 = NULL;
     char *result2 = pascal_preprocess_buffer(pp, "<memory>", source2, strlen(source2), NULL, &error2);
-    TEST_ASSERT(result2 != NULL);
-    TEST_ASSERT(error2 == NULL);
-    if (result2) {
-        // FPC_FULLVERSION is undefined, so treated as 0, which is not > 30300
-        TEST_CHECK(strstr(result2, "old") != NULL);
-        TEST_CHECK(strstr(result2, "new") == NULL);
-        free(result2);
+    TEST_ASSERT(result2 == NULL);  // Should fail
+    TEST_ASSERT(error2 != NULL);   // Should have error message
+    if (error2) {
+        TEST_CHECK(strstr(error2, "undefined macro") != NULL);
+        free(error2);
     }
-    if (error2) free(error2);
+    if (result2) free(result2);
 
     // Test numeric comparison with defined macro
     TEST_ASSERT(pascal_preprocessor_define(pp, "VERSION:=30400"));
