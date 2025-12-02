@@ -1328,12 +1328,24 @@ ParseResult parse(input_t * in, combinator_t * comb) {
     if (!comb || !comb->fn) exception("Attempted to parse with a NULL or uninitialized combinator.");
     if (in == NULL) exception("Attempted to parse with NULL input.");
 
+    // static size_t debug_parse_count = 0;
+    // debug_parse_count++;
+    // if (debug_parse_count % 10000 == 0) {
+    //     fprintf(stderr, "DEBUG: parse() called %zu times, combinator: %s, position: %d\n", 
+    //             debug_parse_count, comb->name ? comb->name : "unknown", in->start);
+    //     fflush(stderr);
+    // }
+    
     if (g_parser_stats_enabled) {
         g_parser_stats.parse_calls++;
     }
     
-    // Memoization is enabled for all parser types
+    // Disable memoization for pascal_layout to prevent memo table explosion
+    // pascal_layout is called at every token position and doesn't need memoization
     bool should_memoize = true;
+    if (comb->name && strcmp(comb->name, "pascal_layout") == 0) {
+        should_memoize = false;
+    }
     
     if (in->memo == NULL && should_memoize) {
         in->memo = memo_table_create();

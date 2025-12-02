@@ -2009,11 +2009,21 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             }
             else
             {
-                /* Create KgpcType if this is a set constant */
+                /* Create KgpcType if this is a set constant or has an explicit type annotation */
                 KgpcType *const_type = NULL;
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
+                }
+                else if (tree->tree_data.const_decl_data.type_id != NULL)
+                {
+                    /* Check if the type annotation is "boolean" */
+                    const char *type_id = tree->tree_data.const_decl_data.type_id;
+                    if (strcasecmp(type_id, "boolean") == 0)
+                    {
+                        const_type = create_primitive_type(BOOL);
+                    }
+                    /* Add more type checks as needed */
                 }
                 
                 /* Use typed or legacy API depending on whether we have a KgpcType */

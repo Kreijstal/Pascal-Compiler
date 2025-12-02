@@ -25,6 +25,24 @@ static char* strndup(const char* s, size_t n)
 }
 #endif
 
+static ParseResult debug_print_fn(input_t* in, void* args, char* parser_name) {
+    char* msg = (char*)args;
+    FILE* f = fopen("/tmp/parser_trace.log", "a");
+    if (f) {
+        fprintf(f, "DEBUG: %s at line %d, col %d, next char: '%c' (0x%02x)\n", 
+                msg, in->line, in->col, in->buffer[in->start], (unsigned char)in->buffer[in->start]);
+        fclose(f);
+    }
+    return make_success(NULL);
+}
+
+combinator_t* debug_print(char* msg) {
+    combinator_t* comb = new_combinator();
+    comb->fn = debug_print_fn;
+    comb->args = strdup(msg);
+    return comb;
+}
+
 extern ast_t* ast_nil;
 
 // Helper to create simple keyword AST nodes for modifiers
@@ -1208,6 +1226,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* const_section = seq(new_combinator(), PASCAL_T_CONST_SECTION,
         token(keyword_ci("const")),                     // const keyword (with word boundary check)
         many(const_decl),                            // multiple const declarations
+        debug_print("Exiting const_section"),
         NULL
     );
     const_section->extra_to_free = const_expr_parser;

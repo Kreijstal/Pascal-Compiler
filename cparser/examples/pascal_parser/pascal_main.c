@@ -361,6 +361,9 @@ static void print_ast_indented(ast_t* ast, int depth) {
 
 
 int main(int argc, char *argv[]) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("Starting main...\n");
+    fflush(stdout);
     bool print_ast = false;
     bool parse_procedure = false;
     char *filename = NULL;
@@ -541,6 +544,15 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     free(preprocess_error);
+
+    // DEBUG: Dump preprocessed content to file
+    FILE *dump_file = fopen("preprocessed_dump.pas", "w");
+    if (dump_file) {
+        fwrite(preprocessed_content, 1, preprocessed_length, dump_file);
+        fclose(dump_file);
+        printf("Dumped preprocessed content to 'preprocessed_dump.pas'\n");
+    }
+
 
     printf("Preprocessed size: %zu bytes\n", preprocessed_length);
 

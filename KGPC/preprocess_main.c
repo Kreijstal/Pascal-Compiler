@@ -1,0 +1,262 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+#include "pascal_preprocessor.h"
+
+static void print_usage(const char *prog_name)
+{
+    fprintf(stderr, "Usage: %s <input.p> [output.p]\n", prog_name);
+    fprintf(stderr, "  Preprocesses Pascal source file\n");
+    fprintf(stderr, "  If output file is not specified, writes to stdout\n");
+    fprintf(stderr, "  Options:\n");
+    fprintf(stderr, "    -D<symbol>    Define a preprocessor symbol\n");
+    fprintf(stderr, "    -U<symbol>    Undefine a preprocessor symbol\n");
+}
+
+static char *read_file(const char *filename)
+{
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "Error: Could not open file '%s'\n", filename);
+        return NULL;
+    }
+
+    /* Get file size */
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    /* Allocate buffer */
+    char *buffer = (char *)malloc(size + 1);
+    if (buffer == NULL)
+    {
+        fprintf(stderr, "Error: Could not allocate memory\n");
+        fclose(fp);
+        return NULL;
+    }
+
+    /* Read file */
+    size_t read_size = fread(buffer, 1, size, fp);
+    buffer[read_size] = '\0';
+    fclose(fp);
+
+    return buffer;
+}
+
+int main(int argc, char **argv)
+{
+    const char *input_file = NULL;
+    const char *output_file = NULL;
+    PascalPreprocessor *preprocessor = NULL;
+    char *source = NULL;
+    char *preprocessed = NULL;
+    int exit_code = 1;
+
+    /* Parse arguments */
+    for (int i = 1; i < argc; i++)
+    {
+        if (argv[i][0] == '-')
+        {
+            if (argv[i][1] == 'D')
+            {
+                /* Handle -D later after creating preprocessor */
+                continue;
+            }
+            else if (argv[i][1] == 'U')
+            {
+                /* Handle -U later after creating preprocessor */
+                continue;
+            }
+            else
+            {
+                fprintf(stderr, "Unknown option: %s\n", argv[i]);
+                print_usage(argv[0]);
+                return 1;
+            }
+        }
+        else if (input_file == NULL)
+        {
+            input_file = argv[i];
+        }
+        else if (output_file == NULL)
+        {
+            output_file = argv[i];
+        }
+        else
+        {
+            fprintf(stderr, "Too many arguments\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (input_file == NULL)
+    {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    /* Create preprocessor */
+    preprocessor = pascal_preprocessor_create();
+    if (preprocessor == NULL)
+    {
+        fprintf(stderr, "Error: Could not create preprocessor\n");
+        return 1;
+    }
+
+    /* Define default symbols (matching FPC) */
+    pascal_preprocessor_define(preprocessor, "FPC");
+    pascal_preprocessor_define(preprocessor, "OBJFPC");
+    
+    /* FPC version defines (matching FPC 3.2.2) */
+    pascal_preprocessor_define(preprocessor, "VER3");
+    pascal_preprocessor_define(preprocessor, "VER3_2");
+    pascal_preprocessor_define(preprocessor, "VER3_2_2");
+    
+    pascal_preprocessor_define(preprocessor, "FPC_FULLVERSION:=30202");
+    pascal_preprocessor_define(preprocessor, "__SIZEOF_PTHREAD_MUTEX_T:=40");
+    pascal_preprocessor_define(preprocessor, "__SIZEOF_PTHREAD_COND_T:=48");
+    /* FPC feature defines */
+    /* pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_SUPPORT"); - Let systemh.inc define features */
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_EXCEPTIONS");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_SETSJMP");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_OPERATOR_ENUMERATOR");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_CONSTREF");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_UNICODESTRING");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_INTERNAL_ABS_LONG");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_INTERNAL_ABS_INT64");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_MEMBAR");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_WINLIKERESOURCES");
+    pascal_preprocessor_define(preprocessor, "FPC_STATICRIPFIXED");
+    pascal_preprocessor_define(preprocessor, "FPC_VARIANTCOPY_FIXED");
+    pascal_preprocessor_define(preprocessor, "FPC_DYNARRAYCOPY_FIXED");
+    pascal_preprocessor_define(preprocessor, "FPC_SETBASE_USED");
+    pascal_preprocessor_define(preprocessor, "FPC_RTTI_PACKSET1");
+
+    /* Define Comp as Comp to satisfy {$if not declared(Comp)} check in systemh.inc */
+    pascal_preprocessor_define_macro(preprocessor, "Comp", "Comp");
+
+    /* Auto-define platform macros based on host compiler */
+#if defined(__linux__)
+    pascal_preprocessor_define(preprocessor, "LINUX");
+    pascal_preprocessor_define(preprocessor, "UNIX");
+    pascal_preprocessor_define(preprocessor, "CONSOLE");
+    pascal_preprocessor_define(preprocessor, "ENDIAN_LITTLE");
+    
+    /* Define constants for heap.inc to avoid {$ERROR} */
+    pascal_preprocessor_define_macro(preprocessor, "FixedArenaOffsetShift", "5");
+    pascal_preprocessor_define_macro(preprocessor, "VarSizeQuant", "32");
+    pascal_preprocessor_define_macro(preprocessor, "FirstVarRangeP2", "10");
+    pascal_preprocessor_define_macro(preprocessor, "FirstVarStepP2", "5");
+    pascal_preprocessor_define_macro(preprocessor, "VarSizeClassesCount", "10");
+    pascal_preprocessor_define_macro(preprocessor, "MaxFixedHeaderAndPayload", "544");
+    pascal_preprocessor_define_macro(preprocessor, "MaxVarHeaderAndPayload", "1048096");
+    pascal_preprocessor_define_macro(preprocessor, "CommonHeaderSize", "4");
+    pascal_preprocessor_define_macro(preprocessor, "MinFixedHeaderAndPayload", "16");
+#endif
+
+#if defined(__x86_64__)
+    pascal_preprocessor_define(preprocessor, "CPU64");
+    pascal_preprocessor_define(preprocessor, "CPUX86_64");
+    pascal_preprocessor_define(preprocessor, "CPUAMD64");
+    pascal_preprocessor_define(preprocessor, "CPUX64");
+    pascal_preprocessor_define(preprocessor, "CPUINT64");
+    pascal_preprocessor_define(preprocessor, "X86_64");
+    pascal_preprocessor_define(preprocessor, "CPUATHLON64");
+    pascal_preprocessor_define(preprocessor, "FPUSSE64");
+    pascal_preprocessor_define(preprocessor, "FPC_ABI_DEFAULT");
+#endif
+
+#if defined(__i386__)
+    pascal_preprocessor_define(preprocessor, "CPU32");
+    pascal_preprocessor_define(preprocessor, "CPUI386");
+    pascal_preprocessor_define(preprocessor, "I386");
+#endif
+
+    /* Handle -D and -U options */
+    for (int i = 1; i < argc; i++)
+    {
+        if (argv[i][0] == '-' && argv[i][1] == 'D' && argv[i][2] != '\0')
+        {
+            pascal_preprocessor_define(preprocessor, &argv[i][2]);
+        }
+        else if (argv[i][0] == '-' && argv[i][1] == 'U' && argv[i][2] != '\0')
+        {
+            pascal_preprocessor_undefine(preprocessor, &argv[i][2]);
+        }
+    }
+
+    /* Read input file */
+    source = read_file(input_file);
+    if (source == NULL)
+    {
+        goto cleanup;
+    }
+
+    /* Preprocess */
+    char *error_message = NULL;
+    size_t preprocessed_length = 0;
+    preprocessed = pascal_preprocess_buffer(
+        preprocessor,
+        input_file,
+        source,
+        strlen(source),
+        &preprocessed_length,
+        &error_message);
+    
+    if (preprocessed == NULL)
+    {
+        fprintf(stderr, "Error: Preprocessing failed for '%s'\n", input_file);
+        if (error_message != NULL)
+        {
+            fprintf(stderr, "%s\n", error_message);
+            free(error_message);
+        }
+        goto cleanup;
+    }
+    
+    if (error_message != NULL)
+    {
+        free(error_message);
+    }
+
+    /* Write output */
+    FILE *out_fp = stdout;
+    if (output_file != NULL)
+    {
+        out_fp = fopen(output_file, "w");
+        if (out_fp == NULL)
+        {
+            fprintf(stderr, "Error: Could not open output file '%s'\n", output_file);
+            goto cleanup;
+        }
+    }
+
+    fprintf(out_fp, "%s", preprocessed);
+
+    if (output_file != NULL)
+    {
+        fclose(out_fp);
+    }
+
+    exit_code = 0;
+
+cleanup:
+    if (preprocessed != NULL)
+    {
+        free(preprocessed);
+    }
+    if (source != NULL)
+    {
+        free(source);
+    }
+    if (preprocessor != NULL)
+    {
+        pascal_preprocessor_free(preprocessor);
+    }
+
+    return exit_code;
+}
