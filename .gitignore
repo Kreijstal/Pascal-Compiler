@@ -32,3 +32,4 @@ __pycache__/
 *.pyc
 
 quasi-msys2/
+preprocessed_dump.pas
