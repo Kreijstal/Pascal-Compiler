@@ -10,6 +10,7 @@ PascalPreprocessor *pascal_preprocessor_create(void);
 void pascal_preprocessor_free(PascalPreprocessor *pp);
 
 bool pascal_preprocessor_define(PascalPreprocessor *pp, const char *symbol);
+bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol, const char *value);
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol);
 bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *symbol);
 

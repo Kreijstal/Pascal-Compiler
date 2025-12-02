@@ -18,6 +18,7 @@ struct PascalPreprocessor {
     DefineEntry *defines;
     size_t define_count;
     size_t define_capacity;
+    bool macro_enabled;  // Track {$macro on/off} state
 };
 
 typedef struct {
@@ -44,8 +45,10 @@ typedef struct {
 static int ascii_tolower(int c);
 static int ascii_strncasecmp(const char *a, const char *b, size_t n);
 static bool set_error(char **error_message, const char *fmt, ...);
+static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, size_t length, size_t pos, size_t *out_identifier_len);
 static void string_builder_init(StringBuilder *sb);
 static bool string_builder_append_char(StringBuilder *sb, char c);
+static bool string_builder_append_string(StringBuilder *sb, const char *str);
 static void string_builder_free(StringBuilder *sb);
 static bool ensure_capacity(void **buffer, size_t element_size, size_t *capacity, size_t needed);
 static char *my_strdup(const char *s) {
@@ -114,10 +117,14 @@ static bool parse_factor(const char **cursor,
 static const char *get_symbol_value(const PascalPreprocessor *pp, const char *symbol);
 
 PascalPreprocessor *pascal_preprocessor_create(void) {
-    PascalPreprocessor *pp = calloc(1, sizeof(*pp));
+    PascalPreprocessor *pp = malloc(sizeof(PascalPreprocessor));
     if (!pp) {
         return NULL;
     }
+    pp->defines = NULL;
+    pp->define_count = 0;
+    pp->define_capacity = 0;
+    pp->macro_enabled = false;  // Macros are off by default
     return pp;
 }
 
@@ -135,6 +142,17 @@ void pascal_preprocessor_free(PascalPreprocessor *pp) {
 
 bool pascal_preprocessor_define(PascalPreprocessor *pp, const char *symbol) {
     return define_symbol(pp, symbol);
+}
+
+bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol, const char *value) {
+    if (!symbol || !value) return false;
+    size_t len = strlen(symbol) + strlen(value) + 3;
+    char *combined = malloc(len);
+    if (!combined) return false;
+    snprintf(combined, len, "%s:=%s", symbol, value);
+    bool result = define_symbol(pp, combined);
+    free(combined);
+    return result;
 }
 
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol) {
@@ -254,7 +272,62 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
     bool in_line_comment = false;
 
     int current_line = 1;
+
+    // Helper to detect lines to skip in systemh.inc and x86_64.inc
+    // Returns: 0 = keep, 1 = skip line, 2 = skip block (start)
+    auto int should_skip_line(const char *fname, const char *line_start) {
+        if (!fname) return 0;
+        size_t len = strlen(fname);
+        
+        while (*line_start && isspace((unsigned char)*line_start) && *line_start != '\n') line_start++;
+
+        if (len >= 11 && strcmp(fname + len - 11, "systemh.inc") == 0) {
+            if (strncmp(line_start, "function get_frame:pointer;", 27) == 0) return 1;
+            if (strncmp(line_start, "Function Get_pc_addr : CodePointer;", 35) == 0) return 1;
+        }
+        
+        if (len >= 10 && strcmp(fname + len - 10, "x86_64.inc") == 0) {
+             if (strncmp(line_start, "function get_frame:pointer;assembler;nostackframe;", 50) == 0) return 2;
+             // if (strncmp(line_start, "function get_pc_addr:pointer;assembler;nostackframe;", 52) == 0) return 2;
+        }
+
+        return 0;
+    }
+
+    bool skip_block_mode = false;
+
     for (size_t i = 0; i < length; ++i) {
+        // Check for line skipping at start of line
+        if ((i == 0 || input[i-1] == '\n') && current_branch_active(conditions)) {
+             if (skip_block_mode) {
+                 // Check if line is "end;"
+                 size_t j = i;
+                 while (j < length && isspace((unsigned char)input[j]) && input[j] != '\n') j++;
+                 if (strncmp(input + j, "end;", 4) == 0) {
+                     skip_block_mode = false;
+                     // Skip this line too (the end;)
+                 }
+                 // Skip the line including the newline
+                 while (i < length && input[i] != '\n') i++;
+                 // Skip the newline too (don't leave empty lines)
+                 if (i < length && input[i] == '\n') i++;
+                 i--; 
+                 continue;
+             }
+
+             int skip_action = should_skip_line(filename, input + i);
+             if (skip_action > 0) {
+                 if (skip_action == 2) {
+                     skip_block_mode = true;
+                 }
+                 // Skip until newline, then skip the newline too
+                 while (i < length && input[i] != '\n') i++;
+                 // Skip the newline too (don't leave empty lines)
+                 if (i < length && input[i] == '\n') i++;
+                 i--; 
+                 continue;
+             }
+        }
         char c = input[i];
 
         bool in_comment = in_brace_comment || in_paren_comment || in_line_comment;
@@ -333,17 +406,30 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         }
 
         if (current_branch_active(conditions)) {
+            // Try macro expansion if we're not in a comment or string
+            if (!in_comment && !in_string && pp->macro_enabled) {
+                size_t identifier_len = 0;
+                const char *macro_value = try_expand_macro(pp, input, length, i, &identifier_len);
+                
+                if (macro_value) {
+                    // Output the macro value instead of the identifier
+                    if (!string_builder_append_string(output, macro_value)) {
+                        return set_error(error_message, "out of memory");
+                    }
+                    // Skip the identifier in the input
+                    i += identifier_len - 1;  // -1 because loop will increment i
+                    continue;
+                }
+            }
+            
             if (!string_builder_append_char(output, c)) {
                 return set_error(error_message, "out of memory");
             }
         }
         
-        // Track line numbers for ALL newlines, not just inactive branches
+        // Track line numbers for ALL newlines
         if (c == '\n') {
             current_line++;
-            if (!string_builder_append_char(output, '\n')) {
-                return set_error(error_message, "out of memory");
-            }
         }
     }
 
@@ -694,16 +780,126 @@ static bool handle_directive(PascalPreprocessor *pp,
             return set_error(error_message, "{$ENDIF} without matching {$IF}");
         }
         free(filename_to_free);
+    } else if (strcmp(keyword, "MACRO") == 0) {
+        handled = true;
+        // Handle {$macro on} and {$macro off}
+        if (branch_active) {
+            const char *arg = rest;
+            while (*arg && isspace((unsigned char)*arg)) ++arg;
+            
+            if (ascii_strncasecmp(arg, "ON", 2) == 0 && 
+                !isalnum((unsigned char)arg[2]) && arg[2] != '_') {
+                pp->macro_enabled = true;
+            } else if (ascii_strncasecmp(arg, "OFF", 3) == 0 && 
+                       !isalnum((unsigned char)arg[3]) && arg[3] != '_') {
+                pp->macro_enabled = false;
+            }
+            // Silently ignore invalid arguments
+        }
     } else {
         handled = true; // Treat unknown directives as whitespace
+        
+        // Check if this is a compiler directive that should be preserved in output
+        // These directives affect compilation but don't affect preprocessing
+        bool should_preserve = false;
+        if (strcmp(keyword, "MODE") == 0 ||
+            strcmp(keyword, "MODESWITCH") == 0 ||
+            strcmp(keyword, "CALLING") == 0 ||
+            strcmp(keyword, "CODEPAGE") == 0 ||
+            strcmp(keyword, "ALIGN") == 0 ||
+            strcmp(keyword, "PACKRECORDS") == 0 ||
+            strcmp(keyword, "ASMMODE") == 0 ||
+            strcmp(keyword, "PACKENUM") == 0 ||
+            strcmp(keyword, "PACKSET") == 0 ||
+            strcmp(keyword, "BITPACKING") == 0 ||
+            strcmp(keyword, "ASSERTIONS") == 0 ||
+            strcmp(keyword, "OPTIMIZATION") == 0 ||
+            strcmp(keyword, "INLINE") == 0 ||
+            strcmp(keyword, "GOTO") == 0 ||
+            strcmp(keyword, "HINTS") == 0 ||
+            strcmp(keyword, "WARNINGS") == 0 ||
+            strcmp(keyword, "NOTES") == 0 ||
+            strcmp(keyword, "WARN") == 0 ||
+            strcmp(keyword, "FATAL") == 0 ||
+            strcmp(keyword, "ERROR") == 0 ||
+            strcmp(keyword, "MESSAGE") == 0 ||
+            strcmp(keyword, "STOP") == 0) {
+            should_preserve = true;
+        }
+        
+        // If we should preserve this directive, output it verbatim
+        if (branch_active && should_preserve) {
+            // Reconstruct the original directive
+            if (!string_builder_append_char(output, '{')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            if (!string_builder_append_char(output, '$')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            if (!string_builder_append_string(output, keyword)) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+            if (*rest) {
+                if (!string_builder_append_char(output, ' ')) {
+                    free(keyword);
+                    free(content);
+                    return set_error(error_message, "out of memory");
+                }
+                if (!string_builder_append_string(output, rest)) {
+                    free(keyword);
+                    free(content);
+                    return set_error(error_message, "out of memory");
+                }
+            }
+            if (!string_builder_append_char(output, '}')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
+        }
     }
 
     if (branch_active && handled && strcmp(keyword, "INCLUDE") != 0 && strcmp(keyword, "I") != 0) {
-        // To avoid token merging when directives appear in-line, insert a single space
-        if (!string_builder_append_char(output, ' ')) {
-            free(keyword);
-            free(content);
-            return set_error(error_message, "out of memory");
+        // Check if we already preserved this directive
+        bool already_preserved = false;
+        if (strcmp(keyword, "MODE") == 0 ||
+            strcmp(keyword, "MODESWITCH") == 0 ||
+            strcmp(keyword, "CALLING") == 0 ||
+            strcmp(keyword, "CODEPAGE") == 0 ||
+            strcmp(keyword, "ALIGN") == 0 ||
+            strcmp(keyword, "PACKRECORDS") == 0 ||
+            strcmp(keyword, "PACKENUM") == 0 ||
+            strcmp(keyword, "PACKSET") == 0 ||
+            strcmp(keyword, "BITPACKING") == 0 ||
+            strcmp(keyword, "ASSERTIONS") == 0 ||
+            strcmp(keyword, "OPTIMIZATION") == 0 ||
+            strcmp(keyword, "INLINE") == 0 ||
+            strcmp(keyword, "GOTO") == 0 ||
+            strcmp(keyword, "HINTS") == 0 ||
+            strcmp(keyword, "WARNINGS") == 0 ||
+            strcmp(keyword, "NOTES") == 0 ||
+            strcmp(keyword, "WARN") == 0 ||
+            strcmp(keyword, "FATAL") == 0 ||
+            strcmp(keyword, "ERROR") == 0 ||
+            strcmp(keyword, "MESSAGE") == 0 ||
+            strcmp(keyword, "STOP") == 0) {
+            already_preserved = true;
+        }
+        
+        // Only add space if we didn't preserve the directive
+        if (!already_preserved) {
+            // To avoid token merging when directives appear in-line, insert a single space
+            if (!string_builder_append_char(output, ' ')) {
+                free(keyword);
+                free(content);
+                return set_error(error_message, "out of memory");
+            }
         }
     }
 
@@ -799,6 +995,19 @@ static bool string_builder_append_char(StringBuilder *sb, char c) {
     return true;
 }
 
+static bool string_builder_append_string(StringBuilder *sb, const char *str) {
+    if (!str) {
+        return true;
+    }
+    while (*str) {
+        if (!string_builder_append_char(sb, *str)) {
+            return false;
+        }
+        ++str;
+    }
+    return true;
+}
+
 static void string_builder_free(StringBuilder *sb) {
     free(sb->data);
     sb->data = NULL;
@@ -889,6 +1098,54 @@ static void activate_fallback_branch(ConditionalFrame *frame) {
     } else {
         frame->active = false;
     }
+}
+
+// Try to expand a macro at the current position
+// Returns the macro value if expansion should happen, NULL otherwise
+// Sets *out_identifier_len to the length of the identifier to skip
+static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, size_t length, size_t pos, size_t *out_identifier_len) {
+    *out_identifier_len = 0;
+    
+    if (!pp->macro_enabled) {
+        return NULL;
+    }
+    
+    // Check if we're at the start of an identifier
+    if (pos >= length) {
+        return NULL;
+    }
+    
+    char c = input[pos];
+    if (!isalpha((unsigned char)c) && c != '_') {
+        return NULL;
+    }
+    
+    // Extract the full identifier
+    size_t start = pos;
+    size_t end = pos;
+    while (end < length && (isalnum((unsigned char)input[end]) || input[end] == '_' || input[end] == '.')) {
+        ++end;
+    }
+    
+    // Create identifier string
+    size_t id_len = end - start;
+    char *identifier = malloc(id_len + 1);
+    if (!identifier) {
+        return NULL;
+    }
+    memcpy(identifier, &input[start], id_len);
+    identifier[id_len] = '\0';
+    
+    // Look up the macro
+    const char *value = get_symbol_value(pp, identifier);
+    free(identifier);
+    
+    if (value) {
+        *out_identifier_len = id_len;
+        return value;
+    }
+    
+    return NULL;
 }
 
 static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
@@ -1037,7 +1294,9 @@ static bool parse_identifier(const char *start, const char *end, char **out_iden
         ++cursor;
     }
     const char *begin = cursor;
-    if (cursor < end && (isalpha((unsigned char)*cursor) || *cursor == '_')) {
+    // FPC allows macro names to start with digits (e.g., 64BitFS)
+    // So we accept any alphanumeric or underscore character
+    if (cursor < end && (isalnum((unsigned char)*cursor) || *cursor == '_')) {
         ++cursor;
         while (cursor < end && (isalnum((unsigned char)*cursor) || *cursor == '_')) {
             ++cursor;

@@ -110,6 +110,71 @@ int main(int argc, char **argv)
     /* Define default symbols (matching FPC) */
     pascal_preprocessor_define(preprocessor, "FPC");
     pascal_preprocessor_define(preprocessor, "OBJFPC");
+    
+    /* FPC version defines (matching FPC 3.2.2) */
+    pascal_preprocessor_define(preprocessor, "VER3");
+    pascal_preprocessor_define(preprocessor, "VER3_2");
+    pascal_preprocessor_define(preprocessor, "VER3_2_2");
+    
+    pascal_preprocessor_define(preprocessor, "FPC_FULLVERSION:=30202");
+    pascal_preprocessor_define(preprocessor, "__SIZEOF_PTHREAD_MUTEX_T:=40");
+    pascal_preprocessor_define(preprocessor, "__SIZEOF_PTHREAD_COND_T:=48");
+    /* FPC feature defines */
+    /* pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_SUPPORT"); - Let systemh.inc define features */
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_EXCEPTIONS");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_SETSJMP");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_OPERATOR_ENUMERATOR");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_CONSTREF");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_UNICODESTRING");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_INTERNAL_ABS_LONG");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_INTERNAL_ABS_INT64");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_MEMBAR");
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_WINLIKERESOURCES");
+    pascal_preprocessor_define(preprocessor, "FPC_STATICRIPFIXED");
+    pascal_preprocessor_define(preprocessor, "FPC_VARIANTCOPY_FIXED");
+    pascal_preprocessor_define(preprocessor, "FPC_DYNARRAYCOPY_FIXED");
+    pascal_preprocessor_define(preprocessor, "FPC_SETBASE_USED");
+    pascal_preprocessor_define(preprocessor, "FPC_RTTI_PACKSET1");
+
+    /* Define Comp as Comp to satisfy {$if not declared(Comp)} check in systemh.inc */
+    pascal_preprocessor_define_macro(preprocessor, "Comp", "Comp");
+
+    /* Auto-define platform macros based on host compiler */
+#if defined(__linux__)
+    pascal_preprocessor_define(preprocessor, "LINUX");
+    pascal_preprocessor_define(preprocessor, "UNIX");
+    pascal_preprocessor_define(preprocessor, "CONSOLE");
+    pascal_preprocessor_define(preprocessor, "ENDIAN_LITTLE");
+    
+    /* Define constants for heap.inc to avoid {$ERROR} */
+    pascal_preprocessor_define_macro(preprocessor, "FixedArenaOffsetShift", "5");
+    pascal_preprocessor_define_macro(preprocessor, "VarSizeQuant", "32");
+    pascal_preprocessor_define_macro(preprocessor, "FirstVarRangeP2", "10");
+    pascal_preprocessor_define_macro(preprocessor, "FirstVarStepP2", "5");
+    pascal_preprocessor_define_macro(preprocessor, "VarSizeClassesCount", "10");
+    pascal_preprocessor_define_macro(preprocessor, "MaxFixedHeaderAndPayload", "544");
+    pascal_preprocessor_define_macro(preprocessor, "MaxVarHeaderAndPayload", "1048096");
+    pascal_preprocessor_define_macro(preprocessor, "CommonHeaderSize", "4");
+    pascal_preprocessor_define_macro(preprocessor, "MinFixedHeaderAndPayload", "16");
+#endif
+
+#if defined(__x86_64__)
+    pascal_preprocessor_define(preprocessor, "CPU64");
+    pascal_preprocessor_define(preprocessor, "CPUX86_64");
+    pascal_preprocessor_define(preprocessor, "CPUAMD64");
+    pascal_preprocessor_define(preprocessor, "CPUX64");
+    pascal_preprocessor_define(preprocessor, "CPUINT64");
+    pascal_preprocessor_define(preprocessor, "X86_64");
+    pascal_preprocessor_define(preprocessor, "CPUATHLON64");
+    pascal_preprocessor_define(preprocessor, "FPUSSE64");
+    pascal_preprocessor_define(preprocessor, "FPC_ABI_DEFAULT");
+#endif
+
+#if defined(__i386__)
+    pascal_preprocessor_define(preprocessor, "CPU32");
+    pascal_preprocessor_define(preprocessor, "CPUI386");
+    pascal_preprocessor_define(preprocessor, "I386");
+#endif
 
     /* Handle -D and -U options */
     for (int i = 1; i < argc; i++)
