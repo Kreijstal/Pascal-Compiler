@@ -253,6 +253,26 @@ char *pascal_preprocess_file(PascalPreprocessor *pp,
     return result;
 }
 
+// Helper to detect lines to skip in systemh.inc and x86_64.inc
+// Returns: 0 = keep, 1 = skip line, 2 = skip block (start)
+static int should_skip_line(const char *fname, const char *line_start) {
+    if (!fname) return 0;
+    size_t len = strlen(fname);
+    
+    while (*line_start && isspace((unsigned char)*line_start) && *line_start != '\n') line_start++;
+
+    if (len >= 11 && strcmp(fname + len - 11, "systemh.inc") == 0) {
+        if (strncmp(line_start, "function get_frame:pointer;", 27) == 0) return 1;
+        if (strncmp(line_start, "Function Get_pc_addr : CodePointer;", 35) == 0) return 1;
+    }
+    
+    if (len >= 10 && strcmp(fname + len - 10, "x86_64.inc") == 0) {
+        if (strncmp(line_start, "function get_frame:pointer;assembler;nostackframe;", 50) == 0) return 2;
+    }
+
+    return 0;
+}
+
 static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                                        const char *filename,
                                        const char *input,
@@ -272,27 +292,6 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
     bool in_line_comment = false;
 
     int current_line = 1;
-
-    // Helper to detect lines to skip in systemh.inc and x86_64.inc
-    // Returns: 0 = keep, 1 = skip line, 2 = skip block (start)
-    auto int should_skip_line(const char *fname, const char *line_start) {
-        if (!fname) return 0;
-        size_t len = strlen(fname);
-        
-        while (*line_start && isspace((unsigned char)*line_start) && *line_start != '\n') line_start++;
-
-        if (len >= 11 && strcmp(fname + len - 11, "systemh.inc") == 0) {
-            if (strncmp(line_start, "function get_frame:pointer;", 27) == 0) return 1;
-            if (strncmp(line_start, "Function Get_pc_addr : CodePointer;", 35) == 0) return 1;
-        }
-        
-        if (len >= 10 && strcmp(fname + len - 10, "x86_64.inc") == 0) {
-             if (strncmp(line_start, "function get_frame:pointer;assembler;nostackframe;", 50) == 0) return 2;
-             // if (strncmp(line_start, "function get_pc_addr:pointer;assembler;nostackframe;", 52) == 0) return 2;
-        }
-
-        return 0;
-    }
 
     bool skip_block_mode = false;
 
@@ -1886,9 +1885,15 @@ static bool parse_factor(const char **cursor,
                 else *value = parsed_val; // Best effort
             }
         } else {
-            // Undefined symbol -> treat as 0 (matching FPC behavior)
-            // FPC treats undefined symbols as 0 in conditional expressions
-            *value = 0;
+            // Undefined symbol -> error (matching FPC behavior)
+            // FPC requires symbols in {$if} expressions to be defined
+            bool err = set_error(
+                error_message,
+                "undefined macro '%s'",
+                sym
+            );
+            free(sym);
+            return err;
         }
         free(sym);
         return true;
