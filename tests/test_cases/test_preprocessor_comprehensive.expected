@@ -1,0 +1,26 @@
+1: FLAG_A defined
+2: UNDEFINED_FLAG not defined
+3: NONEXISTENT does not exist
+4: FLAG_A via DEFINED()
+5: NOT DEFINED works
+6: FLAG_A AND FLAG_B
+7: FLAG_A OR NONEXISTENT
+8: VERSION > 30000
+9: VERSION = 30400
+10: VERSION < 40000
+11: $if 1 is true
+12: $if 0 is false
+13: 10+5=15
+14: 10-5=5
+15: 10*5=50
+16: 10 div 5=2
+17: 10 mod 3=1
+18: $ELSEIF works
+19: $UNDEF works
+20: Nested conditionals work
+21: $IFEND works
+22: VERSION >= 30400
+23: VERSION <= 30400
+24: VERSION <> 99999
+25: Complex boolean expression
+All tests completed
