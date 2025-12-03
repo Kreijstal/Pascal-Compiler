@@ -114,6 +114,31 @@ static bool peek_assignment_operator(input_t* in) {
         if (ch == ';' || ch == '\n' || ch == '\r') {
             return false;
         }
+        /* Check if we're at a statement-terminating keyword like 'else', 'then', 'do', 'end', 'until'.
+         * These keywords mark the boundary of a statement, so we should not scan past them
+         * looking for an assignment operator. */
+        if (isalpha(ch)) {
+            int kw_start = pos;
+            int kw_end = pos;
+            while (kw_end < length && (isalnum((unsigned char)buffer[kw_end]) || buffer[kw_end] == '_')) {
+                kw_end++;
+            }
+            size_t kw_len = (size_t)(kw_end - kw_start);
+            if (kw_len >= 2 && kw_len <= 6) {
+                /* Check for statement-terminating keywords (case-insensitive) */
+                if ((kw_len == 4 && strncasecmp(buffer + kw_start, "else", 4) == 0) ||
+                    (kw_len == 4 && strncasecmp(buffer + kw_start, "then", 4) == 0) ||
+                    (kw_len == 2 && strncasecmp(buffer + kw_start, "do", 2) == 0) ||
+                    (kw_len == 3 && strncasecmp(buffer + kw_start, "end", 3) == 0) ||
+                    (kw_len == 5 && strncasecmp(buffer + kw_start, "until", 5) == 0) ||
+                    (kw_len == 6 && strncasecmp(buffer + kw_start, "except", 6) == 0) ||
+                    (kw_len == 7 && strncasecmp(buffer + kw_start, "finally", 7) == 0)) {
+                    return false;
+                }
+            }
+            pos = kw_end;
+            continue;
+        }
         pos++;
     }
     return false;
