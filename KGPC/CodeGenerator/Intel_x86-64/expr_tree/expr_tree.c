@@ -234,6 +234,10 @@ static long long expr_integer_constant_value(const struct Expression *expr, cons
     return 0;
 }
 
+/* Forward declarations */
+static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf_size);
+static const char *reg64_to_reg32(const char *reg_name, char *buffer, size_t buf_size);
+
 static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
     struct Expression *operand_expr, const char *operand, const char *xmm_reg,
     ListNode_t *inst_list)
@@ -305,8 +309,22 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
         return add_inst(inst_list, buffer);
     }
 
-    const char *convert_instr = operand_is_longint ? "cvtsi2sdq" : "cvtsi2sdl";
-    snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", convert_instr, operand, xmm_reg);
+    /* For cvtsi2sd, we need to match the register size to the instruction suffix:
+     * cvtsi2sdl uses 32-bit register, cvtsi2sdq uses 64-bit register */
+    const char *convert_instr;
+    const char *convert_reg;
+    char reg_buf[16];
+    if (operand_is_longint)
+    {
+        convert_instr = "cvtsi2sdq";
+        convert_reg = reg32_to_reg64(operand, reg_buf, sizeof(reg_buf));
+    }
+    else
+    {
+        convert_instr = "cvtsi2sdl";
+        convert_reg = reg64_to_reg32(operand, reg_buf, sizeof(reg_buf));
+    }
+    snprintf(buffer, sizeof(buffer), "\t%s\t%s, %s\n", convert_instr, convert_reg, xmm_reg);
     return add_inst(inst_list, buffer);
 }
 
@@ -327,7 +345,11 @@ static ListNode_t *gencode_real_binary_op(CodeGenContext *ctx,
     char buffer[80];
     snprintf(buffer, sizeof(buffer), "\t%s\t%%xmm1, %%xmm0\n", sse_mnemonic);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", dest);
+
+    /* movq requires a 64-bit register, so convert 32-bit register to 64-bit */
+    char dest64_buf[16];
+    const char *dest64 = reg32_to_reg64(dest, dest64_buf, sizeof(dest64_buf));
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", dest64);
     return add_inst(inst_list, buffer);
 }
 
@@ -338,11 +360,16 @@ static ListNode_t *gencode_real_negate(const char *value_operand,
         return inst_list;
 
     char buffer[96];
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_operand);
+    /* movq requires a 64-bit register, so convert 32-bit operand/dest to 64-bit */
+    char value64_buf[16];
+    const char *value64 = reg32_to_reg64(value_operand, value64_buf, sizeof(value64_buf));
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value64);
     inst_list = add_inst(inst_list, buffer);
     inst_list = add_inst(inst_list, "\tpxor\t%xmm1, %xmm1\n");
     inst_list = add_inst(inst_list, "\tsubsd\t%xmm0, %xmm1\n");
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm1, %s\n", dest);
+    char dest64_buf[16];
+    const char *dest64 = reg32_to_reg64(dest, dest64_buf, sizeof(dest64_buf));
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm1, %s\n", dest64);
     return add_inst(inst_list, buffer);
 }
 
@@ -2186,6 +2213,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             if(type == STAR)
             {
                 snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, right, left);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else if(type == AND)
+            {
+                snprintf(buffer, sizeof(buffer), "\tand%c\t%s, %s\n", arith_suffix, right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)
