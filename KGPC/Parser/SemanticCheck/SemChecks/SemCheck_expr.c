@@ -6130,7 +6130,8 @@ int semcheck_mulop(int *type_return,
         ++return_val;
     }
 
-    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+    /* SLASH (/) always produces REAL_TYPE in Pascal, regardless of operand types */
+    if (type_first == REAL_TYPE || type_second == REAL_TYPE || op_type == SLASH)
         *type_return = REAL_TYPE;
     else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
         *type_return = LONGINT_TYPE;
