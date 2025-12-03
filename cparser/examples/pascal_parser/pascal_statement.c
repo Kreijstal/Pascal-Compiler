@@ -124,7 +124,7 @@ static bool peek_assignment_operator(input_t* in) {
                 kw_end++;
             }
             size_t kw_len = (size_t)(kw_end - kw_start);
-            if (kw_len >= 2 && kw_len <= 6) {
+            if (kw_len >= 2 && kw_len <= 7) {
                 /* Check for statement-terminating keywords (case-insensitive) */
                 if ((kw_len == 4 && strncasecmp(buffer + kw_start, "else", 4) == 0) ||
                     (kw_len == 4 && strncasecmp(buffer + kw_start, "then", 4) == 0) ||
