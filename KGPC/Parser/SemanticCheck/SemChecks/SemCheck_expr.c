@@ -5988,21 +5988,48 @@ int semcheck_mulop(int *type_return,
     return_val += semcheck_expr_main(&type_second, symtab, expr2, max_scope_lev, mutating);
 
     int op_type = expr->expr_data.mulop_data.mulop_type;
-    if (op_type == AND)
+    
+    /* Handle AND and XOR operators */
+    if (op_type == AND || op_type == XOR)
     {
-        if (type_first != BOOL || type_second != BOOL)
+        /* Boolean operations */
+        if (type_first == BOOL && type_second == BOOL)
         {
-            fprintf(stderr, "Error on line %d, expected boolean operands for AND expression!\n\n",
-                expr->line_num);
-            ++return_val;
+            *type_return = BOOL;
+            return return_val;
         }
-        *type_return = BOOL;
+        
+        /* Set operations */
+        if (type_first == SET_TYPE && type_second == SET_TYPE)
+        {
+            *type_return = SET_TYPE;
+            return return_val;
+        }
+        
+        /* Integer bitwise operations */
+        if ((type_first == INT_TYPE || type_first == LONGINT_TYPE) &&
+            (type_second == INT_TYPE || type_second == LONGINT_TYPE))
+        {
+            /* Both operands are integers - bitwise operation */
+            if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+                *type_return = LONGINT_TYPE;
+            else
+                *type_return = INT_TYPE;
+            return return_val;
+        }
+        
+        /* Invalid operand types for AND/XOR */
+        fprintf(stderr, "Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
+            expr->line_num, op_type == AND ? "AND" : "XOR");
+        ++return_val;
+        *type_return = UNKNOWN_TYPE;
         return return_val;
     }
 
+    /* Set operations for STAR operator (intersection) */
     if (type_first == SET_TYPE && type_second == SET_TYPE)
     {
-        if (op_type == STAR || op_type == XOR)
+        if (op_type == STAR)
         {
             *type_return = SET_TYPE;
         }
@@ -6128,6 +6155,23 @@ int semcheck_mulop(int *type_return,
         fprintf(stderr, "Error on line %d, expected int/real on both sides of mulop!\n\n",
             expr->line_num);
         ++return_val;
+    }
+
+    /* Handle DIV and MOD operators - integer division only */
+    if (op_type == DIV || op_type == MOD)
+    {
+        if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        {
+            fprintf(stderr, "Error on line %d, DIV and MOD operators require integer operands!\n\n",
+                expr->line_num);
+            ++return_val;
+        }
+        /* DIV and MOD produce integer results */
+        if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+            *type_return = LONGINT_TYPE;
+        else
+            *type_return = INT_TYPE;
+        return return_val;
     }
 
     /* SLASH (/) always produces REAL_TYPE in Pascal, regardless of operand types */

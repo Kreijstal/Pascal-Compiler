@@ -2215,6 +2215,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, right, left);
                 inst_list = add_inst(inst_list, buffer);
             }
+            else if(type == AND)
+            {
+                snprintf(buffer, sizeof(buffer), "\tand%c\t%s, %s\n", arith_suffix, right, left);
+                inst_list = add_inst(inst_list, buffer);
+            }
             else if(type == MOD)
             {
                 if (use_qword_op)
