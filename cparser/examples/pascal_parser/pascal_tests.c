@@ -4880,6 +4880,61 @@ void test_external_no_args_debug(void) {
     free_input(input);
 }
 
+// Test for FPC system.pp compatibility - documents parser bugs with comments containing keywords
+// This test currently FAILS due to:
+// 1. "type Double" distinct type parsing bug after record with dword fields
+// 2. Comments containing 'implementation' keyword incorrectly parsed
+// 3. Comments containing 'initialization' keyword incorrectly parsed
+void test_fpc_system_comment_keywords(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("unitwithimplcomment.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    // This test documents a known bug - it should pass but currently fails
+    if (!res.is_success) {
+        printf("KNOWN BUG: Parse error in FPC system.pp compatible code: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
+// Test for Delphi-style form unit with class, method implementation, private vars/consts
+void test_delphi_form_unit(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    char* program = load_pascal_file("delphiformunit.pas");
+    TEST_ASSERT(program != NULL);
+    if (!program) {
+        free_input(input);
+        return;
+    }
+    input->buffer = program;
+    input->length = strlen(program);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error in Delphi form unit: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    }
+    free(input->buffer);
+    free_input(input);
+}
+
 
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
@@ -5047,5 +5102,7 @@ TEST_LIST = {
     { "test_type_subroutine_with_stdcall", test_type_subroutine_with_stdcall },
     { "test_var_absolute_clause", test_var_absolute_clause },
     { "test_library_header_and_exports", test_library_header_and_exports },
+    { "test_fpc_system_comment_keywords", test_fpc_system_comment_keywords },
+    { "test_delphi_form_unit", test_delphi_form_unit },
     { NULL, NULL }
 };

@@ -1085,6 +1085,53 @@ static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     return make_success(ast);
 }
 
+// Helper function to skip a single Pascal comment or one character.
+// Returns true if something was skipped, false if at EOF.
+static bool skip_one_pascal_element(input_t* in) {
+    if (in->start >= in->length) return false;
+    
+    const char* buffer = in->buffer;
+    int pos = in->start;
+    char c = buffer[pos];
+    
+    // Skip { } brace comments
+    if (c == '{') {
+        in->start++; // consume '{'
+        while (in->start < in->length) {
+            char ch = buffer[in->start++];
+            if (ch == '}') break;
+        }
+        return true;
+    }
+    
+    // Skip (* *) paren-star comments
+    if (c == '(' && (pos + 1) < in->length && buffer[pos + 1] == '*') {
+        in->start += 2; // consume '(*'
+        while (in->start < in->length) {
+            if (buffer[in->start] == '*' && (in->start + 1) < in->length && buffer[in->start + 1] == ')') {
+                in->start += 2; // consume '*)'
+                break;
+            }
+            in->start++;
+        }
+        return true;
+    }
+    
+    // Skip // line comments
+    if (c == '/' && (pos + 1) < in->length && buffer[pos + 1] == '/') {
+        in->start += 2; // consume '//'
+        while (in->start < in->length) {
+            char ch = buffer[in->start++];
+            if (ch == '\n' || ch == '\r') break;
+        }
+        return true;
+    }
+    
+    // Skip single character
+    in->start++;
+    return true;
+}
+
 static ParseResult until_fn(input_t* in, void* args, char* parser_name) {
     until_args* uargs = (until_args*)args;
     int start_offset = in->start;
@@ -1097,7 +1144,9 @@ static ParseResult until_fn(input_t* in, void* args, char* parser_name) {
         }
         free_error(res.value.error);
         restore_input_state(in, &current_state);
-        if (read1(in) == EOF) break;
+        // Skip entire comments instead of single characters to avoid
+        // matching keywords that appear inside comments
+        if (!skip_one_pascal_element(in)) break;
     }
     int len = in->start - start_offset;
     char* text = (char*)safe_malloc(len + 1);
