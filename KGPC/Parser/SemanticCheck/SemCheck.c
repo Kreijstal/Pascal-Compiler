@@ -229,6 +229,7 @@ void semcheck_mark_call_requires_static_link(HashNode_t *callee)
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree);
+int semcheck_unit(SymTab_t *symtab, Tree_t *tree);
 
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num);
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
@@ -797,7 +798,11 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     semcheck_add_builtins(symtab);
     /*PrintSymTab(symtab, stderr, 0);*/
 
-    return_val = semcheck_program(symtab, parse_tree);
+    if (parse_tree->type == TREE_UNIT) {
+        return_val = semcheck_unit(symtab, parse_tree);
+    } else {
+        return_val = semcheck_program(symtab, parse_tree);
+    }
 
     if(return_val > 0)
         fprintf(stderr, "\nCheck failed with %d error(s)!\n\n", return_val);
@@ -2602,6 +2607,46 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     }
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
+    return return_val;
+}
+
+/* Semantic check for a unit */
+int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
+{
+    int return_val;
+    assert(tree != NULL);
+    assert(symtab != NULL);
+    assert(tree->type == TREE_UNIT);
+
+    return_val = 0;
+
+    PushScope(symtab);
+
+    /* Check interface section */
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
+    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
+    return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
+    return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
+
+    /* Check implementation section */
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
+
+    /* Check subprograms */
+    return_val += semcheck_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+
+    /* Check initialization section if present */
+    if (tree->tree_data.unit_data.initialization != NULL) {
+        return_val += semcheck_stmt(symtab, tree->tree_data.unit_data.initialization, INT_MAX);
+    }
+
+    /* Check finalization section if present */
+    if (tree->tree_data.unit_data.finalization != NULL) {
+        return_val += semcheck_stmt(symtab, tree->tree_data.unit_data.finalization, INT_MAX);
+    }
+
     return return_val;
 }
 
