@@ -28,6 +28,7 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_LABEL_BUFFER_SIZE 256
 
 /* Helper functions for transitioning from legacy type fields to KgpcType */
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, KgpcType *array_type);
@@ -978,6 +979,91 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
     return;
+}
+
+void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    assert(tree != NULL);
+    assert(tree->type == TREE_UNIT);
+    assert(input_file_name != NULL);
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+
+    if (ctx->target_abi != KGPC_TARGET_ABI_SYSTEM_V && ctx->target_abi != KGPC_TARGET_ABI_WINDOWS)
+        ctx->target_abi = current_target_abi();
+
+    g_current_codegen_abi = ctx->target_abi;
+    g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
+    ctx->pending_stack_arg_bytes = 0;
+
+    ctx->symtab = symtab;
+
+    codegen_reset_finally_stack(ctx);
+    codegen_reset_loop_stack(ctx);
+    codegen_reset_except_stack(ctx);
+
+    init_stackmng();
+
+    codegen_program_header(input_file_name, ctx);
+    codegen_rodata(ctx);
+
+    /* Generate code for unit subprograms */
+    codegen_subprograms(tree->tree_data.unit_data.subprograms, ctx, symtab);
+
+    /* Generate initialization section if present */
+    if (tree->tree_data.unit_data.initialization != NULL)
+    {
+        char *unit_id = tree->tree_data.unit_data.unit_id;
+        char init_label[CODEGEN_LABEL_BUFFER_SIZE];
+        snprintf(init_label, sizeof(init_label), "_UNIT_%s_INIT", unit_id ? unit_id : "UNKNOWN");
+        
+        push_stackscope();
+        ListNode_t *inst_list = NULL;
+        inst_list = codegen_stmt(tree->tree_data.unit_data.initialization, inst_list, ctx, symtab);
+        
+        fprintf(ctx->output_file, "\t.globl\t%s\n", init_label);
+        fprintf(ctx->output_file, "%s:\n", init_label);
+        fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
+        fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
+        codegen_stack_space(ctx);
+        codegen_inst_list(inst_list, ctx);
+        fprintf(ctx->output_file, "\tleave\n");
+        fprintf(ctx->output_file, "\tret\n");
+        
+        free_inst_list(inst_list);
+        pop_stackscope();
+    }
+
+    /* Generate finalization section if present */
+    if (tree->tree_data.unit_data.finalization != NULL)
+    {
+        char *unit_id = tree->tree_data.unit_data.unit_id;
+        char final_label[CODEGEN_LABEL_BUFFER_SIZE];
+        snprintf(final_label, sizeof(final_label), "_UNIT_%s_FINAL", unit_id ? unit_id : "UNKNOWN");
+        
+        push_stackscope();
+        ListNode_t *inst_list = NULL;
+        inst_list = codegen_stmt(tree->tree_data.unit_data.finalization, inst_list, ctx, symtab);
+        
+        fprintf(ctx->output_file, "\t.globl\t%s\n", final_label);
+        fprintf(ctx->output_file, "%s:\n", final_label);
+        fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
+        fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
+        codegen_stack_space(ctx);
+        codegen_inst_list(inst_list, ctx);
+        fprintf(ctx->output_file, "\tleave\n");
+        fprintf(ctx->output_file, "\tret\n");
+        
+        free_inst_list(inst_list);
+        pop_stackscope();
+    }
+
+    codegen_program_footer(ctx);
+
+    free_stackmng();
+    codegen_reset_loop_stack(ctx);
+    codegen_reset_finally_stack(ctx);
+    codegen_reset_except_stack(ctx);
 }
 
 void codegen_rodata(CodeGenContext *ctx)

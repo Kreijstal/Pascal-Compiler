@@ -916,6 +916,116 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Handle unit compilation separately from program compilation */
+    if (user_tree->type == TREE_UNIT)
+    {
+        fprintf(stderr, "Compiling unit: %s\n", user_tree->tree_data.unit_data.unit_id);
+        
+        /* For units, we still need to merge stdlib for built-in functions */
+        ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
+        if (prelude_subs != NULL)
+            mark_stdlib_var_params(prelude_subs);
+        if (prelude_subs != NULL)
+        {
+            mark_unit_subprograms(prelude_subs);
+            ListNode_t *last = prelude_subs;
+            while (last->next != NULL)
+                last = last->next;
+            last->next = user_tree->tree_data.unit_data.subprograms;
+            user_tree->tree_data.unit_data.subprograms = prelude_subs;
+            prelude_tree->tree_data.program_data.subprograms = NULL;
+        }
+        
+        /* Load used units */
+        UnitSet visited_units;
+        unit_set_init(&visited_units);
+        /* NOTE: Unit dependency loading is not yet implemented.
+         * Units that use other units (via interface/implementation uses clauses)
+         * will need those dependencies loaded here. For now, only stdlib is merged. */
+        unit_set_destroy(&visited_units);
+        
+        int sem_result = 0;
+        double sem_start = track_time ? current_time_seconds() : 0.0;
+        SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+        if (track_time)
+            g_time_semantic += current_time_seconds() - sem_start;
+        
+        if (sem_result > 0)
+        {
+            fprintf(stderr, "Semantic check failed for unit.\n");
+            DestroySymTab(symtab);
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            free(stdlib_path);
+            clear_dump_ast_path();
+            pascal_frontend_cleanup();
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
+        
+        fprintf(stderr, "Generating code for unit to file: %s\n", output_file);
+        
+        CodeGenContext ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.output_file = fopen(output_file, "w");
+        if (ctx.output_file == NULL)
+        {
+            fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
+            DestroySymTab(symtab);
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            free(stdlib_path);
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
+        ctx.label_counter = 1;
+        ctx.write_label_counter = 1;
+        ctx.symtab = symtab;
+        ctx.target_abi = current_target_abi();
+        ctx.had_error = 0;
+        ctx.loop_frames = NULL;
+        ctx.loop_depth = 0;
+        ctx.loop_capacity = 0;
+        
+        double codegen_start = track_time ? current_time_seconds() : 0.0;
+        codegen_unit(user_tree, input_file, &ctx, symtab);
+        if (track_time)
+            g_time_codegen += current_time_seconds() - codegen_start;
+        
+        int codegen_failed = codegen_had_error(&ctx);
+        fclose(ctx.output_file);
+        
+        if (codegen_failed)
+        {
+            fprintf(stderr, "ERROR: Code generation failed for unit.\n");
+            DestroySymTab(symtab);
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
+            free(stdlib_path);
+            clear_dump_ast_path();
+            pascal_frontend_cleanup();
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
+        
+        DestroySymTab(symtab);
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
+        free(stdlib_path);
+        if (ast_nil != NULL)
+        {
+            free(ast_nil);
+            ast_nil = NULL;
+        }
+        clear_dump_ast_path();
+        pascal_frontend_cleanup();
+        unit_search_paths_destroy(&g_unit_paths);
+        arena_destroy(arena);
+        return 0;
+    }
+
+    /* Normal program compilation continues below */
     ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
     UnitSet visited_units;
