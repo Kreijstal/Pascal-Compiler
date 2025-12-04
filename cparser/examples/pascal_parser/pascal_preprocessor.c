@@ -19,6 +19,9 @@ struct PascalPreprocessor {
     size_t define_count;
     size_t define_capacity;
     bool macro_enabled;  // Track {$macro on/off} state
+    char **include_paths;
+    size_t include_path_count;
+    size_t include_path_capacity;
 };
 
 typedef struct {
@@ -89,7 +92,7 @@ static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol);
 static void trim(char **begin, char **end);
 static char *duplicate_range(const char *start, const char *end);
 static void extract_directory(const char *filename, char *buffer, size_t buffer_size);
-static bool resolve_include_path(const char *current_file, const char *directive_path, char **result_path);
+static bool resolve_include_path(const PascalPreprocessor *pp, const char *current_file, const char *directive_path, char **result_path);
 static bool parse_identifier(const char *start, const char *end, char **out_identifier);
 static void uppercase(char *str);
 static bool evaluate_if_directive(PascalPreprocessor *pp,
@@ -125,6 +128,9 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->define_count = 0;
     pp->define_capacity = 0;
     pp->macro_enabled = false;  // Macros are off by default
+    pp->include_paths = NULL;
+    pp->include_path_count = 0;
+    pp->include_path_capacity = 0;
     return pp;
 }
 
@@ -137,6 +143,10 @@ void pascal_preprocessor_free(PascalPreprocessor *pp) {
         free(pp->defines[i].value);
     }
     free(pp->defines);
+    for (size_t i = 0; i < pp->include_path_count; ++i) {
+        free(pp->include_paths[i]);
+    }
+    free(pp->include_paths);
     free(pp);
 }
 
@@ -161,6 +171,24 @@ bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol) {
 
 bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *symbol) {
     return symbol_is_defined(pp, symbol);
+}
+
+bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp, const char *path) {
+    if (!pp || !path) return false;
+    
+    if (pp->include_path_count >= pp->include_path_capacity) {
+        size_t new_capacity = pp->include_path_capacity == 0 ? 8 : pp->include_path_capacity * 2;
+        char **new_paths = realloc(pp->include_paths, new_capacity * sizeof(char*));
+        if (!new_paths) return false;
+        pp->include_paths = new_paths;
+        pp->include_path_capacity = new_capacity;
+    }
+    
+    char *path_copy = my_strdup(path);
+    if (!path_copy) return false;
+    
+    pp->include_paths[pp->include_path_count++] = path_copy;
+    return true;
 }
 
 char *pascal_preprocess_buffer(PascalPreprocessor *pp,
@@ -540,7 +568,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             }
 
             char *resolved_path = NULL;
-            if (!resolve_include_path(filename, path_token, &resolved_path)) {
+            if (!resolve_include_path(pp, filename, path_token, &resolved_path)) {
                 bool err = set_error(error_message, "unable to resolve include '%s' in '%s'", path_token, filename ? filename : "<buffer>");
                 free(keyword);
                 free(content);
@@ -560,7 +588,7 @@ static bool handle_directive(PascalPreprocessor *pp,
                         memcpy(with_inc, path_token, base_len);
                         memcpy(with_inc + base_len, ".inc", 5);
                         char *resolved2 = NULL;
-                        if (resolve_include_path(filename, with_inc, &resolved2)) {
+                        if (resolve_include_path(pp, filename, with_inc, &resolved2)) {
                             // Clear previous error message (if any) and retry
                             if (error_message && *error_message) {
                                 free(*error_message);
@@ -1358,7 +1386,7 @@ static void extract_directory(const char *filename, char *buffer, size_t buffer_
     buffer[len] = '\0';
 }
 
-static bool resolve_include_path(const char *current_file, const char *directive_path, char **result_path) {
+static bool resolve_include_path(const PascalPreprocessor *pp, const char *current_file, const char *directive_path, char **result_path) {
     if (!directive_path || !result_path) {
         return false;
     }
@@ -1374,6 +1402,7 @@ static bool resolve_include_path(const char *current_file, const char *directive
         return *result_path != NULL;
     }
 
+    // First try relative to current file
     char directory[1024];
     extract_directory(current_file, directory, sizeof(directory));
 
@@ -1381,6 +1410,44 @@ static bool resolve_include_path(const char *current_file, const char *directive
     size_t path_len = strlen(directive_path);
     size_t total_len = dir_len + 1 + path_len + 1;
     char *combined = malloc(total_len);
+    if (!combined) {
+        return false;
+    }
+    snprintf(combined, total_len, "%s/%s", directory, directive_path);
+    
+    // Check if file exists
+    FILE *f = fopen(combined, "r");
+    if (f) {
+        fclose(f);
+        *result_path = combined;
+        return true;
+    }
+    free(combined);
+    
+    // Try each include path
+    if (pp) {
+        for (size_t i = 0; i < pp->include_path_count; ++i) {
+            size_t inc_dir_len = strlen(pp->include_paths[i]);
+            total_len = inc_dir_len + 1 + path_len + 1;
+            combined = malloc(total_len);
+            if (!combined) {
+                return false;
+            }
+            snprintf(combined, total_len, "%s/%s", pp->include_paths[i], directive_path);
+            
+            f = fopen(combined, "r");
+            if (f) {
+                fclose(f);
+                *result_path = combined;
+                return true;
+            }
+            free(combined);
+        }
+    }
+    
+    // File not found in any path - return the relative path for error message
+    total_len = dir_len + 1 + path_len + 1;
+    combined = malloc(total_len);
     if (!combined) {
         return false;
     }

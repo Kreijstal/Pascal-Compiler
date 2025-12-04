@@ -14,6 +14,9 @@ bool pascal_preprocessor_define_macro(PascalPreprocessor *pp, const char *symbol
 bool pascal_preprocessor_undefine(PascalPreprocessor *pp, const char *symbol);
 bool pascal_preprocessor_is_defined(const PascalPreprocessor *pp, const char *symbol);
 
+/* Add a directory to search for include files */
+bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp, const char *path);
+
 char *pascal_preprocess_buffer(PascalPreprocessor *pp,
                                const char *filename,
                                const char *input,

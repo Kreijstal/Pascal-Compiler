@@ -13,6 +13,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "  Options:\n");
     fprintf(stderr, "    -D<symbol>    Define a preprocessor symbol\n");
     fprintf(stderr, "    -U<symbol>    Undefine a preprocessor symbol\n");
+    fprintf(stderr, "    -I<path>      Add include search path\n");
 }
 
 static char *read_file(const char *filename)
@@ -68,6 +69,11 @@ int main(int argc, char **argv)
             else if (argv[i][1] == 'U')
             {
                 /* Handle -U later after creating preprocessor */
+                continue;
+            }
+            else if (argv[i][1] == 'I')
+            {
+                /* Handle -I later after creating preprocessor */
                 continue;
             }
             else
@@ -246,7 +252,7 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "I386");
 #endif
 
-    /* Handle -D and -U options */
+    /* Handle -D, -U, and -I options */
     for (int i = 1; i < argc; i++)
     {
         if (argv[i][0] == '-' && argv[i][1] == 'D' && argv[i][2] != '\0')
@@ -256,6 +262,10 @@ int main(int argc, char **argv)
         else if (argv[i][0] == '-' && argv[i][1] == 'U' && argv[i][2] != '\0')
         {
             pascal_preprocessor_undefine(preprocessor, &argv[i][2]);
+        }
+        else if (argv[i][0] == '-' && argv[i][1] == 'I' && argv[i][2] != '\0')
+        {
+            pascal_preprocessor_add_include_path(preprocessor, &argv[i][2]);
         }
     }
 
