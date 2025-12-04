@@ -389,8 +389,27 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
+/* Define architecture-specific symbols based on the target platform */
 #if INTPTR_MAX >= INT64_MAX
     const char *arch_symbol = "CPU64";
+    /* On 64-bit x86, define CPUX86_64 for FPC compatibility */
+    #if defined(__x86_64__) || defined(_M_X64)
+    if (!pascal_preprocessor_define(preprocessor, "CPUX86_64"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define CPUX86_64 symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    /* Define CPUINT64 for FPC (integer register size) */
+    if (!pascal_preprocessor_define(preprocessor, "CPUINT64"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define CPUINT64 symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    #endif
 #else
     const char *arch_symbol = "CPU32";
 #endif
@@ -403,6 +422,42 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         free(buffer);
         return false;
     }
+
+    /* Define platform-specific symbols */
+#if defined(__linux__)
+    if (!pascal_preprocessor_define(preprocessor, "LINUX"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define LINUX symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "UNIX"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define UNIX symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+#endif
+
+    /* Define endianness - x86/x86_64 is little-endian */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    if (!pascal_preprocessor_define(preprocessor, "ENDIAN_LITTLE"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define ENDIAN_LITTLE symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "FPC_LITTLE_ENDIAN"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define FPC_LITTLE_ENDIAN symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+#endif
 
     /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which expose a POSIX API) */
 #if defined(_WIN32) && !defined(__CYGWIN__)
