@@ -10,6 +10,47 @@
 #endif
 
 #include "ErrVars.h"
+
+/* Global storage for user-defined preprocessor configuration */
+#define MAX_USER_INCLUDE_PATHS 64
+#define MAX_USER_DEFINES 128
+
+static char *g_user_include_paths[MAX_USER_INCLUDE_PATHS];
+static int g_user_include_path_count = 0;
+
+static char *g_user_defines[MAX_USER_DEFINES];
+static int g_user_define_count = 0;
+
+void pascal_frontend_add_include_path(const char *path)
+{
+    if (path == NULL || g_user_include_path_count >= MAX_USER_INCLUDE_PATHS)
+        return;
+    g_user_include_paths[g_user_include_path_count++] = strdup(path);
+}
+
+void pascal_frontend_add_define(const char *define)
+{
+    if (define == NULL || g_user_define_count >= MAX_USER_DEFINES)
+        return;
+    g_user_defines[g_user_define_count++] = strdup(define);
+}
+
+void pascal_frontend_clear_user_config(void)
+{
+    for (int i = 0; i < g_user_include_path_count; ++i)
+    {
+        free(g_user_include_paths[i]);
+        g_user_include_paths[i] = NULL;
+    }
+    g_user_include_path_count = 0;
+    
+    for (int i = 0; i < g_user_define_count; ++i)
+    {
+        free(g_user_defines[i]);
+        g_user_defines[i] = NULL;
+    }
+    g_user_define_count = 0;
+}
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "ParseTree/generic_types.h"
@@ -301,6 +342,24 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         report_preprocessor_error(error_out, path, "unable to initialise preprocessor");
         free(buffer);
         return false;
+    }
+
+    /* Apply user-defined include paths */
+    for (int i = 0; i < g_user_include_path_count; ++i)
+    {
+        if (g_user_include_paths[i] != NULL)
+        {
+            pascal_preprocessor_add_include_path(preprocessor, g_user_include_paths[i]);
+        }
+    }
+
+    /* Apply user-defined symbols */
+    for (int i = 0; i < g_user_define_count; ++i)
+    {
+        if (g_user_defines[i] != NULL)
+        {
+            pascal_preprocessor_define(preprocessor, g_user_defines[i]);
+        }
     }
 
     // Define our own dialect symbol and FPC for Lazarus-compatible headers
