@@ -3925,6 +3925,10 @@ next_identifier:
                                 inferred_var_type = HASHVAR_SET;
                                 normalized_type = SET_TYPE;
                                 break;
+                            case POINTER_TYPE:
+                                inferred_var_type = HASHVAR_POINTER;
+                                normalized_type = POINTER_TYPE;
+                                break;
                             default:
                                 fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",
                                     tree->line_num, var_name);
@@ -3965,6 +3969,13 @@ next_identifier:
                                 {
                                     compatible = 1;
                                 }
+                            }
+                            
+                            /* Allow nil (POINTER_TYPE) to initialize any pointer variable */
+                            if (!compatible && inferred_var_type == HASHVAR_POINTER &&
+                                current_var_type == HASHVAR_POINTER)
+                            {
+                                compatible = 1;
                             }
 
                             if (!compatible)
