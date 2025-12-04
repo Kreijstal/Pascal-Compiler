@@ -577,8 +577,8 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                 
                 /* CRITICAL: Check TypeAlias FIRST for target_type_id before checking primitive tag.
                  * This preserves the original type name for small integer types (Byte, Word, etc.)
-                 * which are all mapped to LONGINT_TYPE during predeclare_types but need to retain
-                 * their original type semantics for SizeOf/High/Low operations. */
+                 * which are all mapped to LONGINT_TYPE by the predeclare_types function but need
+                 * to retain their original type semantics for SizeOf/High/Low operations. */
                 struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
                 if (alias != NULL)
                 {
@@ -3971,7 +3971,9 @@ next_identifier:
                                 }
                             }
                             
-                            /* Allow nil (POINTER_TYPE) to initialize any pointer variable */
+                            /* Allow pointer type initializers (including nil) for pointer variables.
+                             * Both the initializer expression type and the declared variable type must
+                             * be pointer types. This enables patterns like: var my_ptr: PChar = nil; */
                             if (!compatible && inferred_var_type == HASHVAR_POINTER &&
                                 current_var_type == HASHVAR_POINTER)
                             {
