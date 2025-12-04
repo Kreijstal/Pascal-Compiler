@@ -438,10 +438,18 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
 
     pascal_word_slice_t word;
     if (pascal_peek_word_after(in, pos, &word)) {
-        if (dispatch->helper_parser && pascal_word_equals_ci(&word, "type")) {
+        if (pascal_word_equals_ci(&word, "type")) {
             pascal_word_slice_t next;
-            if (pascal_peek_word_after(in, word.end_pos, &next) && pascal_word_equals_ci(&next, "helper")) {
-                return run_type_branch(in, dispatch->helper_parser);
+            if (pascal_peek_word_after(in, word.end_pos, &next)) {
+                /* Check for "type helper" first */
+                if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
+                    return run_type_branch(in, dispatch->helper_parser);
+                }
+                /* Handle "type <typename>" (distinct type) - when word after "type" is an identifier.
+                   The distinct_type_parser will parse "type <identifier>" and handle the full validation. */
+                if (dispatch->distinct_type_parser) {
+                    return run_type_branch(in, dispatch->distinct_type_parser);
+                }
             }
         }
         if (dispatch->reference_parser && pascal_word_equals_ci(&word, "reference")) {
@@ -1172,6 +1180,14 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
     combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
     
+    /* Distinct type parser: "type <typename>" creates a distinct (strong) type alias */
+    /* Example: Real = type Double; creates a new type distinct from Double */
+    combinator_t* distinct_type_spec = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
+        token(keyword_ci("type")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    
     // Create parser for identifier with optional subscript (e.g., string[20])
     combinator_t* simple_identifier = new_combinator();
     simple_identifier->type = COMB_TYPE_DISPATCH;
@@ -1195,6 +1211,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     type_args->specialize_parser = specialize_type;
     type_args->constructed_parser = constructed_type;
     type_args->identifier_parser = simple_identifier;
+    type_args->distinct_type_parser = distinct_type_spec;
 
     combinator_t* type_definition = new_combinator();
     type_definition->type = COMB_TYPE_DISPATCH;

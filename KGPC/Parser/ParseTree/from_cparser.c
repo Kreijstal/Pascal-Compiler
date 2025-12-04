@@ -4512,7 +4512,27 @@ static struct Expression *convert_factor(ast_t *expr_node) {
 
     switch (expr_node->typ) {
     case PASCAL_T_INTEGER:
-        return mk_inum(expr_node->line, strtoll(expr_node->sym->name, NULL, 10));
+    {
+        const char *num_str = (expr_node->sym != NULL) ? expr_node->sym->name : "0";
+        int base = 10;
+        /* Handle hex literals ($FF), binary literals (%1010), octal literals (&777) */
+        if (num_str[0] == '$')
+        {
+            base = 16;
+            num_str++;  /* Skip the $ prefix */
+        }
+        else if (num_str[0] == '%')
+        {
+            base = 2;
+            num_str++;  /* Skip the % prefix */
+        }
+        else if (num_str[0] == '&')
+        {
+            base = 8;
+            num_str++;  /* Skip the & prefix */
+        }
+        return mk_inum(expr_node->line, strtoll(num_str, NULL, base));
+    }
     case PASCAL_T_REAL:
         return mk_rnum(expr_node->line, strtof(expr_node->sym->name, NULL));
     case PASCAL_T_STRING:
