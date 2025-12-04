@@ -575,26 +575,21 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                 /* Get the underlying type from KgpcType */
                 KgpcType *kgpc_type = type_node->type;
                 
-                /* Check if it's a simple type alias */
-                if (kgpc_type->kind == TYPE_KIND_PRIMITIVE)
-                {
-                    switch (kgpc_type->info.primitive_type_tag)
-                    {
-                        case INT_TYPE: return "Integer";
-                        case LONGINT_TYPE: return "Int64";
-                        case BOOL: return "Boolean";
-                        case CHAR_TYPE: return "Char";
-                        case REAL_TYPE: return "Real";
-                        case POINTER_TYPE: return "Pointer";
-                        default: break;
-                    }
-                }
-                
-                /* Check type aliases for target_type_id */
+                /* CRITICAL: Check TypeAlias FIRST for target_type_id before checking primitive tag.
+                 * This preserves the original type name for small integer types (Byte, Word, etc.)
+                 * which are all mapped to LONGINT_TYPE during predeclare_types but need to retain
+                 * their original type semantics for SizeOf/High/Low operations. */
                 struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
                 if (alias != NULL)
                 {
-                    /* Check for base_type tag first */
+                    /* Recursively resolve via target_type_id if available.
+                     * This will eventually reach a builtin type like "Word", "Byte", etc.
+                     * which are handled by the builtin check at the top of this function. */
+                    if (alias->target_type_id != NULL)
+                    {
+                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                    }
+                    /* Check for base_type tag if no target_type_id */
                     if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0)
                     {
                         switch (alias->base_type)
@@ -608,10 +603,20 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                             default: break;
                         }
                     }
-                    /* Recursively resolve via target_type_id */
-                    if (alias->target_type_id != NULL)
+                }
+                
+                /* Fallback: Check primitive type tag if no alias info */
+                if (kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    switch (kgpc_type->info.primitive_type_tag)
                     {
-                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                        case INT_TYPE: return "Integer";
+                        case LONGINT_TYPE: return "Int64";
+                        case BOOL: return "Boolean";
+                        case CHAR_TYPE: return "Char";
+                        case REAL_TYPE: return "Real";
+                        case POINTER_TYPE: return "Pointer";
+                        default: break;
                     }
                 }
             }
