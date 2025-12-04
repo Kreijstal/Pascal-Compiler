@@ -891,6 +891,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     }
                     if (pascal_identifier_equals(type_name, "QWord") ||
                         pascal_identifier_equals(type_name, "UInt64")) {
+                        /* Note: This will be -1 as a signed long long, but the bit pattern
+                         * is correct for UINT64_MAX. The consumer must interpret appropriately. */
                         *out_value = (long long)0xFFFFFFFFFFFFFFFFULL;
                         return 0;
                     }
@@ -2504,9 +2506,13 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(pointer_name);
     }
     /* Additional type aliases for FPC compatibility */
+    /* Note: Cardinal, LongWord, DWord are 32-bit unsigned integers in Pascal.
+     * Since we don't have distinct unsigned types, we map them to HASHVAR_INTEGER (32-bit).
+     * Byte, Word, ShortInt, SmallInt are smaller types but we also use HASHVAR_INTEGER
+     * since there's no HASHVAR for 8-bit or 16-bit integers. */
     char *cardinal_name = strdup("Cardinal");
     if (cardinal_name != NULL) {
-        KgpcType *cardinal_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *cardinal_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
         assert(cardinal_type != NULL && "Failed to create Cardinal type");
         AddBuiltinType_Typed(symtab, cardinal_name, cardinal_type);
         destroy_kgpc_type(cardinal_type);
@@ -2514,7 +2520,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *longword_name = strdup("LongWord");
     if (longword_name != NULL) {
-        KgpcType *longword_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *longword_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
         assert(longword_type != NULL && "Failed to create LongWord type");
         AddBuiltinType_Typed(symtab, longword_name, longword_type);
         destroy_kgpc_type(longword_type);
@@ -2522,7 +2528,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *dword_name = strdup("DWord");
     if (dword_name != NULL) {
-        KgpcType *dword_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *dword_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
         assert(dword_type != NULL && "Failed to create DWord type");
         AddBuiltinType_Typed(symtab, dword_name, dword_type);
         destroy_kgpc_type(dword_type);
@@ -2560,6 +2566,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(smallint_type);
         free(smallint_name);
     }
+    /* QWord and UInt64 are 64-bit unsigned integers */
     char *qword_name = strdup("QWord");
     if (qword_name != NULL) {
         KgpcType *qword_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
