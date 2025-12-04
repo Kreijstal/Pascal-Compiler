@@ -1445,7 +1445,9 @@ static bool resolve_include_path(const PascalPreprocessor *pp, const char *curre
         }
     }
     
-    // File not found in any path - return the relative path for error message
+    /* File not found in any include path.
+     * We return the relative path anyway so the caller can report a meaningful error.
+     * The caller (read_file_contents) will fail to open this path and report the error. */
     total_len = dir_len + 1 + path_len + 1;
     combined = malloc(total_len);
     if (!combined) {

@@ -939,8 +939,9 @@ int main(int argc, char **argv)
         /* Load used units */
         UnitSet visited_units;
         unit_set_init(&visited_units);
-        /* Units don't have a prelude uses list in the same way */
-        /* TODO: Handle unit uses clauses properly */
+        /* NOTE: Unit dependency loading is not yet implemented.
+         * Units that use other units (via interface/implementation uses clauses)
+         * will need those dependencies loaded here. For now, only stdlib is merged. */
         unit_set_destroy(&visited_units);
         
         int sem_result = 0;

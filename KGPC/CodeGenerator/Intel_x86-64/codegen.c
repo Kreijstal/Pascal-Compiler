@@ -28,6 +28,7 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 
 #define CODEGEN_POINTER_SIZE_BYTES 8
+#define CODEGEN_LABEL_BUFFER_SIZE 256
 
 /* Helper functions for transitioning from legacy type fields to KgpcType */
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, KgpcType *array_type);
@@ -1013,7 +1014,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     if (tree->tree_data.unit_data.initialization != NULL)
     {
         char *unit_id = tree->tree_data.unit_data.unit_id;
-        char init_label[256];
+        char init_label[CODEGEN_LABEL_BUFFER_SIZE];
         snprintf(init_label, sizeof(init_label), "_UNIT_%s_INIT", unit_id ? unit_id : "UNKNOWN");
         
         push_stackscope();
@@ -1037,7 +1038,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     if (tree->tree_data.unit_data.finalization != NULL)
     {
         char *unit_id = tree->tree_data.unit_data.unit_id;
-        char final_label[256];
+        char final_label[CODEGEN_LABEL_BUFFER_SIZE];
         snprintf(final_label, sizeof(final_label), "_UNIT_%s_FINAL", unit_id ? unit_id : "UNKNOWN");
         
         push_stackscope();
