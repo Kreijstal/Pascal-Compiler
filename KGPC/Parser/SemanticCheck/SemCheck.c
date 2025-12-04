@@ -638,6 +638,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         case EXPR_BOOL:
             *out_value = expr->expr_data.bool_value ? 1 : 0;
             return 0;
+        case EXPR_NIL:
+            /* nil is represented as 0 in pointer context */
+            *out_value = 0;
+            return 0;
         case EXPR_STRING:
             /* Handle character literals in const expressions */
             if (expr->expr_data.string != NULL && 
