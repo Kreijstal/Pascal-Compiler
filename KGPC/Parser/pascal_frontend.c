@@ -10,6 +10,47 @@
 #endif
 
 #include "ErrVars.h"
+
+/* Global storage for user-defined preprocessor configuration */
+#define MAX_USER_INCLUDE_PATHS 64
+#define MAX_USER_DEFINES 128
+
+static char *g_user_include_paths[MAX_USER_INCLUDE_PATHS];
+static int g_user_include_path_count = 0;
+
+static char *g_user_defines[MAX_USER_DEFINES];
+static int g_user_define_count = 0;
+
+void pascal_frontend_add_include_path(const char *path)
+{
+    if (path == NULL || g_user_include_path_count >= MAX_USER_INCLUDE_PATHS)
+        return;
+    g_user_include_paths[g_user_include_path_count++] = strdup(path);
+}
+
+void pascal_frontend_add_define(const char *define)
+{
+    if (define == NULL || g_user_define_count >= MAX_USER_DEFINES)
+        return;
+    g_user_defines[g_user_define_count++] = strdup(define);
+}
+
+void pascal_frontend_clear_user_config(void)
+{
+    for (int i = 0; i < g_user_include_path_count; ++i)
+    {
+        free(g_user_include_paths[i]);
+        g_user_include_paths[i] = NULL;
+    }
+    g_user_include_path_count = 0;
+    
+    for (int i = 0; i < g_user_define_count; ++i)
+    {
+        free(g_user_defines[i]);
+        g_user_defines[i] = NULL;
+    }
+    g_user_define_count = 0;
+}
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "ParseTree/generic_types.h"
@@ -303,6 +344,24 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         return false;
     }
 
+    /* Apply user-defined include paths */
+    for (int i = 0; i < g_user_include_path_count; ++i)
+    {
+        if (g_user_include_paths[i] != NULL)
+        {
+            pascal_preprocessor_add_include_path(preprocessor, g_user_include_paths[i]);
+        }
+    }
+
+    /* Apply user-defined symbols */
+    for (int i = 0; i < g_user_define_count; ++i)
+    {
+        if (g_user_defines[i] != NULL)
+        {
+            pascal_preprocessor_define(preprocessor, g_user_defines[i]);
+        }
+    }
+
     // Define our own dialect symbol and FPC for Lazarus-compatible headers
     const char *default_symbols[] = { 
         "KGPC", "FPC", "FPC_FULLVERSION := 30200", "maxExitCode := 255", 
@@ -330,8 +389,27 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
+/* Define architecture-specific symbols based on the target platform */
 #if INTPTR_MAX >= INT64_MAX
     const char *arch_symbol = "CPU64";
+    /* On x86-64 architecture, define CPUX86_64 for FPC compatibility */
+    #if defined(__x86_64__) || defined(_M_X64)
+    if (!pascal_preprocessor_define(preprocessor, "CPUX86_64"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define CPUX86_64 symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    /* Define CPUINT64 for FPC (integer register size) */
+    if (!pascal_preprocessor_define(preprocessor, "CPUINT64"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define CPUINT64 symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    #endif
 #else
     const char *arch_symbol = "CPU32";
 #endif
@@ -344,6 +422,42 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         free(buffer);
         return false;
     }
+
+    /* Define platform-specific symbols */
+#if defined(__linux__)
+    if (!pascal_preprocessor_define(preprocessor, "LINUX"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define LINUX symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "UNIX"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define UNIX symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+#endif
+
+    /* Define endianness - x86/x86_64 is little-endian */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    if (!pascal_preprocessor_define(preprocessor, "ENDIAN_LITTLE"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define ENDIAN_LITTLE symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "FPC_LITTLE_ENDIAN"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define FPC_LITTLE_ENDIAN symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+#endif
 
     /* Define MSWINDOWS when targeting Windows (but not for Cygwin/MSYS which expose a POSIX API) */
 #if defined(_WIN32) && !defined(__CYGWIN__)

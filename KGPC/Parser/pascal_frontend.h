@@ -12,4 +12,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 void pascal_print_parse_error(const char *path, const ParseError *err);
 void pascal_frontend_cleanup(void);
 
+/* User-configurable preprocessor settings */
+void pascal_frontend_add_include_path(const char *path);
+void pascal_frontend_add_define(const char *define);
+void pascal_frontend_clear_user_config(void);
+
 #endif

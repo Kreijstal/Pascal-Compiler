@@ -236,6 +236,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls);
 int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
+static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
@@ -530,6 +531,96 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
     return 1;
 }
 
+/* Helper function to resolve a type name to its base primitive type name.
+ * This follows type aliases until we reach a known primitive type.
+ * Returns the resolved type name (caller should not free), or NULL if unknown.
+ */
+static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_name)
+{
+    if (type_name == NULL) return NULL;
+    
+    /* First, check if it's already a known primitive type */
+    if (pascal_identifier_equals(type_name, "Int64") ||
+        pascal_identifier_equals(type_name, "QWord") ||
+        pascal_identifier_equals(type_name, "UInt64") ||
+        pascal_identifier_equals(type_name, "LongInt") ||
+        pascal_identifier_equals(type_name, "Integer") ||
+        pascal_identifier_equals(type_name, "Cardinal") ||
+        pascal_identifier_equals(type_name, "LongWord") ||
+        pascal_identifier_equals(type_name, "DWord") ||
+        pascal_identifier_equals(type_name, "SmallInt") ||
+        pascal_identifier_equals(type_name, "Word") ||
+        pascal_identifier_equals(type_name, "ShortInt") ||
+        pascal_identifier_equals(type_name, "Byte") ||
+        pascal_identifier_equals(type_name, "Boolean") ||
+        pascal_identifier_equals(type_name, "Char") ||
+        pascal_identifier_equals(type_name, "Pointer") ||
+        pascal_identifier_equals(type_name, "PChar") ||
+        pascal_identifier_equals(type_name, "Double") ||
+        pascal_identifier_equals(type_name, "Real") ||
+        pascal_identifier_equals(type_name, "Single"))
+    {
+        return type_name;
+    }
+    
+    /* Try to look up as a type alias in the symbol table */
+    if (symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        /* Cast away const for FindIdent - it doesn't modify the string */
+        if (FindIdent(&type_node, symtab, (char *)type_name) >= 0 && type_node != NULL)
+        {
+            if (type_node->hash_type == HASHTYPE_TYPE && type_node->type != NULL)
+            {
+                /* Get the underlying type from KgpcType */
+                KgpcType *kgpc_type = type_node->type;
+                
+                /* Check if it's a simple type alias */
+                if (kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    switch (kgpc_type->info.primitive_type_tag)
+                    {
+                        case INT_TYPE: return "Integer";
+                        case LONGINT_TYPE: return "Int64";
+                        case BOOL: return "Boolean";
+                        case CHAR_TYPE: return "Char";
+                        case REAL_TYPE: return "Real";
+                        case POINTER_TYPE: return "Pointer";
+                        default: break;
+                    }
+                }
+                
+                /* Check type aliases for target_type_id */
+                struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
+                if (alias != NULL)
+                {
+                    /* Check for base_type tag first */
+                    if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0)
+                    {
+                        switch (alias->base_type)
+                        {
+                            case INT_TYPE: return "Integer";
+                            case LONGINT_TYPE: return "Int64";
+                            case BOOL: return "Boolean";
+                            case CHAR_TYPE: return "Char";
+                            case REAL_TYPE: return "Real";
+                            case POINTER_TYPE: return "Pointer";
+                            default: break;
+                        }
+                    }
+                    /* Recursively resolve via target_type_id */
+                    if (alias->target_type_id != NULL)
+                    {
+                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                    }
+                }
+            }
+        }
+    }
+    
+    return NULL; /* Unknown type */
+}
+
 static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
 {
     if (expr == NULL || out_value == NULL)
@@ -546,6 +637,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             return 0;
         case EXPR_BOOL:
             *out_value = expr->expr_data.bool_value ? 1 : 0;
+            return 0;
+        case EXPR_NIL:
+            /* nil is represented as 0 in pointer context */
+            *out_value = 0;
             return 0;
         case EXPR_STRING:
             /* Handle character literals in const expressions */
@@ -769,7 +864,231 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
             }
             
-            fprintf(stderr, "Error: only Ord() function calls are supported in const expressions.\n");
+            /* Handle High() function for constant expressions */
+            if (id != NULL && pascal_identifier_equals(id, "High"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: High in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: High argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* High expects a type identifier */
+                if (arg->type == EXPR_VAR_ID)
+                {
+                    const char *type_name = arg->expr_data.id;
+                    /* Resolve type aliases to base type */
+                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    if (resolved != NULL)
+                        type_name = resolved;
+                    
+                    /* Map common type names to their High values */
+                    if (pascal_identifier_equals(type_name, "Int64")) {
+                        *out_value = 9223372036854775807LL; /* INT64_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "QWord") ||
+                        pascal_identifier_equals(type_name, "UInt64")) {
+                        /* Note: This will be -1 as a signed long long, but the bit pattern
+                         * is correct for UINT64_MAX. The consumer must interpret appropriately. */
+                        *out_value = (long long)0xFFFFFFFFFFFFFFFFULL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "LongInt") ||
+                        pascal_identifier_equals(type_name, "Integer")) {
+                        *out_value = 2147483647LL; /* INT32_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Cardinal") ||
+                        pascal_identifier_equals(type_name, "LongWord") ||
+                        pascal_identifier_equals(type_name, "DWord")) {
+                        *out_value = 4294967295LL; /* UINT32_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "SmallInt")) {
+                        *out_value = 32767LL; /* INT16_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Word")) {
+                        *out_value = 65535LL; /* UINT16_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "ShortInt")) {
+                        *out_value = 127LL; /* INT8_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Byte")) {
+                        *out_value = 255LL; /* UINT8_MAX */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Boolean")) {
+                        *out_value = 1LL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Char")) {
+                        *out_value = 255LL;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n", arg->expr_data.id);
+                    return 1;
+                }
+                fprintf(stderr, "Error: High expects a type identifier as argument.\n");
+                return 1;
+            }
+            
+            /* Handle Low() function for constant expressions */
+            if (id != NULL && pascal_identifier_equals(id, "Low"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Low in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Low argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* Low expects a type identifier */
+                if (arg->type == EXPR_VAR_ID)
+                {
+                    const char *type_name = arg->expr_data.id;
+                    /* Resolve type aliases to base type */
+                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    if (resolved != NULL)
+                        type_name = resolved;
+                        
+                    /* Map common type names to their Low values */
+                    if (pascal_identifier_equals(type_name, "Int64")) {
+                        *out_value = (-9223372036854775807LL - 1); /* INT64_MIN */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "QWord") ||
+                        pascal_identifier_equals(type_name, "UInt64")) {
+                        *out_value = 0LL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "LongInt") ||
+                        pascal_identifier_equals(type_name, "Integer")) {
+                        *out_value = -2147483648LL; /* INT32_MIN */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Cardinal") ||
+                        pascal_identifier_equals(type_name, "LongWord") ||
+                        pascal_identifier_equals(type_name, "DWord")) {
+                        *out_value = 0LL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "SmallInt")) {
+                        *out_value = -32768LL; /* INT16_MIN */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Word")) {
+                        *out_value = 0LL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "ShortInt")) {
+                        *out_value = -128LL; /* INT8_MIN */
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Byte")) {
+                        *out_value = 0LL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Boolean")) {
+                        *out_value = 0LL;
+                        return 0;
+                    }
+                    if (pascal_identifier_equals(type_name, "Char")) {
+                        *out_value = 0LL;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n", arg->expr_data.id);
+                    return 1;
+                }
+                fprintf(stderr, "Error: Low expects a type identifier as argument.\n");
+                return 1;
+            }
+            
+            /* Handle SizeOf() function for constant expressions */
+            if (id != NULL && pascal_identifier_equals(id, "SizeOf"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: SizeOf in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: SizeOf argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* SizeOf expects a type identifier */
+                if (arg->type == EXPR_VAR_ID)
+                {
+                    const char *type_name = arg->expr_data.id;
+                    /* Resolve type aliases to base type */
+                    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+                    if (resolved != NULL)
+                        type_name = resolved;
+                        
+                    /* Map common type names to their sizes (in bytes) */
+                    /* 64-bit types */
+                    if (pascal_identifier_equals(type_name, "Int64") ||
+                        pascal_identifier_equals(type_name, "QWord") ||
+                        pascal_identifier_equals(type_name, "UInt64") ||
+                        pascal_identifier_equals(type_name, "Pointer") ||
+                        pascal_identifier_equals(type_name, "PChar") ||
+                        pascal_identifier_equals(type_name, "Double") ||
+                        pascal_identifier_equals(type_name, "Real")) {
+                        *out_value = 8LL;
+                        return 0;
+                    }
+                    /* 32-bit types */
+                    if (pascal_identifier_equals(type_name, "LongInt") ||
+                        pascal_identifier_equals(type_name, "LongWord") ||
+                        pascal_identifier_equals(type_name, "Cardinal") ||
+                        pascal_identifier_equals(type_name, "DWord") ||
+                        pascal_identifier_equals(type_name, "Integer") ||
+                        pascal_identifier_equals(type_name, "Single")) {
+                        *out_value = 4LL;
+                        return 0;
+                    }
+                    /* 16-bit types */
+                    if (pascal_identifier_equals(type_name, "SmallInt") ||
+                        pascal_identifier_equals(type_name, "Word")) {
+                        *out_value = 2LL;
+                        return 0;
+                    }
+                    /* 8-bit types */
+                    if (pascal_identifier_equals(type_name, "ShortInt") ||
+                        pascal_identifier_equals(type_name, "Byte") ||
+                        pascal_identifier_equals(type_name, "Char") ||
+                        pascal_identifier_equals(type_name, "Boolean")) {
+                        *out_value = 1LL;
+                        return 0;
+                    }
+                    fprintf(stderr, "Error: SizeOf(%s) - unsupported type in const expression.\n", arg->expr_data.id);
+                    return 1;
+                }
+                fprintf(stderr, "Error: SizeOf expects a type identifier as argument.\n");
+                return 1;
+            }
+            
+            fprintf(stderr, "Error: only Ord(), High(), Low(), and SizeOf() function calls are supported in const expressions.\n");
             return 1;
         }
         default:
@@ -868,6 +1187,156 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         /* KgpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
                 }
+            }
+        }
+        cur = cur->next;
+    }
+
+    return errors;
+}
+
+/* Pre-declare types so they can be used in const expressions like High(MyType).
+ * This function creates stub entries in the symbol table for SIMPLE type aliases
+ * BEFORE const declarations are processed.
+ *
+ * This enables patterns like:
+ *   type
+ *     MyInt = Int64;
+ *   const
+ *     MaxMyInt = High(MyInt);  // Works because MyInt is pre-declared
+ *
+ * IMPORTANT: We only pre-declare simple primitive type aliases (e.g., MyInt = Int64).
+ * Complex types (pointers, arrays, records, etc.) are NOT pre-declared because
+ * they may have forward references that can't be resolved yet.
+ */
+static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
+{
+    if (symtab == NULL)
+        return 0;
+
+    int errors = 0;
+    ListNode_t *cur = type_decls;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *tree = (Tree_t *)cur->cur;
+            if (tree->type == TREE_TYPE_DECL)
+            {
+                const char *type_id = tree->tree_data.type_decl_data.id;
+                
+                /* Skip if no type id */
+                if (type_id == NULL)
+                {
+                    cur = cur->next;
+                    continue;
+                }
+                
+                /* Check if already declared (e.g., from a previous pass or builtin) */
+                HashNode_t *existing = NULL;
+                if (FindIdent(&existing, symtab, (char *)type_id) >= 0 && existing != NULL)
+                {
+                    /* Already declared, skip */
+                    cur = cur->next;
+                    continue;
+                }
+                
+                /* Only handle simple TYPE_DECL_ALIAS that resolve to primitive types */
+                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                {
+                    struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                    
+                    /* Skip complex types - let semcheck_type_decls handle them */
+                    if (alias->is_enum || alias->is_array || alias->is_pointer || 
+                        alias->is_set || alias->is_file || alias->inline_record_type != NULL)
+                    {
+                        cur = cur->next;
+                        continue;
+                    }
+                    
+                    /* Only pre-declare simple primitive type aliases */
+                    KgpcType *kgpc_type = NULL;
+                    
+                    /* Case 1: Direct primitive type tag (e.g., MyInt = Integer where base_type is set)
+                     * Exclude PROCEDURE - procedure types are NOT primitive and need special handling */
+                    if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
+                        alias->base_type != PROCEDURE)
+                    {
+                        kgpc_type = create_primitive_type(alias->base_type);
+                    }
+                    /* Case 2: Reference to a known primitive type name */
+                    else if (alias->target_type_id != NULL)
+                    {
+                        /* Check if target is a known builtin primitive type */
+                        const char *target = alias->target_type_id;
+                        if (pascal_identifier_equals(target, "Int64") ||
+                            pascal_identifier_equals(target, "Integer") ||
+                            pascal_identifier_equals(target, "LongInt") ||
+                            pascal_identifier_equals(target, "SmallInt") ||
+                            pascal_identifier_equals(target, "ShortInt") ||
+                            pascal_identifier_equals(target, "Byte") ||
+                            pascal_identifier_equals(target, "Word") ||
+                            pascal_identifier_equals(target, "Cardinal") ||
+                            pascal_identifier_equals(target, "LongWord") ||
+                            pascal_identifier_equals(target, "DWord") ||
+                            pascal_identifier_equals(target, "QWord") ||
+                            pascal_identifier_equals(target, "UInt64"))
+                        {
+                            kgpc_type = create_primitive_type(LONGINT_TYPE);
+                        }
+                        else if (pascal_identifier_equals(target, "Real") ||
+                                 pascal_identifier_equals(target, "Double") ||
+                                 pascal_identifier_equals(target, "Single"))
+                        {
+                            kgpc_type = create_primitive_type(REAL_TYPE);
+                        }
+                        else if (pascal_identifier_equals(target, "Boolean"))
+                        {
+                            kgpc_type = create_primitive_type(BOOL);
+                        }
+                        else if (pascal_identifier_equals(target, "Char"))
+                        {
+                            kgpc_type = create_primitive_type(CHAR_TYPE);
+                        }
+                        /* If target is another user-defined type, check if it's already declared */
+                        else
+                        {
+                            HashNode_t *target_node = NULL;
+                            if (FindIdent(&target_node, symtab, (char *)target) >= 0 &&
+                                target_node != NULL && target_node->hash_type == HASHTYPE_TYPE &&
+                                target_node->type != NULL)
+                            {
+                                /* Target type already exists, retain and use it */
+                                kgpc_type = target_node->type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+                            /* Otherwise, skip - can't resolve this type yet */
+                        }
+                    }
+                    
+                    if (kgpc_type != NULL)
+                    {
+                        /* Set type_alias on KgpcType */
+                        kgpc_type_set_type_alias(kgpc_type, alias);
+                        
+                        /* Store in tree for later use by semcheck_type_decls */
+                        if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                        {
+                            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                            kgpc_type_retain(kgpc_type);  /* Tree owns a reference */
+                        }
+                        
+                        /* Push onto symbol table */
+                        int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        if (result > 0)
+                        {
+                            /* Should not happen since we checked above, but handle gracefully */
+                            errors++;
+                        }
+                    }
+                }
+                /* Skip TYPE_DECL_RECORD, TYPE_DECL_GENERIC, TYPE_DECL_RANGE - 
+                 * these have complex dependencies and are handled by semcheck_type_decls */
             }
         }
         cur = cur->next;
@@ -1795,7 +2264,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
         KgpcType *kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
 
-
+        /* Check if this type was already pre-declared by predeclare_types().
+         * If so, skip the push to avoid "redeclaration" errors.
+         * IMPORTANT: Only skip if the type exists in the CURRENT scope (scope level 0),
+         * not if it exists as a builtin or in a parent scope. */
+        HashNode_t *existing_type = NULL;
+        int scope_level = FindIdent(&existing_type, symtab, tree->tree_data.type_decl_data.id);
+        int already_predeclared = (scope_level == 0 && existing_type != NULL && 
+                                   existing_type->hash_type == HASHTYPE_TYPE);
 
         /* Skip symbol table registration for generic declarations - they're only in the registry */
         if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
@@ -1806,6 +2282,21 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             {
                 /* Continue to next type declaration */
             }
+        }
+        else if (already_predeclared)
+        {
+            /* Type was already registered by predeclare_types().
+             * We still need to update any additional metadata like array bounds. */
+            if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL && 
+                existing_type->type != NULL)
+            {
+                /* Resolve array bounds from constant identifiers now that constants are in scope */
+                if (alias_info->is_array)
+                {
+                    resolve_array_bounds_in_kgpctype(symtab, existing_type->type, alias_info);
+                }
+            }
+            func_return = 0;  /* No error */
         }
         else if (kgpc_type != NULL) {
             /* Set type_alias on KgpcType before pushing */
@@ -2191,6 +2682,84 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(pointer_type);
         free(pointer_name);
     }
+    /* Additional type aliases for FPC compatibility */
+    /* Note: Cardinal, LongWord, DWord are 32-bit unsigned integers in Pascal.
+     * Since we don't have distinct unsigned types, we map them to HASHVAR_INTEGER (32-bit).
+     * Byte, Word, ShortInt, SmallInt are smaller types but we also use HASHVAR_INTEGER
+     * since there's no HASHVAR for 8-bit or 16-bit integers. */
+    char *cardinal_name = strdup("Cardinal");
+    if (cardinal_name != NULL) {
+        KgpcType *cardinal_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(cardinal_type != NULL && "Failed to create Cardinal type");
+        AddBuiltinType_Typed(symtab, cardinal_name, cardinal_type);
+        destroy_kgpc_type(cardinal_type);
+        free(cardinal_name);
+    }
+    char *longword_name = strdup("LongWord");
+    if (longword_name != NULL) {
+        KgpcType *longword_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(longword_type != NULL && "Failed to create LongWord type");
+        AddBuiltinType_Typed(symtab, longword_name, longword_type);
+        destroy_kgpc_type(longword_type);
+        free(longword_name);
+    }
+    char *dword_name = strdup("DWord");
+    if (dword_name != NULL) {
+        KgpcType *dword_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(dword_type != NULL && "Failed to create DWord type");
+        AddBuiltinType_Typed(symtab, dword_name, dword_type);
+        destroy_kgpc_type(dword_type);
+        free(dword_name);
+    }
+    char *byte_name = strdup("Byte");
+    if (byte_name != NULL) {
+        KgpcType *byte_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(byte_type != NULL && "Failed to create Byte type");
+        AddBuiltinType_Typed(symtab, byte_name, byte_type);
+        destroy_kgpc_type(byte_type);
+        free(byte_name);
+    }
+    char *word_name = strdup("Word");
+    if (word_name != NULL) {
+        KgpcType *word_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(word_type != NULL && "Failed to create Word type");
+        AddBuiltinType_Typed(symtab, word_name, word_type);
+        destroy_kgpc_type(word_type);
+        free(word_name);
+    }
+    char *shortint_name = strdup("ShortInt");
+    if (shortint_name != NULL) {
+        KgpcType *shortint_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(shortint_type != NULL && "Failed to create ShortInt type");
+        AddBuiltinType_Typed(symtab, shortint_name, shortint_type);
+        destroy_kgpc_type(shortint_type);
+        free(shortint_name);
+    }
+    char *smallint_name = strdup("SmallInt");
+    if (smallint_name != NULL) {
+        KgpcType *smallint_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(smallint_type != NULL && "Failed to create SmallInt type");
+        AddBuiltinType_Typed(symtab, smallint_name, smallint_type);
+        destroy_kgpc_type(smallint_type);
+        free(smallint_name);
+    }
+    /* QWord and UInt64 are 64-bit unsigned integers */
+    char *qword_name = strdup("QWord");
+    if (qword_name != NULL) {
+        KgpcType *qword_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(qword_type != NULL && "Failed to create QWord type");
+        AddBuiltinType_Typed(symtab, qword_name, qword_type);
+        destroy_kgpc_type(qword_type);
+        free(qword_name);
+    }
+    char *uint64_name = strdup("UInt64");
+    if (uint64_name != NULL) {
+        KgpcType *uint64_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        assert(uint64_type != NULL && "Failed to create UInt64 type");
+        AddBuiltinType_Typed(symtab, uint64_name, uint64_type);
+        destroy_kgpc_type(uint64_type);
+        free(uint64_name);
+    }
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 
@@ -2530,6 +3099,8 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 #endif
 
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
+    /* Pre-declare types so they're available for const expressions like High(MyType) */
+    return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -2624,12 +3195,16 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     /* Check interface section */
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
+    /* Pre-declare types so they're available for const expressions like High(MyType) */
+    return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
 
     /* Check implementation section */
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    /* Pre-declare types so they're available for const expressions like High(MyType) */
+    return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
@@ -3742,6 +4317,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #endif
 
     return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
+    /* Pre-declare types so they're available for const expressions like High(MyType) */
+    return_val += predeclare_types(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     return_val += semcheck_const_decls(symtab, subprogram->tree_data.subprogram_data.const_declarations);
     return_val += semcheck_type_decls(symtab, subprogram->tree_data.subprogram_data.type_declarations);
     return_val += semcheck_decls(symtab, subprogram->tree_data.subprogram_data.declarations);

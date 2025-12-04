@@ -72,6 +72,8 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
     fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
     fprintf(stderr, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
+    fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
+    fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
 }
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
@@ -344,6 +346,16 @@ static void set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "Assembly debug comments enabled.\n\n");
             set_asm_debug_flag();
+        }
+        else if (arg[0] == '-' && arg[1] == 'I' && arg[2] != '\0')
+        {
+            /* Include path: -I/path/to/include */
+            pascal_frontend_add_include_path(&arg[2]);
+        }
+        else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
+        {
+            /* Define: -DSYMBOL or -DSYMBOL=VALUE */
+            pascal_frontend_add_define(&arg[2]);
         }
         else
         {
