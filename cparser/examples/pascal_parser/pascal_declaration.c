@@ -445,7 +445,8 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
                 if (dispatch->helper_parser && pascal_word_equals_ci(&next, "helper")) {
                     return run_type_branch(in, dispatch->helper_parser);
                 }
-                /* Handle "type <typename>" (distinct type) - any identifier after "type" that's not "helper" */
+                /* Handle "type <typename>" (distinct type) - when word after "type" is an identifier.
+                   The distinct_type_parser will parse "type <identifier>" and handle the full validation. */
                 if (dispatch->distinct_type_parser) {
                     return run_type_branch(in, dispatch->distinct_type_parser);
                 }

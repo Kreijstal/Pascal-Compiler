@@ -392,7 +392,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 /* Define architecture-specific symbols based on the target platform */
 #if INTPTR_MAX >= INT64_MAX
     const char *arch_symbol = "CPU64";
-    /* On 64-bit x86, define CPUX86_64 for FPC compatibility */
+    /* On x86-64 architecture, define CPUX86_64 for FPC compatibility */
     #if defined(__x86_64__) || defined(_M_X64)
     if (!pascal_preprocessor_define(preprocessor, "CPUX86_64"))
     {
