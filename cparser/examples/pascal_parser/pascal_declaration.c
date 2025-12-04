@@ -2780,6 +2780,28 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    // Module-level property declaration (FPC extension)
+    // Syntax: property Name: Type read ReadFunc [write WriteFunc];
+    // Example from system.pp: property cmdline:PAnsiChar read get_cmdline;
+    combinator_t* module_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        token(keyword_ci("property")),
+        token(cident(PASCAL_T_IDENTIFIER)), // property name
+        token(match(":")),
+        type_name(PASCAL_T_IDENTIFIER), // type name (simple identifier)
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("read")),
+            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("write")),
+            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+            NULL
+        )),
+        token(match(";")),
+        NULL
+    );
+
     // Allow const/type/var sections to be interspersed with procedure/function declarations
     // Parse them in a single many() to avoid backtracking issues
     // Try declaration sections first (they have distinctive keywords), then procedures/functions
@@ -2792,6 +2814,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         const_section,      // const
         type_section,       // type
         var_section,        // var
+        module_property_decl, // Module-level property declarations (FPC extension)
         NULL
     );
 

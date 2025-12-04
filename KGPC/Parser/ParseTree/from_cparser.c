@@ -6899,6 +6899,22 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 append_subprogram_node(&subprograms, method_tree);
                 break;
             }
+            case PASCAL_T_PROPERTY_DECL: {
+                /* Module-level property declaration (FPC extension)
+                 * Syntax: property Name: Type read ReadFunc [write WriteFunc];
+                 * We need to create a synthetic function that calls the read accessor.
+                 * For now, just skip it and emit a warning - the user needs to call
+                 * the read function directly. Full support would require creating a
+                 * synthetic wrapper or modifying the semantic checker to resolve
+                 * property accesses to the underlying accessor functions. */
+                if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
+                    fprintf(stderr, "[KGPC] Module-level property declaration detected\n");
+                }
+                /* TODO: Implement proper module-level property support.
+                 * For now, we need to at least register this in the symbol table
+                 * so that the identifier can be resolved during semantic checking. */
+                break;
+            }
             case PASCAL_T_BEGIN_BLOCK:
             case PASCAL_T_MAIN_BLOCK:
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
