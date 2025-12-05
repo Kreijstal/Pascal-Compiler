@@ -554,6 +554,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
         pascal_identifier_equals(type_name, "Byte") ||
         pascal_identifier_equals(type_name, "Boolean") ||
         pascal_identifier_equals(type_name, "Char") ||
+        pascal_identifier_equals(type_name, "WideChar") ||
         pascal_identifier_equals(type_name, "Pointer") ||
         pascal_identifier_equals(type_name, "PChar") ||
         pascal_identifier_equals(type_name, "Double") ||
@@ -575,26 +576,21 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                 /* Get the underlying type from KgpcType */
                 KgpcType *kgpc_type = type_node->type;
                 
-                /* Check if it's a simple type alias */
-                if (kgpc_type->kind == TYPE_KIND_PRIMITIVE)
-                {
-                    switch (kgpc_type->info.primitive_type_tag)
-                    {
-                        case INT_TYPE: return "Integer";
-                        case LONGINT_TYPE: return "Int64";
-                        case BOOL: return "Boolean";
-                        case CHAR_TYPE: return "Char";
-                        case REAL_TYPE: return "Real";
-                        case POINTER_TYPE: return "Pointer";
-                        default: break;
-                    }
-                }
-                
-                /* Check type aliases for target_type_id */
+                /* CRITICAL: Check TypeAlias FIRST for target_type_id before checking primitive tag.
+                 * This preserves the original type name for small integer types (Byte, Word, etc.)
+                 * which are all mapped to LONGINT_TYPE by the predeclare_types function but need
+                 * to retain their original type semantics for SizeOf/High/Low operations. */
                 struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
                 if (alias != NULL)
                 {
-                    /* Check for base_type tag first */
+                    /* Recursively resolve via target_type_id if available.
+                     * This will eventually reach a builtin type like "Word", "Byte", etc.
+                     * which are handled by the builtin check at the top of this function. */
+                    if (alias->target_type_id != NULL)
+                    {
+                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                    }
+                    /* Check for base_type tag if no target_type_id */
                     if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0)
                     {
                         switch (alias->base_type)
@@ -608,10 +604,20 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                             default: break;
                         }
                     }
-                    /* Recursively resolve via target_type_id */
-                    if (alias->target_type_id != NULL)
+                }
+                
+                /* Fallback: Check primitive type tag if no alias info */
+                if (kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    switch (kgpc_type->info.primitive_type_tag)
                     {
-                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                        case INT_TYPE: return "Integer";
+                        case LONGINT_TYPE: return "Int64";
+                        case BOOL: return "Boolean";
+                        case CHAR_TYPE: return "Char";
+                        case REAL_TYPE: return "Real";
+                        case POINTER_TYPE: return "Pointer";
+                        default: break;
                     }
                 }
             }
@@ -1069,7 +1075,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     }
                     /* 16-bit types */
                     if (pascal_identifier_equals(type_name, "SmallInt") ||
-                        pascal_identifier_equals(type_name, "Word")) {
+                        pascal_identifier_equals(type_name, "Word") ||
+                        pascal_identifier_equals(type_name, "WideChar")) {
                         *out_value = 2LL;
                         return 0;
                     }
@@ -1258,8 +1265,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     KgpcType *kgpc_type = NULL;
                     
                     /* Case 1: Direct primitive type tag (e.g., MyInt = Integer where base_type is set)
-                     * Exclude PROCEDURE - procedure types are NOT primitive and need special handling */
-                    if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
+                     * Exclude PROCEDURE - procedure types are NOT primitive and need special handling.
+                     * IMPORTANT: If target_type_id is "WideChar", skip to Case 2 to look it up
+                     * from the symbol table where it has correct storage_size=2. Without this check,
+                     * WideChar aliases would get 4 bytes (INT_TYPE) instead of 2 bytes. */
+                    int skip_case1_for_widechar = (alias->target_type_id != NULL &&
+                        pascal_identifier_equals(alias->target_type_id, "WideChar"));
+                    if (!skip_case1_for_widechar &&
+                        alias->base_type != UNKNOWN_TYPE && alias->base_type != 0 &&
                         alias->base_type != PROCEDURE)
                     {
                         kgpc_type = create_primitive_type(alias->base_type);
@@ -1316,6 +1329,16 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     
                     if (kgpc_type != NULL)
                     {
+                        /* IMPORTANT: Inherit storage_size from the original type's alias.
+                         * This is critical for types like WideChar (2 bytes) where we retain
+                         * the original type but need to preserve its custom storage_size. */
+                        struct TypeAlias *original_alias = kgpc_type_get_type_alias(kgpc_type);
+                        if (original_alias != NULL && original_alias->storage_size > 0 &&
+                            alias->storage_size <= 0)
+                        {
+                            alias->storage_size = original_alias->storage_size;
+                        }
+                        
                         /* Set type_alias on KgpcType */
                         kgpc_type_set_type_alias(kgpc_type, alias);
                         
@@ -2304,6 +2327,31 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             {
                 kgpc_type_set_type_alias(kgpc_type, alias_info);
                 
+                /* IMPORTANT: Inherit storage_size from target type for type aliases.
+                 * This is critical for types like WideChar (2 bytes) that are represented
+                 * as INT_TYPE (4 bytes) in the primitive type system but have a custom
+                 * storage_size defined. Without this, SizeOf(TMyChar) where TMyChar = WideChar
+                 * would return 4 instead of the correct 2 bytes. */
+                if (alias_info->target_type_id != NULL && alias_info->storage_size <= 0)
+                {
+                    HashNode_t *target_node = NULL;
+                    int found = FindIdent(&target_node, symtab, alias_info->target_type_id);
+                    if (found != -1 && target_node != NULL && target_node->type != NULL)
+                    {
+                        /* Get the target type's storage_size */
+                        struct TypeAlias *target_alias = kgpc_type_get_type_alias(target_node->type);
+                        if (target_alias != NULL && target_alias->storage_size > 0)
+                        {
+                            /* Inherit storage_size from target type */
+                            alias_info->storage_size = target_alias->storage_size;
+                            /* Also update the KgpcType's type_alias storage_size */
+                            struct TypeAlias *kgpc_alias = kgpc_type_get_type_alias(kgpc_type);
+                            if (kgpc_alias != NULL)
+                                kgpc_alias->storage_size = target_alias->storage_size;
+                        }
+                    }
+                }
+                
                 /* Resolve array bounds from constant identifiers now that constants are in scope */
                 if (alias_info->is_array)
                 {
@@ -2658,6 +2706,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(char_type);
         free(char_name);
     }
+    /* WideChar is a 2-byte character type (UTF-16 code unit) */
+    char *widechar_name = strdup("WideChar");
+    if (widechar_name != NULL) {
+        KgpcType *widechar_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+        assert(widechar_type != NULL && "Failed to create WideChar type");
+        AddBuiltinType_Typed(symtab, widechar_name, widechar_type);
+        destroy_kgpc_type(widechar_type);
+        free(widechar_name);
+    }
     char *file_name = strdup("file");
     if (file_name != NULL) {
         KgpcType *file_type = kgpc_type_from_var_type(HASHVAR_FILE);
@@ -2713,7 +2770,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *byte_name = strdup("Byte");
     if (byte_name != NULL) {
-        KgpcType *byte_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *byte_type = create_primitive_type_with_size(INT_TYPE, 1);
         assert(byte_type != NULL && "Failed to create Byte type");
         AddBuiltinType_Typed(symtab, byte_name, byte_type);
         destroy_kgpc_type(byte_type);
@@ -2721,7 +2778,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *word_name = strdup("Word");
     if (word_name != NULL) {
-        KgpcType *word_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *word_type = create_primitive_type_with_size(INT_TYPE, 2);
         assert(word_type != NULL && "Failed to create Word type");
         AddBuiltinType_Typed(symtab, word_name, word_type);
         destroy_kgpc_type(word_type);
@@ -2729,7 +2786,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *shortint_name = strdup("ShortInt");
     if (shortint_name != NULL) {
-        KgpcType *shortint_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *shortint_type = create_primitive_type_with_size(INT_TYPE, 1);
         assert(shortint_type != NULL && "Failed to create ShortInt type");
         AddBuiltinType_Typed(symtab, shortint_name, shortint_type);
         destroy_kgpc_type(shortint_type);
@@ -2737,7 +2794,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *smallint_name = strdup("SmallInt");
     if (smallint_name != NULL) {
-        KgpcType *smallint_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *smallint_type = create_primitive_type_with_size(INT_TYPE, 2);
         assert(smallint_type != NULL && "Failed to create SmallInt type");
         AddBuiltinType_Typed(symtab, smallint_name, smallint_type);
         destroy_kgpc_type(smallint_type);
@@ -3920,6 +3977,10 @@ next_identifier:
                                 inferred_var_type = HASHVAR_SET;
                                 normalized_type = SET_TYPE;
                                 break;
+                            case POINTER_TYPE:
+                                inferred_var_type = HASHVAR_POINTER;
+                                normalized_type = POINTER_TYPE;
+                                break;
                             default:
                                 fprintf(stderr, "Error on line %d, unsupported inferred type for %s.\n",
                                     tree->line_num, var_name);
@@ -3960,6 +4021,15 @@ next_identifier:
                                 {
                                     compatible = 1;
                                 }
+                            }
+                            
+                            /* Allow pointer type initializers (including nil) for pointer variables.
+                             * Both the initializer expression type and the declared variable type must
+                             * be pointer types. This enables patterns like: var my_ptr: PChar = nil; */
+                            if (!compatible && inferred_var_type == HASHVAR_POINTER &&
+                                current_var_type == HASHVAR_POINTER)
+                            {
+                                compatible = 1;
                             }
 
                             if (!compatible)

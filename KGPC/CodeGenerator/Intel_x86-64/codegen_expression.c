@@ -2939,6 +2939,12 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     if (codegen_had_error(ctx) || addr_reg == NULL)
         return inst_list;
 
+    /* Get the element size from the array expression */
+    struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
+    long long element_size = 4; /* default to 4-byte integer */
+    if (array_expr != NULL)
+        element_size = expr_get_array_element_size(array_expr, ctx);
+
     char buffer[100];
     if (expr_uses_qword_kgpctype(expr))
     {
@@ -2947,9 +2953,15 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
     else
     {
-        if (expr_has_type_tag(expr, CHAR_TYPE))
+        if (expr_has_type_tag(expr, CHAR_TYPE) || element_size == 1)
         {
+            /* Byte-sized element - use zero-extend byte to long */
             snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        }
+        else if (element_size == 2)
+        {
+            /* Word-sized element - use zero-extend word to long */
+            snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
         else
         {

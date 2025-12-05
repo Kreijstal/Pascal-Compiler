@@ -1,0 +1,15 @@
+SizeOf(MyWord) = 2
+SizeOf(MyByte) = 1
+SizeOf(MyCardinal) = 4
+SizeOf(MySmallInt) = 2
+SizeOf(MyShortInt) = 1
+High(MyWord) = 65535
+High(MyByte) = 255
+High(MyCardinal) = 4294967295
+High(MySmallInt) = 32767
+High(MyShortInt) = 127
+Low(MyWord) = 0
+Low(MyByte) = 0
+Low(MyCardinal) = 0
+Low(MySmallInt) = -32768
+Low(MyShortInt) = -128

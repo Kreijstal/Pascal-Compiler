@@ -1180,11 +1180,20 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* range_spec = range_type(PASCAL_T_RANGE_TYPE);
     combinator_t* pointer_spec = pointer_type(PASCAL_T_POINTER_TYPE);
     
-    /* Distinct type parser: "type <typename>" creates a distinct (strong) type alias */
-    /* Example: Real = type Double; creates a new type distinct from Double */
+    /* Distinct type parser: "type <typename>" creates a distinct (strong) type alias.
+     * Example: Real = type Double; creates a new type distinct from Double.
+     * FPC also supports "type AnsiString(CP_UTF8)" with codepage parameter, which
+     * we parse but ignore the parameter since we don't handle codepages. */
+    combinator_t* distinct_type_codepage_param = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("(")),
+        token(cident(PASCAL_T_IDENTIFIER)),  /* codepage constant name */
+        token(match(")")),
+        NULL
+    ));
     combinator_t* distinct_type_spec = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
         token(keyword_ci("type")),
         token(cident(PASCAL_T_IDENTIFIER)),
+        distinct_type_codepage_param,  /* optional (CODEPAGE) */
         NULL
     );
     
@@ -2088,7 +2097,23 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    /* Distinct type parser for programs: "type <typename>" with optional codepage parameter.
+     * Example: UTF8String = type AnsiString(CP_UTF8); */
+    combinator_t* distinct_type_codepage_param_prog = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("(")),
+        token(cident(PASCAL_T_IDENTIFIER)),  /* codepage constant name */
+        token(match(")")),
+        NULL
+    ));
+    combinator_t* distinct_type_spec_prog = seq(new_combinator(), PASCAL_T_DISTINCT_TYPE,
+        token(keyword_ci("type")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        distinct_type_codepage_param_prog,  /* optional (CODEPAGE) */
+        NULL
+    );
+
     combinator_t* type_spec = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
+        distinct_type_spec_prog,                        // distinct types like "type Double" (must be first to catch "type" keyword)
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
@@ -2780,6 +2805,28 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     );
 
+    // Module-level property declaration (FPC extension)
+    // Syntax: property Name: Type read ReadFunc [write WriteFunc];
+    // Example from system.pp: property cmdline:PAnsiChar read get_cmdline;
+    combinator_t* module_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        token(keyword_ci("property")),
+        token(cident(PASCAL_T_IDENTIFIER)), // property name
+        token(match(":")),
+        type_name(PASCAL_T_IDENTIFIER), // type name (simple identifier)
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("read")),
+            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("write")),
+            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+            NULL
+        )),
+        token(match(";")),
+        NULL
+    );
+
     // Allow const/type/var sections to be interspersed with procedure/function declarations
     // Parse them in a single many() to avoid backtracking issues
     // Try declaration sections first (they have distinctive keywords), then procedures/functions
@@ -2792,6 +2839,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         const_section,      // const
         type_section,       // type
         var_section,        // var
+        module_property_decl, // Module-level property declarations (FPC extension)
         NULL
     );
 

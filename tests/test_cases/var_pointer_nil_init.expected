@@ -1,0 +1,4 @@
+my_char_ptr is nil: TRUE
+my_int_ptr is nil: TRUE
+generic_ptr is nil: TRUE
+All pointers initialized to nil correctly

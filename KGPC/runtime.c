@@ -1131,6 +1131,25 @@ void kgpc_write_integer(KGPCTextFile *file, int width, int64_t value)
         fprintf(dest, "%lld", (long long)value);
 }
 
+void kgpc_write_unsigned(KGPCTextFile *file, int width, uint64_t value)
+{
+    FILE *dest = kgpc_text_output_stream(file);
+    if (dest == NULL)
+        return;
+
+    if (width > 1024 || width < -1024)
+        width = 0;
+    if (width == -1)
+        width = 0;
+
+    if (width > 0)
+        fprintf(dest, "%*llu", width, (unsigned long long)value);
+    else if (width < 0)
+        fprintf(dest, "%-*llu", -width, (unsigned long long)value);
+    else
+        fprintf(dest, "%llu", (unsigned long long)value);
+}
+
 static size_t kgpc_string_known_length(const char *value);
 
 void kgpc_write_string(KGPCTextFile *file, int width, const char *value)
