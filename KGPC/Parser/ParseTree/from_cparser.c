@@ -1281,6 +1281,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("longint");  // Treat unsigned as signed for size purposes
         return LONGINT_TYPE;
     }
+    /* Procedure and Function as bare type names (no parameters) - procedure pointers */
+    if (strcasecmp(name, "procedure") == 0 || strcasecmp(name, "function") == 0) {
+        /* Don't set type_id_out - PROCEDURE type tag is sufficient */
+        return PROCEDURE;
+    }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
     }
@@ -1874,6 +1879,27 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             destroy_record_type(record);
         }
         return RECORD_TYPE;
+    }
+
+    /* Distinct type: type Real = Double - creates a strong alias */
+    if (spec_node->typ == PASCAL_T_DISTINCT_TYPE) {
+        /* The child should be the target type identifier */
+        ast_t *target = spec_node->child;
+        if (target != NULL) {
+            target = unwrap_pascal_node(target);
+            if (target != NULL && target->typ == PASCAL_T_IDENTIFIER) {
+                char *dup = dup_symbol(target);
+                int result = map_type_name(dup, type_id_out);
+                if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+                    *type_id_out = dup;
+                } else {
+                    free(dup);
+                }
+                return result;
+            }
+        }
+        /* Fallback for distinct types with complex target */
+        return UNKNOWN_TYPE;
     }
 
     return UNKNOWN_TYPE;
