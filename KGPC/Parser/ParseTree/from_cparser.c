@@ -1260,7 +1260,7 @@ static int map_type_name(const char *name, char **type_id_out) {
     if (strcasecmp(name, "widechar") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("widechar");
-        return INT_TYPE;  /* 2 bytes like Word */
+        return INT_TYPE;  /* 2 bytes like Word - actual size from symbol table lookup */
     }
     if (strcasecmp(name, "file") == 0) {
         if (type_id_out != NULL)

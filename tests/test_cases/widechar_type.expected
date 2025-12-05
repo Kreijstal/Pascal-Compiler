@@ -1,2 +1,2 @@
-SizeOf(WideChar): 4
-SizeOf(TMyChar): 4
+SizeOf(WideChar): 2
+SizeOf(TMyChar): 2
