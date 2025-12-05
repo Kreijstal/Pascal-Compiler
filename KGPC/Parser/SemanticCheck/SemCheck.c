@@ -2663,6 +2663,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(char_type);
         free(char_name);
     }
+    /* WideChar is a 2-byte character type (UTF-16 code unit) */
+    char *widechar_name = strdup("WideChar");
+    if (widechar_name != NULL) {
+        KgpcType *widechar_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        assert(widechar_type != NULL && "Failed to create WideChar type");
+        AddBuiltinType_Typed(symtab, widechar_name, widechar_type);
+        destroy_kgpc_type(widechar_type);
+        free(widechar_name);
+    }
     char *file_name = strdup("file");
     if (file_name != NULL) {
         KgpcType *file_type = kgpc_type_from_var_type(HASHVAR_FILE);

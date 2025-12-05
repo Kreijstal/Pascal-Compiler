@@ -1256,6 +1256,12 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("char");
         return CHAR_TYPE;
     }
+    /* WideChar is a 2-byte character type (UTF-16 code unit) */
+    if (strcasecmp(name, "widechar") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("widechar");
+        return INT_TYPE;  /* 2 bytes like Word */
+    }
     if (strcasecmp(name, "file") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("file");
