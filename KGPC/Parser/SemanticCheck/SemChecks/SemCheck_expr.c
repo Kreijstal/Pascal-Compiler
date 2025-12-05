@@ -4332,8 +4332,9 @@ static int semcheck_recordaccess(int *type_return,
     struct RecordField *field_desc = NULL;
     long long field_offset = 0;
     int property_matched = 0;
-    /* For classes, use silent mode when looking for fields, since we'll check properties next */
-    int silent_mode = record_type_is_class(record_info) ? 1 : 0;
+    /* For classes and records with potential methods, use silent mode when looking for fields,
+     * since we'll check properties and methods next */
+    int silent_mode = 1;  /* Always use silent mode - we'll print a better error later if needed */
     if (resolve_record_field(symtab, record_info, field_id, &field_desc,
             &field_offset, expr->line_num, silent_mode) != 0 || field_desc == NULL)
     {
@@ -4609,6 +4610,49 @@ static int semcheck_recordaccess(int *type_return,
                 destroy_expr(record_expr);
                 
                 return error_count;
+            }
+        }
+
+        /* Check for methods on non-class records (advanced records) */
+        /* This handles {$modeswitch advancedrecords} style record methods */
+        /* Unlike classes, advanced records don't use VMT but still have methods
+         * registered with mangled names (TypeName__MethodName) in the symbol table */
+        if (record_info != NULL && !record_type_is_class(record_info))
+        {
+            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, NULL);
+            if (method_node != NULL)
+            {
+                /* Found a method on an advanced record */
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found advanced record method %s\n", field_id);
+                }
+
+                if (method_node->hash_type == HASHTYPE_FUNCTION ||
+                    method_node->hash_type == HASHTYPE_PROCEDURE)
+                {
+                    /* Transform record access into an explicit method call: receiver.Method() */
+                    struct Expression *receiver = record_expr;
+                    char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
+
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0,
+                        sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.id = method_id;
+                    if (method_node->mangled_id != NULL)
+                        expr->expr_data.function_call_data.mangled_id =
+                            strdup(method_node->mangled_id);
+                    else if (method_id != NULL)
+                        expr->expr_data.function_call_data.mangled_id = strdup(method_id);
+                    expr->expr_data.function_call_data.resolved_func = method_node;
+
+                    ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                    expr->expr_data.function_call_data.args_expr = arg_node;
+
+                    /* Re-run semantic checking as a function call */
+                    expr->record_type = NULL;
+                    expr->resolved_type = UNKNOWN_TYPE;
+                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                }
             }
         }
 
