@@ -6934,17 +6934,63 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             case PASCAL_T_PROPERTY_DECL: {
                 /* Module-level property declaration (FPC extension)
                  * Syntax: property Name: Type read ReadFunc [write WriteFunc];
-                 * We need to create a synthetic function that calls the read accessor.
-                 * For now, just skip it and emit a warning - the user needs to call
-                 * the read function directly. Full support would require creating a
-                 * synthetic wrapper or modifying the semantic checker to resolve
-                 * property accesses to the underlying accessor functions. */
-                if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
-                    fprintf(stderr, "[KGPC] Module-level property declaration detected\n");
+                 * We convert this to a synthetic function that calls the read accessor.
+                 * This allows property access like "my_value" to be resolved as a function call. */
+                struct ClassProperty *prop = convert_property_decl(section);
+                if (prop != NULL && prop->name != NULL && prop->read_accessor != NULL) {
+                    /* Create a synthetic function declaration that returns the property value
+                     * by calling the read accessor. The function has the same name as the property. */
+                    char *func_name = strdup(prop->name);
+                    if (func_name != NULL) {
+                        /* Create the function's body: a single statement that calls the read accessor */
+                        struct Expression *accessor_call = mk_functioncall(0, strdup(prop->read_accessor), NULL);
+                        if (accessor_call != NULL) {
+                            /* Create an assignment to Result */
+                            struct Expression *result_var = mk_varid(0, strdup("Result"));
+                            if (result_var != NULL) {
+                                struct Statement *assign_stmt = mk_varassign(0, 0, result_var, accessor_call);
+                                if (assign_stmt != NULL) {
+                                    /* Create compound statement with just this assignment */
+                                    ListNode_t *body_list = CreateListNode((void *)assign_stmt, LIST_STMT);
+                                    struct Statement *body_stmt = mk_compoundstatement(0, body_list);
+                                    if (body_stmt != NULL) {
+                                        /* Create function with return type matching property type */
+                                        char *return_type_id = prop->type_id != NULL ? strdup(prop->type_id) : NULL;
+                                        Tree_t *func_tree = mk_function(0, func_name, NULL, NULL, NULL, NULL, NULL, NULL, body_stmt,
+                                            prop->type, return_type_id, NULL, 0, 0);
+                                        if (func_tree != NULL) {
+                                            append_subprogram_node(&subprograms, func_tree);
+                                            if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
+                                                fprintf(stderr, "[KGPC] Created synthetic function '%s' for module property\n", prop->name);
+                                            }
+                                        } else {
+                                            destroy_stmt(body_stmt);
+                                            free(func_name);
+                                        }
+                                    } else {
+                                        destroy_stmt(assign_stmt);
+                                        free(func_name);
+                                    }
+                                } else {
+                                    destroy_expr(accessor_call);
+                                    destroy_expr(result_var);
+                                    free(func_name);
+                                }
+                            } else {
+                                destroy_expr(accessor_call);
+                                free(func_name);
+                            }
+                        } else {
+                            free(func_name);
+                        }
+                    }
+                    /* Free property structure */
+                    if (prop->name) free(prop->name);
+                    if (prop->type_id) free(prop->type_id);
+                    if (prop->read_accessor) free(prop->read_accessor);
+                    if (prop->write_accessor) free(prop->write_accessor);
+                    free(prop);
                 }
-                /* TODO: Implement proper module-level property support.
-                 * For now, we need to at least register this in the symbol table
-                 * so that the identifier can be resolved during semantic checking. */
                 break;
             }
             case PASCAL_T_BEGIN_BLOCK:

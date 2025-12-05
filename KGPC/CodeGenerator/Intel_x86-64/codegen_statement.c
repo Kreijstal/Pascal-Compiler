@@ -4520,7 +4520,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type);
-        long long element_size = expr_get_array_element_size(var_expr, ctx);
+        /* Get element size from the base array expression, not the access expression */
+        struct Expression *array_expr = var_expr->expr_data.array_access_data.array_expr;
+        long long element_size = array_expr != NULL ? expr_get_array_element_size(array_expr, ctx) : -1;
         if (element_size <= 0)
             element_size = expr_effective_size_bytes(var_expr);
         int use_word = (!use_qword && element_size == 2);
@@ -4540,13 +4542,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            if (var_type == CHAR_TYPE)
+            if (var_type == CHAR_TYPE || element_size == 1)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)
                 {
                     codegen_report_error(ctx,
-                        "ERROR: Unable to select 8-bit register for character assignment.");
+                        "ERROR: Unable to select 8-bit register for byte assignment.");
                 }
                 else
                 {

@@ -2727,7 +2727,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *byte_name = strdup("Byte");
     if (byte_name != NULL) {
-        KgpcType *byte_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *byte_type = create_primitive_type_with_size(INT_TYPE, 1);
         assert(byte_type != NULL && "Failed to create Byte type");
         AddBuiltinType_Typed(symtab, byte_name, byte_type);
         destroy_kgpc_type(byte_type);
@@ -2735,7 +2735,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *word_name = strdup("Word");
     if (word_name != NULL) {
-        KgpcType *word_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *word_type = create_primitive_type_with_size(INT_TYPE, 2);
         assert(word_type != NULL && "Failed to create Word type");
         AddBuiltinType_Typed(symtab, word_name, word_type);
         destroy_kgpc_type(word_type);
@@ -2743,7 +2743,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *shortint_name = strdup("ShortInt");
     if (shortint_name != NULL) {
-        KgpcType *shortint_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *shortint_type = create_primitive_type_with_size(INT_TYPE, 1);
         assert(shortint_type != NULL && "Failed to create ShortInt type");
         AddBuiltinType_Typed(symtab, shortint_name, shortint_type);
         destroy_kgpc_type(shortint_type);
@@ -2751,7 +2751,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *smallint_name = strdup("SmallInt");
     if (smallint_name != NULL) {
-        KgpcType *smallint_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
+        KgpcType *smallint_type = create_primitive_type_with_size(INT_TYPE, 2);
         assert(smallint_type != NULL && "Failed to create SmallInt type");
         AddBuiltinType_Typed(symtab, smallint_name, smallint_type);
         destroy_kgpc_type(smallint_type);

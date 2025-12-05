@@ -86,6 +86,7 @@ struct KgpcType {
 
 // Constructor functions
 KgpcType* create_primitive_type(int primitive_tag);
+KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size);
 KgpcType* create_pointer_type(KgpcType *points_to);
 KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type);
 KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_index);
