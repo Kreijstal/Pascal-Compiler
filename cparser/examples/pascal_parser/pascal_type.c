@@ -1288,23 +1288,35 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple procedure header inside a record
+    // Simple procedure header inside a record (with optional class prefix and static directive)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_NONE,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("static")),
+            token(match(";")),
+            NULL
+        )),
         NULL
     );
 
-    // Simple function header inside a record
+    // Simple function header inside a record (with optional class prefix and static directive)
     combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_NONE,
+        optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(":")),
         create_type_ref_parser(),
         token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("static")),
+            token(match(";")),
+            NULL
+        )),
         NULL
     );
 

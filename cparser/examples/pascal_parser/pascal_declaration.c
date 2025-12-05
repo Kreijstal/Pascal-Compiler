@@ -2697,6 +2697,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* method_procedure_param_list = create_simple_param_list();
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
+        optional(token(keyword_ci("class"))),        // optional class keyword
         token(keyword_ci("procedure")),              // procedure keyword (with word boundary check)
         method_name_with_class,                      // ClassName.MethodName
         method_procedure_param_list,                 // optional parameter list
