@@ -28,6 +28,31 @@ KgpcType* create_primitive_type(int primitive_tag) {
     return type;
 }
 
+KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size) {
+    KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
+    assert(type != NULL);
+    type->kind = TYPE_KIND_PRIMITIVE;
+    type->info.primitive_type_tag = primitive_tag;
+    type->ref_count = 1;
+    
+    /* Create a minimal type_alias just to hold the storage_size */
+    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+    if (alias != NULL) {
+        alias->storage_size = storage_size;
+        /* These fields are required for proper cleanup */
+        alias->base_type = primitive_tag;
+        alias->is_array = 0;
+        alias->is_pointer = 0;
+        alias->is_set = 0;
+        alias->is_enum = 0;
+        alias->is_file = 0;
+        alias->is_range = 0;
+    }
+    type->type_alias = alias;
+    
+    return type;
+}
+
 KgpcType* create_pointer_type(KgpcType *points_to) {
     KgpcType *type = (KgpcType *)calloc(1, sizeof(KgpcType));
     assert(type != NULL);

@@ -1256,6 +1256,12 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("char");
         return CHAR_TYPE;
     }
+    /* WideChar is a 2-byte character type (UTF-16 code unit) */
+    if (strcasecmp(name, "widechar") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("widechar");
+        return INT_TYPE;  /* 2 bytes like Word - actual size from symbol table lookup */
+    }
     if (strcasecmp(name, "file") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("file");
@@ -1280,6 +1286,11 @@ static int map_type_name(const char *name, char **type_id_out) {
         if (type_id_out != NULL)
             *type_id_out = strdup("longint");  // Treat unsigned as signed for size purposes
         return LONGINT_TYPE;
+    }
+    /* Procedure and Function as bare type names (no parameters) - procedure pointers */
+    if (strcasecmp(name, "procedure") == 0 || strcasecmp(name, "function") == 0) {
+        /* Don't set type_id_out - PROCEDURE type tag is sufficient */
+        return PROCEDURE;
     }
     if (type_id_out != NULL) {
         *type_id_out = strdup(name);
@@ -1874,6 +1885,27 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             destroy_record_type(record);
         }
         return RECORD_TYPE;
+    }
+
+    /* Distinct type: type Real = Double - creates a strong alias */
+    if (spec_node->typ == PASCAL_T_DISTINCT_TYPE) {
+        /* The child should be the target type identifier */
+        ast_t *target = spec_node->child;
+        if (target != NULL) {
+            target = unwrap_pascal_node(target);
+            if (target != NULL && target->typ == PASCAL_T_IDENTIFIER) {
+                char *dup = dup_symbol(target);
+                int result = map_type_name(dup, type_id_out);
+                if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+                    *type_id_out = dup;
+                } else {
+                    free(dup);
+                }
+                return result;
+            }
+        }
+        /* Fallback for distinct types with complex target */
+        return UNKNOWN_TYPE;
     }
 
     return UNKNOWN_TYPE;
@@ -6897,6 +6929,68 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             case PASCAL_T_DESTRUCTOR_DECL: {
                 Tree_t *method_tree = convert_method_impl(section);
                 append_subprogram_node(&subprograms, method_tree);
+                break;
+            }
+            case PASCAL_T_PROPERTY_DECL: {
+                /* Module-level property declaration (FPC extension)
+                 * Syntax: property Name: Type read ReadFunc [write WriteFunc];
+                 * We convert this to a synthetic function that calls the read accessor.
+                 * This allows property access like "my_value" to be resolved as a function call. */
+                struct ClassProperty *prop = convert_property_decl(section);
+                if (prop != NULL && prop->name != NULL && prop->read_accessor != NULL) {
+                    /* Create a synthetic function declaration that returns the property value
+                     * by calling the read accessor. The function has the same name as the property. */
+                    char *func_name = strdup(prop->name);
+                    if (func_name != NULL) {
+                        /* Create the function's body: a single statement that calls the read accessor */
+                        struct Expression *accessor_call = mk_functioncall(0, strdup(prop->read_accessor), NULL);
+                        if (accessor_call != NULL) {
+                            /* Create an assignment to Result */
+                            struct Expression *result_var = mk_varid(0, strdup("Result"));
+                            if (result_var != NULL) {
+                                struct Statement *assign_stmt = mk_varassign(0, 0, result_var, accessor_call);
+                                if (assign_stmt != NULL) {
+                                    /* Create compound statement with just this assignment */
+                                    ListNode_t *body_list = CreateListNode((void *)assign_stmt, LIST_STMT);
+                                    struct Statement *body_stmt = mk_compoundstatement(0, body_list);
+                                    if (body_stmt != NULL) {
+                                        /* Create function with return type matching property type */
+                                        char *return_type_id = prop->type_id != NULL ? strdup(prop->type_id) : NULL;
+                                        Tree_t *func_tree = mk_function(0, func_name, NULL, NULL, NULL, NULL, NULL, NULL, body_stmt,
+                                            prop->type, return_type_id, NULL, 0, 0);
+                                        if (func_tree != NULL) {
+                                            append_subprogram_node(&subprograms, func_tree);
+                                            if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
+                                                fprintf(stderr, "[KGPC] Created synthetic function '%s' for module property\n", prop->name);
+                                            }
+                                        } else {
+                                            destroy_stmt(body_stmt);
+                                            free(func_name);
+                                        }
+                                    } else {
+                                        destroy_stmt(assign_stmt);
+                                        free(func_name);
+                                    }
+                                } else {
+                                    destroy_expr(accessor_call);
+                                    destroy_expr(result_var);
+                                    free(func_name);
+                                }
+                            } else {
+                                destroy_expr(accessor_call);
+                                free(func_name);
+                            }
+                        } else {
+                            free(func_name);
+                        }
+                    }
+                    /* Free property structure */
+                    if (prop->name) free(prop->name);
+                    if (prop->type_id) free(prop->type_id);
+                    if (prop->read_accessor) free(prop->read_accessor);
+                    if (prop->write_accessor) free(prop->write_accessor);
+                    free(prop);
+                }
                 break;
             }
             case PASCAL_T_BEGIN_BLOCK:
