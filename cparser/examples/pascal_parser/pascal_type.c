@@ -950,6 +950,8 @@ static combinator_t* create_record_field_type_spec(void) {
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),
         range_type(PASCAL_T_RANGE_TYPE),
         record_type(PASCAL_T_RECORD_TYPE),
+        procedure_type(PASCAL_T_PROCEDURE_TYPE),  /* Allow procedure/function fields with calling conventions */
+        function_type(PASCAL_T_FUNCTION_TYPE),
         type_name(PASCAL_T_IDENTIFIER),
         token(pascal_identifier(PASCAL_T_IDENTIFIER)),
         token(cident(PASCAL_T_IDENTIFIER)),
