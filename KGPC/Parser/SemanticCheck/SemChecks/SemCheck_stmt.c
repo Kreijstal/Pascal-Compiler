@@ -2237,6 +2237,10 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         size_t class_len = strlen(current_class_name);
                         size_t method_len = strlen(method_name_part);
                         char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
+                        if (mangled_name == NULL) {
+                            /* Malloc failed, skip to next iteration */
+                            break;
+                        }
                         sprintf(mangled_name, "%s__%s", current_class_name, method_name_part);
                         
                         /* Check if this mangled name exists in the symbol table */
@@ -2291,11 +2295,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                          size_t class_len = strlen(correct_class_name);
                          size_t method_len = strlen(method_name_part);
                          char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
-                         sprintf(mangled_name, "%s__%s", correct_class_name, method_name_part);
-                         free(proc_id);
-                         proc_id = mangled_name;
-                         stmt->stmt_data.procedure_call_data.id = proc_id;
-                         /* Don't set mangled_id here - let the normal mangling process handle it */
+                         if (mangled_name != NULL) {
+                             sprintf(mangled_name, "%s__%s", correct_class_name, method_name_part);
+                             free(proc_id);
+                             proc_id = mangled_name;
+                             stmt->stmt_data.procedure_call_data.id = proc_id;
+                             /* Don't set mangled_id here - let the normal mangling process handle it */
+                         }
                     }
                 }
             }
