@@ -1458,13 +1458,6 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         HashNode_t *parent_method_node = NULL;
                         if (parent_class_name != NULL && method_name != NULL)
                         {
-                            /* Prepend Self as the first argument for inherited method calls */
-                            ListNode_t *args_given = call_expr->expr_data.function_call_data.args_expr;
-                            struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
-                            ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                            self_arg->next = args_given;
-                            call_expr->expr_data.function_call_data.args_expr = self_arg;
-
                             /* Look up the parent method in the symbol table */
                             char parent_mangled[512];
                             snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
@@ -1489,32 +1482,54 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             }
                         }
 
+                        /* Create temporary argument list for inherited calls without modifying original AST */
+                        ListNode_t *temp_args = NULL;
+                        ListNode_t *temp_self_arg = NULL;
+
+                        if (parent_method_node != NULL)
+                        {
+                            /* Only prepend Self if parent method was found */
+                            struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                            temp_self_arg = CreateListNode(self_expr, LIST_EXPR);
+                            temp_self_arg->next = call_expr->expr_data.function_call_data.args_expr;
+                            temp_args = temp_self_arg;
+                        }
+                        else
+                        {
+                            /* Use original arguments for non-inherited calls */
+                            temp_args = call_expr->expr_data.function_call_data.args_expr;
+                        }
+
                         struct Statement temp_call;
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
                         temp_call.line_num = stmt->line_num;
                         /* For inherited calls, use the parent method's id as the procedure ID
                          * for symbol table lookup, and set mangled_id to prevent re-mangling.
-                         * The mangled_id already includes the correct parameter signature. */
+                         * Use direct pointer assignment (no strdup) since symbol table has sufficient lifetime */
                         if (parent_method_node != NULL && parent_method_node->id != NULL)
                         {
                             temp_call.stmt_data.procedure_call_data.id = parent_method_node->id;
                             /* Pre-set mangled_id to prevent type-based method correction and re-mangling */
-                            if (parent_method_node->mangled_id != NULL) {
-                                temp_call.stmt_data.procedure_call_data.mangled_id = strdup(parent_method_node->mangled_id);
-                            } else {
-                                temp_call.stmt_data.procedure_call_data.mangled_id = strdup(parent_method_node->id);
-                            }
+                            temp_call.stmt_data.procedure_call_data.mangled_id =
+                                parent_method_node->mangled_id ? parent_method_node->mangled_id : parent_method_node->id;
                         }
                         else
                         {
                             temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
                             temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                         }
-                        temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
+                        temp_call.stmt_data.procedure_call_data.expr_args = temp_args;
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
+
+                        /* Clean up temporary argument node if we created one */
+                        if (temp_self_arg != NULL)
+                        {
+                            temp_self_arg->next = NULL;  /* Detach to avoid double-free */
+                            /* Note: self_expr will be cleaned up with the statement tree */
+                        }
 
                         if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
                         {
