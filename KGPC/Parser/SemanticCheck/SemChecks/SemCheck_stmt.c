@@ -30,6 +30,7 @@
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
+#include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
@@ -1492,14 +1493,18 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
                         temp_call.line_num = stmt->line_num;
-                        /* For inherited calls, use the parent method's mangled name as the procedure ID
-                         * so that semcheck_proccall finds the right overload.
-                         * We also pre-set mangled_id to signal that type-based correction should be skipped */
-                        if (parent_method_node != NULL && parent_method_node->mangled_id != NULL)
+                        /* For inherited calls, use the parent method's id as the procedure ID
+                         * for symbol table lookup, and set mangled_id to prevent re-mangling.
+                         * The mangled_id already includes the correct parameter signature. */
+                        if (parent_method_node != NULL && parent_method_node->id != NULL)
                         {
-                            temp_call.stmt_data.procedure_call_data.id = parent_method_node->mangled_id;
-                            /* Pre-set mangled_id to prevent type-based method correction in semcheck_proccall */
-                            temp_call.stmt_data.procedure_call_data.mangled_id = strdup(parent_method_node->mangled_id);
+                            temp_call.stmt_data.procedure_call_data.id = parent_method_node->id;
+                            /* Pre-set mangled_id to prevent type-based method correction and re-mangling */
+                            if (parent_method_node->mangled_id != NULL) {
+                                temp_call.stmt_data.procedure_call_data.mangled_id = strdup(parent_method_node->mangled_id);
+                            } else {
+                                temp_call.stmt_data.procedure_call_data.mangled_id = strdup(parent_method_node->id);
+                            }
                         }
                         else
                         {
@@ -2082,6 +2087,80 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * Skip this correction if mangled_id is already set (e.g., for inherited calls
      * where we explicitly want to call the parent class method).
      */
+    
+    /* First, check if this is a static method call.
+     * Method calls can have two patterns:
+     * 1. __MethodName(object, ...) - method call without class prefix
+     * 2. ClassName__MethodName(object, ...) - method call with class prefix
+     */
+    if (proc_id != NULL && strstr(proc_id, "__") != NULL && args_given != NULL) {
+        char *double_underscore = strstr(proc_id, "__");
+        const char *method_name = double_underscore + 2;
+        const char *class_name = NULL;
+        int need_free_class_name = 0;
+        
+        if (double_underscore == proc_id) {
+            /* Case 1: __MethodName - need to get class from first argument */
+            if (args_given != NULL && args_given->cur != NULL) {
+                struct Expression *first_arg = (struct Expression *)args_given->cur;
+                
+                /* Try to get the record type of the first argument */
+                struct RecordType *record_type = NULL;
+                if (first_arg->record_type != NULL) {
+                    record_type = first_arg->record_type;
+                } else if (first_arg->type == EXPR_VAR_ID) {
+                    /* Look up the variable to get its type */
+                    HashNode_t *var_node = NULL;
+                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 && var_node != NULL &&
+                        var_node->type != NULL && var_node->type->kind == TYPE_KIND_RECORD) {
+                        record_type = var_node->type->info.record_info;
+                    }
+                }
+                
+                if (record_type != NULL && record_type->type_id != NULL) {
+                    class_name = record_type->type_id;
+                }
+            }
+        } else {
+            /* Case 2: ClassName__MethodName - extract class from proc_id */
+            size_t class_len = double_underscore - proc_id;
+            char *extracted_class = (char *)malloc(class_len + 1);
+            if (extracted_class != NULL) {
+                memcpy(extracted_class, proc_id, class_len);
+                extracted_class[class_len] = '\0';
+                class_name = extracted_class;
+                need_free_class_name = 1;
+            }
+        }
+        
+        if (class_name != NULL && method_name != NULL) {
+            int is_static = from_cparser_is_method_static(class_name, method_name);
+            
+            /* If proc_id started with __, update it to include the class name */
+            if (double_underscore == proc_id) {
+                size_t class_len = strlen(class_name);
+                size_t method_len = strlen(method_name);
+                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                if (new_proc_id != NULL) {
+                    sprintf(new_proc_id, "%s__%s", class_name, method_name);
+                    free(proc_id);
+                    proc_id = new_proc_id;
+                    stmt->stmt_data.procedure_call_data.id = proc_id;
+                }
+            }
+            
+            if (is_static) {
+                /* For static methods, remove the first argument (the type identifier) */
+                args_given = args_given->next;
+                stmt->stmt_data.procedure_call_data.expr_args = args_given;
+            }
+        }
+        
+        if (need_free_class_name && class_name != NULL) {
+            free((void *)class_name);
+        }
+    }
+    
     if (proc_id != NULL && strstr(proc_id, "__") != NULL && args_given != NULL &&
         stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
         char *double_underscore = strstr(proc_id, "__");
@@ -2167,7 +2246,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                                 free(proc_id);
                                 proc_id = mangled_name;
                                 stmt->stmt_data.procedure_call_data.id = proc_id;
-                                stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
+                                /* Don't set mangled_id here - let the normal mangling process handle it */
                                 method_found = 1;
                                 break;
                             }
@@ -2216,7 +2295,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                              free(proc_id);
                              proc_id = mangled_name;
                              stmt->stmt_data.procedure_call_data.id = proc_id;
-                             stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
+                             /* Don't set mangled_id here - let the normal mangling process handle it */
                         }
                     }
                 }
@@ -2225,7 +2304,14 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
-    mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
+    /* For inherited calls where mangled_id is already set, use it directly 
+     * instead of re-mangling based on the call site arguments.
+     * The mangled_id already includes the correct parameter signature. */
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL) {
+        mangled_name = strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+    } else {
+        mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
+    }
     assert(mangled_name != NULL);
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
