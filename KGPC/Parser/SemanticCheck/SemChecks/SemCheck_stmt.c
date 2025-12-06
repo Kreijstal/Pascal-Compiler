@@ -30,6 +30,7 @@
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
+#include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
@@ -1412,14 +1413,26 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         HashNode_t *self_node = NULL;
                         const char *parent_class_name = NULL;
                         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
-                            self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
-                            self_node->type->info.record_info != NULL)
+                            self_node->type != NULL)
                         {
-                            struct RecordType *current_class = self_node->type->info.record_info;
-                            parent_class_name = current_class->parent_class_name;
+                            struct RecordType *current_class = NULL;
+                            if (self_node->type->kind == TYPE_KIND_RECORD &&
+                                self_node->type->info.record_info != NULL)
+                            {
+                                current_class = self_node->type->info.record_info;
+                                parent_class_name = current_class->parent_class_name;
+                            }
+                            else if (self_node->type->kind == TYPE_KIND_POINTER &&
+                                     self_node->type->info.points_to != NULL &&
+                                     self_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                     self_node->type->info.points_to->info.record_info != NULL)
+                            {
+                                current_class = self_node->type->info.points_to->info.record_info;
+                                parent_class_name = current_class->parent_class_name;
+                            }
                             
                             /* Check if there's no parent class and this is Create or Destroy */
-                            if (current_class->parent_class_name == NULL && method_name != NULL &&
+                            if (current_class != NULL && current_class->parent_class_name == NULL && method_name != NULL &&
                                 (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
                             {
                                 /* No parent class - convert to empty compound statement (no-op) */
@@ -1451,7 +1464,12 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
                         temp_call.line_num = stmt->line_num;
-                        temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                        /* Use mangled_id if available (for inherited calls to parent class methods) */
+                        if (call_expr->expr_data.function_call_data.mangled_id != NULL) {
+                            temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.mangled_id;
+                        } else {
+                            temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                        }
                         temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
                         temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
@@ -2106,11 +2124,32 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             /* Check if this mangled name exists in the symbol table */
                             HashNode_t *proc_node = NULL;
                             if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
+                                /* Save method_name_part before freeing proc_id (since method_name_part points into proc_id) */
+                                char *method_name_copy = strdup(method_name_part);
+                                if (method_name_copy == NULL) {
+                                    free(mangled_name);
+                                    break;  /* Memory allocation failed, skip static method handling */
+                                }
+                                
                                 /* Found it! Update the procedure ID */
                                 free(proc_id);
                                 proc_id = mangled_name;
                                 stmt->stmt_data.procedure_call_data.id = proc_id;
                                 stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
+                                
+                                /* Check if this is a static method (no Self parameter) */
+                                int is_static = from_cparser_is_method_static(current_class_name, method_name_copy);
+                                if (is_static) {
+                                    /* For static methods, remove the first argument (the type identifier) */
+                                    stmt->stmt_data.procedure_call_data.expr_args = args_given->next;
+                                    args_given = args_given->next;
+                                    
+                                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        fprintf(stderr, "[SemCheck] semcheck_proccall: Removed type arg for static method %s\n", proc_id);
+                                    }
+                                }
+                                
+                                free(method_name_copy);
                                 method_found = 1;
                                 break;
                             }

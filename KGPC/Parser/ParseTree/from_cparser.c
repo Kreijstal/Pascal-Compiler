@@ -293,7 +293,7 @@ static char *generate_anonymous_method_name(int is_function) {
 }
 
 static void register_class_method_ex(const char *class_name, const char *method_name, 
-                                      int is_virtual, int is_override) {
+                                      int is_virtual, int is_override, int is_static) {
     if (class_name == NULL || method_name == NULL)
         return;
 
@@ -305,6 +305,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->method_name = strdup(method_name);
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
+    binding->is_static = is_static;
 
     ListNode_t *node = NULL;
     if (binding->class_name != NULL && binding->method_name != NULL)
@@ -321,8 +322,8 @@ static void register_class_method_ex(const char *class_name, const char *method_
     class_method_bindings = node;
     
     if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d)\n",
-            class_name, method_name, is_virtual, is_override);
+        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d)\n",
+            class_name, method_name, is_virtual, is_override, is_static);
     }
 }
 
@@ -341,6 +342,28 @@ static const char *find_class_for_method(const char *method_name) {
         cur = cur->next;
     }
     return NULL;
+}
+
+/* Check if a method is static (no Self parameter) */
+static int is_method_static(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+            return binding->is_static;
+        cur = cur->next;
+    }
+    return 0;
+}
+
+/* Public wrapper for is_method_static */
+int from_cparser_is_method_static(const char *class_name, const char *method_name) {
+    return is_method_static(class_name, method_name);
 }
 
 static int typed_const_counter = 0;
@@ -2498,6 +2521,7 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                 break;
             case PASCAL_T_METHOD_DIRECTIVE:
                 method_template->directives_ast = node;
+                /* Check for directive keywords (virtual, override, static) in symbol name and children */
                 if (sym_name != NULL)
                 {
                     if (strcasecmp(sym_name, "virtual") == 0)
@@ -2507,6 +2531,32 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                         method_template->is_override = 1;
                         method_template->is_virtual = 1;
                     }
+                    else if (strcasecmp(sym_name, "static") == 0)
+                        method_template->is_static = 1;
+                }
+                /* Also check the child for static keyword */
+                if (node->child != NULL) {
+                    ast_t *dir_child = unwrap_pascal_node(node->child);
+                    if (dir_child != NULL && dir_child->sym != NULL && dir_child->sym->name != NULL) {
+                        if (strcasecmp(dir_child->sym->name, "static") == 0)
+                            method_template->is_static = 1;
+                    }
+                }
+                /* Also recursively check all children of the directive to find static */
+                ast_t *dir_cur = node->child;
+                while (dir_cur != NULL) {
+                    ast_t *unwrapped_dir = unwrap_pascal_node(dir_cur);
+                    if (unwrapped_dir != NULL && unwrapped_dir->sym != NULL && 
+                        unwrapped_dir->sym->name != NULL && strcasecmp(unwrapped_dir->sym->name, "static") == 0) {
+                        method_template->is_static = 1;
+                    }
+                    /* Check identifier child of token */
+                    if (unwrapped_dir != NULL && unwrapped_dir->typ == PASCAL_T_IDENTIFIER &&
+                        unwrapped_dir->sym != NULL && unwrapped_dir->sym->name != NULL &&
+                        strcasecmp(unwrapped_dir->sym->name, "static") == 0) {
+                        method_template->is_static = 1;
+                    }
+                    dir_cur = dir_cur->next;
                 }
                 break;
             case PASCAL_T_RETURN_TYPE:
@@ -2518,6 +2568,8 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                 {
                     if (strcasecmp(sym_name, "class") == 0)
                         method_template->is_class_method = 1;
+                    else if (strcasecmp(sym_name, "static") == 0)
+                        method_template->is_static = 1;
                     else if (strcasecmp(sym_name, "constructor") == 0)
                         method_template->kind = METHOD_TEMPLATE_CONSTRUCTOR;
                     else if (strcasecmp(sym_name, "destructor") == 0)
@@ -2622,7 +2674,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
                 register_class_method_ex(class_name, template->name,
-                    template->is_virtual, template->is_override);
+                    template->is_virtual, template->is_override, template->is_static);
 
                 if (method_builder != NULL)
                     list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
@@ -3892,6 +3944,32 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
 
     Tree_t *decl = NULL;
     if (record_type != NULL) {
+        /* Set the type ID for the record */
+        if (record_type->type_id == NULL && id != NULL)
+            record_type->type_id = strdup(id);
+        
+        /* For advanced records, register any method declarations */
+        /* Walk the fields list looking for stored method AST nodes */
+        ListNode_t *field_cur = record_type->fields;
+        while (field_cur != NULL) {
+            if (field_cur->type == LIST_UNSPECIFIED) {
+                /* This is a method AST node stored during convert_record_members */
+                ast_t *method_ast = (ast_t *)field_cur->cur;
+                if (method_ast != NULL && method_ast->typ == PASCAL_T_METHOD_DECL) {
+                    struct MethodTemplate *template = create_method_template(method_ast);
+                    if (template != NULL) {
+                        register_class_method_ex(id, template->name,
+                            template->is_virtual, template->is_override, template->is_static);
+                        if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
+                            fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
+                                id, template->name, template->is_static);
+                        destroy_method_template_instance(template);
+                    }
+                }
+            }
+            field_cur = field_cur->next;
+        }
+        
         /* Direct record/class type declaration */
         decl = mk_record_type(type_decl_node->line, id, record_type);
     } else if (type_info.is_array) {
@@ -6189,6 +6267,15 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
+    /* Check if this method was declared as static in the record/class declaration */
+    int is_static_method = is_method_static(effective_class, method_name);
+    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+        fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
+                effective_class ? effective_class : "<null>", 
+                method_name ? method_name : "<null>",
+                is_static_method);
+    }
+    
     char *proc_name = mangle_method_name(effective_class, method_name);
     if (proc_name == NULL) {
         free(class_name);
@@ -6235,8 +6322,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     struct TypeAlias *inline_return_type = NULL;
     int has_return_type = 0;
 
-    /* Add Self parameter only for instance methods, not for class operators */
-    if (!is_class_operator) {
+    /* Add Self parameter only for instance methods, not for class operators or static methods */
+    if (!is_class_operator && !is_static_method) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
         if (effective_class != NULL)
@@ -6365,8 +6452,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return_type = POINTER_TYPE;
     }
 
-    /* Wrap method body in WITH Self for instance methods, but not for class operators */
-    if (body != NULL && !is_class_operator) {
+    /* Wrap method body in WITH Self for instance methods, but not for class operators or static methods */
+    if (body != NULL && !is_class_operator && !is_static_method) {
         struct Expression *self_expr = mk_varid(method_node->line, strdup("Self"));
         body = mk_with(method_node->line, self_expr, body);
     }
