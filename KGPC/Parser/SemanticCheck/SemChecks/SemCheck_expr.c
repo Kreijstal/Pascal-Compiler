@@ -428,7 +428,8 @@ static int semcheck_map_builtin_type_name(const char *id)
         return LONGINT_TYPE;
     if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
-    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString") ||
+        pascal_identifier_equals(id, "ShortString"))
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "Char"))
         return CHAR_TYPE;
@@ -5910,6 +5911,57 @@ int semcheck_addop(int *type_return,
         }
     }
 
+    /* Check for pointer arithmetic: pointer + integer or integer + pointer */
+    if (op_type == PLUS || op_type == MINUS)
+    {
+        int left_is_pointer = (type_first == POINTER_TYPE);
+        int right_is_pointer = (type_second == POINTER_TYPE);
+        int left_is_int = (type_first == INT_TYPE || type_first == LONGINT_TYPE);
+        int right_is_int = (type_second == INT_TYPE || type_second == LONGINT_TYPE);
+
+        /* pointer + integer or pointer - integer */
+        if (left_is_pointer && right_is_int)
+        {
+            /* Result is a pointer of the same type as the left operand */
+            *type_return = POINTER_TYPE;
+            /* Copy pointer metadata from left operand to result */
+            if (expr1->pointer_subtype != UNKNOWN_TYPE)
+            {
+                expr->pointer_subtype = expr1->pointer_subtype;
+            }
+            if (expr1->pointer_subtype_id != NULL)
+            {
+                expr->pointer_subtype_id = strdup(expr1->pointer_subtype_id);
+            }
+            if (expr1->record_type != NULL)
+            {
+                expr->record_type = expr1->record_type;
+            }
+            return return_val;
+        }
+
+        /* integer + pointer (only for PLUS) */
+        if (op_type == PLUS && left_is_int && right_is_pointer)
+        {
+            /* Result is a pointer of the same type as the right operand */
+            *type_return = POINTER_TYPE;
+            /* Copy pointer metadata from right operand to result */
+            if (expr2->pointer_subtype != UNKNOWN_TYPE)
+            {
+                expr->pointer_subtype = expr2->pointer_subtype;
+            }
+            if (expr2->pointer_subtype_id != NULL)
+            {
+                expr->pointer_subtype_id = strdup(expr2->pointer_subtype_id);
+            }
+            if (expr2->record_type != NULL)
+            {
+                expr->record_type = expr2->record_type;
+            }
+            return return_val;
+        }
+    }
+
     /* Check for operator overloading for record types */
     if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
     {
@@ -6466,7 +6518,9 @@ int semcheck_arrayaccess(int *type_return,
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
     int base_is_string = (base_type == STRING_TYPE && !array_expr->is_array_expr);
-    if (!array_expr->is_array_expr && !base_is_string)
+    int base_is_pointer = (base_type == POINTER_TYPE);
+    
+    if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
         fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
@@ -6477,6 +6531,46 @@ int semcheck_arrayaccess(int *type_return,
     if (base_is_string)
     {
         element_type = CHAR_TYPE;
+    }
+    else if (base_is_pointer)
+    {
+        /* Pointer indexing: p[i] is equivalent to (p+i)^ */
+        /* Get the type that the pointer points to */
+        element_type = array_expr->pointer_subtype;
+        
+        if (element_type == UNKNOWN_TYPE && array_expr->pointer_subtype_id != NULL)
+        {
+            int resolved_type = UNKNOWN_TYPE;
+            if (resolve_type_identifier(&resolved_type, symtab, array_expr->pointer_subtype_id,
+                    expr->line_num) == 0)
+                element_type = resolved_type;
+        }
+        
+        if (element_type == UNKNOWN_TYPE && array_expr->record_type != NULL)
+            element_type = RECORD_TYPE;
+        
+        /* Copy pointer target type info to result */
+        if (element_type == POINTER_TYPE && array_expr->pointer_subtype_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, array_expr->pointer_subtype_id) != -1 && type_node != NULL)
+            {
+                struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                if (alias != NULL && alias->is_pointer)
+                {
+                    expr->pointer_subtype = alias->pointer_type;
+                    if (alias->pointer_type_id != NULL)
+                        expr->pointer_subtype_id = strdup(alias->pointer_type_id);
+                    if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
+                        expr->record_type = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
+                }
+            }
+        }
+        
+        if (element_type == RECORD_TYPE && array_expr->record_type != NULL)
+        {
+            expr->record_type = array_expr->record_type;
+        }
     }
     else
     {
@@ -6507,7 +6601,7 @@ int semcheck_arrayaccess(int *type_return,
         if (element_type == POINTER_TYPE)
         {
             int pointer_subtype = UNKNOWN_TYPE;
-            const char *pointer_type_id = NULL;
+            const char *pointer_subtype_id = NULL;
             struct RecordType *pointer_record = NULL;
 
             if (array_expr->array_element_type_id != NULL)
@@ -6520,14 +6614,14 @@ int semcheck_arrayaccess(int *type_return,
                     if (alias != NULL && alias->is_pointer)
                     {
                         pointer_subtype = alias->pointer_type;
-                        pointer_type_id = alias->pointer_type_id;
+                        pointer_subtype_id = alias->pointer_type_id;
                         if (alias->pointer_type == RECORD_TYPE && alias->pointer_type_id != NULL)
                             pointer_record = semcheck_lookup_record_type(symtab, alias->pointer_type_id);
                     }
                 }
             }
 
-            semcheck_set_pointer_info(expr, pointer_subtype, pointer_type_id);
+            semcheck_set_pointer_info(expr, pointer_subtype, pointer_subtype_id);
             if (pointer_subtype == RECORD_TYPE)
                 expr->record_type = pointer_record;
             else
