@@ -34,6 +34,7 @@
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
+#include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
 
@@ -4630,8 +4631,19 @@ static int semcheck_recordaccess(int *type_return,
                 if (method_node->hash_type == HASHTYPE_FUNCTION ||
                     method_node->hash_type == HASHTYPE_PROCEDURE)
                 {
-                    /* Transform record access into an explicit method call: receiver.Method() */
-                    struct Expression *receiver = record_expr;
+                    /* Check if this is a static method (no Self parameter) */
+                    const char *type_name = record_info->type_id;
+                    int is_static_method = 0;
+                    if (type_name != NULL && field_id != NULL) {
+                        is_static_method = from_cparser_is_method_static(type_name, field_id);
+                    }
+                    
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] semcheck_recordaccess: type=%s method=%s is_static=%d\n",
+                            type_name ? type_name : "<null>", field_id, is_static_method);
+                    }
+                    
+                    /* Transform record access into an explicit method call */
                     char *method_id = (field_id != NULL) ? strdup(field_id) : NULL;
 
                     expr->type = EXPR_FUNCTION_CALL;
@@ -4645,8 +4657,15 @@ static int semcheck_recordaccess(int *type_return,
                         expr->expr_data.function_call_data.mangled_id = strdup(method_id);
                     expr->expr_data.function_call_data.resolved_func = method_node;
 
-                    ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
-                    expr->expr_data.function_call_data.args_expr = arg_node;
+                    /* For static methods, don't pass a receiver/Self */
+                    if (is_static_method) {
+                        expr->expr_data.function_call_data.args_expr = NULL;
+                    } else {
+                        /* For instance methods, pass receiver as first argument (Self) */
+                        struct Expression *receiver = record_expr;
+                        ListNode_t *arg_node = CreateListNode(receiver, LIST_EXPR);
+                        expr->expr_data.function_call_data.args_expr = arg_node;
+                    }
 
                     /* Re-run semantic checking as a function call */
                     expr->record_type = NULL;
@@ -6882,6 +6901,72 @@ int semcheck_funccall(int *type_return,
 
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
+    /* Check for method call with unresolved name (__MethodName format) where first arg is the type/instance.
+     * This handles TFoo.PrintHello being parsed as __PrintHello(TFoo).
+     * For static methods, we need to remove the type argument. */
+    if (id != NULL && id[0] == '_' && id[1] == '_' && args_given != NULL) {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        int first_arg_type_tag;
+        semcheck_expr_main(&first_arg_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+        
+        if (first_arg->resolved_kgpc_type != NULL) {
+            KgpcType *owner_type = first_arg->resolved_kgpc_type;
+            struct RecordType *record_info = NULL;
+            
+            if (owner_type->kind == TYPE_KIND_RECORD) {
+                record_info = owner_type->info.record_info;
+            } else if (owner_type->kind == TYPE_KIND_POINTER && owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                record_info = owner_type->info.points_to->info.record_info;
+            }
+            
+            if (record_info != NULL && record_info->type_id != NULL) {
+                const char *method_name = id + 2;  /* Skip the leading __ */
+                
+                /* Check if this is a static method */
+                int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
+                        record_info->type_id, method_name, is_static);
+                }
+                
+                /* Look up the method */
+                HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+                if (method_node != NULL) {
+                    /* Resolve the method name */
+                    set_type_from_hashtype(type_return, method_node);
+                    semcheck_expr_set_resolved_kgpc_type_shared(expr, method_node->type);
+                    expr->expr_data.function_call_data.resolved_func = method_node;
+                    const char *resolved_method_name = (method_node->mangled_id != NULL) ?
+                        method_node->mangled_id : method_node->id;
+                    if (expr->expr_data.function_call_data.mangled_id != NULL)
+                        free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id =
+                        (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+                    
+                    if (is_static) {
+                        /* For static methods, remove the first argument (the type identifier) */
+                        expr->expr_data.function_call_data.args_expr = args_given->next;
+                        args_given = args_given->next;
+                        
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                        }
+                    }
+                    
+                    /* Update mangled_name to use the resolved name */
+                    if (mangled_name != NULL)
+                        free(mangled_name);
+                    mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
+                    
+                    /* Continue with normal function call processing using the resolved method */
+                    hash_return = method_node;
+                    goto method_call_resolved;
+                }
+            }
+        }
+    }
+    
     /* Check for Constructor Call (Create) where first arg is the class type/instance */
     if (id != NULL && (strcasecmp(id, "Create") == 0 || strcasecmp(id, "Destroy") == 0) && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -7020,6 +7105,8 @@ constructor_resolved:
         return ++return_val;
     }
 
+method_call_resolved:
+    ;  /* Label for jumping here after method resolution */
     int final_status = 0;
 
     HashNode_t *best_match = NULL;

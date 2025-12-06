@@ -120,6 +120,7 @@ struct MethodTemplate
     struct Tree *method_tree; /* Converted Tree_t template built on-demand */
     enum MethodTemplateKind kind;  /* Method classification */
     int is_class_method;      /* 1 if declared with CLASS */
+    int is_static;            /* 1 if directive static found (no Self parameter) */
     int is_virtual;           /* 1 if directive virtual found */
     int is_override;          /* 1 if directive override found */
     int has_return_type;      /* 1 if function with explicit return type */

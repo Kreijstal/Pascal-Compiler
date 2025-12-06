@@ -1289,14 +1289,14 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     // Simple procedure header inside a record (with optional class prefix and static directive)
-    combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("static")),
+        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
             token(match(";")),
             NULL
         )),
@@ -1304,7 +1304,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
     );
 
     // Simple function header inside a record (with optional class prefix and static directive)
-    combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -1312,8 +1312,8 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         token(match(":")),
         create_type_ref_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("static")),
+        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
             token(match(";")),
             NULL
         )),
@@ -1351,13 +1351,52 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     combinator_t* adv_members = many(adv_member);
     ParseResult adv_res = parse(in, adv_members);
+    ast_t* adv_members_ast = NULL;
     if (adv_res.is_success) {
         if (adv_res.value.ast != ast_nil)
-            free_ast(adv_res.value.ast);
+            adv_members_ast = adv_res.value.ast;
     } else {
         discard_failure(adv_res);
     }
     free_combinator(adv_members);
+    
+    /* Add advanced member declarations to fields list */
+    if (adv_members_ast != NULL) {
+        /* Only keep METHOD_DECL nodes */
+        ast_t *adv_cur = adv_members_ast;
+        ast_t *last_kept = NULL;
+        ast_t *first_kept = NULL;
+        while (adv_cur != NULL) {
+            ast_t *next_node = adv_cur->next;
+            if (adv_cur->typ == PASCAL_T_METHOD_DECL) {
+                adv_cur->next = NULL;
+                if (first_kept == NULL) {
+                    first_kept = adv_cur;
+                    last_kept = adv_cur;
+                } else {
+                    last_kept->next = adv_cur;
+                    last_kept = adv_cur;
+                }
+            } else {
+                /* Discard non-METHOD_DECL nodes */
+                adv_cur->next = NULL;
+                free_ast(adv_cur);
+            }
+            adv_cur = next_node;
+        }
+        
+        /* Append to fields list */
+        if (first_kept != NULL) {
+            if (fields_ast == NULL) {
+                fields_ast = first_kept;
+            } else {
+                ast_t* last_field = fields_ast;
+                while (last_field->next != NULL)
+                    last_field = last_field->next;
+                last_field->next = first_kept;
+            }
+        }
+    }
 
     combinator_t* end_keyword = token(keyword_ci("end"));
     ParseResult end_res = parse(in, end_keyword);

@@ -30,6 +30,7 @@
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
+#include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
@@ -2106,11 +2107,28 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             /* Check if this mangled name exists in the symbol table */
                             HashNode_t *proc_node = NULL;
                             if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
+                                /* Save method_name_part before freeing proc_id (since method_name_part points into proc_id) */
+                                char *method_name_copy = strdup(method_name_part);
+                                
                                 /* Found it! Update the procedure ID */
                                 free(proc_id);
                                 proc_id = mangled_name;
                                 stmt->stmt_data.procedure_call_data.id = proc_id;
                                 stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
+                                
+                                /* Check if this is a static method (no Self parameter) */
+                                int is_static = from_cparser_is_method_static(current_class_name, method_name_copy);
+                                if (is_static) {
+                                    /* For static methods, remove the first argument (the type identifier) */
+                                    stmt->stmt_data.procedure_call_data.expr_args = args_given->next;
+                                    args_given = args_given->next;
+                                    
+                                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        fprintf(stderr, "[SemCheck] semcheck_proccall: Removed type arg for static method %s\n", proc_id);
+                                    }
+                                }
+                                
+                                free(method_name_copy);
                                 method_found = 1;
                                 break;
                             }
