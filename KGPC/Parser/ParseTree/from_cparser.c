@@ -2521,7 +2521,7 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
                 break;
             case PASCAL_T_METHOD_DIRECTIVE:
                 method_template->directives_ast = node;
-                /* Check for static in the symbol name */
+                /* Check for directive keywords (virtual, override, static) in symbol name and children */
                 if (sym_name != NULL)
                 {
                     if (strcasecmp(sym_name, "virtual") == 0)
@@ -6175,7 +6175,6 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
 
     ast_t *cur = method_node->child;
-    
     ast_t *qualified = unwrap_pascal_node(cur);
     if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {

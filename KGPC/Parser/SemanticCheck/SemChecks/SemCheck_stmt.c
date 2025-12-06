@@ -2109,6 +2109,10 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                             if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
                                 /* Save method_name_part before freeing proc_id (since method_name_part points into proc_id) */
                                 char *method_name_copy = strdup(method_name_part);
+                                if (method_name_copy == NULL) {
+                                    free(mangled_name);
+                                    break;  /* Memory allocation failed, skip static method handling */
+                                }
                                 
                                 /* Found it! Update the procedure ID */
                                 free(proc_id);
