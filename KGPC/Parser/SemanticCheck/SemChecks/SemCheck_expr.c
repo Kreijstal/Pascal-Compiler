@@ -6600,6 +6600,7 @@ int semcheck_funccall(int *type_return,
     char *mangled_name = NULL;
     int arg_type, cur_arg;
     ListNode_t *true_args, *true_arg_ids, *args_given;
+    ListNode_t *overload_candidates = NULL;  /* Declare early to avoid uninitialized use */
     HashNode_t *hash_return;
     Tree_t *arg_decl;
     assert(symtab != NULL);
@@ -6946,19 +6947,24 @@ int semcheck_funccall(int *type_return,
                     
                     if (is_static) {
                         /* For static methods, remove the first argument (the type identifier) */
-                        expr->expr_data.function_call_data.args_expr = args_given->next;
-                        args_given = args_given->next;
-                        
+                        ListNode_t *old_head = args_given;
+                        expr->expr_data.function_call_data.args_expr = old_head->next;
+                        old_head->next = NULL;  /* Detach to prevent dangling reference */
+                        args_given = expr->expr_data.function_call_data.args_expr;
+
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
                         }
                     }
-                    
+
                     /* Update mangled_name to use the resolved name */
                     if (mangled_name != NULL)
                         free(mangled_name);
                     mangled_name = (resolved_method_name != NULL) ? strdup(resolved_method_name) : NULL;
-                    
+
+                    /* Initialize overload candidates before jumping to avoid uninitialized access */
+                    overload_candidates = FindAllIdents(symtab, id);
+
                     /* Continue with normal function call processing using the resolved method */
                     hash_return = method_node;
                     goto method_call_resolved;
@@ -7081,9 +7087,6 @@ int semcheck_funccall(int *type_return,
 constructor_resolved:
     /* Constructor handling completed, continue with normal function call processing */
 
-    /* Declare and initialize overload_candidates early to avoid uninitialized use */
-    ListNode_t *overload_candidates = NULL;
-    
     /* If constructor was already resolved above, skip overload resolution */
     if (expr->expr_data.function_call_data.resolved_func != NULL &&
         expr->expr_data.function_call_data.mangled_id != NULL)
