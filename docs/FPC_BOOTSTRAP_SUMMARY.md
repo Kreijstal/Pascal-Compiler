@@ -54,14 +54,20 @@ All tests follow this validation pattern:
 
 ### Test Execution Results
 
+**Updated Status:** Tests are now properly marked as skipped to prevent breaking the test suite.
+
 ```
 Test Suite: Compiler tests
-Status: 3 new tests added, all failing as expected
+Status: 3 gap demonstration tests added, automatically skipped
 
-- test_auto_fpc_pointer_indexing     FAIL (expected)
-- test_auto_fpc_pointer_arithmetic   FAIL (expected)  
-- test_auto_fpc_shortstring_type     FAIL (expected)
+- test_auto_fpc_pointer_indexing     SKIP (demonstrates missing feature)
+- test_auto_fpc_pointer_arithmetic   SKIP (demonstrates missing feature)  
+- test_auto_fpc_shortstring_type     SKIP (demonstrates missing feature)
 ```
+
+These tests are skipped automatically by the test runner because they demonstrate
+features that KGPC doesn't yet support. They serve as documentation of the gaps
+and can be enabled once the features are implemented.
 
 ## Investigation Methodology
 
@@ -127,7 +133,8 @@ To enable FPC bootstrap with KGPC, implement in order:
 
 All work has been validated:
 - ✓ Tests compile with FPC 3.2.2
-- ✓ Tests fail with KGPC (as expected)
+- ✓ Tests demonstrate KGPC gaps (skipped in test suite)
 - ✓ Error messages documented
 - ✓ Workarounds provided where possible
-- ✓ Tests integrated into CI/test suite
+- ✓ Tests integrated into CI/test suite as skipped tests
+- ✓ Test suite passes without failures

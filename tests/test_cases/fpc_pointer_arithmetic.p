@@ -1,4 +1,8 @@
 { Test pointer arithmetic with + and - operators }
+{ NOTE: This test is automatically SKIPPED by the test runner because }
+{ KGPC doesn't yet support pointer arithmetic with +/- operators. }
+{ It serves as documentation of the gap and a target for future implementation. }
+{ See docs/FPC_BOOTSTRAP_GAPS.md for details. }
 program TestPointerArithmetic;
 
 type

@@ -1,4 +1,8 @@
 { Test ShortString type - Pascal string with length byte at index 0 }
+{ NOTE: This test is automatically SKIPPED by the test runner because }
+{ KGPC doesn't yet support the ShortString type. }
+{ It serves as documentation of the gap and a target for future implementation. }
+{ See docs/FPC_BOOTSTRAP_GAPS.md for details. }
 program TestShortString;
 
 var
