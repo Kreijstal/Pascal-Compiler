@@ -49,6 +49,43 @@ inc(p);
 writeln(p^);
 ```
 
+### 1b. Pointer Arithmetic with +/- (CRITICAL - BLOCKING)
+
+**Status:** ❌ NOT SUPPORTED  
+**Priority:** HIGH  
+**Impact:** BLOCKING for FPC RTL
+
+FPC supports pointer arithmetic using + and - operators: `p + n` and `p - n` where p is a pointer and n is an integer.
+
+**Example:**
+```pascal
+var
+  arr: array[0..4] of Integer;
+  p, q: PInteger;
+begin
+  p := @arr[0];
+  q := p + 2;  // This fails in KGPC
+  writeln(q^);
+end.
+```
+
+**Test Case:** `tests/test_cases/fpc_pointer_arithmetic.p`
+
+**Error in KGPC:**
+```
+Error on line 21: type mismatch on addop
+Error on line 21: expected int/real on both sides of addop
+```
+
+**FPC Usage:** Used throughout FPC RTL for pointer manipulation and array traversal.
+
+**Workaround:** Use inc/dec with count parameter:
+```pascal
+p := @arr[0];
+inc(p, 2);
+writeln(p^);
+```
+
 ### 2. ShortString Type (CRITICAL - BLOCKING)
 
 **Status:** ❌ NOT SUPPORTED  
@@ -88,11 +125,14 @@ The following FPC features ARE supported by KGPC:
 4. **FillChar procedure** - Memory initialization ✓
 5. **Move procedure** - Memory copy ✓
 6. **SHL/SHR operators** - Bitwise shifts ✓
-7. **Pointer arithmetic with Inc** - Advancing pointers ✓
+7. **Pointer arithmetic with Inc/Dec** - Advancing pointers with inc(p) ✓
 8. **Inline assembly** - asm blocks ✓
 9. **Assembler functions** - Functions with assembler directive ✓
 10. **Units and uses clause** - Modular compilation ✓
 11. **Compiler directives** - {$mode objfpc}, etc. ✓
+12. **SizeOf function** - Type and variable size calculation ✓
+13. **Length function** - String length ✓
+14. **High/Low functions** - Array bounds ✓
 
 ## FPC RTL system.pp Analysis
 
@@ -145,12 +185,20 @@ To bootstrap FPC with KGPC, the following features MUST be implemented:
    - Implement `pointer[index]` syntax
    - Generate correct address calculation: base + (index * element_size)
    - Support for all pointer types (PChar, PInteger, etc.)
+   - Related: pointer arithmetic with +/- operators
 
-2. **ShortString Type Support**
+2. **Pointer Arithmetic Operators**
+   - Implement `pointer + integer` and `pointer - integer`
+   - Calculate: new_pointer = old_pointer + (offset * element_size)
+   - Support for pointer subtraction to get element count
+   - Ensure type safety (pointer of same type)
+
+3. **ShortString Type Support**
    - Define ShortString as array[0..255] of char internally
    - Implement length byte at position 0
    - Support string assignment to ShortString
    - Support ShortString indexing (s[i])
+   - Handle automatic conversion from string literals
 
 ### Medium Priority (Helpful)
 
@@ -178,6 +226,11 @@ Each identified gap has:
 3. Documentation of the failure mode in KGPC
 
 Test naming convention: `fpc_<feature>_<description>.p`
+
+**Current Test Cases:**
+- `fpc_pointer_indexing.p` - Tests pointer[index] syntax
+- `fpc_pointer_arithmetic.p` - Tests pointer +/- integer operators  
+- `fpc_shortstring_type.p` - Tests ShortString type support
 
 ## References
 
