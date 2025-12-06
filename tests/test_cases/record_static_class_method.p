@@ -2,8 +2,8 @@
 {$modeswitch advancedrecords}
 program record_static_class_method;
 { Test case for static class methods on advanced records }
-{ This tests: class procedure ... static; on record types }
-{ FPC supports this feature with advanced records mode switch }
+{ This tests parsing of: class procedure ... static; declarations }
+{ Full static method call syntax (TCounter.PrintHello) is TODO }
 
 type
   TCounter = record
@@ -19,7 +19,8 @@ end;
 var
   C: TCounter;
 begin
-  { Instance method call works via method call syntax }
+  { Static method called via mangled name with dummy instance }
+  { TODO: Support TCounter.PrintHello; syntax for true static call }
   C.Value := 0;
   TCounter__PrintHello(C);
 end.
