@@ -1436,17 +1436,26 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             }
                         }
 
-                        /* If a parent exists, direct the call to the parent's mangled name */
+                        /* If a parent exists, call the parent class method */
                         if (parent_class_name != NULL && method_name != NULL)
                         {
-                            char parent_mangled[512];
-                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
+                            /* Prepend Self as the first argument for inherited method calls */
+                            ListNode_t *args_given = call_expr->expr_data.function_call_data.args_expr;
+                            struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                            ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                            self_arg->next = args_given;
+                            call_expr->expr_data.function_call_data.args_expr = self_arg;
+
+                            /* Set mangled_id directly to the parent method's mangled name */
+                            /* This bypasses the normal lookup which would find the current class method */
+                            char parent_mangled_prefix[512];
+                            snprintf(parent_mangled_prefix, sizeof(parent_mangled_prefix), "%s__%s",
                                 parent_class_name, method_name);
                             if (call_expr->expr_data.function_call_data.mangled_id != NULL)
                                 free(call_expr->expr_data.function_call_data.mangled_id);
-                            call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled);
+                            call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled_prefix);
                         }
-                        
+
                         struct Statement temp_call;
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
