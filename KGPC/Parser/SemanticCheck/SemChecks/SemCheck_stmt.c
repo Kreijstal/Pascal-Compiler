@@ -1411,32 +1411,50 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         const char *method_name = call_expr->expr_data.function_call_data.id;
                         HashNode_t *self_node = NULL;
                         const char *parent_class_name = NULL;
+                        struct RecordType *current_class = NULL;
+
                         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
-                            self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
-                            self_node->type->info.record_info != NULL)
+                            self_node->type != NULL)
                         {
-                            struct RecordType *current_class = self_node->type->info.record_info;
-                            parent_class_name = current_class->parent_class_name;
-                            
-                            /* Check if there's no parent class and this is Create or Destroy */
-                            if (current_class->parent_class_name == NULL && method_name != NULL &&
-                                (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
+                            /* Handle both direct records and pointers to records (classes) */
+                            if (self_node->type->kind == TYPE_KIND_RECORD &&
+                                self_node->type->info.record_info != NULL)
                             {
-                                /* No parent class - convert to empty compound statement (no-op) */
-                                if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                                current_class = self_node->type->info.record_info;
+                            }
+                            else if (self_node->type->kind == TYPE_KIND_POINTER &&
+                                     self_node->type->info.points_to != NULL &&
+                                     self_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                     self_node->type->info.points_to->info.record_info != NULL)
+                            {
+                                current_class = self_node->type->info.points_to->info.record_info;
+                            }
+
+                            if (current_class != NULL)
+                            {
+                                parent_class_name = current_class->parent_class_name;
+
+                                /* Check if there's no parent class and this is Create or Destroy */
+                                if (current_class->parent_class_name == NULL && method_name != NULL &&
+                                    (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
                                 {
-                                    fprintf(stderr, "[KGPC] Inherited %s with no parent class - converting to no-op\n",
-                                            method_name);
+                                    /* No parent class - convert to empty compound statement (no-op) */
+                                    if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                                    {
+                                        fprintf(stderr, "[KGPC] Inherited %s with no parent class - converting to no-op\n",
+                                                method_name);
+                                    }
+                                    /* Convert this inherited statement to an empty compound statement */
+                                    stmt->type = STMT_COMPOUND_STATEMENT;
+                                    stmt->stmt_data.compound_statement = NULL;
+                                    /* No errors */
+                                    break;
                                 }
-                                /* Convert this inherited statement to an empty compound statement */
-                                stmt->type = STMT_COMPOUND_STATEMENT;
-                                stmt->stmt_data.compound_statement = NULL;
-                                /* No errors */
-                                break;
                             }
                         }
 
                         /* If a parent exists, call the parent class method */
+                        HashNode_t *parent_method_node = NULL;
                         if (parent_class_name != NULL && method_name != NULL)
                         {
                             /* Prepend Self as the first argument for inherited method calls */
@@ -1446,23 +1464,49 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             self_arg->next = args_given;
                             call_expr->expr_data.function_call_data.args_expr = self_arg;
 
-                            /* Set mangled_id directly to the parent method's mangled name */
-                            /* This bypasses the normal lookup which would find the current class method */
-                            char parent_mangled_prefix[512];
-                            snprintf(parent_mangled_prefix, sizeof(parent_mangled_prefix), "%s__%s",
+                            /* Look up the parent method in the symbol table */
+                            char parent_mangled[512];
+                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
                                 parent_class_name, method_name);
-                            if (call_expr->expr_data.function_call_data.mangled_id != NULL)
-                                free(call_expr->expr_data.function_call_data.mangled_id);
-                            call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled_prefix);
+
+                            if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
+                            {
+                                parent_method_node = NULL;
+                            }
+
+                            if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                            {
+                                fprintf(stderr, "[INHERITED] Looking for parent method: %s, found: %s\n",
+                                    parent_mangled, parent_method_node != NULL ? "YES" : "NO");
+                                if (parent_method_node != NULL)
+                                {
+                                    fprintf(stderr, "[INHERITED] Parent method mangled_id: %s\n",
+                                        parent_method_node->mangled_id ? parent_method_node->mangled_id : "(null)");
+                                    fprintf(stderr, "[INHERITED] Parent method id: %s\n",
+                                        parent_method_node->id ? parent_method_node->id : "(null)");
+                                }
+                            }
                         }
 
                         struct Statement temp_call;
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
                         temp_call.line_num = stmt->line_num;
-                        temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                        /* For inherited calls, use the parent method's mangled name as the procedure ID
+                         * so that semcheck_proccall finds the right overload.
+                         * We also pre-set mangled_id to signal that type-based correction should be skipped */
+                        if (parent_method_node != NULL && parent_method_node->mangled_id != NULL)
+                        {
+                            temp_call.stmt_data.procedure_call_data.id = parent_method_node->mangled_id;
+                            /* Pre-set mangled_id to prevent type-based method correction in semcheck_proccall */
+                            temp_call.stmt_data.procedure_call_data.mangled_id = strdup(parent_method_node->mangled_id);
+                        }
+                        else
+                        {
+                            temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                            temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        }
                         temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
-                        temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
@@ -2034,8 +2078,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * Method calls have the pattern: ClassName__MethodName(object, ...)
      * We need to verify the ClassName matches the object's actual type.
      * If not, we need to correct it based on the object's type.
+     *
+     * Skip this correction if mangled_id is already set (e.g., for inherited calls
+     * where we explicitly want to call the parent class method).
      */
-    if (proc_id != NULL && strstr(proc_id, "__") != NULL && args_given != NULL) {
+    if (proc_id != NULL && strstr(proc_id, "__") != NULL && args_given != NULL &&
+        stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
         char *double_underscore = strstr(proc_id, "__");
         if (double_underscore != NULL) {
             /* Extract the method name (part after __) */

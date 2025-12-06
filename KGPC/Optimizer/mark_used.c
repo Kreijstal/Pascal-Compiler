@@ -436,45 +436,9 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
             mark_expr_calls(stmt->stmt_data.raise_data.exception_expr, map);
             break;
             
-        case STMT_INHERITED: {
-            /* Mark the expression's calls */
+        case STMT_INHERITED:
             mark_expr_calls(stmt->stmt_data.inherited_data.call_expr, map);
-
-            /* For inherited calls, we also need to ensure parent class methods are marked as used.
-             * The call_expr may have a mangled_id set during semantic checking that points to the
-             * parent method. If so, mark it as used. */
-            struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
-            if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
-            {
-                char *id = call_expr->expr_data.function_call_data.id;
-                char *mangled = call_expr->expr_data.function_call_data.mangled_id;
-
-                /* Try the mangled_id first, then fall back to id */
-                const char *lookup_name = mangled ? mangled : id;
-                if (lookup_name != NULL)
-                {
-                    if (getenv("KGPC_DEBUG_MARK_USED") != NULL)
-                    {
-                        fprintf(stderr, "[mark_used] STMT_INHERITED: id=%s, mangled=%s, lookup=%s\n",
-                            id ? id : "(null)", mangled ? mangled : "(null)", lookup_name);
-                    }
-                    Tree_t *parent_method = map_find(map, lookup_name);
-                    if (parent_method != NULL)
-                    {
-                        if (getenv("KGPC_DEBUG_MARK_USED") != NULL)
-                        {
-                            fprintf(stderr, "[mark_used] Found parent method, marking as used\n");
-                        }
-                        mark_subprogram_recursive(parent_method, map);
-                    }
-                    else if (getenv("KGPC_DEBUG_MARK_USED") != NULL)
-                    {
-                        fprintf(stderr, "[mark_used] Parent method NOT found in map\n");
-                    }
-                }
-            }
             break;
-        }
             
         case STMT_LABEL:
             mark_stmt_calls(stmt->stmt_data.label_data.stmt, map);
