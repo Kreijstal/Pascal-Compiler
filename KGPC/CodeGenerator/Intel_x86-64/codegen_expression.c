@@ -2811,8 +2811,9 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     }
 
     int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
+    int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !array_expr->is_array_expr);
 
-    if (!array_expr->is_array_expr && !base_is_string)
+    if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
         codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
         return inst_list;
@@ -2824,8 +2825,9 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
 
     Register_t *base_reg = NULL;
-    if (base_is_string)
+    if (base_is_string || base_is_pointer)
     {
+        /* For strings and pointers, get the value (the pointer itself) */
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
         if (codegen_had_error(ctx) || base_reg == NULL)
         {

@@ -5910,6 +5910,45 @@ int semcheck_addop(int *type_return,
         }
     }
 
+    /* Check for pointer arithmetic: pointer +/- integer */
+    if (op_type == PLUS || op_type == MINUS)
+    {
+        int left_is_pointer = (type_first == POINTER_TYPE);
+        int right_is_pointer = (type_second == POINTER_TYPE);
+        int left_is_integer = (type_first == INT_TYPE || type_first == LONGINT_TYPE);
+        int right_is_integer = (type_second == INT_TYPE || type_second == LONGINT_TYPE);
+
+        /* pointer +/- integer = pointer */
+        if (left_is_pointer && right_is_integer)
+        {
+            *type_return = POINTER_TYPE;
+            /* Preserve the pointer's kgpc_type information */
+            if (expr1->resolved_kgpc_type != NULL)
+            {
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = expr1->resolved_kgpc_type;
+                kgpc_type_retain(expr->resolved_kgpc_type);
+            }
+            return return_val;
+        }
+
+        /* integer + pointer = pointer (only for addition) */
+        if (op_type == PLUS && left_is_integer && right_is_pointer)
+        {
+            *type_return = POINTER_TYPE;
+            /* Preserve the pointer's kgpc_type information */
+            if (expr2->resolved_kgpc_type != NULL)
+            {
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = expr2->resolved_kgpc_type;
+                kgpc_type_retain(expr->resolved_kgpc_type);
+            }
+            return return_val;
+        }
+    }
+
     /* Check for operator overloading for record types */
     if (type_first == RECORD_TYPE && type_second == RECORD_TYPE)
     {
@@ -6466,7 +6505,8 @@ int semcheck_arrayaccess(int *type_return,
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
     int base_is_string = (base_type == STRING_TYPE && !array_expr->is_array_expr);
-    if (!array_expr->is_array_expr && !base_is_string)
+    int base_is_pointer = (base_type == POINTER_TYPE && !array_expr->is_array_expr);
+    if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
         fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
@@ -6477,6 +6517,42 @@ int semcheck_arrayaccess(int *type_return,
     if (base_is_string)
     {
         element_type = CHAR_TYPE;
+    }
+    else if (base_is_pointer)
+    {
+        /* Pointer indexing: p[i] is equivalent to (p + i)^ */
+        /* Get the element type from the pointer's resolved_kgpc_type */
+        if (array_expr->resolved_kgpc_type != NULL)
+        {
+            element_type = kgpc_type_get_pointer_subtype_tag(array_expr->resolved_kgpc_type);
+
+            if (element_type != UNKNOWN_TYPE && kgpc_type_is_pointer(array_expr->resolved_kgpc_type))
+            {
+                KgpcType *pointee_type = array_expr->resolved_kgpc_type->info.points_to;
+                if (pointee_type != NULL)
+                {
+                    /* Preserve kgpc_type information */
+                    if (expr->resolved_kgpc_type != NULL)
+                        destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = pointee_type;
+                    kgpc_type_retain(pointee_type);
+
+                    /* Handle record types */
+                    if (element_type == RECORD_TYPE && kgpc_type_is_record(pointee_type))
+                    {
+                        expr->record_type = kgpc_type_get_record(pointee_type);
+                    }
+                }
+            }
+
+            /* Set element type on the base pointer expression for code generation */
+            array_expr->array_element_type = element_type;
+        }
+        else
+        {
+            /* Couldn't determine pointee type - fallback will handle this */
+            element_type = UNKNOWN_TYPE;
+        }
     }
     else
     {
@@ -6549,6 +6625,9 @@ int semcheck_arrayaccess(int *type_return,
 
     if (element_type == UNKNOWN_TYPE)
         element_type = LONGINT_TYPE;
+
+    /* Set the resolved element type for code generation */
+    expr->array_element_type = element_type;
 
     *type_return = element_type;
     return return_val;

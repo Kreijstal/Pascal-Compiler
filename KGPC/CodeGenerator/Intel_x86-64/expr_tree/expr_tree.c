@@ -2098,6 +2098,62 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                 }
                 break;
             }
+            /* Handle pointer arithmetic: pointer +/- integer */
+            if (expr->resolved_type == POINTER_TYPE && (type == PLUS || type == MINUS))
+            {
+                /* Get the size of the pointed-to type */
+                long long pointee_size = 1; /* Default to 1 byte if we can't determine size */
+                if (expr->resolved_kgpc_type != NULL && kgpc_type_is_pointer(expr->resolved_kgpc_type))
+                {
+                    /* Access the pointee type directly from the pointer type's info structure */
+                    KgpcType *pointee_type = expr->resolved_kgpc_type->info.points_to;
+                    if (pointee_type != NULL)
+                    {
+                        pointee_size = kgpc_type_sizeof(pointee_type);
+                        if (pointee_size <= 0)
+                            pointee_size = 1; /* Fallback if size is unknown */
+                    }
+                }
+
+                /* Scale the integer operand by the pointee size */
+                if (pointee_size > 1)
+                {
+                    /* If right is a constant (starts with $), multiply it directly */
+                    if (right[0] == '$')
+                    {
+                        long long value = strtoll(right + 1, NULL, 0);
+                        long long scaled_value = value * pointee_size;
+                        snprintf(buffer, sizeof(buffer), "$%lld", scaled_value);
+                        /* Use the scaled value as the right operand */
+                        if (type == PLUS)
+                            snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", scaled_value, left);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tsubq\t$%lld, %s\n", scaled_value, left);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else
+                    {
+                        /* Right is a register - need to scale it first */
+                        snprintf(buffer, sizeof(buffer), "\timulq\t$%lld, %s, %s\n", pointee_size, right, right);
+                        inst_list = add_inst(inst_list, buffer);
+                        if (type == PLUS)
+                            snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", right, left);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", right, left);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+                else
+                {
+                    /* No scaling needed - pointee size is 1 */
+                    if (type == PLUS)
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", right, left);
+                    else
+                        snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", right, left);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                break;
+            }
             if (expr->resolved_type == REAL_TYPE || type == SLASH)
             {
                 const char *sse_op = NULL;

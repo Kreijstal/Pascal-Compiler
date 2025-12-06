@@ -248,8 +248,13 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
+    /* Handle ShortString as an alias for String */
+    const char *lookup_type_id = type_id;
+    if (strcasecmp(type_id, "ShortString") == 0)
+        lookup_type_id = "String";
+
     HashNode_t *result = NULL;
-    ListNode_t *all_nodes = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *all_nodes = FindAllIdents(symtab, (char *)lookup_type_id);
     ListNode_t *cur = all_nodes;
     while (cur != NULL)
     {
@@ -3354,7 +3359,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
         HashNode_t *resolved_type = NULL;
         if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.type_id != NULL)
-            FindIdent(&resolved_type, symtab, tree->tree_data.var_decl_data.type_id);
+        {
+            /* Handle ShortString as an alias for String */
+            const char *lookup_type = tree->tree_data.var_decl_data.type_id;
+            if (strcasecmp(lookup_type, "ShortString") == 0)
+                lookup_type = "String";
+            FindIdent(&resolved_type, symtab, (char *)lookup_type);
+        }
         if (tree->type == TREE_VAR_DECL)
         {
             if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
