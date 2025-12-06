@@ -30,6 +30,7 @@
 #include "../../List/List.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../ParseTree/KgpcType.h"
+#include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
 
 static int semcheck_loop_depth = 0;
@@ -1411,52 +1412,124 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         const char *method_name = call_expr->expr_data.function_call_data.id;
                         HashNode_t *self_node = NULL;
                         const char *parent_class_name = NULL;
+                        struct RecordType *current_class = NULL;
+
                         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
-                            self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
-                            self_node->type->info.record_info != NULL)
+                            self_node->type != NULL)
                         {
-                            struct RecordType *current_class = self_node->type->info.record_info;
-                            parent_class_name = current_class->parent_class_name;
-                            
-                            /* Check if there's no parent class and this is Create or Destroy */
-                            if (current_class->parent_class_name == NULL && method_name != NULL &&
-                                (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
+                            /* Handle both direct records and pointers to records (classes) */
+                            if (self_node->type->kind == TYPE_KIND_RECORD &&
+                                self_node->type->info.record_info != NULL)
                             {
-                                /* No parent class - convert to empty compound statement (no-op) */
-                                if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                                current_class = self_node->type->info.record_info;
+                            }
+                            else if (self_node->type->kind == TYPE_KIND_POINTER &&
+                                     self_node->type->info.points_to != NULL &&
+                                     self_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                     self_node->type->info.points_to->info.record_info != NULL)
+                            {
+                                current_class = self_node->type->info.points_to->info.record_info;
+                            }
+
+                            if (current_class != NULL)
+                            {
+                                parent_class_name = current_class->parent_class_name;
+
+                                /* Check if there's no parent class and this is Create or Destroy */
+                                if (current_class->parent_class_name == NULL && method_name != NULL &&
+                                    (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
                                 {
-                                    fprintf(stderr, "[KGPC] Inherited %s with no parent class - converting to no-op\n",
-                                            method_name);
+                                    /* No parent class - convert to empty compound statement (no-op) */
+                                    if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                                    {
+                                        fprintf(stderr, "[KGPC] Inherited %s with no parent class - converting to no-op\n",
+                                                method_name);
+                                    }
+                                    /* Convert this inherited statement to an empty compound statement */
+                                    stmt->type = STMT_COMPOUND_STATEMENT;
+                                    stmt->stmt_data.compound_statement = NULL;
+                                    /* No errors */
+                                    break;
                                 }
-                                /* Convert this inherited statement to an empty compound statement */
-                                stmt->type = STMT_COMPOUND_STATEMENT;
-                                stmt->stmt_data.compound_statement = NULL;
-                                /* No errors */
-                                break;
                             }
                         }
 
-                        /* If a parent exists, direct the call to the parent's mangled name */
+                        /* If a parent exists, call the parent class method */
+                        HashNode_t *parent_method_node = NULL;
                         if (parent_class_name != NULL && method_name != NULL)
                         {
+                            /* Look up the parent method in the symbol table */
                             char parent_mangled[512];
                             snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
                                 parent_class_name, method_name);
-                            if (call_expr->expr_data.function_call_data.mangled_id != NULL)
-                                free(call_expr->expr_data.function_call_data.mangled_id);
-                            call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled);
+
+                            if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
+                            {
+                                parent_method_node = NULL;
+                            }
+
+                            if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                            {
+                                fprintf(stderr, "[INHERITED] Looking for parent method: %s, found: %s\n",
+                                    parent_mangled, parent_method_node != NULL ? "YES" : "NO");
+                                if (parent_method_node != NULL)
+                                {
+                                    fprintf(stderr, "[INHERITED] Parent method mangled_id: %s\n",
+                                        parent_method_node->mangled_id ? parent_method_node->mangled_id : "(null)");
+                                    fprintf(stderr, "[INHERITED] Parent method id: %s\n",
+                                        parent_method_node->id ? parent_method_node->id : "(null)");
+                                }
+                            }
                         }
-                        
+
+                        /* Create temporary argument list for inherited calls without modifying original AST */
+                        ListNode_t *temp_args = NULL;
+                        ListNode_t *temp_self_arg = NULL;
+
+                        if (parent_method_node != NULL)
+                        {
+                            /* Only prepend Self if parent method was found */
+                            struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
+                            temp_self_arg = CreateListNode(self_expr, LIST_EXPR);
+                            temp_self_arg->next = call_expr->expr_data.function_call_data.args_expr;
+                            temp_args = temp_self_arg;
+                        }
+                        else
+                        {
+                            /* Use original arguments for non-inherited calls */
+                            temp_args = call_expr->expr_data.function_call_data.args_expr;
+                        }
+
                         struct Statement temp_call;
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
                         temp_call.line_num = stmt->line_num;
-                        temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
-                        temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
-                        temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        /* For inherited calls, use the parent method's id as the procedure ID
+                         * for symbol table lookup, and set mangled_id to prevent re-mangling.
+                         * Use direct pointer assignment (no strdup) since symbol table has sufficient lifetime */
+                        if (parent_method_node != NULL && parent_method_node->id != NULL)
+                        {
+                            temp_call.stmt_data.procedure_call_data.id = parent_method_node->id;
+                            /* Pre-set mangled_id to prevent type-based method correction and re-mangling */
+                            temp_call.stmt_data.procedure_call_data.mangled_id =
+                                parent_method_node->mangled_id ? parent_method_node->mangled_id : parent_method_node->id;
+                        }
+                        else
+                        {
+                            temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                            temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        }
+                        temp_call.stmt_data.procedure_call_data.expr_args = temp_args;
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
+
+                        /* Clean up temporary argument node if we created one */
+                        if (temp_self_arg != NULL)
+                        {
+                            temp_self_arg->next = NULL;  /* Detach to avoid double-free */
+                            /* Note: self_expr will be cleaned up with the statement tree */
+                        }
 
                         if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
                         {
@@ -2025,150 +2098,242 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
      * Method calls have the pattern: ClassName__MethodName(object, ...)
      * We need to verify the ClassName matches the object's actual type.
      * If not, we need to correct it based on the object's type.
+     *
+     * Skip this correction if mangled_id is already set (e.g., for inherited calls
+     * where we explicitly want to call the parent class method).
      */
-    if (proc_id != NULL && strstr(proc_id, "__") != NULL && args_given != NULL) {
-        char *double_underscore = strstr(proc_id, "__");
-        if (double_underscore != NULL) {
-            /* Extract the method name (part after __) */
-            char *method_name_part = double_underscore + 2;
-            
-            /* Get the first argument (should be the object/Self parameter) */
-            struct Expression *first_arg = (struct Expression *)args_given->cur;
-            if (first_arg != NULL) {
-                /* Resolve the type of the first argument */
-                int arg_type_owned = 0;
-                KgpcType *arg_type = semcheck_resolve_expression_kgpc_type(symtab, first_arg, INT_MAX, NO_MUTATE, &arg_type_owned);
+    
+    /* First, check if this is a static method call.
+     * Method calls can have two patterns:
+     * 1. __MethodName(object, ...) - method call without class prefix
+     * 2. ClassName__MethodName(object, ...) - method call with class prefix
+     */
+    char *method_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
+    if (method_double_underscore != NULL && args_given != NULL) {
+        const char *method_name = method_double_underscore + 2;
+        const char *class_name = NULL;
+        int need_free_class_name = 0;
+        
+        if (method_double_underscore == proc_id) {
+            /* Case 1: __MethodName - need to get class from first argument */
+            if (args_given != NULL && args_given->cur != NULL) {
+                struct Expression *first_arg = (struct Expression *)args_given->cur;
                 
-                if (arg_type != NULL) {
-                    struct RecordType *obj_record_type = NULL;
-                    
-                    if (arg_type->kind == TYPE_KIND_RECORD) {
-                        obj_record_type = arg_type->info.record_info;
-                    } else if (arg_type->kind == TYPE_KIND_POINTER && 
-                               arg_type->info.points_to != NULL &&
-                               arg_type->info.points_to->kind == TYPE_KIND_RECORD) {
-                        obj_record_type = arg_type->info.points_to->info.record_info;
+                /* Try to get the record type of the first argument */
+                struct RecordType *record_type = NULL;
+                if (first_arg->record_type != NULL) {
+                    record_type = first_arg->record_type;
+                } else if (first_arg->type == EXPR_VAR_ID) {
+                    /* Look up the variable to get its type */
+                    HashNode_t *var_node = NULL;
+                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 && var_node != NULL &&
+                        var_node->type != NULL && var_node->type->kind == TYPE_KIND_RECORD) {
+                        record_type = var_node->type->info.record_info;
                     }
-                    
-                    if (obj_record_type != NULL) {
-                        /* Found the object with a record type. Now find the class name for this type. */
-                    
-                    /* Search for a type declaration with this RecordType */
-                    /* We need to iterate through all identifiers in the symbol table */
-                    char *correct_class_name = NULL;
-                    
-                    /* Walk through symbol table scopes to find matching type */
-                    ListNode_t *scope_list = symtab->stack_head;
-                    while (scope_list != NULL && correct_class_name == NULL) {
-                        HashTable_t *hash_table = (HashTable_t *)scope_list->cur;
-                        if (hash_table != NULL) {
-                            for (int i = 0; i < TABLE_SIZE && correct_class_name == NULL; i++) {
-                                ListNode_t *bucket = hash_table->table[i];
-                                while (bucket != NULL && correct_class_name == NULL) {
-                                    HashNode_t *node = (HashNode_t *)bucket->cur;
-                                    if (node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL) {
-                                        /* Check direct record type */
-                                        if (node->type->kind == TYPE_KIND_RECORD &&
-                                            node->type->info.record_info == obj_record_type) {
-                                            correct_class_name = node->id;
-                                            break;
-                                        }
-                                        /* Check class type (pointer to record) */
-                                        else if (node->type->kind == TYPE_KIND_POINTER &&
-                                                 node->type->info.points_to != NULL &&
-                                                 node->type->info.points_to->kind == TYPE_KIND_RECORD &&
-                                                 node->type->info.points_to->info.record_info == obj_record_type) {
-                                            correct_class_name = node->id;
-                                            break;
-                                        }
+                }
+                
+                if (record_type != NULL && record_type->type_id != NULL) {
+                    class_name = record_type->type_id;
+                }
+            }
+        } else {
+            /* Case 2: ClassName__MethodName - extract class from proc_id */
+            size_t class_len = method_double_underscore - proc_id;
+            char *extracted_class = (char *)malloc(class_len + 1);
+            if (extracted_class != NULL) {
+                memcpy(extracted_class, proc_id, class_len);
+                extracted_class[class_len] = '\0';
+                class_name = extracted_class;
+                need_free_class_name = 1;
+            }
+            /* If malloc failed, class_name remains NULL and we skip the rest */
+        }
+        
+        if (class_name != NULL && method_name != NULL) {
+            int is_static = from_cparser_is_method_static(class_name, method_name);
+            
+            /* If proc_id started with __, update it to include the class name */
+            if (method_double_underscore == proc_id) {
+                size_t class_len = strlen(class_name);
+                size_t method_len = strlen(method_name);
+                char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
+                if (new_proc_id != NULL) {
+                    sprintf(new_proc_id, "%s__%s", class_name, method_name);
+                    free(proc_id);
+                    proc_id = new_proc_id;
+                    stmt->stmt_data.procedure_call_data.id = proc_id;
+                }
+            }
+            
+            if (is_static) {
+                /* For static methods, remove the first argument (the type identifier) */
+                args_given = args_given->next;
+                stmt->stmt_data.procedure_call_data.expr_args = args_given;
+            }
+        }
+        
+        if (need_free_class_name && class_name != NULL) {
+            free((void *)class_name);
+        }
+    }
+    
+    char *type_resolution_double_underscore = (proc_id != NULL) ? strstr(proc_id, "__") : NULL;
+    if (type_resolution_double_underscore != NULL && args_given != NULL &&
+        stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
+        /* Extract the method name (part after __) */
+        char *method_name_part = type_resolution_double_underscore + 2;
+        
+        /* Get the first argument (should be the object/Self parameter) */
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL) {
+            /* Resolve the type of the first argument */
+            int arg_type_owned = 0;
+            KgpcType *arg_type = semcheck_resolve_expression_kgpc_type(symtab, first_arg, INT_MAX, NO_MUTATE, &arg_type_owned);
+            
+            if (arg_type != NULL) {
+                struct RecordType *obj_record_type = NULL;
+                
+                if (arg_type->kind == TYPE_KIND_RECORD) {
+                    obj_record_type = arg_type->info.record_info;
+                } else if (arg_type->kind == TYPE_KIND_POINTER && 
+                           arg_type->info.points_to != NULL &&
+                           arg_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                    obj_record_type = arg_type->info.points_to->info.record_info;
+                }
+                
+                if (obj_record_type != NULL) {
+                    /* Found the object with a record type. Now find the class name for this type. */
+                
+                /* Search for a type declaration with this RecordType */
+                /* We need to iterate through all identifiers in the symbol table */
+                char *correct_class_name = NULL;
+                
+                /* Walk through symbol table scopes to find matching type */
+                ListNode_t *scope_list = symtab->stack_head;
+                while (scope_list != NULL && correct_class_name == NULL) {
+                    HashTable_t *hash_table = (HashTable_t *)scope_list->cur;
+                    if (hash_table != NULL) {
+                        for (int i = 0; i < TABLE_SIZE && correct_class_name == NULL; i++) {
+                            ListNode_t *bucket = hash_table->table[i];
+                            while (bucket != NULL && correct_class_name == NULL) {
+                                HashNode_t *node = (HashNode_t *)bucket->cur;
+                                if (node != NULL && node->hash_type == HASHTYPE_TYPE && node->type != NULL) {
+                                    /* Check direct record type */
+                                    if (node->type->kind == TYPE_KIND_RECORD &&
+                                        node->type->info.record_info == obj_record_type) {
+                                        correct_class_name = node->id;
+                                        break;
                                     }
-                                    bucket = bucket->next;
+                                    /* Check class type (pointer to record) */
+                                    else if (node->type->kind == TYPE_KIND_POINTER &&
+                                             node->type->info.points_to != NULL &&
+                                             node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                             node->type->info.points_to->info.record_info == obj_record_type) {
+                                        correct_class_name = node->id;
+                                        break;
+                                    }
                                 }
+                                bucket = bucket->next;
                             }
                         }
-                        scope_list = scope_list->next;
                     }
+                    scope_list = scope_list->next;
+                }
+                
+                
+                if (correct_class_name != NULL) {
+                    /* Walk up the inheritance chain to find the method */
+                    struct RecordType *current_record = obj_record_type;
+                    char *current_class_name = correct_class_name;
+                    int method_found = 0;
                     
-                    
-                    if (correct_class_name != NULL) {
-                        /* Walk up the inheritance chain to find the method */
-                        struct RecordType *current_record = obj_record_type;
-                        char *current_class_name = correct_class_name;
-                        int method_found = 0;
+                    while (current_record != NULL && current_class_name != NULL) {
+                        /* Build the mangled name for the current class */
+                        size_t class_len = strlen(current_class_name);
+                        size_t method_len = strlen(method_name_part);
+                        char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
+                        if (mangled_name == NULL) {
+                            /* Malloc failed, skip to next iteration */
+                            break;
+                        }
+                        sprintf(mangled_name, "%s__%s", current_class_name, method_name_part);
                         
-                        while (current_record != NULL && current_class_name != NULL) {
-                            /* Build the mangled name for the current class */
-                            size_t class_len = strlen(current_class_name);
-                            size_t method_len = strlen(method_name_part);
-                            char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
-                            sprintf(mangled_name, "%s__%s", current_class_name, method_name_part);
+                        /* Check if this mangled name exists in the symbol table */
+                        HashNode_t *proc_node = NULL;
+                        if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
+                            /* Found it! Update the procedure ID */
+                            free(proc_id);
+                            proc_id = mangled_name;
+                            stmt->stmt_data.procedure_call_data.id = proc_id;
+                            /* Don't set mangled_id here - let the normal mangling process handle it */
+                            method_found = 1;
+                            break;
+                        }
+                        
+                        free(mangled_name);
+                        
+                        /* Not found in this class, try parent */
+                        if (current_record->parent_class_name != NULL) {
+                            char *parent_name = current_record->parent_class_name;
                             
-                            /* Check if this mangled name exists in the symbol table */
-                            HashNode_t *proc_node = NULL;
-                            if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
-                                /* Found it! Update the procedure ID */
-                                free(proc_id);
-                                proc_id = mangled_name;
-                                stmt->stmt_data.procedure_call_data.id = proc_id;
-                                stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
-                                method_found = 1;
-                                break;
-                            }
-                            
-                            free(mangled_name);
-                            
-                            /* Not found in this class, try parent */
-                            if (current_record->parent_class_name != NULL) {
-                                char *parent_name = current_record->parent_class_name;
+                            /* Look up parent class record type */
+                            HashNode_t *parent_node = NULL;
+                            if (FindIdent(&parent_node, symtab, parent_name) != -1 && 
+                                parent_node != NULL && parent_node->type != NULL) {
                                 
-                                /* Look up parent class record type */
-                                HashNode_t *parent_node = NULL;
-                                if (FindIdent(&parent_node, symtab, parent_name) != -1 && 
-                                    parent_node != NULL && parent_node->type != NULL) {
-                                    
-                                    if (parent_node->type->kind == TYPE_KIND_RECORD) {
-                                        current_record = parent_node->type->info.record_info;
-                                    } else if (parent_node->type->kind == TYPE_KIND_POINTER && 
-                                               parent_node->type->info.points_to != NULL &&
-                                               parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
-                                        current_record = parent_node->type->info.points_to->info.record_info;
-                                    } else {
-                                        current_record = NULL;
-                                    }
-                                    current_class_name = parent_name;
+                                if (parent_node->type->kind == TYPE_KIND_RECORD) {
+                                    current_record = parent_node->type->info.record_info;
+                                } else if (parent_node->type->kind == TYPE_KIND_POINTER && 
+                                           parent_node->type->info.points_to != NULL &&
+                                           parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                    current_record = parent_node->type->info.points_to->info.record_info;
                                 } else {
-                                    /* Parent not found in symbol table (shouldn't happen for valid code) */
                                     current_record = NULL;
                                 }
+                                current_class_name = parent_name;
                             } else {
-                                /* No parent */
+                                /* Parent not found in symbol table (shouldn't happen for valid code) */
                                 current_record = NULL;
                             }
+                        } else {
+                            /* No parent */
+                            current_record = NULL;
                         }
-                        
-                        if (!method_found) {
-                            /* If we didn't find it in the hierarchy, fallback to the original class name 
-                             * so the error message makes sense (or maybe it's a virtual method that will be resolved later?)
-                             * Actually, if we don't find it, we should probably leave it as is or try to construct
-                             * the name for the base class to let the standard check fail with a clear message.
-                             */
-                             size_t class_len = strlen(correct_class_name);
-                             size_t method_len = strlen(method_name_part);
-                             char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
+                    }
+                    
+                    if (!method_found) {
+                        /* If we didn't find it in the hierarchy, fallback to the original class name 
+                         * so the error message makes sense (or maybe it's a virtual method that will be resolved later?)
+                         * Actually, if we don't find it, we should probably leave it as is or try to construct
+                         * the name for the base class to let the standard check fail with a clear message.
+                         */
+                         size_t class_len = strlen(correct_class_name);
+                         size_t method_len = strlen(method_name_part);
+                         char *mangled_name = (char *)malloc(class_len + 2 + method_len + 1);
+                         if (mangled_name != NULL) {
                              sprintf(mangled_name, "%s__%s", correct_class_name, method_name_part);
                              free(proc_id);
                              proc_id = mangled_name;
                              stmt->stmt_data.procedure_call_data.id = proc_id;
-                             stmt->stmt_data.procedure_call_data.mangled_id = strdup(proc_id);
-                        }
+                             /* Don't set mangled_id here - let the normal mangling process handle it */
+                         }
                     }
                 }
             }
-            }
+        }
+            if (arg_type_owned && arg_type != NULL)
+                destroy_kgpc_type(arg_type);
         }
     }
 
-    mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
+    /* For inherited calls where mangled_id is already set, use it directly 
+     * instead of re-mangling based on the call site arguments.
+     * The mangled_id already includes the correct parameter signature. */
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL) {
+        mangled_name = strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+    } else {
+        mangled_name = MangleFunctionNameFromCallSite(proc_id, args_given, symtab, INT_MAX);
+    }
     assert(mangled_name != NULL);
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
