@@ -195,6 +195,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->method_tree = NULL; /* Method trees are rebuilt on demand */
     clone->kind = method->kind;
     clone->is_class_method = method->is_class_method;
+    clone->is_static = method->is_static;
     clone->is_virtual = method->is_virtual;
     clone->is_override = method->is_override;
     clone->has_return_type = method->has_return_type;

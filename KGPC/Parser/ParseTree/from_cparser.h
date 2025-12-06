@@ -17,6 +17,7 @@ typedef struct {
     char *method_name;
     int is_virtual;
     int is_override;
+    int is_static;   /* 1 if method is static (no Self parameter) */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
@@ -31,6 +32,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
  * Caller should NOT free the returned list - it's owned by the parser.
  */
 void get_class_methods(const char *class_name, ListNode_t **methods_out, int *count_out);
+
+/* Check if a method is declared as static (no Self parameter).
+ * Returns 1 if static, 0 otherwise.
+ */
+int from_cparser_is_method_static(const char *class_name, const char *method_name);
 
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
