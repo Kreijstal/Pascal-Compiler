@@ -1450,28 +1450,102 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         }
 
                         /* If a parent exists, direct the call to the parent's mangled name */
+                        HashNode_t *parent_method_node = NULL;
                         if (parent_class_name != NULL && method_name != NULL)
                         {
                             char parent_mangled[512];
-                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
+                            snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s_p",
                                 parent_class_name, method_name);
                             if (call_expr->expr_data.function_call_data.mangled_id != NULL)
                                 free(call_expr->expr_data.function_call_data.mangled_id);
                             call_expr->expr_data.function_call_data.mangled_id = strdup(parent_mangled);
+                            
+                            /* Try to find the parent method's HashNode_t to set resolved_proc */
+                            char parent_method_key[512];
+                            snprintf(parent_method_key, sizeof(parent_method_key), "%s.%s", parent_class_name, method_name);
+                            if (FindIdent(&parent_method_node, symtab, parent_method_key) != -1 && parent_method_node != NULL) {
+                                if (getenv("KGPC_DEBUG_INHERITED") != NULL) {
+                                    fprintf(stderr, "[KGPC] Inherited: found parent method node for %s\n", parent_method_key);
+                                }
+                            }
+                            
+                            if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                            {
+                                fprintf(stderr, "[KGPC] Inherited call: parent_class_name=%s, method_name=%s, mangled=%s, setting mangled_id=%s\n",
+                                        parent_class_name, method_name, parent_mangled, call_expr->expr_data.function_call_data.mangled_id);
+                            }
+                        }
+                        else if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                        {
+                            fprintf(stderr, "[KGPC] Inherited call: parent_class_name=%s, method_name=%s\n",
+                                    parent_class_name ? parent_class_name : "<NULL>", 
+                                    method_name ? method_name : "<NULL>");
                         }
                         
                         struct Statement temp_call;
                         memset(&temp_call, 0, sizeof(temp_call));
                         temp_call.type = STMT_PROCEDURE_CALL;
                         temp_call.line_num = stmt->line_num;
+                        
+                        /* Set resolved_proc if we found parent method */
+                        if (parent_method_node != NULL) {
+                            temp_call.stmt_data.procedure_call_data.resolved_proc = parent_method_node;
+                        }
                         /* Use mangled_id if available (for inherited calls to parent class methods) */
                         if (call_expr->expr_data.function_call_data.mangled_id != NULL) {
-                            temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.mangled_id;
+                            temp_call.stmt_data.procedure_call_data.id = strdup(call_expr->expr_data.function_call_data.mangled_id);
+                            temp_call.stmt_data.procedure_call_data.mangled_id = strdup(call_expr->expr_data.function_call_data.mangled_id);
+                            if (getenv("KGPC_DEBUG_INHERITED") != NULL) {
+                                fprintf(stderr, "[KGPC] Inherited: setting procedure_call_data.id=%s, mangled_id=%s\n",
+                                        temp_call.stmt_data.procedure_call_data.id,
+                                        temp_call.stmt_data.procedure_call_data.mangled_id);
+                            }
                         } else {
                             temp_call.stmt_data.procedure_call_data.id = call_expr->expr_data.function_call_data.id;
+                            temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
                         }
-                        temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
-                        temp_call.stmt_data.procedure_call_data.mangled_id = NULL;
+                        
+                        /* For inherited method calls, we need to add Self as the first argument */
+                        /* Check if we're in a method context (Self exists and is a record/pointer-to-record) */
+                        HashNode_t *self_node_check = NULL;
+                        int in_method_context = 0;
+                        if (FindIdent(&self_node_check, symtab, "Self") != -1 && self_node_check != NULL &&
+                            self_node_check->type != NULL)
+                        {
+                            if (self_node_check->type->kind == TYPE_KIND_RECORD ||
+                                (self_node_check->type->kind == TYPE_KIND_POINTER &&
+                                 self_node_check->type->info.points_to != NULL &&
+                                 self_node_check->type->info.points_to->kind == TYPE_KIND_RECORD))
+                            {
+                                in_method_context = 1;
+                            }
+                        }
+                        
+                        if (in_method_context) {
+                            struct Expression *self_expr = mk_varid(stmt->line_num, "Self");
+                            /* Create a new argument list with Self as first argument */
+                            ListNode_t *new_args = CreateListNode(self_expr, LIST_EXPR);
+                            if (new_args != NULL) {
+                                /* Append any existing arguments */
+                                if (call_expr->expr_data.function_call_data.args_expr != NULL) {
+                                    ListNode_t *existing_args = call_expr->expr_data.function_call_data.args_expr;
+                                    while (existing_args != NULL) {
+                                        struct Expression *arg = (struct Expression *)existing_args->cur;
+                                        if (arg != NULL) {
+                                            new_args = PushListNodeBack(new_args, CreateListNode(arg, LIST_EXPR));
+                                        }
+                                        existing_args = existing_args->next;
+                                    }
+                                }
+                                temp_call.stmt_data.procedure_call_data.expr_args = new_args;
+                            } else {
+                                temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
+                            }
+                        } else {
+                            temp_call.stmt_data.procedure_call_data.expr_args = call_expr->expr_data.function_call_data.args_expr;
+                        }
+                        
+                        /* mangled_id already set above for inherited calls */
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
@@ -2420,10 +2494,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     if (match_count == 1)
     {
-        if (resolved_proc->mangled_id != NULL)
-            stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
-        else
-            stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        /* Only set mangled_id if not already set (e.g., by semcheck_inherited) */
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
+            if (resolved_proc->mangled_id != NULL)
+                stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
+            else
+                stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        }
         if (stmt->stmt_data.procedure_call_data.mangled_id == NULL &&
             (resolved_proc->hash_type == HASHTYPE_PROCEDURE ||
              resolved_proc->hash_type == HASHTYPE_FUNCTION) &&
@@ -2476,10 +2553,33 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             return return_val + semcheck_call_with_proc_var(symtab, stmt, proc_var, max_scope_lev);
         }
 
-        fprintf(stderr, "Error on line %d, call to procedure %s does not match any available overload\n", stmt->line_num, proc_id);
+        /* If mangled_id is already set (e.g., for inherited calls), don't error */
+        if (stmt->stmt_data.procedure_call_data.mangled_id == NULL) {
+            fprintf(stderr, "Error on line %d, call to procedure %s does not match any available overload\n", stmt->line_num, proc_id);
+            DestroyList(overload_candidates);
+            free(mangled_name);
+            return ++return_val;
+        }
+        /* For inherited calls with mangled_id already set, just do argument checking */
+        /* We need to find the procedure for argument checking, but we already have mangled_id */
+        /* Try to find procedure by mangled_id */
+        HashNode_t *proc_by_mangled = NULL;
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL) {
+            /* Look for procedure with this mangled_id */
+            ListNode_t *all_procs = FindAllIdents(symtab, stmt->stmt_data.procedure_call_data.mangled_id);
+            if (all_procs != NULL) {
+                proc_by_mangled = (HashNode_t *)all_procs->cur;
+                DestroyList(all_procs);
+            }
+        }
+        if (proc_by_mangled != NULL) {
+            stmt->stmt_data.procedure_call_data.resolved_proc = proc_by_mangled;
+            return_val += semcheck_call_with_proc_var(symtab, stmt, proc_by_mangled, max_scope_lev);
+        }
+        /* Even if we can't find it, mangled_id is set so codegen can handle it */
         DestroyList(overload_candidates);
         free(mangled_name);
-        return ++return_val;
+        return return_val;
     }
     else
     {

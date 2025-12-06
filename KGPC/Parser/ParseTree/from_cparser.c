@@ -6473,6 +6473,11 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
     if (tree != NULL) {
         tree->tree_data.subprogram_data.mangled_id = strdup(proc_name);
+        if (getenv("KGPC_DEBUG_INHERITED") != NULL) {
+            fprintf(stderr, "[KGPC] convert_method_impl: created method %s (mangled: %s)\n", 
+                    method_name ? method_name : "<null>", 
+                    proc_name ? proc_name : "<null>");
+        }
     }
 
     record_generic_method_impl(effective_class, method_name, method_node);

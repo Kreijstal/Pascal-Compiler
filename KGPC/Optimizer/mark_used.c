@@ -286,9 +286,14 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
         case STMT_PROCEDURE_CALL: {
             char *mangled_id = stmt->stmt_data.procedure_call_data.mangled_id;
             if (mangled_id != NULL) {
+                if (getenv("KGPC_DEBUG_INHERITED") != NULL) {
+                    fprintf(stderr, "[KGPC] mark_used: STMT_PROCEDURE_CALL mangled_id=%s\n", mangled_id);
+                }
                 Tree_t *called_sub = map_find(map, mangled_id);
                 if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
+                } else if (getenv("KGPC_DEBUG_INHERITED") != NULL) {
+                    fprintf(stderr, "[KGPC] mark_used: NOT FOUND in map: %s\n", mangled_id);
                 }
             }
             /* Also check arguments */
@@ -461,6 +466,9 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
                 
                 char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
                 if (mangled_id != NULL) {
+                    if (getenv("KGPC_DEBUG_INHERITED") != NULL) {
+                        fprintf(stderr, "[KGPC] mark_used: adding to map: %s (id=%s)\n", mangled_id, sub->tree_data.subprogram_data.id ? sub->tree_data.subprogram_data.id : "<null>");
+                    }
                     /* Check if this mangled_id already exists (forward declaration case) */
                     Tree_t *existing = map_find(map, mangled_id);
                     if (existing != NULL) {
