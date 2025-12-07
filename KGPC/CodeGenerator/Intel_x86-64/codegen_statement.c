@@ -1227,6 +1227,89 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
     return inst_list;
 }
 
+/* Call kgpc_string_to_shortstring(dest, src, size) to copy string to ShortString */
+static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int array_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64 ABI: first arg in %rcx, second in %rdx, third in %r8 */
+        int value_in_rcx = (strcmp(value_reg->bit_64, "%rcx") == 0);
+        int addr_in_rdx = (strcmp(addr_reg->bit_64, "%rdx") == 0);
+
+        if (value_in_rcx && addr_in_rdx)
+        {
+            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+        }
+        else if (value_in_rcx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rdx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V ABI: first arg in %rdi, second in %rsi, third in %rdx */
+        int value_in_rdi = (strcmp(value_reg->bit_64, "%rdi") == 0);
+        int addr_in_rsi = (strcmp(addr_reg->bit_64, "%rsi") == 0);
+
+        if (value_in_rdi && addr_in_rsi)
+        {
+            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+        }
+        else if (value_in_rdi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rsi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = add_inst(inst_list, "\tcall\tkgpc_string_to_shortstring\n");
+    free_arg_regs();
+    return inst_list;
+}
+
 /* Assign a static array value (copy all elements) */
 static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
@@ -3614,6 +3697,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         
         const char *call_target = is_unsigned_int ? "kgpc_write_unsigned" : "kgpc_write_integer";
         int is_char_array = 0;
+        int is_shortstring = 0;
         int char_array_size = 0;
         
         if (treat_as_string)
@@ -3621,9 +3705,19 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             /* Check if it's a char array (not a regular string) */
             if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
             {
-                call_target = "kgpc_write_char_array";
-                is_char_array = 1;
                 char_array_size = expr->array_upper_bound - expr->array_lower_bound + 1;
+                
+                /* Check if this is a ShortString (array[0..255] of Char) */
+                if (expr->array_lower_bound == 0 && expr->array_upper_bound == 255 && char_array_size == 256)
+                {
+                    call_target = "kgpc_write_shortstring";
+                    is_shortstring = 1;
+                }
+                else
+                {
+                    call_target = "kgpc_write_char_array";
+                    is_char_array = 1;
+                }
             }
             else
             {
@@ -4297,7 +4391,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
 
             int array_size = var_expr->array_upper_bound - var_expr->array_lower_bound + 1;
-            inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
+            
+            /* Check if this is a ShortString (array[0..255] of Char) */
+            int is_shortstring = (var_expr->array_lower_bound == 0 && 
+                                 var_expr->array_upper_bound == 255 &&
+                                 array_size == 256);
+            
+            if (is_shortstring)
+            {
+                /* Use ShortString-specific copy that sets length byte at index 0 */
+                inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
+            }
+            else
+            {
+                /* Regular char array copy */
+                inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reg, value_reg, array_size);
+            }
+            
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
