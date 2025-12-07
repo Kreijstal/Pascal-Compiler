@@ -25,6 +25,7 @@ tests/output/
 /*.md
 /_codeql_detected_source_root
 !/README.md
+!/FPC_BOOTSTRAP_INVESTIGATION.md
 !/test-cross-compile*.sh
 
 # Python cache
