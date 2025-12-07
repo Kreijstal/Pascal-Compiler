@@ -428,9 +428,10 @@ static int semcheck_map_builtin_type_name(const char *id)
         return LONGINT_TYPE;
     if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
-    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString") ||
-        pascal_identifier_equals(id, "ShortString"))
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
         return STRING_TYPE;
+    if (pascal_identifier_equals(id, "ShortString"))
+        return SHORTSTRING_TYPE;
     if (pascal_identifier_equals(id, "Char"))
         return CHAR_TYPE;
     if (pascal_identifier_equals(id, "Boolean"))
