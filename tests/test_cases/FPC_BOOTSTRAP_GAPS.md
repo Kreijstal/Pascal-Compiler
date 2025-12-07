@@ -32,9 +32,9 @@ int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
 2. Then try `.pp`
 3. Finally try `.p`
 
-**Test Case:** `fpc_unit_exports_program.p` 
+**Test Case:** `fpc_bootstrap_failing/fpc_pas_extension_test.p` 
 
-This test demonstrates unit export/import functionality, but currently the unit file must be named with `.p` extension to work with KGPC. For FPC compatibility, it should also work with `.pas` extension.
+This test demonstrates the unit file extension gap. The unit file `fpc_pas_extension_unit.pas` uses the `.pas` extension (as FPC RTL files do), which causes KGPC to fail to locate it.
 
 ### 2. Unit Interface/Implementation Export/Import
 
