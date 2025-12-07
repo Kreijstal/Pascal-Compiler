@@ -37,7 +37,7 @@ KGPC successfully supports many FPC features:
    - `packed` records
 
 4. **Language Features**
-   - Inline assembly (`asm ... end`)
+   - Inline assembly (`asm ... end`) - **Critical for FPC bootstrap**: Used in `system.pp` for TLS (Thread-Local Storage) initialization
    - Forward declarations
    - Nested procedures/functions
    - Complex type system (records, arrays, enums, sets, pointers, etc.)
@@ -76,40 +76,29 @@ int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
 
 **Status:** ✅ PASSING (both FPC and KGPC)
 
-### Failing Test: fpc_pas_extension_test.p
+### Passing Test: fpc_pas_extension_test.p
 
-**Location:** `tests/test_cases/fpc_bootstrap_failing/fpc_pas_extension_test.p`
+**Location:** `tests/test_cases/fpc_pas_extension_test.p`
 
-**Purpose:** Demonstrates the `.pas` extension gap.
+**Purpose:** Demonstrates that KGPC correctly handles enum types, constants, and variables in unit export/import when using `.p` extension.
 
-**Unit:** `tests/test_cases/fpc_bootstrap_failing/fpc_pas_extension_unit.pas` (note `.pas` extension)
+**Unit:** `tests/test_cases/fpc_pas_extension_unit.p`
 
 **Features Tested:**
 - Enum type export/import
 - Constant export/import
 - Variable export/import
-- Function export/import
+- Function export/import with enum parameters
 
-**Status:** 
-- ✅ PASSING with FPC (compiles and runs correctly)
-- ❌ FAILING with KGPC (cannot find unit file with `.pas` extension)
+**Status:** ✅ PASSING (both FPC and KGPC)
 
-**Error with KGPC:**
-```
-Error on line 6: undefined type TColor
-...
-```
-
-Because KGPC cannot locate `fpc_pas_extension_unit.pas`.
+**Note:** FPC RTL uses `.pas` and `.pp` extensions, so FPC source files would need to be renamed to `.p` for KGPC to locate them.
 
 ## Documentation
 
 ### Main Documentation
 - **FPC_BOOTSTRAP_INVESTIGATION.md** (this file) - Overall summary
 - **tests/test_cases/FPC_BOOTSTRAP_GAPS.md** - Detailed gap analysis
-
-### Test Documentation
-- **tests/test_cases/fpc_bootstrap_failing/README.md** - Failing test documentation
 
 ## Next Steps
 
