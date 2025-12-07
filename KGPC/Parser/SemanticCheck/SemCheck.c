@@ -3730,7 +3730,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
 
                 /* Always use _Typed variant, even if KgpcType is NULL (UNTYPED) */
-                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                /* Use PushArrayOntoScope_Typed for ShortString (which is array[0..255] of Char) */
+                int is_shortstring = (var_type == HASHVAR_ARRAY && 
+                                     tree->tree_data.var_decl_data.type_id != NULL &&
+                                     pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"));
+                
+                if (is_shortstring)
+                    func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                else
+                    func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
                 
                 if (func_return == 0)
                 {
