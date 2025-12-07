@@ -2852,7 +2852,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int lower_bound = (base_is_string || base_is_pointer) ? 0 : expr_get_array_lower_bound(array_expr);
+    int lower_bound = base_is_pointer ? 0 : (base_is_string ? 1 : expr_get_array_lower_bound(array_expr));
     if (lower_bound > 0)
     {
         snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
