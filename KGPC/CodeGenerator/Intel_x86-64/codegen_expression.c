@@ -2811,8 +2811,9 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     }
 
     int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
+    int base_is_pointer = expr_has_type_tag(array_expr, POINTER_TYPE);
 
-    if (!array_expr->is_array_expr && !base_is_string)
+    if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
         codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
         return inst_list;
@@ -2824,7 +2825,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
 
     Register_t *base_reg = NULL;
-    if (base_is_string)
+    if (base_is_string || base_is_pointer)
     {
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
         if (codegen_had_error(ctx) || base_reg == NULL)
@@ -2845,13 +2846,13 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     char buffer[128];
 
-    if (!base_is_string && array_expr->array_is_dynamic)
+    if (!base_is_string && !base_is_pointer && array_expr->array_is_dynamic)
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", base_reg->bit_64, base_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
 
-    int lower_bound = base_is_string ? 1 : expr_get_array_lower_bound(array_expr);
+    int lower_bound = base_is_pointer ? 0 : (base_is_string ? 1 : expr_get_array_lower_bound(array_expr));
     if (lower_bound > 0)
     {
         snprintf(buffer, sizeof(buffer), "\tsubl\t$%d, %s\n", lower_bound, index_reg->bit_32);
@@ -2865,9 +2866,32 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
-    long long element_size_ll = base_is_string ? 1 : expr_get_array_element_size(array_expr, ctx);
-    if (!base_is_string)
+    long long element_size_ll = 1;
+    
+    if (base_is_string)
     {
+        element_size_ll = 1;
+    }
+    else if (base_is_pointer)
+    {
+        /* For pointers, get the size of what the pointer points to */
+        int need_element_size = 1;
+        if (need_element_size)
+        {
+            if (codegen_sizeof_type(ctx, array_expr->pointer_subtype,
+                    array_expr->pointer_subtype_id,
+                    array_expr->record_type,
+                    &element_size_ll, 0) != 0 || element_size_ll <= 0)
+            {
+                /* Default to pointer size if we can't determine */
+                element_size_ll = 8;
+            }
+        }
+    }
+    else
+    {
+        element_size_ll = expr_get_array_element_size(array_expr, ctx);
+        
         int need_element_size = 0;
         if (element_size_ll <= 0)
             need_element_size = 1;

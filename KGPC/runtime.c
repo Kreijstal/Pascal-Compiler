@@ -1225,6 +1225,32 @@ void kgpc_write_char_array(KGPCTextFile *file, int width, const char *value, siz
         fprintf(dest, "%.*s", (int)actual_len, value);
 }
 
+/* Write ShortString (Pascal string with length byte at index 0) */
+void kgpc_write_shortstring(KGPCTextFile *file, int width, const char *value)
+{
+    FILE *dest = kgpc_text_output_stream(file);
+    if (dest == NULL || value == NULL)
+        return;
+    
+    /* Read length from index 0 */
+    unsigned char len = (unsigned char)value[0];
+    
+    /* String data starts at index 1 */
+    const char *str_data = value + 1;
+    
+    /* Use precision specifier to limit output to the stored length */
+    if (width > 1024 || width < -1024)
+        width = 0;
+    if (width == -1)
+        width = 0;
+    if (width > 0)
+        fprintf(dest, "%*.*s", width, (int)len, str_data);
+    else if (width < 0)
+        fprintf(dest, "%-*.*s", -width, (int)len, str_data);
+    else
+        fprintf(dest, "%.*s", (int)len, str_data);
+}
+
 void kgpc_write_newline(KGPCTextFile *file)
 {
     FILE *dest = kgpc_text_output_stream(file);
@@ -1732,6 +1758,28 @@ void kgpc_string_to_char_array(char *dest, const char *src, size_t dest_size)
     /* Pad remaining space with zeros if string is shorter than array */
     if (copy_len < dest_size)
         memset(dest + copy_len, 0, dest_size - copy_len);
+}
+
+/* Copy string to ShortString (Pascal string with length byte at index 0) */
+void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
+{
+    if (dest == NULL || src == NULL || dest_size < 2)
+        return;
+    
+    size_t src_len = kgpc_string_known_length(src);
+    /* ShortString max capacity is 255 chars (indices 1..255) */
+    size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+    size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
+    
+    /* Set length byte at index 0 */
+    dest[0] = (char)copy_len;
+    
+    /* Copy characters starting at index 1 */
+    memcpy(dest + 1, src, copy_len);
+    
+    /* Pad remaining space with zeros */
+    if (copy_len + 1 < dest_size)
+        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
 }
 
 
