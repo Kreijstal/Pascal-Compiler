@@ -3387,12 +3387,39 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
                     HashNode_t *type_node = resolved_type;
+                    const char *type_id = tree->tree_data.var_decl_data.type_id;
+                    
+                    /* Check if it's a builtin type even if not in symbol table */
                     if (type_node == NULL)
                     {
-                        semantic_error(tree->line_num, 0, "undefined type %s",
-                            tree->tree_data.var_decl_data.type_id);
-                        return_val++;
-                        var_type = HASHVAR_UNTYPED;
+                        /* Check for builtin types */
+                        if (pascal_identifier_equals(type_id, "Integer"))
+                            var_type = HASHVAR_INTEGER;
+                        else if (pascal_identifier_equals(type_id, "LongInt"))
+                            var_type = HASHVAR_LONGINT;
+                        else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
+                            var_type = HASHVAR_REAL;
+                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString"))
+                            var_type = HASHVAR_PCHAR;
+                        else if (pascal_identifier_equals(type_id, "ShortString"))
+                        {
+                            /* ShortString is array[0..255] of Char with length at index 0 */
+                            var_type = HASHVAR_ARRAY;
+                        }
+                        else if (pascal_identifier_equals(type_id, "Char"))
+                            var_type = HASHVAR_CHAR;
+                        else if (pascal_identifier_equals(type_id, "Boolean"))
+                            var_type = HASHVAR_BOOLEAN;
+                        else if (pascal_identifier_equals(type_id, "Pointer"))
+                            var_type = HASHVAR_POINTER;
+                        else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "Word"))
+                            var_type = HASHVAR_INTEGER;
+                        else
+                        {
+                            semantic_error(tree->line_num, 0, "undefined type %s", type_id);
+                            return_val++;
+                            var_type = HASHVAR_UNTYPED;
+                        }
                     }
                     else
                     {
@@ -3641,8 +3668,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 else
                 {
-                    /* Create KgpcType from var_type */
-                    var_kgpc_type = kgpc_type_from_var_type(var_type);
+                    /* Special handling for ShortString - create as array[0..255] of Char */
+                    if (var_type == HASHVAR_ARRAY && 
+                        tree->tree_data.var_decl_data.type_id != NULL &&
+                        pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"))
+                    {
+                        /* Create ShortString as array[0..255] of Char */
+                        KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                        var_kgpc_type = create_array_type(char_type, 0, 255);
+                    }
+                    else
+                    {
+                        /* Create KgpcType from var_type */
+                        var_kgpc_type = kgpc_type_from_var_type(var_type);
+                    }
                     
                     /* Add metadata from resolved_type if present */
                     if (var_kgpc_type != NULL && resolved_type != NULL)
@@ -3691,7 +3730,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
 
                 /* Always use _Typed variant, even if KgpcType is NULL (UNTYPED) */
-                func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                /* Use PushArrayOntoScope_Typed for ShortString (which is array[0..255] of Char) */
+                int is_shortstring = (var_type == HASHVAR_ARRAY && 
+                                     tree->tree_data.var_decl_data.type_id != NULL &&
+                                     pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"));
+                
+                if (is_shortstring)
+                    func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
+                else
+                    func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
                 
                 if (func_return == 0)
                 {

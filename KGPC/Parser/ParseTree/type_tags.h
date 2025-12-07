@@ -23,6 +23,7 @@
 #define SET_TYPE            30
 #define ENUM_TYPE           31
 #define FILE_TYPE           32
+#define SHORTSTRING_TYPE    37
 
 /* Legacy token constants reused by the semantic analyser and code generator */
 #define BOOL                6

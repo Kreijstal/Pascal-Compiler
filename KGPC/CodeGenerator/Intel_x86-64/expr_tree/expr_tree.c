@@ -2120,6 +2120,76 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         left, inst_list, sse_op);
                 break;
             }
+            /* Handle pointer arithmetic: pointer + integer or integer + pointer */
+            if (expr->resolved_type == POINTER_TYPE && (type == PLUS || type == MINUS))
+            {
+                struct Expression *left_expr = expr->expr_data.addop_data.left_expr;
+                struct Expression *right_expr = expr->expr_data.addop_data.right_term;
+                
+                int left_is_pointer = (left_expr != NULL && left_expr->resolved_type == POINTER_TYPE);
+                int right_is_pointer = (right_expr != NULL && right_expr->resolved_type == POINTER_TYPE);
+                
+                /* Determine which operand is the pointer and which is the integer */
+                const char *ptr_reg = left_is_pointer ? left : right;
+                const char *int_reg = left_is_pointer ? right : left;
+                struct Expression *ptr_expr = left_is_pointer ? left_expr : right_expr;
+                
+                /* Get element size */
+                long long element_size = 1;
+                if (ptr_expr != NULL && ptr_expr->pointer_subtype != UNKNOWN_TYPE)
+                {
+                    int dummy_type = ptr_expr->pointer_subtype;
+                    if (codegen_sizeof_type_reference(ctx, dummy_type, ptr_expr->pointer_subtype_id,
+                            ptr_expr->record_type, &element_size) != 0 || element_size <= 0)
+                    {
+                        element_size = 8; /* Default to pointer size */
+                    }
+                }
+                
+                /* Scale the integer offset by element size */
+                if (element_size != 1)
+                {
+                    /* Check if int_reg is an immediate value */
+                    if (int_reg[0] == '$')
+                    {
+                        /* It's an immediate - compute the scaled value directly */
+                        long long int_val = strtoll(int_reg + 1, NULL, 0);
+                        long long scaled_val = int_val * element_size;
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", scaled_val);
+                        inst_list = add_inst(inst_list, buffer);
+                        int_reg = "%r11";
+                    }
+                    else
+                    {
+                        /* It's a register - multiply in place */
+                        snprintf(buffer, sizeof(buffer), "\timulq\t$%lld, %s\n", element_size, int_reg);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                }
+                
+                /* Now add or subtract */
+                if (type == PLUS)
+                {
+                    /* For integer + pointer, we need to put result in correct register */
+                    if (right_is_pointer && left_is_pointer == 0)
+                    {
+                        /* int + ptr: add int to ptr, result goes to left (the int register initially) */
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", ptr_reg, left);
+                    }
+                    else
+                    {
+                        /* ptr + int: add int to ptr */
+                        snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", int_reg, left);
+                    }
+                }
+                else /* MINUS */
+                {
+                    /* ptr - int: subtract int from ptr */
+                    snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", int_reg, left);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                break;
+            }
             {
                 const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
