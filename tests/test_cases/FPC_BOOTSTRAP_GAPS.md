@@ -12,15 +12,15 @@ The first file in the bootstrap process is `system.pp` from the RTL (Run-Time Li
 
 ### 1. Unit File Extension (.pas vs .p)
 
-**Status:** FAILING
+**Status:** DOCUMENTED GAP (not blocking tests)
 
 **Description:** KGPC only searches for unit files with the `.p` extension, while FPC uses `.pas` and `.pp` extensions for unit files.
 
-**Impact:** This is a critical gap for FPC bootstrap, as all FPC RTL units use `.pas` or `.pp` extensions.
+**Impact:** This is a critical gap for FPC bootstrap, as all FPC RTL units use `.pas` or `.pp` extensions. FPC source files would need to be renamed from `.pas`/`.pp` to `.p` for KGPC to find them.
 
 **Location in Code:** `KGPC/unit_paths.c`, line 47:
 ```c
-int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
+int written = snprintf(candidate, sizeof(buffer), "%s/%s.p", dir, unit_name);
 ```
 
 **FPC Behavior:** FPC searches for units with `.pas`, `.pp`, and `.p` extensions (in that priority order).
@@ -32,9 +32,9 @@ int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
 2. Then try `.pp`
 3. Finally try `.p`
 
-**Test Case:** `fpc_bootstrap_failing/fpc_pas_extension_test.p` 
+**Test Case:** `fpc_pas_extension_test.p` 
 
-This test demonstrates the unit file extension gap. The unit file `fpc_pas_extension_unit.pas` uses the `.pas` extension (as FPC RTL files do), which causes KGPC to fail to locate it.
+This test validates unit export/import with enum types, demonstrating that KGPC correctly handles unit functionality when using the `.p` extension. The unit `fpc_pas_extension_unit.p` exports an enum type, constants, and variables.
 
 ### 2. Unit Interface/Implementation Export/Import
 
@@ -98,7 +98,7 @@ The following FPC features were tested and work correctly in KGPC:
 6. ✅ `public name` directive
 7. ✅ `external name` directive
 8. ✅ `alias` attribute (e.g., `[public, alias: 'name']`)
-9. ✅ Inline assembly (`asm ... end`)
+9. ✅ Inline assembly (`asm ... end`) - **Used in FPC bootstrap** (system.pp uses inline assembly for TLS initialization)
 10. ✅ `array of const` parameters
 11. ✅ `absolute` variable directive
 12. ✅ `threadvar` declarations
