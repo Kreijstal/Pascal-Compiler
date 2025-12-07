@@ -3387,12 +3387,35 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
                     HashNode_t *type_node = resolved_type;
+                    const char *type_id = tree->tree_data.var_decl_data.type_id;
+                    
+                    /* Check if it's a builtin type even if not in symbol table */
                     if (type_node == NULL)
                     {
-                        semantic_error(tree->line_num, 0, "undefined type %s",
-                            tree->tree_data.var_decl_data.type_id);
-                        return_val++;
-                        var_type = HASHVAR_UNTYPED;
+                        /* Check for builtin types */
+                        if (pascal_identifier_equals(type_id, "Integer"))
+                            var_type = HASHVAR_INTEGER;
+                        else if (pascal_identifier_equals(type_id, "LongInt"))
+                            var_type = HASHVAR_LONGINT;
+                        else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
+                            var_type = HASHVAR_REAL;
+                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
+                                 pascal_identifier_equals(type_id, "ShortString"))
+                            var_type = HASHVAR_PCHAR;
+                        else if (pascal_identifier_equals(type_id, "Char"))
+                            var_type = HASHVAR_CHAR;
+                        else if (pascal_identifier_equals(type_id, "Boolean"))
+                            var_type = HASHVAR_BOOLEAN;
+                        else if (pascal_identifier_equals(type_id, "Pointer"))
+                            var_type = HASHVAR_POINTER;
+                        else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "Word"))
+                            var_type = HASHVAR_INTEGER;
+                        else
+                        {
+                            semantic_error(tree->line_num, 0, "undefined type %s", type_id);
+                            return_val++;
+                            var_type = HASHVAR_UNTYPED;
+                        }
                     }
                     else
                     {
