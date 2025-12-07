@@ -3399,9 +3399,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_LONGINT;
                         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                             var_type = HASHVAR_REAL;
-                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
-                                 pascal_identifier_equals(type_id, "ShortString"))
+                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString"))
                             var_type = HASHVAR_PCHAR;
+                        else if (pascal_identifier_equals(type_id, "ShortString"))
+                        {
+                            /* ShortString is array[0..255] of Char with length at index 0 */
+                            var_type = HASHVAR_ARRAY;
+                        }
                         else if (pascal_identifier_equals(type_id, "Char"))
                             var_type = HASHVAR_CHAR;
                         else if (pascal_identifier_equals(type_id, "Boolean"))
@@ -3664,8 +3668,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 else
                 {
-                    /* Create KgpcType from var_type */
-                    var_kgpc_type = kgpc_type_from_var_type(var_type);
+                    /* Special handling for ShortString - create as array[0..255] of Char */
+                    if (var_type == HASHVAR_ARRAY && 
+                        tree->tree_data.var_decl_data.type_id != NULL &&
+                        pascal_identifier_equals(tree->tree_data.var_decl_data.type_id, "ShortString"))
+                    {
+                        /* Create ShortString as array[0..255] of Char */
+                        KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                        var_kgpc_type = create_array_type(char_type, 0, 255);
+                    }
+                    else
+                    {
+                        /* Create KgpcType from var_type */
+                        var_kgpc_type = kgpc_type_from_var_type(var_type);
+                    }
                     
                     /* Add metadata from resolved_type if present */
                     if (var_kgpc_type != NULL && resolved_type != NULL)
