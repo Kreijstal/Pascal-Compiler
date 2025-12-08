@@ -1,0 +1,5 @@
+Number: 42
+Value: 99
+a=1 b=2
+a=3 b=100
+Default params test passed
