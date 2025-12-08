@@ -40,6 +40,7 @@
 #include "stacktrace.h"
 #include "unit_paths.h"
 #include "arena.h"
+#include "identifier_utils.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -933,7 +934,7 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "Compiling unit: %s\n", user_tree->tree_data.unit_data.unit_id);
         
-        /* For units, we still need to merge stdlib for built-in functions */
+        /* For units, we still need to merge stdlib for built-in functions and types */
         ListNode_t *prelude_subs = prelude_tree->tree_data.program_data.subprograms;
         if (prelude_subs != NULL)
             mark_stdlib_var_params(prelude_subs);
@@ -948,12 +949,27 @@ int main(int argc, char **argv)
             prelude_tree->tree_data.program_data.subprograms = NULL;
         }
         
+        /* Merge stdlib types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+        ListNode_t *prelude_types = prelude_tree->tree_data.program_data.type_declaration;
+        if (prelude_types != NULL)
+        {
+            mark_unit_type_decls(prelude_types, 1);  /* Mark as exported from unit */
+            user_tree->tree_data.unit_data.interface_type_decls =
+                ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
+            prelude_tree->tree_data.program_data.type_declaration = NULL;
+        }
+        
         /* Load used units */
         UnitSet visited_units;
         unit_set_init(&visited_units);
-        /* NOTE: Unit dependency loading is not yet implemented.
-         * Units that use other units (via interface/implementation uses clauses)
-         * will need those dependencies loaded here. For now, only stdlib is merged. */
+        
+        /* NOTE: For FPC compatibility, system types (SizeInt, PAnsiChar, etc.)
+         * are now included in stdlib.p and available to all compilations.
+         * Explicit system unit loading is not needed. */
+        
+        /* Load units from interface and implementation uses clauses */
+        load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units);
+        load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
         unit_set_destroy(&visited_units);
         
         int sem_result = 0;

@@ -15,6 +15,13 @@ KGPC/Parser/LexAndYacc/Grammar.output
 
 # Test output
 tests/output/
+tests/test_cases/*.s
+tests/test_cases/*.o
+tests/test_cases/*.out
+tests/test_cases/*.exe
+tests/test_cases/*.log
+tests/test_cases/*.tmp
+!tests/test_cases/*.expected
 
 # Root-level scratch artifacts that should live under tests/output or build/
 /*.s
@@ -25,6 +32,9 @@ tests/output/
 /*.md
 /_codeql_detected_source_root
 !/README.md
+!/FPC_BOOTSTRAP_INVESTIGATION.md
+!/FPC_BOOTSTRAP_ACTUAL_TEST.md
+!/FPC_FULL_BOOTSTRAP_TEST.md
 !/test-cross-compile*.sh
 
 # Python cache
@@ -35,3 +45,4 @@ quasi-msys2/
 /preprocessed_dump.pas
 *.ppu
 *.o
+fpc_bootstrap_failing/fpc_pas_extension_test

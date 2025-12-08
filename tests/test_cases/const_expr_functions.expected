@@ -1,0 +1,6 @@
+MaxByte: 255
+CharSize: 1
+CharA: 65
+CharZ: 90
+CalcValue: 30
+ArraySize: 256
