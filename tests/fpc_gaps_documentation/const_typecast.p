@@ -7,6 +7,8 @@
   This is used in charset.pp for character constants.
   
   CRITICAL for FPC bootstrap: charset.pp uses this pattern.
+  
+  STATUS: ❌ FAILS with KGPC - type casting in const expressions not supported
 }
 program ConstTypeCast;
 
