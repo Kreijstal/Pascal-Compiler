@@ -1095,7 +1095,42 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 1;
             }
             
-            fprintf(stderr, "Error: only Ord(), High(), Low(), and SizeOf() function calls are supported in const expressions.\n");
+            /* Handle Chr() function for constant expressions */
+            if (id != NULL && pascal_identifier_equals(id, "Chr"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Chr in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Chr argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* Evaluate the argument as a const expression */
+                long long char_code;
+                if (evaluate_const_expr(symtab, arg, &char_code) != 0)
+                {
+                    fprintf(stderr, "Error: Chr argument must be a const expression.\n");
+                    return 1;
+                }
+                
+                /* Validate the character code is in valid range (0..255) */
+                if (char_code < 0 || char_code > 255)
+                {
+                    fprintf(stderr, "Error: Chr argument %lld is out of valid range (0..255).\n", char_code);
+                    return 1;
+                }
+                
+                *out_value = char_code;
+                return 0;
+            }
+            
+            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), and Chr() function calls are supported in const expressions.\n");
             return 1;
         }
         default:
