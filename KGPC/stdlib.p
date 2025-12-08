@@ -1,6 +1,30 @@
 program stdlib;
 
 { ============================================================================
+  FPC System Types for Bootstrap Compatibility
+  ============================================================================ }
+
+type
+  { Size types - platform dependent }
+  SizeInt = LongInt;        { Signed size type }
+  SizeUInt = LongWord;      { Unsigned size type }
+  
+  { Pointer types }
+  PAnsiChar = ^Char;        { Pointer to ANSI character }
+  PChar = ^Char;            { Alias for PAnsiChar }
+  PPointer = ^Pointer;      { Pointer to pointer }
+  
+  { Additional common pointer types }
+  PByte = ^Byte;
+  PWord = ^Word;
+  PLongInt = ^LongInt;
+  PLongWord = ^LongWord;
+  PInteger = ^Integer;
+  PCardinal = ^Cardinal;
+  PShortInt = ^ShortInt;
+  PSmallInt = ^SmallInt;
+
+{ ============================================================================
   Compiler Intrinsic Functions
   
   The following functions are implemented as compiler intrinsics for
@@ -449,6 +473,29 @@ end;
 procedure FreeMem(var target);
 begin
     freemem_impl(target);
+end;
+
+{ Function forms for FPC compatibility }
+function GetMem(size: longint): Pointer; overload;
+var
+    p: Pointer;
+begin
+    getmem_impl(p, size);
+    GetMem := p;
+end;
+
+function GetMem(size: integer): Pointer; overload;
+var
+    size_long: longint;
+begin
+    size_long := size;
+    GetMem := GetMem(size_long);
+end;
+
+procedure FreeMem(p: Pointer; size: longint); overload;
+begin
+    { FPC's FreeMem with size parameter just ignores the size and calls freemem }
+    freemem_impl(p);
 end;
 
 procedure BlockRead(var f: file; var buffer; count: longint); overload;
