@@ -1,62 +1,94 @@
 # FPC Bootstrap Gap Tests
 
-This directory contains **FAILING** tests that demonstrate specific gaps preventing full FPC bootstrap with KGPC.
+This directory contains tests that demonstrate specific gaps preventing full FPC bootstrap with KGPC.
 
 ## Purpose
 
-These tests are NOT part of the automatic test suite. They document features that FPC's RTL actually uses and that KGPC must implement for successful bootstrap.
+These tests document features that FPC's RTL actually uses and that KGPC must implement for successful bootstrap.
 
 Each test:
 - ✅ Compiles and runs correctly with FPC
-- ❌ Fails to compile with KGPC due to missing feature
+- Status varies with KGPC (some now fixed, some still failing)
 - Documents which FPC RTL units need this feature
 
 ## Tests
 
-### 1. `const_expr_functions.p`
+### 1. `const_expr_functions.p` - ✅ FIXED
 
-**Gap**: Const expression function support
+**Gap**: Const expression function support - Chr()
 
 **FPC Behavior**: Supports `Chr()` function in const expressions
 
-**KGPC Behavior**: Only supports `Ord()`, `High()`, `Low()`, `SizeOf()`
+**KGPC Behavior**: ✅ NOW SUPPORTS Chr() (fixed in commit b78ef42)
 
 **Impact**: 
-- `charset.pp` fails - uses Chr() extensively in const initialization
-- Other RTL units with character/string const initialization fail
+- `charset.pp` - uses Chr() extensively in const initialization
 
-**Example from FPC RTL**:
-```pascal
-const
-  UpperCaseA = Chr(65);  // FPC: OK, KGPC: Error
-```
-
-**Fix Needed**: Expand const expression evaluator to support Chr() function
+**Status**: ✅ NOW COMPILES with KGPC
 
 ---
 
-### 2. `implicit_system_import.p`
+### 2. `implicitsystemimport.p` - ✅ FIXED
 
 **Gap**: Implicit system unit import
 
 **FPC Behavior**: Automatically imports system unit types for all units
 
-**KGPC Behavior**: Requires explicit `uses system` clause
+**KGPC Behavior**: ✅ NOW AUTOMATICALLY AVAILABLE (fixed in commit b78ef42)
 
 **Impact**:
-- `strings.pp` fails - uses SizeInt, PAnsiChar without importing
-- `sortbase.pp` fails - uses SizeUInt, PPointer without importing
-- Most RTL units fail - they depend on system types being available
+- `strings.pp` - uses SizeInt, PAnsiChar without importing
+- `sortbase.pp` - uses SizeUInt, PPointer without importing
+- Most RTL units - depend on system types being available
 
-**Example from FPC RTL**:
-```pascal
-unit Strings;
-interface
-// No 'uses system' clause, but uses system types:
-function strcomp(str1, str2: PAnsiChar): SizeInt;  // FPC: OK, KGPC: Error
-```
+**Status**: ✅ NOW COMPILES with KGPC
 
-**Fix Needed**: Auto-import system unit for all units (except system itself)
+---
+
+### 3. `include_directive.p` - ✅ PASSING
+
+**Gap**: None - include directives work
+
+**FPC Behavior**: {$I filename} includes a file inline
+
+**KGPC Behavior**: ✅ WORKS CORRECTLY
+
+**Impact**: 
+- Used by sysutils.pp, classes.pp, and many other RTL units
+
+**Status**: ✅ COMPILES with KGPC
+
+---
+
+### 4. `procedure_default_params.p` - ⚠️ INVESTIGATION NEEDED
+
+**Gap**: Default/optional parameters (objfpc mode)
+
+**FPC Behavior**: Supports default parameter values in objfpc mode
+
+**KGPC Behavior**: ⚠️ Compiles but may not handle defaults correctly
+
+**Impact**: 
+- Used in various RTL units for optional parameters
+
+**Status**: ⚠️ Needs investigation
+
+---
+
+### 5. `dos_freemem.p` - ❌ FAILING
+
+**Gap**: GetMem/FreeMem procedures
+
+**FPC Behavior**: Built-in memory management procedures
+
+**KGPC Behavior**: ❌ GetMem not defined in stdlib
+
+**Impact**: 
+- Required by dos.pp and memory management code
+
+**Status**: ❌ Needs stdlib extension
+
+
 
 ---
 
