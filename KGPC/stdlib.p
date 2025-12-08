@@ -1,6 +1,30 @@
 program stdlib;
 
 { ============================================================================
+  FPC System Types for Bootstrap Compatibility
+  ============================================================================ }
+
+type
+  { Size types - platform dependent }
+  SizeInt = LongInt;        { Signed size type }
+  SizeUInt = LongWord;      { Unsigned size type }
+  
+  { Pointer types }
+  PAnsiChar = ^Char;        { Pointer to ANSI character }
+  PChar = ^Char;            { Alias for PAnsiChar }
+  PPointer = ^Pointer;      { Pointer to pointer }
+  
+  { Additional common pointer types }
+  PByte = ^Byte;
+  PWord = ^Word;
+  PLongInt = ^LongInt;
+  PLongWord = ^LongWord;
+  PInteger = ^Integer;
+  PCardinal = ^Cardinal;
+  PShortInt = ^ShortInt;
+  PSmallInt = ^SmallInt;
+
+{ ============================================================================
   Compiler Intrinsic Functions
   
   The following functions are implemented as compiler intrinsics for
