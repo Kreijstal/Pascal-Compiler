@@ -60,6 +60,102 @@ Each test:
 
 ---
 
+### 4. `dos_freemem.p` - ✅ FIXED
+
+**Gap**: GetMem/FreeMem function forms
+
+**FPC Behavior**: GetMem can be used as function returning Pointer, FreeMem with optional size
+
+**KGPC Behavior**: ✅ NOW SUPPORTS function forms (fixed in commit 5d577fe)
+
+**Impact**: 
+- Required by memory management code in RTL units
+
+**Status**: ✅ NOW COMPILES with KGPC
+
+---
+
+### 5. `procedural_types.p` - ❌ FAILING
+
+**Gap**: Procedural types (function/procedure types as variables)
+
+**FPC Behavior**: Supports declaring types that are function/procedure signatures
+```pascal
+type TComparer = function(a, b: Pointer): Integer;
+```
+
+**KGPC Behavior**: ❌ Does not support procedural types
+
+**Impact**:
+- `sortbase.pp` - Uses procedural types for pluggable sorting algorithms
+
+**Status**: ❌ FAILS to compile with KGPC
+
+**From FPC RTL**: sortbase.pp uses:
+```pascal
+type
+  TListSortComparer = function(Item1, Item2: Pointer): Integer;
+  TPtrListSorter = procedure(ItemPtrs: PPointer; ...);
+```
+
+---
+
+### 6. `const_typecast.p` - ❌ FAILING
+
+**Gap**: Type casting in const expressions
+
+**FPC Behavior**: Supports type casting like `Char(65)` in const expressions
+
+**KGPC Behavior**: ❌ Only supports Chr(), Ord(), High(), Low(), SizeOf()
+
+**Impact**:
+- `charset.pp` - Uses `ansichar(63)` and similar type casts in const declarations
+
+**Status**: ❌ FAILS to compile with KGPC
+
+**From FPC RTL**: charset.pp uses:
+```pascal
+const
+  UNKNOW_CHAR_A = ansichar(63);
+  UNKNOW_CHAR_W = tunicodechar(63);
+```
+
+---
+
+### 7. `procedure_default_params.p` - ⚠️ NEEDS INVESTIGATION
+
+### 2. `implicitsystemimport.p` - ✅ FIXED
+
+**Gap**: Implicit system unit import
+
+**FPC Behavior**: Automatically imports system unit types for all units
+
+**KGPC Behavior**: ✅ NOW AUTOMATICALLY AVAILABLE (fixed in commit b78ef42)
+
+**Impact**:
+- `strings.pp` - uses SizeInt, PAnsiChar without importing
+- `sortbase.pp` - uses SizeUInt, PPointer without importing
+- Most RTL units - depend on system types being available
+
+**Status**: ✅ NOW COMPILES with KGPC
+
+---
+
+### 3. `include_directive.p` - ✅ PASSING
+
+**Gap**: None - include directives work
+
+**FPC Behavior**: {$I filename} includes a file inline
+
+**KGPC Behavior**: ✅ WORKS CORRECTLY
+
+**Impact**: 
+- Used by sysutils.pp, classes.pp, and many other RTL units
+
+**Status**: ✅ COMPILES with KGPC
+
+---
+
 ### 4. `procedure_default_params.p` - ⚠️ INVESTIGATION NEEDED
 
 **Gap**: Default/optional parameters (objfpc mode)

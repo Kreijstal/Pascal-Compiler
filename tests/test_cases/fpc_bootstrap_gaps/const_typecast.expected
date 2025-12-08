@@ -1,0 +1,4 @@
+CharFromInt: A
+WordValue: 1000
+ByteValue: 255
+Const typecast test passed
