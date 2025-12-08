@@ -15,6 +15,11 @@ KGPC/Parser/LexAndYacc/Grammar.output
 
 # Test output
 tests/output/
+tests/test_cases/*.s
+tests/test_cases/*
+!tests/test_cases/*.p
+!tests/test_cases/*.expected
+!tests/test_cases/*.inc
 
 # Root-level scratch artifacts that should live under tests/output or build/
 /*.s
