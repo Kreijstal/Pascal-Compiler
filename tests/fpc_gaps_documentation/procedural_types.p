@@ -7,6 +7,8 @@
   This is used in sortbase.pp for pluggable sorting algorithms.
   
   CRITICAL for FPC bootstrap: sortbase.pp uses this extensively.
+  
+  STATUS: ❌ FAILS with KGPC - procedural types not supported
 }
 program ProceduralTypes;
 
