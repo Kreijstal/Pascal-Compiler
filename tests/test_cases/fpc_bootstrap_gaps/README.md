@@ -75,18 +75,18 @@ Each test:
 
 ---
 
-### 5. `dos_freemem.p` - ❌ FAILING
+### 5. `dos_freemem.p` - ✅ FIXED
 
-**Gap**: GetMem/FreeMem procedures
+**Gap**: GetMem/FreeMem function forms
 
-**FPC Behavior**: Built-in memory management procedures
+**FPC Behavior**: GetMem can be used as function returning Pointer, FreeMem with optional size
 
-**KGPC Behavior**: ❌ GetMem not defined in stdlib
+**KGPC Behavior**: ✅ NOW SUPPORTS function forms (fixed)
 
 **Impact**: 
-- Required by dos.pp and memory management code
+- Required by memory management code in RTL units
 
-**Status**: ❌ Needs stdlib extension
+**Status**: ✅ NOW COMPILES with KGPC
 
 
 
