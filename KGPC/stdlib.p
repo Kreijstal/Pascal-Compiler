@@ -475,6 +475,29 @@ begin
     freemem_impl(target);
 end;
 
+{ Function forms for FPC compatibility }
+function GetMem(size: longint): Pointer; overload;
+var
+    p: Pointer;
+begin
+    getmem_impl(p, size);
+    GetMem := p;
+end;
+
+function GetMem(size: integer): Pointer; overload;
+var
+    size_long: longint;
+begin
+    size_long := size;
+    GetMem := GetMem(size_long);
+end;
+
+procedure FreeMem(p: Pointer; size: longint); overload;
+begin
+    { FPC's FreeMem with size parameter just ignores the size and calls freemem }
+    freemem_impl(p);
+end;
+
 procedure BlockRead(var f: file; var buffer; count: longint); overload;
 begin
     blockread_impl(f, buffer, count, nil);
