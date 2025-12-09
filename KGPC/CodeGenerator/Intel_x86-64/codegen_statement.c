@@ -3661,10 +3661,16 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
-        else if (expr_type == LONGINT_TYPE || expr_is_real || expr_type == POINTER_TYPE)
+        else if (expr_is_real || expr_type == POINTER_TYPE)
         {
+            /* REAL_TYPE and POINTER_TYPE are 64-bit - use movq */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
+        }
+        else if (expr_type == LONGINT_TYPE)
+        {
+            /* LONGINT_TYPE is now 4 bytes (to match FPC) - sign-extend to 64-bit */
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
         }
         else
         {
