@@ -171,6 +171,41 @@ static int expr_effective_storage_type(const struct Expression *expr)
     return (expr != NULL) ? expr->resolved_type : UNKNOWN_TYPE;
 }
 
+/**
+ * Check if an expression requires 64-bit (qword) storage based on its type.
+ * This checks both the type tag and storage_size from KgpcType.
+ * This is needed to properly handle Int64/QWord/UInt64 which have storage_size=8
+ * but use LONGINT_TYPE as their base type tag.
+ */
+static int expr_requires_qword(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* Check type tag first */
+    int type_tag = expr->resolved_type;
+    if (codegen_type_uses_qword(type_tag))
+        return 1;
+    
+    /* Check storage_size in KgpcType for Int64/QWord/UInt64 */
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->storage_size >= 8)
+            return 1;
+    }
+    
+    /* Also check for large integer values that require 64 bits */
+    if (expr->type == EXPR_INUM)
+    {
+        long long val = expr->expr_data.i_num;
+        if (val > 2147483647LL || val < -2147483648LL)
+            return 1;
+    }
+    
+    return 0;
+}
+
 static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *reg,
     int type_tag, int offset)
 {
@@ -1725,7 +1760,9 @@ cleanup_constructor:
         }
     }
 
-    int desired_qword = codegen_type_uses_qword(expr->resolved_type);
+    /* Use expr_requires_qword to check both type tag and storage_size.
+     * This properly handles Int64/QWord/UInt64 which have storage_size=8 */
+    int desired_qword = expr_requires_qword(expr);
     int storage_tag = expr_effective_storage_type(expr);
     int storage_qword = codegen_type_uses_qword(storage_tag);
     int is_immediate = (buf_leaf[0] == '$');
@@ -1784,6 +1821,18 @@ cleanup_constructor:
     {
         snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", buf_leaf, target_reg->bit_32);
         return add_inst(inst_list, buffer);
+    }
+
+    /* Check if immediate value requires 64 bits */
+    if (is_immediate)
+    {
+        long long imm_value = strtoll(buf_leaf + 1, NULL, 10);
+        if (imm_value > 2147483647LL || imm_value < -2147483648LL)
+        {
+            /* Value doesn't fit in 32 bits - use 64-bit move */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", imm_value, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
     }
 
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", buf_leaf, target_reg->bit_32);

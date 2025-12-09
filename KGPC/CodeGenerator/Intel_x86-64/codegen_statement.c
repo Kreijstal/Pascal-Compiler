@@ -116,6 +116,69 @@ static int is_unsigned_type_name(const char *type_name)
     return 0;
 }
 
+/**
+ * Check if an expression requires 64-bit (qword) storage for integers.
+ * This returns true for:
+ * - Int64, QWord, UInt64 types (storage_size=8)
+ * - Integer literals that don't fit in 32 bits
+ * - Const variables whose values don't fit in 32 bits
+ */
+static int expr_is_64bit_integer(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* Check storage_size in KgpcType for Int64/QWord/UInt64 */
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->storage_size >= 8)
+            return 1;
+    }
+    
+    /* Check for large integer literals that require 64 bits */
+    if (expr->type == EXPR_INUM)
+    {
+        long long val = expr->expr_data.i_num;
+        if (val > 2147483647LL || val < -2147483648LL)
+            return 1;
+    }
+    
+    return 0;
+}
+
+/**
+ * Check if an expression's effective value requires 64-bit storage.
+ * This is like expr_is_64bit_integer but also checks const variable values
+ * by looking up the symbol table.
+ */
+static int expr_value_requires_64bit(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* First check the standard 64-bit integer conditions */
+    if (expr_is_64bit_integer(expr))
+        return 1;
+    
+    /* For variable references, check if it's a const with a large value */
+    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            if (node->hash_type == HASHTYPE_CONST)
+            {
+                long long val = node->const_int_value;
+                if (val > 2147483647LL || val < -2147483648LL)
+                    return 1;
+            }
+        }
+    }
+    
+    return 0;
+}
+
 /* Check if an expression's type is unsigned */
 static int expr_is_unsigned_type(const struct Expression *expr)
 {
@@ -3661,10 +3724,22 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
-        else if (expr_type == LONGINT_TYPE || expr_is_real || expr_type == POINTER_TYPE)
+        else if (expr_is_real || expr_type == POINTER_TYPE)
         {
+            /* REAL_TYPE and POINTER_TYPE are 64-bit - use movq */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
+        }
+        else if (expr_value_requires_64bit(expr, ctx))
+        {
+            /* Int64/QWord/UInt64 or large const values - use 64-bit move */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (expr_type == LONGINT_TYPE)
+        {
+            /* LONGINT_TYPE is now 4 bytes (to match FPC) - sign-extend to 64-bit */
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
         }
         else
         {
