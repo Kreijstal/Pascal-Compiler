@@ -787,6 +787,7 @@ long long kgpc_type_sizeof(KgpcType *type)
                     return 4;
                 }
                 case LONGINT_TYPE:
+                    return 4;  // Match FPC's 32-bit LongInt
                 case REAL_TYPE:
                     return 8;
                 case STRING_TYPE:
@@ -1078,7 +1079,6 @@ int kgpc_type_uses_qword(KgpcType *type)
     switch (type->kind) {
         case TYPE_KIND_PRIMITIVE:
             switch (type->info.primitive_type_tag) {
-                case LONGINT_TYPE:
                 case REAL_TYPE:
                 case STRING_TYPE:
                 case FILE_TYPE:

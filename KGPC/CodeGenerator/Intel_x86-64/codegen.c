@@ -147,6 +147,7 @@ static inline int get_var_storage_size(HashNode_t *node)
             switch (tag)
             {
                 case LONGINT_TYPE:
+                    return 4;  // Match FPC's 32-bit LongInt
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
                 case FILE_TYPE:
@@ -1507,6 +1508,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         switch (alias->array_element_type)
                         {
                             case LONGINT_TYPE:
+                                element_size = 4;  // Match FPC's 32-bit LongInt
+                                break;
                             case REAL_TYPE:
                             case STRING_TYPE:
                             case POINTER_TYPE:
@@ -1712,6 +1715,8 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     switch (arr->type)
                     {
                         case LONGINT_TYPE:
+                            element_size = 4;  // Match FPC's 32-bit LongInt
+                            break;
                         case REAL_TYPE:
                         case STRING_TYPE:
                         case FILE_TYPE:
@@ -2271,6 +2276,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             switch (tag)
             {
                 case LONGINT_TYPE:
+                    return_size = DOUBLEWORD;  // 4 bytes for FPC's 32-bit LongInt
+                    break;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
                 case POINTER_TYPE:
@@ -2294,8 +2301,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
              func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
         int tag = kgpc_type_get_primitive_tag(func_node->type);
-        if (tag == LONGINT_TYPE || tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
+        if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
             return_size = 8;
+        else if (tag == LONGINT_TYPE)
+            return_size = DOUBLEWORD;
         else if (tag == BOOL)
             return_size = DOUBLEWORD;
     }
@@ -2514,10 +2523,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 /* Helper function to determine the size in bytes for a return type */
 static int get_return_type_size(int return_type)
 {
-    if (return_type == LONGINT_TYPE || return_type == STRING_TYPE || 
+    if (return_type == STRING_TYPE || 
         return_type == POINTER_TYPE || return_type == REAL_TYPE)
         return 8;
-    return 4; /* Default for INT_TYPE, BOOL, CHAR_TYPE, etc. */
+    return 4; /* Default for INT_TYPE, LONGINT_TYPE, BOOL, CHAR_TYPE, etc. */
 }
 
 /* Helper to add an alias label for a return variable so multiple identifiers share storage. */
@@ -2574,6 +2583,7 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
             switch (tag)
             {
                 case LONGINT_TYPE:
+                    return DOUBLEWORD;  // 4 bytes for FPC's 32-bit LongInt
                 case REAL_TYPE:
                 case STRING_TYPE:
                 case POINTER_TYPE:
@@ -2710,7 +2720,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     if (anon->is_function && return_var != NULL)
     {
         char buffer[64];
-        int uses_qword = (anon->return_type == LONGINT_TYPE || anon->return_type == STRING_TYPE || 
+        int uses_qword = (anon->return_type == STRING_TYPE || 
                          anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE);
         if (uses_qword)
         {
@@ -3020,9 +3030,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         is_array_type = 1;
                     }
                     
-                    int use_64bit = is_var_param || is_array_type ||
-                        (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
-                         inferred_type_tag == REAL_TYPE || inferred_type_tag == LONGINT_TYPE || type == PROCEDURE);
+                     int use_64bit = is_var_param || is_array_type ||
+                         (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
+                          inferred_type_tag == REAL_TYPE || type == PROCEDURE);
                     int use_sse_reg = (!is_var_param && !is_array_type &&
                         inferred_type_tag == REAL_TYPE);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
@@ -3258,7 +3268,7 @@ static long long codegen_type_tag_size(int parser_tag)
         case BOOL:
             return 1;
         case LONGINT_TYPE:
-            return 8;
+            return 4;  // Match FPC's 32-bit LongInt
         case REAL_TYPE:
             return 8;
         case INT_TYPE:
