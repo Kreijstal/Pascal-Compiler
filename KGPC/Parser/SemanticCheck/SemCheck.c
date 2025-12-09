@@ -2673,7 +2673,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *int64_name = strdup("int64");
     if (int64_name != NULL) {
-        KgpcType *int64_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        /* Int64 is 8 bytes (64-bit signed integer) - different from LongInt which is 4 bytes */
+        KgpcType *int64_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
         assert(int64_type != NULL && "Failed to create int64 type");
         AddBuiltinType_Typed(symtab, int64_name, int64_type);
         destroy_kgpc_type(int64_type);
@@ -2837,10 +2838,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(smallint_type);
         free(smallint_name);
     }
-    /* QWord and UInt64 are 64-bit unsigned integers */
+    /* QWord and UInt64 are 64-bit unsigned integers (8 bytes) */
     char *qword_name = strdup("QWord");
     if (qword_name != NULL) {
-        KgpcType *qword_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *qword_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
         assert(qword_type != NULL && "Failed to create QWord type");
         AddBuiltinType_Typed(symtab, qword_name, qword_type);
         destroy_kgpc_type(qword_type);
@@ -2848,7 +2849,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *uint64_name = strdup("UInt64");
     if (uint64_name != NULL) {
-        KgpcType *uint64_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *uint64_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
         assert(uint64_type != NULL && "Failed to create UInt64 type");
         AddBuiltinType_Typed(symtab, uint64_name, uint64_type);
         destroy_kgpc_type(uint64_type);
