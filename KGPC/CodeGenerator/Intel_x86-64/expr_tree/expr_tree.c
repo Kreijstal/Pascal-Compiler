@@ -1407,20 +1407,68 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (static_link_expr_active)
             codegen_end_expression(ctx);
 
-        const char *call_target = expr->expr_data.function_call_data.mangled_id;
-        if (call_target == NULL)
-            call_target = expr->expr_data.function_call_data.id;
-        
-        if (call_target != NULL)
+        /* Check if this is a call through a procedural variable */
+        if (expr->expr_data.function_call_data.is_procedural_var_call &&
+            expr->expr_data.function_call_data.procedural_var_symbol != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
-            inst_list = add_inst(inst_list, buffer);
+            /* This is a call through a function pointer - load the variable and call through it */
+            HashNode_t *var_symbol = expr->expr_data.function_call_data.procedural_var_symbol;
+            const char *var_name = expr->expr_data.function_call_data.id;
+            
+            /* Find the variable on the stack */
+            StackNode_t *stack_node = find_label(var_name);
+            if (stack_node != NULL)
+            {
+                /* Load the function pointer into a register */
+                Register_t *func_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (func_ptr_reg != NULL)
+                {
+                    if (stack_node->is_static)
+                    {
+                        const char *label = (stack_node->static_label != NULL) ?
+                            stack_node->static_label : stack_node->label;
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n", 
+                            label, func_ptr_reg->bit_64);
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", 
+                            stack_node->offset, func_ptr_reg->bit_64);
+                    }
+                    inst_list = add_inst(inst_list, buffer);
+                    
+                    /* Call through the function pointer */
+                    snprintf(buffer, sizeof(buffer), "\tcall\t*%s\n", func_ptr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    
+                    free_reg(get_reg_stack(), func_ptr_reg);
+                }
+            }
+            else
+            {
+                /* Variable not found - emit error */
+                snprintf(buffer, sizeof(buffer), "\t# ERROR: procedural variable %s not found\n", var_name);
+                inst_list = add_inst(inst_list, buffer);
+            }
         }
         else
         {
-            /* This should never happen - emit error */
-            snprintf(buffer, sizeof(buffer), "\t# ERROR: function call with NULL target\n");
-            inst_list = add_inst(inst_list, buffer);
+            /* Normal function call */
+            const char *call_target = expr->expr_data.function_call_data.mangled_id;
+            if (call_target == NULL)
+                call_target = expr->expr_data.function_call_data.id;
+            
+            if (call_target != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* This should never happen - emit error */
+                snprintf(buffer, sizeof(buffer), "\t# ERROR: function call with NULL target\n");
+                inst_list = add_inst(inst_list, buffer);
+            }
         }
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
