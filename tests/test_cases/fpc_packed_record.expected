@@ -1,0 +1,5 @@
+Regular record: a=1 b=100 c=2
+Regular record size: 12
+Packed record: a=3 b=200 c=4
+Packed record size: 12
+Test completed
