@@ -1,13 +1,15 @@
 # FPC Bootstrap Gap Tests
 
-These tests demonstrate features used in the Free Pascal Compiler (FPC) Runtime Library (RTL) that are not yet supported by KGPC. They compile successfully with FPC but fail with KGPC, highlighting the gaps that need to be addressed for FPC RTL bootstrap.
+These tests demonstrate features used in the Free Pascal Compiler (FPC) Runtime Library (RTL) that are not yet supported by KGPC. They compile successfully with FPC but **INTENTIONALLY FAIL** with KGPC, breaking CI to highlight the gaps that need to be addressed for FPC RTL bootstrap.
 
-## Test Files Without .expected (Intentionally Failing)
+## ⚠️ THESE TESTS BREAK CI ON PURPOSE ⚠️
 
-These tests **DO NOT** have `.expected` files because they are meant to demonstrate KGPC gaps. They compile and run successfully with FPC but fail to compile with KGPC.
+All tests in this directory prefixed with `fpc_` have `.expected` files and **WILL CAUSE CI FAILURES**. This is intentional to demonstrate the compiler gaps.
+
+## Test Files That Break CI (Intentional Failures)
 
 ### 1. Traditional Procedural Types
-- **File**: `fpc_procedural_type_basic.p`
+- **File**: `fpc_procedural_type_basic.p` + `.expected`
 - **Feature**: Plain function/procedure type aliases (without "reference to")
 - **FPC RTL Example**: `sortbase.pp` line 26:
   ```pascal
@@ -15,16 +17,18 @@ These tests **DO NOT** have `.expected` files because they are meant to demonstr
   ```
 - **KGPC Gap**: Only supports "reference to" syntax for procedural types
 - **Error**: "call to function SimpleComparer does not match any available overload"
+- **CI Status**: ❌ BREAKS CI (compilation fails)
 
 ### 2. Advanced Procedural Type Patterns  
-- **File**: `fpc_procedural_type_advanced.p`
+- **File**: `fpc_procedural_type_advanced.p` + `.expected`
 - **Feature**: Procedural types as record fields, taking addresses of functions
 - **FPC RTL Example**: `sortbase.pp` lines 38-44 (TSortingAlgorithm record)
 - **KGPC Gap**: Same as #1, traditional procedural types not supported
 - **Error**: "type mismatch in assignment statement"
+- **CI Status**: ❌ BREAKS CI (compilation fails)
 
 ### 3. Const Type Casting
-- **File**: `fpc_const_typecast.p`
+- **File**: `fpc_const_typecast.p` + `.expected`
 - **Feature**: Type casting/conversion in const declarations
 - **FPC RTL Example**: `charset.pp` lines 95-96:
   ```pascal
@@ -34,13 +38,39 @@ These tests **DO NOT** have `.expected` files because they are meant to demonstr
   ```
 - **KGPC Gap**: Cannot evaluate type casts in const expressions
 - **Error**: "unsupported const expression"
+- **CI Status**: ❌ BREAKS CI (compilation fails)
 
 ### 4. SizeUInt Type
-- **File**: `fpc_sizeuint.p`
+- **File**: `fpc_sizeuint.p` + `.expected`
 - **Feature**: Platform-dependent unsigned integer type
 - **FPC RTL Example**: Used throughout RTL, e.g., `sortbase.pp` line 27
 - **KGPC Gap**: SizeUInt type not defined
 - **Error**: "undefined type SizeUInt"
+- **CI Status**: ❌ BREAKS CI (compilation fails)
+
+### 6. PChar Arrays and StrPas
+- **File**: `fpc_pansichar_array.p` + `.expected`
+- **Feature**: Array of PChar (string pointers) + StrPas() function
+- **FPC RTL Example**: `errnostr.inc` lines 18-124 (sys_errlist array), `errors.pp` line 42
+- **KGPC Gap**: StrPas() function not defined (array itself works)
+- **Error**: "call to function StrPas does not match any available overload"
+- **CI Status**: ❌ BREAKS CI (compilation fails)
+
+### 7. Sortbase Minimal (Comprehensive)
+- **File**: `fpc_sortbase_minimal.p` + `.expected`
+- **Feature**: Complete sortbase.pp pattern - procedural types + const record initialization
+- **FPC RTL Example**: Direct adaptation of `sortbase.pp` lines 26-97
+- **KGPC Gap**: Multiple issues - procedural types, const record with function pointers, circular reference detection
+- **Error**: "Circular reference detected in const section"
+- **CI Status**: ❌ BREAKS CI (compilation fails)
+
+### 8. Compiler Directives
+- **File**: `fpc_compiler_directives.p` + `.expected`
+- **Feature**: Conditional compilation directives ({$IFDEF}, {$DEFINE}, etc.)
+- **FPC RTL Example**: Used throughout RTL - `ctypes.pp`, `sortbase.pp`
+- **KGPC Gap**: Preprocessor doesn't support FPC-style conditional directives
+- **Error**: "malformed conditional directive"
+- **CI Status**: ❌ BREAKS CI (parsing fails)
 
 ## Test Files With .expected (Working Features)
 
