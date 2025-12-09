@@ -4828,6 +4828,27 @@ static int semcheck_addressof(int *type_return,
     int inner_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
 
+    /* Special case: If the inner expression was auto-converted from a function identifier
+     * to a function call (because we're in NO_MUTATE mode), we need to reverse that
+     * since we're taking the address of the function, not calling it. */
+    if (inner->type == EXPR_FUNCTION_CALL && 
+        inner->expr_data.function_call_data.args_expr == NULL)
+    {
+        const char *func_id = inner->expr_data.function_call_data.id;
+        if (func_id != NULL)
+        {
+            HashNode_t *func_symbol = NULL;
+            if (FindIdent(&func_symbol, symtab, (char *)func_id) >= 0 &&
+                func_symbol != NULL && 
+                (func_symbol->hash_type == HASHTYPE_FUNCTION || func_symbol->hash_type == HASHTYPE_PROCEDURE))
+            {
+                /* This was auto-converted - treat it as a procedure reference instead */
+                inner_type = PROCEDURE;
+                /* We'll handle this below in the PROCEDURE case */
+            }
+        }
+    }
+
     if (inner_type == UNKNOWN_TYPE)
     {
         *type_return = UNKNOWN_TYPE;
@@ -4875,16 +4896,36 @@ static int semcheck_addressof(int *type_return,
             pointed_to_type = proc_type;
         }
 
+        /* Handle both EXPR_VAR_ID (for procedures) and EXPR_FUNCTION_CALL (for functions that were auto-converted) */
         if (inner->type == EXPR_VAR_ID)
         {
             HashNode_t *proc_symbol = NULL;
             if (FindIdent(&proc_symbol, symtab, inner->expr_data.id) >= 0 &&
-                proc_symbol != NULL && proc_symbol->hash_type == HASHTYPE_PROCEDURE)
+                proc_symbol != NULL && 
+                (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
             {
                 expr->expr_data.addr_data.expr = NULL;
                 destroy_expr(inner);
                 expr->type = EXPR_ADDR_OF_PROC;
                 expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+            }
+        }
+        else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
+        {
+            /* This was auto-converted from a function identifier - get the original symbol */
+            const char *func_id = inner->expr_data.function_call_data.id;
+            if (func_id != NULL)
+            {
+                HashNode_t *proc_symbol = NULL;
+                if (FindIdent(&proc_symbol, symtab, (char *)func_id) >= 0 &&
+                    proc_symbol != NULL && 
+                    (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    expr->expr_data.addr_data.expr = NULL;
+                    destroy_expr(inner);
+                    expr->type = EXPR_ADDR_OF_PROC;
+                    expr->expr_data.addr_of_proc_data.procedure_symbol = proc_symbol;
+                }
             }
         }
     }
@@ -4926,30 +4967,37 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         }
         else if (hash_node->type->kind == TYPE_KIND_PROCEDURE)
         {
-            /* For functions, return the return type, not PROCEDURE */
-            KgpcType *return_type = kgpc_type_get_return_type(hash_node->type);
-            if (return_type != NULL)
+            /* When this is a variable/const with a procedural type (not a function/procedure definition),
+             * we return PROCEDURE to indicate it's a procedure variable.
+             * Only for actual function/procedure definitions (HASHTYPE_FUNCTION/HASHTYPE_PROCEDURE)
+             * do we return the function's return type. */
+            if (hash_node->hash_type == HASHTYPE_FUNCTION || hash_node->hash_type == HASHTYPE_PROCEDURE)
             {
-                if (return_type->kind == TYPE_KIND_PRIMITIVE)
+                /* This is an actual function/procedure definition - return its return type */
+                KgpcType *return_type = kgpc_type_get_return_type(hash_node->type);
+                if (return_type != NULL)
                 {
-                    *type = kgpc_type_get_primitive_tag(return_type);
+                    if (return_type->kind == TYPE_KIND_PRIMITIVE)
+                    {
+                        *type = kgpc_type_get_primitive_tag(return_type);
+                        return 0;
+                    }
+                    else if (return_type->kind == TYPE_KIND_RECORD)
+                    {
+                        *type = RECORD_TYPE;
+                        return 0;
+                    }
+                    else if (return_type->kind == TYPE_KIND_POINTER)
+                    {
+                        *type = POINTER_TYPE;
+                        return 0;
+                    }
+                    /* Add other return type kinds as needed */
+                    *type = UNKNOWN_TYPE;
                     return 0;
                 }
-                else if (return_type->kind == TYPE_KIND_RECORD)
-                {
-                    *type = RECORD_TYPE;
-                    return 0;
-                }
-                else if (return_type->kind == TYPE_KIND_POINTER)
-                {
-                    *type = POINTER_TYPE;
-                    return 0;
-                }
-                /* Add other return type kinds as needed */
-                *type = UNKNOWN_TYPE;
-                return 0;
             }
-            /* No return type means it's a procedure (void) */
+            /* For procedure variables/constants or procedures with no return type */
             *type = PROCEDURE;
             return 0;
         }
