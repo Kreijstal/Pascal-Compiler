@@ -1700,10 +1700,14 @@ cleanup_constructor:
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 case REAL_TYPE:
-                case LONGINT_TYPE:
                 case UNKNOWN_TYPE:
                     snprintf(load_value, sizeof(load_value), "\tmovq\t(%s), %s\n",
                         target_reg->bit_64, target_reg->bit_64);
+                    break;
+                case LONGINT_TYPE:
+                    // Now 4 bytes, use movl like INT_TYPE
+                    snprintf(load_value, sizeof(load_value), "\tmovl\t(%s), %s\n",
+                        target_reg->bit_64, target_reg->bit_32);
                     break;
                 case CHAR_TYPE:
                 case BOOL:

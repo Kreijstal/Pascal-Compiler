@@ -5625,7 +5625,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
                             switch (f->array_element_type) {
                                 case CHAR_TYPE: case BOOL: element_size = 1; break;
                                 case INT_TYPE: case ENUM_TYPE: element_size = 4; break;
-                                case LONGINT_TYPE: case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
+                                case LONGINT_TYPE: element_size = 4; break;  // 4 bytes to match FPC
+                                case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
                             }
                         }
                         break;
