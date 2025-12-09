@@ -426,6 +426,10 @@ struct Expression
             int call_hash_type;              /* HashType enum value */
             struct KgpcType *call_kgpc_type;   /* Procedure/function signature */
             int is_call_info_valid;          /* 1 if cached info is usable */
+            
+            /* Support for calling through procedural variables */
+            int is_procedural_var_call;      /* 1 if calling through a procedural variable */
+            struct HashNode *procedural_var_symbol;  /* Symbol for the procedural variable */
         } function_call_data;
 
         /* Integer number */

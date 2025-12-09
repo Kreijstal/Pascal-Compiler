@@ -7295,6 +7295,102 @@ constructor_resolved:
     }
 
     overload_candidates = FindAllIdents(symtab, id);
+    
+    /* Check if this is a call through a procedural variable */
+    /* If 'id' resolves to a variable with a procedural type, handle it specially */
+    if (overload_candidates != NULL && overload_candidates->cur != NULL)
+    {
+        HashNode_t *first_candidate = (HashNode_t *)overload_candidates->cur;
+        if (first_candidate->hash_type == HASHTYPE_VAR &&
+            first_candidate->type != NULL &&
+            first_candidate->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            /* This is a procedural variable - we're calling through a function pointer */
+            KgpcType *proc_type = first_candidate->type;
+            ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
+            KgpcType *return_type = kgpc_type_get_return_type(proc_type);
+            
+            /* Validate arguments match the procedural type's signature */
+            if (ListLength(formal_params) != ListLength(args_given))
+            {
+                fprintf(stderr, "Error on line %d, call to procedural variable %s: expected %d arguments, got %d\n",
+                    expr->line_num, id, ListLength(formal_params), ListLength(args_given));
+                destroy_list(overload_candidates);
+                if (mangled_name != NULL) free(mangled_name);
+                *type_return = UNKNOWN_TYPE;
+                return ++return_val;
+            }
+            
+            /* Check argument types */
+            ListNode_t *formal = formal_params;
+            ListNode_t *actual = args_given;
+            int arg_idx = 0;
+            while (formal != NULL && actual != NULL)
+            {
+                Tree_t *formal_decl = (Tree_t *)formal->cur;
+                struct Expression *actual_expr = (struct Expression *)actual->cur;
+                
+                int formal_type = resolve_param_type(formal_decl, symtab);
+                int actual_type = UNKNOWN_TYPE;
+                semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+                
+                /* Simple type check - could be more sophisticated */
+                if (formal_type != actual_type && formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE)
+                {
+                    /* Allow some type coercions like INT to LONGINT */
+                    if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
+                          (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
+                          (formal_type == POINTER_TYPE) || /* pointers are flexible */
+                          (actual_type == POINTER_TYPE)))
+                    {
+                        fprintf(stderr, "Warning on line %d, argument %d type mismatch in call to procedural variable %s\n",
+                            expr->line_num, arg_idx + 1, id);
+                    }
+                }
+                
+                formal = formal->next;
+                actual = actual->next;
+                arg_idx++;
+            }
+            
+            /* Set the return type */
+            if (return_type != NULL)
+            {
+                if (return_type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    *type_return = kgpc_type_get_primitive_tag(return_type);
+                }
+                else if (return_type->kind == TYPE_KIND_RECORD)
+                {
+                    *type_return = RECORD_TYPE;
+                }
+                else if (return_type->kind == TYPE_KIND_POINTER)
+                {
+                    *type_return = POINTER_TYPE;
+                }
+                else
+                {
+                    *type_return = UNKNOWN_TYPE;
+                }
+                
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
+            }
+            else
+            {
+                /* It's a procedure (no return value) */
+                *type_return = PROCEDURE;
+            }
+            
+            /* Mark this as a procedural variable call */
+            expr->expr_data.function_call_data.is_procedural_var_call = 1;
+            expr->expr_data.function_call_data.procedural_var_symbol = first_candidate;
+            
+            destroy_list(overload_candidates);
+            if (mangled_name != NULL) free(mangled_name);
+            return 0;  /* Success */
+        }
+    }
+    
     mangled_name = MangleFunctionNameFromCallSite(id, args_given, symtab, max_scope_lev);
     if (mangled_name == NULL)
     {
