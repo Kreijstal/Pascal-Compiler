@@ -3338,10 +3338,12 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             {
                 is_builtin_type = 1;
                 /* Determine the size based on the type */
-                if (pascal_identifier_equals(arg_id, "Integer") || 
-                    pascal_identifier_equals(arg_id, "Byte") ||
-                    pascal_identifier_equals(arg_id, "Word"))
+                if (pascal_identifier_equals(arg_id, "Integer"))
                     computed_size = 4;  /* 32-bit */
+                else if (pascal_identifier_equals(arg_id, "Byte"))
+                    computed_size = 1;  /* 8-bit unsigned */
+                else if (pascal_identifier_equals(arg_id, "Word"))
+                    computed_size = 2;  /* 16-bit unsigned */
                 else if (pascal_identifier_equals(arg_id, "LongInt") ||
                          pascal_identifier_equals(arg_id, "SizeUInt") ||
                          pascal_identifier_equals(arg_id, "QWord") ||
