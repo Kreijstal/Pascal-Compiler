@@ -1412,7 +1412,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             expr->expr_data.function_call_data.procedural_var_symbol != NULL)
         {
             /* This is a call through a function pointer - load the variable and call through it */
-            HashNode_t *var_symbol = expr->expr_data.function_call_data.procedural_var_symbol;
             const char *var_name = expr->expr_data.function_call_data.id;
             
             /* Find the variable on the stack */
