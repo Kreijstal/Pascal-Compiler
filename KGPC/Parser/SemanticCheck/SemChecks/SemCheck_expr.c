@@ -4826,11 +4826,12 @@ static int semcheck_addressof(int *type_return,
 
     int error_count = 0;
     int inner_type = UNKNOWN_TYPE;
-    error_count += semcheck_expr_main(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
+    int inner_errors = semcheck_expr_main(&inner_type, symtab, inner, max_scope_lev, NO_MUTATE);
 
     /* Special case: If the inner expression was auto-converted from a function identifier
      * to a function call (because we're in NO_MUTATE mode), we need to reverse that
      * since we're taking the address of the function, not calling it. */
+    int converted_to_proc_addr = 0;  /* Track if we successfully convert to procedure address */
     if (inner->type == EXPR_FUNCTION_CALL && 
         inner->expr_data.function_call_data.args_expr == NULL)
     {
@@ -4844,6 +4845,7 @@ static int semcheck_addressof(int *type_return,
             {
                 /* This was auto-converted - treat it as a procedure reference instead */
                 inner_type = PROCEDURE;
+                converted_to_proc_addr = 1;
                 /* We'll handle this below in the PROCEDURE case */
             }
         }
@@ -4887,8 +4889,35 @@ static int semcheck_addressof(int *type_return,
         pointed_to_type = create_record_type(record_info);
     } else if (inner_type == PROCEDURE) {
         int proc_type_owned = 0;
-        KgpcType *proc_type = semcheck_resolve_expression_kgpc_type(symtab, inner,
-            max_scope_lev, NO_MUTATE, &proc_type_owned);
+        KgpcType *proc_type = NULL;
+        
+        /* For procedures/functions, we need the actual procedural type, not the return type.
+         * semcheck_resolve_expression_kgpc_type returns the return type for functions,
+         * so we look up the symbol directly instead. */
+        const char *proc_id = NULL;
+        if (inner->type == EXPR_VAR_ID)
+        {
+            proc_id = inner->expr_data.id;
+        }
+        else if (inner->type == EXPR_FUNCTION_CALL && inner->expr_data.function_call_data.args_expr == NULL)
+        {
+            proc_id = inner->expr_data.function_call_data.id;
+        }
+        
+        if (proc_id != NULL)
+        {
+            HashNode_t *proc_symbol = NULL;
+            if (FindIdent(&proc_symbol, symtab, (char *)proc_id) >= 0 &&
+                proc_symbol != NULL && 
+                (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION) &&
+                proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                /* Use the procedure type from the symbol */
+                proc_type = proc_symbol->type;
+                proc_type_owned = 0; /* Shared reference */
+            }
+        }
+        
         if (proc_type != NULL)
         {
             if (!proc_type_owned)
@@ -4937,6 +4966,13 @@ static int semcheck_addressof(int *type_return,
             destroy_kgpc_type(expr->resolved_kgpc_type);
         }
         expr->resolved_kgpc_type = create_pointer_type(pointed_to_type);
+    }
+    
+    /* If we successfully converted to a procedure address, don't count inner expression errors.
+     * Those errors were from trying to call the function with no arguments, which is not what we want. */
+    if (converted_to_proc_addr && expr->type == EXPR_ADDR_OF_PROC)
+    {
+        return 0;  /* Success - ignore inner errors */
     }
     
     return error_count;
