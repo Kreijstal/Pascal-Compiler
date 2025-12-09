@@ -5573,7 +5573,14 @@ int semcheck_expr_main(int *type_return,
         /*** BASE CASES ***/
         case EXPR_INUM:
             if (expr->expr_data.i_num > INT_MAX || expr->expr_data.i_num < INT_MIN)
+            {
                 *type_return = LONGINT_TYPE;
+                /* For values that don't fit in 32 bits, create a KgpcType with storage_size=8
+                 * to indicate this is a true 64-bit value (Int64), not a 4-byte LongInt */
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+            }
             else
                 *type_return = INT_TYPE;
             break;
