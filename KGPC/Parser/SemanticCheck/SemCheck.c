@@ -1328,7 +1328,9 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             pascal_identifier_equals(target, "LongWord") ||
                             pascal_identifier_equals(target, "DWord") ||
                             pascal_identifier_equals(target, "QWord") ||
-                            pascal_identifier_equals(target, "UInt64"))
+                            pascal_identifier_equals(target, "UInt64") ||
+                            pascal_identifier_equals(target, "SizeUInt") ||
+                            pascal_identifier_equals(target, "NativeUInt"))
                         {
                             kgpc_type = create_primitive_type(LONGINT_TYPE);
                         }
@@ -3432,6 +3434,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_INTEGER;
                         else if (pascal_identifier_equals(type_id, "LongInt"))
                             var_type = HASHVAR_LONGINT;
+                        else if (pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") || 
+                                 pascal_identifier_equals(type_id, "NativeUInt"))
+                            var_type = HASHVAR_LONGINT;  /* Unsigned 64-bit on x86-64 */
                         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                             var_type = HASHVAR_REAL;
                         else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString"))

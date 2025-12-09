@@ -3320,9 +3320,52 @@ static int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         int scope = FindIdent(&node, symtab, arg_id);
         if (scope == -1 || node == NULL)
         {
-            fprintf(stderr, "Error on line %d, SizeOf references undeclared identifier %s.\n",
-                expr->line_num, arg_id);
-            error_count++;
+            /* Check if this is a builtin type name that isn't in the symbol table */
+            int is_builtin_type = 0;
+            if (pascal_identifier_equals(arg_id, "Integer") ||
+                pascal_identifier_equals(arg_id, "LongInt") ||
+                pascal_identifier_equals(arg_id, "Real") ||
+                pascal_identifier_equals(arg_id, "Double") ||
+                pascal_identifier_equals(arg_id, "Char") ||
+                pascal_identifier_equals(arg_id, "Boolean") ||
+                pascal_identifier_equals(arg_id, "Byte") ||
+                pascal_identifier_equals(arg_id, "Word") ||
+                pascal_identifier_equals(arg_id, "String") ||
+                pascal_identifier_equals(arg_id, "Pointer") ||
+                pascal_identifier_equals(arg_id, "SizeUInt") ||
+                pascal_identifier_equals(arg_id, "QWord") ||
+                pascal_identifier_equals(arg_id, "NativeUInt"))
+            {
+                is_builtin_type = 1;
+                /* Determine the size based on the type */
+                if (pascal_identifier_equals(arg_id, "Integer") || 
+                    pascal_identifier_equals(arg_id, "Byte") ||
+                    pascal_identifier_equals(arg_id, "Word"))
+                    computed_size = 4;  /* 32-bit */
+                else if (pascal_identifier_equals(arg_id, "LongInt") ||
+                         pascal_identifier_equals(arg_id, "SizeUInt") ||
+                         pascal_identifier_equals(arg_id, "QWord") ||
+                         pascal_identifier_equals(arg_id, "NativeUInt"))
+                    computed_size = 8;  /* 64-bit */
+                else if (pascal_identifier_equals(arg_id, "Real") ||
+                         pascal_identifier_equals(arg_id, "Double"))
+                    computed_size = 8;  /* 64-bit float */
+                else if (pascal_identifier_equals(arg_id, "Char"))
+                    computed_size = 1;  /* 8-bit */
+                else if (pascal_identifier_equals(arg_id, "Boolean"))
+                    computed_size = 1;  /* 8-bit */
+                else if (pascal_identifier_equals(arg_id, "String"))
+                    computed_size = 8;  /* Pointer */
+                else if (pascal_identifier_equals(arg_id, "Pointer"))
+                    computed_size = 8;  /* Pointer */
+            }
+            
+            if (!is_builtin_type)
+            {
+                fprintf(stderr, "Error on line %d, SizeOf references undeclared identifier %s.\n",
+                    expr->line_num, arg_id);
+                error_count++;
+            }
         }
         else
         {
