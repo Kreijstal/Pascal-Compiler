@@ -35,6 +35,7 @@ tests/test_cases/*.tmp
 !/FPC_BOOTSTRAP_INVESTIGATION.md
 !/FPC_BOOTSTRAP_ACTUAL_TEST.md
 !/FPC_FULL_BOOTSTRAP_TEST.md
+!/FPC_BOOTSTRAP_ANALYSIS.md
 !/test-cross-compile*.sh
 
 # Python cache
