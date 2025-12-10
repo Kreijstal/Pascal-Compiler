@@ -3442,23 +3442,20 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
-/* Weak aliases to satisfy pascal-level mangling when the SysUtils wrappers
- * are not emitted (e.g., when the compiler bypasses wrapper generation).
- * If a strong definition exists in generated assembly, it will override these. */
-__attribute__((weak)) uintptr_t LoadLibrary_s(const char *path)
-{
-    return kgpc_load_library(path);
-}
-
-__attribute__((weak)) uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
-{
-    return kgpc_get_proc_address(handle, symbol);
-}
-
-__attribute__((weak)) int FreeLibrary_li(uintptr_t handle)
-{
-    return kgpc_free_library(handle);
-}
+#ifdef _WIN32
+/* Inject COFF alternatename directives so unresolved Pascal stubs bind to the
+ * runtime implementations when no stub is emitted. */
+__asm__(".section .drectve,\"yn\"\n"
+        ".ascii \" /alternatename:LoadLibrary_s=kgpc_load_library\"\n"
+        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_get_proc_address\"\n"
+        ".ascii \" /alternatename:FreeLibrary_li=kgpc_free_library\"\n"
+        ".text");
+#else
+/* ELF targets can rely on weak aliases directly. */
+uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_load_library")));
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_get_proc_address")));
+int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_free_library")));
+#endif
 
 int kgpc_directory_create(const char *path)
 {
