@@ -29,7 +29,7 @@ type
     destructor Destroy; override;
     procedure Add(const Value: T);
     function Count: NativeInt;
-    function GetEnumerator: specialize TFPGListEnumerator<T>;
+    function GetEnumerator: TFPGListEnumerator<T>;
     property Items[Index: NativeInt]: T read GetItem write SetItem; default;
   end;
 
@@ -80,7 +80,7 @@ begin
   FItems[Index] := Value;
 end;
 
-function TFPGList<T>.GetEnumerator: specialize TFPGListEnumerator<T>;
+function TFPGList<T>.GetEnumerator: TFPGListEnumerator<T>;
 begin
   Result.FItems := Self.FItems;
   Result.FCount := Self.FCount;
