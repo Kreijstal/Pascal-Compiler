@@ -699,6 +699,10 @@ class TestCompiler(unittest.TestCase):
             command.append("-O2")
             if not IS_WINDOWS_ABI:
                 command.append("-no-pie")
+            else:
+                # Allow user-provided shims (e.g., LoadLibrary_s) to override runtime
+                # fallbacks without duplicate-definition errors under MinGW.
+                command.append("-Wl,--allow-multiple-definition")
             if is_coverage_enabled():
                 command.append("--coverage")
             command.extend([
