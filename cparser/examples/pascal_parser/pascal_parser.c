@@ -27,24 +27,36 @@ static bool consume_pascal_layout(input_t* in) {
     }
 
     if (c == '{') {
+        int depth = 0;
         read1(in); // consume '{'
-        while (in->start < in->length) {
+        depth = 1;
+        while (in->start < in->length && depth > 0) {
             char ch = read1(in);
-            if (ch == '}') {
-                break;
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
             }
         }
         return true;
     }
 
     if (c == '(' && (pos + 1) < in->length && buffer[pos + 1] == '*') {
+        int depth = 0;
         read1(in); // '('
         read1(in); // '*'
-        while (in->start < in->length) {
+        depth = 1;
+        while (in->start < in->length && depth > 0) {
             char ch = read1(in);
+            if (ch == '(' && in->start < in->length && in->buffer[in->start] == '*') {
+                read1(in); // consume '*'
+                depth++;
+                continue;
+            }
             if (ch == '*' && in->start < in->length && in->buffer[in->start] == ')') {
-                read1(in);
-                break;
+                read1(in); // consume ')'
+                depth--;
+                continue;
             }
         }
         return true;

@@ -315,8 +315,8 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
 
     bool in_string = false;
     char string_delim = '\0';
-    bool in_brace_comment = false;
-    bool in_paren_comment = false;
+    int brace_comment_depth = 0;
+    int paren_comment_depth = 0;
     bool in_line_comment = false;
 
     int current_line = 1;
@@ -357,7 +357,7 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         }
         char c = input[i];
 
-        bool in_comment = in_brace_comment || in_paren_comment || in_line_comment;
+        bool in_comment = (brace_comment_depth > 0) || (paren_comment_depth > 0) || in_line_comment;
 
         if (!in_string && !in_comment) {
             if (c == '{' && i + 1 < length && input[i + 1] == '$') {
@@ -395,13 +395,19 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
                 ++i;
                 continue;
             }
-        } else if (in_brace_comment) {
-            if (c == '}') {
-                in_brace_comment = false;
+        } else if (brace_comment_depth > 0) {
+            if (c == '{') {
+                ++brace_comment_depth;
+            } else if (c == '}') {
+                if (brace_comment_depth > 0)
+                    --brace_comment_depth;
             }
-        } else if (in_paren_comment) {
-            if (c == '*' && i + 1 < length && input[i + 1] == ')') {
-                in_paren_comment = false;
+        } else if (paren_comment_depth > 0) {
+            if (c == '(' && i + 1 < length && input[i + 1] == '*') {
+                ++paren_comment_depth;
+            } else if (c == '*' && i + 1 < length && input[i + 1] == ')') {
+                if (paren_comment_depth > 0)
+                    --paren_comment_depth;
             }
         } else if (in_string) {
             if (c == string_delim) {
@@ -421,9 +427,9 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
             }
         } else {
             if (c == '{') {
-                in_brace_comment = true;
+                brace_comment_depth = 1;
             } else if (c == '(' && i + 1 < length && input[i + 1] == '*') {
-                in_paren_comment = true;
+                paren_comment_depth = 1;
             } else if (c == '/' && i + 1 < length && input[i + 1] == '/') {
                 in_line_comment = true;
             } else if (c == '\'' || c == '"') {

@@ -315,8 +315,8 @@ int kgpc_tfile_read_int(KGPCTextFile **slot, int32_t *ptr)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
-    return 1;
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
+    return ferror(file->handle) ? 1 : 0;
 }
 
 int kgpc_tfile_read_char(KGPCTextFile **slot, char *ptr)
@@ -347,8 +347,8 @@ int kgpc_tfile_read_char(KGPCTextFile **slot, char *ptr)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
-    return 1;
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
+    return ferror(file->handle) ? 1 : 0;
 }
 
 int kgpc_tfile_read_real(KGPCTextFile **slot, double *ptr)
@@ -377,8 +377,8 @@ int kgpc_tfile_read_real(KGPCTextFile **slot, double *ptr)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
-    return 1;
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
+    return ferror(file->handle) ? 1 : 0;
 }
 
 int kgpc_tfile_write_int(KGPCTextFile **slot, int32_t value)
@@ -402,7 +402,7 @@ int kgpc_tfile_write_int(KGPCTextFile **slot, int32_t value)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -428,7 +428,7 @@ int kgpc_tfile_write_char(KGPCTextFile **slot, char value)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -453,7 +453,7 @@ int kgpc_tfile_write_real(KGPCTextFile **slot, double value)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -510,7 +510,7 @@ int kgpc_tfile_blockread(KGPCTextFile **slot, void *buffer, size_t count, long l
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -562,7 +562,7 @@ int kgpc_tfile_blockwrite(KGPCTextFile **slot, const void *buffer, size_t count,
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(errno != 0 ? errno : 1);
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -844,9 +844,9 @@ int kgpc_read_integer(KGPCTextFile *file, int32_t *ptr) {
     return kgpc_scanf_result_to_ioresult(res);
 }
 
-int kgpc_read_longint(KGPCTextFile *file, int64_t *ptr) {
+int kgpc_read_longint(KGPCTextFile *file, int32_t *ptr) {
     FILE *stream = kgpc_text_input_stream(file);
-    int res = fscanf(stream, "%" PRId64, ptr);
+    int res = fscanf(stream, "%" PRId32, ptr);
     return kgpc_scanf_result_to_ioresult(res);
 }
 
@@ -2296,6 +2296,13 @@ int64_t kgpc_string_compare(const char *lhs, const char *rhs)
     if (lhs_len > rhs_len)
         return 1;
     return 0;
+}
+
+char *kgpc_strpas(const char *p)
+{
+    if (p == NULL)
+        return kgpc_alloc_empty_string();
+    return kgpc_string_duplicate(p);
 }
 
 int64_t kgpc_string_pos(const char *substr, const char *value)

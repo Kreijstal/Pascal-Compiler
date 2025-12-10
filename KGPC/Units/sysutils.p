@@ -52,6 +52,8 @@ function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
 function Format(const Fmt: string; const Args: array of const): string;
+function StrPas(P: PAnsiChar): AnsiString;
+function StrPas(P: PChar): AnsiString;
 function FloatToStr(Value: Real): AnsiString;
 function StrToInt(const S: AnsiString): longint;
 function StrToFloat(const S: AnsiString): Real;
@@ -110,6 +112,7 @@ function kgpc_get_process_id: NativeUInt; external;
 function kgpc_load_library(path: PChar): NativeUInt; external;
 function kgpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; external;
 function kgpc_free_library(handle: NativeUInt): Integer; external;
+function kgpc_strpas(p: PAnsiChar): AnsiString; external;
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -117,6 +120,22 @@ begin
         Result := nil
     else
         Result := @S[1];
+end;
+
+function StrPas(P: PAnsiChar): AnsiString;
+begin
+    if P = nil then
+        StrPas := ''
+    else
+        StrPas := kgpc_strpas(P);
+end;
+
+function StrPas(P: PChar): AnsiString;
+begin
+    if P = nil then
+        StrPas := ''
+    else
+        StrPas := kgpc_strpas(PAnsiChar(P));
 end;
 
 procedure Sleep(milliseconds: integer);

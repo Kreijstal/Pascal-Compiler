@@ -143,6 +143,11 @@ static inline int get_var_storage_size(HashNode_t *node)
     {
         if (node->type->kind == TYPE_KIND_PRIMITIVE)
         {
+            /* Honor explicit storage overrides from type aliases (e.g., Int64/QWord) */
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias != NULL && alias->storage_size > 0)
+                return (int)alias->storage_size;
+
             int tag = kgpc_type_get_primitive_tag(node->type);
             switch (tag)
             {
@@ -1861,7 +1866,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
-        /* Skip unused functions (dead code elimination) */
+        /* Skip unused functions (dead code elimination / reachability pass) */
         if (!sub->tree_data.subprogram_data.is_used)
         {
             sub_list = sub_list->next;
@@ -2273,7 +2278,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
         {
             int tag = kgpc_type_get_primitive_tag(return_type);
-            switch (tag)
+            struct TypeAlias *alias = kgpc_type_get_type_alias(return_type);
+            if (alias != NULL && alias->storage_size > 0)
+            {
+                return_size = (int)alias->storage_size;
+            }
+            else switch (tag)
             {
                 case LONGINT_TYPE:
                     return_size = DOUBLEWORD;  // 4 bytes for FPC's 32-bit LongInt
@@ -2301,7 +2311,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
              func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
         int tag = kgpc_type_get_primitive_tag(func_node->type);
-        if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
+        struct TypeAlias *alias = kgpc_type_get_type_alias(func_node->type);
+        if (alias != NULL && alias->storage_size > 0)
+            return_size = (int)alias->storage_size;
+        else if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
             return_size = 8;
         else if (tag == LONGINT_TYPE)
             return_size = DOUBLEWORD;
@@ -3014,23 +3027,35 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
 
                     // Var parameters are passed by reference (as pointers), so always use 64-bit
-                    // Also use 64-bit for strings, explicit pointers, and arrays
+                    // Also use 64-bit for strings, explicit pointers, arrays, or aliases that
+                    // explicitly require 8-byte storage (e.g., NativeUInt/Int64).
                     int is_var_param = symbol_is_var_param;
                     int is_array_type = 0;
+                    int type_requires_qword = 0;
                     
                     /* Determine if parameter is an array type via resolved type only */
                     if (resolved_type_node != NULL && resolved_type_node->type != NULL &&
                              kgpc_type_is_array(resolved_type_node->type))
                     {
                         is_array_type = 1;
+                        type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
                     }
                     else if (cached_arg_type != NULL &&
                         kgpc_type_is_array(cached_arg_type))
                     {
                         is_array_type = 1;
+                        type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
+                    }
+                    else if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+                    {
+                        type_requires_qword = kgpc_type_uses_qword(resolved_type_node->type);
+                    }
+                    else if (cached_arg_type != NULL)
+                    {
+                        type_requires_qword = kgpc_type_uses_qword(cached_arg_type);
                     }
                     
-                     int use_64bit = is_var_param || is_array_type ||
+                     int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
                           inferred_type_tag == REAL_TYPE || type == PROCEDURE);
                     int use_sse_reg = (!is_var_param && !is_array_type &&
