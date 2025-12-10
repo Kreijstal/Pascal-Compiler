@@ -4307,15 +4307,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
 
-    /* If already declared in the current scope (e.g., from an earlier predeclare), skip */
-    HashNode_t *existing = NULL;
-    int existing_scope = FindIdent(&existing, symtab, id_to_use_for_lookup);
-    if (existing_scope == 0 && existing != NULL &&
-        (existing->hash_type == HASHTYPE_PROCEDURE || existing->hash_type == HASHTYPE_FUNCTION))
-    {
-        return 0;
-    }
-
     /* Check if already declared (e.g., by predeclare_subprogram in two-pass approach) */
     HashNode_t *existing_decl = NULL;
     int already_declared = 0;
@@ -4774,6 +4765,30 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             symtab);
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
+    
+    /* Check if this specific overload is already declared (by matching mangled name) */
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
+        ListNode_t *cur = all_matches;
+        int already_exists = 0;
+        while (cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
+            {
+                already_exists = 1;
+                break;
+            }
+            cur = cur->next;
+        }
+        if (all_matches != NULL)
+            DestroyList(all_matches);
+        
+        if (already_exists)
+            return 0;  /* Already declared - skip to avoid duplicates */
+    }
     
     /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
