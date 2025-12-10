@@ -3470,29 +3470,16 @@ __asm__(".section .drectve,\"yn\"\n"
         ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_default_GetProcedureAddress_li_s\\0\"\n"
         ".ascii \" /alternatename:FreeLibrary_li=kgpc_default_FreeLibrary_li\\0\"\n"
         ".text");
+/* MinGW ld (used under Wine) ignores .drectve alternatename; provide strong
+ * definitions so linkers that don’t honor the directive still find the symbols. */
+uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
+int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
 #else
 uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_default_LoadLibrary_s")));
 uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_default_GetProcedureAddress_li_s")));
 int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_default_FreeLibrary_li")));
 #endif
-
-/* MinGW ld (used under Wine in the quasi-msys2 flow) ignores the .drectve
- * alternatename directives above. Provide strong fallbacks so linking succeeds
- * even when alternatename is not honored. */
-uintptr_t LoadLibrary_s(const char *path)
-{
-    return kgpc_default_LoadLibrary_s(path);
-}
-
-uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
-{
-    return kgpc_default_GetProcedureAddress_li_s(handle, symbol);
-}
-
-int FreeLibrary_li(uintptr_t handle)
-{
-    return kgpc_default_FreeLibrary_li(handle);
-}
 
 int kgpc_directory_create(const char *path)
 {
