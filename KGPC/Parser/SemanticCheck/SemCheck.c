@@ -306,6 +306,7 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count)
 {
+    const char *debug_env = getenv("KGPC_DEBUG_RETURN_TYPE");
     if (subprogram == NULL || symtab == NULL)
         return NULL;
 
@@ -322,6 +323,19 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             if (error_count != NULL)
                 ++(*error_count);
         }
+    }
+
+    if (debug_env != NULL)
+    {
+        const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
+        int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
+        fprintf(stderr,
+            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d\n",
+            subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
+            rt_id ? rt_id : "<null>",
+            primitive_tag,
+            (void *)type_node,
+            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1);
     }
 
     return kgpc_type_build_function_return(
@@ -1356,26 +1370,122 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Check if already declared (e.g., from a previous pass or builtin) */
                 HashNode_t *existing = NULL;
-                if (FindIdent(&existing, symtab, (char *)type_id) >= 0 && existing != NULL)
+                int scope_level = FindIdent(&existing, symtab, (char *)type_id);
+                if (scope_level == 0 && existing != NULL)
                 {
                     /* Already declared, skip */
                     cur = cur->next;
                     continue;
                 }
                 
-                /* Only handle simple TYPE_DECL_ALIAS that resolve to primitive types */
-                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                /* Predeclare record types so they can be referenced (e.g., as function returns) */
+                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                {
+                    struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
+                    
+                    /* Annotate the record with its canonical name if missing */
+                    if (record_info != NULL && record_info->type_id == NULL)
+                        record_info->type_id = strdup(type_id);
+                    
+                    KgpcType *kgpc_type = create_record_type(record_info);
+                    if (record_type_is_class(record_info))
+                    {
+                        /* Classes are reference types - register as pointers to the record */
+                        kgpc_type = create_pointer_type(kgpc_type);
+                    }
+                    if (kgpc_type != NULL)
+                    {
+                        /* Store in tree for later reuse by semcheck_type_decls */
+                        if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                        {
+                            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                            kgpc_type_retain(kgpc_type);
+                        }
+                        
+                        int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        if (result > 0)
+                            errors += result;
+                    }
+                }
+                /* Only handle TYPE_DECL_ALIAS cases we can resolve early */
+                else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
                 {
                     struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
                     
-                    /* Skip complex types - let semcheck_type_decls handle them */
-                    if (alias->is_enum || alias->is_array || alias->is_pointer || 
-                        alias->is_set || alias->is_file || alias->inline_record_type != NULL)
+                    /* Handle inline record aliases (e.g., generic specializations) */
+                    if (alias->inline_record_type != NULL &&
+                        alias->inline_record_type->type_id != NULL)
+                    {
+                        const char *record_name = alias->inline_record_type->type_id;
+                        HashNode_t *existing_inline = NULL;
+                        int inline_scope = FindIdent(&existing_inline, symtab, (char *)record_name);
+                        if (inline_scope != 0 || existing_inline == NULL)
+                        {
+                            KgpcType *inline_kgpc = create_record_type(alias->inline_record_type);
+                            if (record_type_is_class(alias->inline_record_type))
+                                inline_kgpc = create_pointer_type(inline_kgpc);
+
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
+                                kgpc_type_retain(inline_kgpc);
+                            }
+
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)record_name, inline_kgpc);
+                            if (result > 0)
+                                errors += result;
+                        }
+
+                        /* Also register the alias name itself */
+                        KgpcType *alias_kgpc = create_record_type(alias->inline_record_type);
+                        if (record_type_is_class(alias->inline_record_type))
+                            alias_kgpc = create_pointer_type(alias_kgpc);
+                        kgpc_type_set_type_alias(alias_kgpc, alias);
+                        int alias_result = PushTypeOntoScope_Typed(symtab, (char *)type_id, alias_kgpc);
+                        if (alias_result > 0)
+                            errors += alias_result;
+
+                        cur = cur->next;
+                        continue;
+                    }
+
+                    /* Skip other complex types - let semcheck_type_decls handle them */
+                    if (alias->is_enum || alias->is_array || alias->is_set || 
+                        alias->is_file)
                     {
                         cur = cur->next;
                         continue;
                     }
                     
+                    /* Handle pointer aliases to already known element types */
+                    if (alias->is_pointer)
+                    {
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        if (kgpc_type != NULL)
+                        {
+                            if (getenv("KGPC_DEBUG_PREDECLARE_POINTERS") != NULL)
+                            {
+                                fprintf(stderr, "[KGPC] predeclare pointer alias %s: ptr_type=%d ptr_id=%s kind=%d\n",
+                                    type_id,
+                                    alias->pointer_type,
+                                    alias->pointer_type_id ? alias->pointer_type_id : "<null>",
+                                    kgpc_type->kind);
+                            }
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+
+                            cur = cur->next;
+                            continue;
+                        }
+                    }
+
                     /* Only pre-declare simple primitive type aliases */
                     KgpcType *kgpc_type = NULL;
                     
@@ -2403,6 +2513,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int before_symtab_errors = return_val;
 
         KgpcType *kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
+        if (record_info != NULL && record_type_is_class(record_info) &&
+            kgpc_type != NULL && kgpc_type->kind == TYPE_KIND_RECORD)
+        {
+            /* Classes are reference types - represent them as pointers to the class record */
+            KgpcType *wrapped = create_pointer_type(kgpc_type);
+            kgpc_type = wrapped;
+            tree->tree_data.type_decl_data.kgpc_type = wrapped;
+        }
 
         /* Check if this type was already pre-declared by predeclare_types().
          * If so, skip the push to avoid "redeclaration" errors.
@@ -4778,6 +4896,18 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             if (candidate != NULL && candidate->mangled_id != NULL &&
                 strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
             {
+                already_exists = 1;
+                break;
+            }
+            /* If this exact subprogram was already registered (even with a different
+             * mangled name), reuse that declaration instead of creating a duplicate. */
+            if (candidate != NULL && candidate->type != NULL &&
+                candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                candidate->type->info.proc_info.definition == subprogram)
+            {
+                if (candidate->mangled_id != NULL)
+                    free(candidate->mangled_id);
+                candidate->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
                 already_exists = 1;
                 break;
             }

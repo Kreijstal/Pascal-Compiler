@@ -3442,6 +3442,24 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
+/* Weak aliases to satisfy pascal-level mangling when the SysUtils wrappers
+ * are not emitted (e.g., when the compiler bypasses wrapper generation).
+ * If a strong definition exists in generated assembly, it will override these. */
+__attribute__((weak)) uintptr_t LoadLibrary_s(const char *path)
+{
+    return kgpc_load_library(path);
+}
+
+__attribute__((weak)) uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
+{
+    return kgpc_get_proc_address(handle, symbol);
+}
+
+__attribute__((weak)) int FreeLibrary_li(uintptr_t handle)
+{
+    return kgpc_free_library(handle);
+}
+
 int kgpc_directory_create(const char *path)
 {
     if (path == NULL)

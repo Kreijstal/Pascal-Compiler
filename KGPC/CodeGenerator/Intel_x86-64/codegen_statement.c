@@ -5615,8 +5615,12 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     // Check if this is a TFPGList (specialized generic list)
     int is_fpglist = 0;
     struct RecordType *record_info = NULL;
-    if (array_type != NULL && array_type->kind == TYPE_KIND_RECORD) {
-        record_info = kgpc_type_get_record(array_type);
+    KgpcType *record_candidate = array_type;
+    if (array_type != NULL && array_type->kind == TYPE_KIND_POINTER)
+        record_candidate = array_type->info.points_to;
+
+    if (record_candidate != NULL && record_candidate->kind == TYPE_KIND_RECORD) {
+        record_info = kgpc_type_get_record(record_candidate);
         if (record_info != NULL && record_info->type_id != NULL) {
             const char *prefix = "TFPGList$";
             size_t prefix_len = strlen(prefix);

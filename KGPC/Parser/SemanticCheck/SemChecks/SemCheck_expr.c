@@ -7932,6 +7932,29 @@ method_call_resolved:
     }
     else
     {
+        const char *ambig_env = getenv("KGPC_DEBUG_AMBIGUOUS");
+        if (ambig_env != NULL && overload_candidates != NULL)
+        {
+            fprintf(stderr, "[KGPC] Ambiguous call to %s, %d best matches with score %d:\n",
+                id ? id : "<unknown>", num_best_matches, best_score);
+            ListNode_t *cur = overload_candidates;
+            while (cur != NULL)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate != NULL && candidate->type != NULL &&
+                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                     candidate->hash_type == HASHTYPE_PROCEDURE))
+                {
+                    ListNode_t *candidate_args = kgpc_type_get_procedure_params(candidate->type);
+                    fprintf(stderr, "  - %s mangled=%s args=%d kind=%d\n",
+                        candidate->id ? candidate->id : "<anon>",
+                        candidate->mangled_id ? candidate->mangled_id : "<null>",
+                        ListLength(candidate_args),
+                        candidate->type->kind);
+                }
+                cur = cur->next;
+            }
+        }
         fprintf(stderr, "Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         final_status = ++return_val;

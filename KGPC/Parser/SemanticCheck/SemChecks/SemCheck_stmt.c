@@ -3248,14 +3248,21 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         if (collection_kgpc_type != NULL) {
             if (kgpc_type_is_array(collection_kgpc_type)) {
                 collection_is_array = 1;
-            } else if (kgpc_type_is_record(collection_kgpc_type)) {
-                struct RecordType *record_info = kgpc_type_get_record(collection_kgpc_type);
-                if (record_info != NULL && record_info->type_id != NULL) {
-                    const char *prefix = "TFPGList$";
-                    size_t prefix_len = strlen(prefix);
-                    if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
-                        collection_is_list = 1;
-                        list_element_id = record_info->type_id + prefix_len;
+            } else {
+                /* Lists are represented as pointers to class records */
+                KgpcType *record_candidate = collection_kgpc_type;
+                if (kgpc_type_is_pointer(collection_kgpc_type))
+                    record_candidate = collection_kgpc_type->info.points_to;
+
+                if (record_candidate != NULL && kgpc_type_is_record(record_candidate)) {
+                    struct RecordType *record_info = kgpc_type_get_record(record_candidate);
+                    if (record_info != NULL && record_info->type_id != NULL) {
+                        const char *prefix = "TFPGList$";
+                        size_t prefix_len = strlen(prefix);
+                        if (strncasecmp(record_info->type_id, prefix, prefix_len) == 0) {
+                            collection_is_list = 1;
+                            list_element_id = record_info->type_id + prefix_len;
+                        }
                     }
                 }
             }
