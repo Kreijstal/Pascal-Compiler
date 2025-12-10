@@ -36,6 +36,38 @@ typedef struct
     size_t capacity;
 } UnitSet;
 
+/* Ensure program-defined subprograms are emitted even if reachability misses them */
+static void mark_program_subs_used(Tree_t *program)
+{
+    if (program == NULL || program->type != TREE_PROGRAM_TYPE)
+        return;
+    ListNode_t *cur = program->tree_data.program_data.subprograms;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)cur->cur;
+            if (sub->type == TREE_SUBPROGRAM)
+            {
+                if (sub->tree_data.subprogram_data.statement_list != NULL &&
+                    sub->tree_data.subprogram_data.defined_in_unit == 0)
+                {
+                    sub->tree_data.subprogram_data.is_used = 1;
+                }
+                /* Recurse into nested subprograms */
+                if (sub->tree_data.subprogram_data.subprograms != NULL)
+                {
+                    Tree_t wrapper = {0};
+                    wrapper.type = TREE_PROGRAM_TYPE;
+                    wrapper.tree_data.program_data.subprograms = sub->tree_data.subprogram_data.subprograms;
+                    mark_program_subs_used(&wrapper);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
 static void unit_set_init(UnitSet *set)
 {
     set->names = NULL;
@@ -378,13 +410,9 @@ int main(int argc, char **argv)
             ctx.loop_capacity = 0;
 
             /* Mark which functions are actually used */
-            /* Temporarily disabled due to segfaults in some test cases */
-            /*
             extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
-            fprintf(stderr, "DEBUG main.c: About to call mark_used_functions\n");
             mark_used_functions(user_tree, symtab);
-            fprintf(stderr, "DEBUG main.c: Returned from mark_used_functions\n");
-            */
+            mark_program_subs_used(user_tree);
 
             codegen(user_tree, argv[1], &ctx, symtab);
 

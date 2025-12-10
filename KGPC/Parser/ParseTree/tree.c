@@ -1254,6 +1254,11 @@ void destroy_stmt(struct Statement *stmt)
           if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
             free(stmt->stmt_data.procedure_call_data.mangled_id);
           destroy_list(stmt->stmt_data.procedure_call_data.expr_args);
+          if (stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
+          {
+              destroy_expr(stmt->stmt_data.procedure_call_data.procedural_var_expr);
+              stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+          }
           if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
           {
               destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
@@ -1442,6 +1447,11 @@ void destroy_expr(struct Expression *expr)
           if (expr->expr_data.function_call_data.mangled_id != NULL)
               free(expr->expr_data.function_call_data.mangled_id);
           destroy_list(expr->expr_data.function_call_data.args_expr);
+          if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
+          {
+              destroy_expr(expr->expr_data.function_call_data.procedural_var_expr);
+              expr->expr_data.function_call_data.procedural_var_expr = NULL;
+          }
           if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
           {
               destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
@@ -1923,6 +1933,7 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
+    new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
 
     return new_tree;
 }
@@ -1957,6 +1968,7 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.declarations = var_decl;
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
+    new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
 
     return new_tree;
 }
@@ -2195,6 +2207,9 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.is_call_info_valid = 0;
     new_stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;  /* Default, will be overwritten */
     new_stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
+    new_stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
+    new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
+    new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
 
     return new_stmt;
 }
@@ -2591,6 +2606,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.call_kgpc_type = NULL;
     new_expr->expr_data.function_call_data.is_procedural_var_call = 0;
     new_expr->expr_data.function_call_data.procedural_var_symbol = NULL;
+    new_expr->expr_data.function_call_data.procedural_var_expr = NULL;
 
     return new_expr;
 }

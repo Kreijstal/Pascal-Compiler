@@ -2713,6 +2713,13 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_ADDR_OF_PROC:
+            CODEGEN_DEBUG("DEBUG: Processing address-of-procedure expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         case EXPR_RELOP:
             CODEGEN_DEBUG("DEBUG: Processing relational operator expression\n");
             #ifdef DEBUG_CODEGEN
@@ -3341,11 +3348,15 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     }
 
     int use_qword = expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
+    /* When either operand is 64-bit (pointers, qword ints), make sure we also
+     * use the 64-bit register names for the comparison. Using LONGINT_TYPE here
+     * used to work when LongInt was 8 bytes, but now emits 32-bit names (rXXd)
+     * which are invalid with a qword cmp suffix. */
     const char *left_name = use_qword
-        ? register_name_for_type(left_reg, LONGINT_TYPE)
+        ? left_reg->bit_64
         : register_name_for_expr(left_reg, left_expr);
     const char *right_name = use_qword
-        ? register_name_for_type(right_reg, LONGINT_TYPE)
+        ? right_reg->bit_64
         : register_name_for_expr(right_reg, right_expr);
     snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);

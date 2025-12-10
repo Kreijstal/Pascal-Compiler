@@ -1300,16 +1300,6 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("boolean");
         return BOOL;
     }
-    if (strcasecmp(name, "NativeInt") == 0 || strcasecmp(name, "cint64") == 0) {
-        if (type_id_out != NULL)
-            *type_id_out = strdup("longint");
-        return LONGINT_TYPE;
-    }
-    if (strcasecmp(name, "NativeUInt") == 0 || strcasecmp(name, "cuint64") == 0) {
-        if (type_id_out != NULL)
-            *type_id_out = strdup("longint");  // Treat unsigned as signed for size purposes
-        return LONGINT_TYPE;
-    }
     /* Procedure and Function as bare type names (no parameters) - procedure pointers */
     if (strcasecmp(name, "procedure") == 0 || strcasecmp(name, "function") == 0) {
         /* Don't set type_id_out - PROCEDURE type tag is sufficient */
@@ -3786,21 +3776,8 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
     while (*tail != NULL)
         tail = &(*tail)->next;
 
-    /* Create visited set to detect circular references */
-    VisitedSet *visited = visited_set_create();
-    if (visited == NULL) {
-        fprintf(stderr, "ERROR: Failed to allocate visited set for const traversal\n");
-        return;
-    }
-
     ast_t *const_decl = const_section->child;
     while (const_decl != NULL) {
-        /* Check for circular reference before processing */
-        if (!is_safe_to_continue(visited, const_decl)) {
-            fprintf(stderr, "ERROR: Circular reference detected in const section, stopping traversal\n");
-            break;
-        }
-        
         if (const_decl->typ == PASCAL_T_CONST_DECL) {
             Tree_t *decl = convert_const_decl(const_decl, var_builder, type_section, const_section);
             if (decl != NULL) {
@@ -3811,8 +3788,6 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
         }
         const_decl = const_decl->next;
     }
-    
-    visited_set_destroy(visited);
 }
 
 static int select_range_primitive_tag(const TypeInfo *info)
@@ -6849,6 +6824,29 @@ static ast_t *find_node_by_type(ast_t *node, int target_type) {
     return find_node_by_type(node->next, target_type);
 }
 
+/**
+ * Helper to find the last occurrence of a node type in a subtree.
+ * Performs a depth-first traversal but keeps updating the result so that
+ * the deepest/rightmost match is returned. This is useful when multiple
+ * BEGIN blocks exist (e.g., function bodies plus program body) and we want
+ * the final program block rather than the first nested block.
+ */
+static ast_t *find_last_node_by_type(ast_t *node, int target_type) {
+    ast_t *last = NULL;
+    while (node != NULL) {
+        /* Recurse into children first to honor depth-first ordering */
+        ast_t *child_last = find_last_node_by_type(node->child, target_type);
+        if (child_last != NULL)
+            last = child_last;
+        
+        if (node->typ == target_type)
+            last = node;
+        
+        node = node->next;
+    }
+    return last;
+}
+
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     Tree_t *final_tree = NULL;
     if (program_ast == NULL)
@@ -6961,6 +6959,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ast_t *type_section_ast = NULL;  /* Keep AST for enum resolution */
         ListNode_t *subprograms = NULL;
         struct Statement *body = NULL;
+        int body_line = -1;
 
         /* Create visited set to detect circular references in top-level sections */
         VisitedSet *visited = visited_set_create();
@@ -6974,7 +6973,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
             if (getenv("KGPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
-                fprintf(stderr, "[kgpc program] section typ=%d line=%d\n", section->typ, section->line);
+                fprintf(stderr, "[kgpc program] section typ=%d (%s) line=%d\n",
+                    section->typ, pascal_tag_to_string(section->typ), section->line);
             }
             /* Check for circular reference before processing */
             if (!is_safe_to_continue(visited, section)) {
@@ -7081,15 +7081,29 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             }
             case PASCAL_T_BEGIN_BLOCK:
-            case PASCAL_T_MAIN_BLOCK:
+            case PASCAL_T_MAIN_BLOCK: {
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found block type %d\n", section->typ);
                 }
-                body = convert_block(section);
+                struct Statement *candidate_body = convert_block(section);
+                /* Prefer the last non-empty block. If the candidate has no statements,
+                 * keep the previous body (if any) but still remember the candidate if
+                 * we haven't found anything else. */
+                if (candidate_body != NULL &&
+                    candidate_body->stmt_data.compound_statement != NULL) {
+                    if (section->line >= body_line) {
+                        body = candidate_body;
+                        body_line = section->line;
+                    }
+                } else if (body == NULL) {
+                    body = candidate_body;
+                    body_line = section->line;
+                }
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: body assigned, body=%p\n", body);
                 }
                 break;
+            }
             case PASCAL_T_TYPE_SPEC:
             case PASCAL_T_VAR_DECL:
             case PASCAL_T_TYPE_DECL:
@@ -7135,19 +7149,19 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             if (getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Searching for MAIN_BLOCK (typ=%d)\n", PASCAL_T_MAIN_BLOCK);
             }
-            ast_t* main_block_node = find_node_by_type(cur->child, PASCAL_T_MAIN_BLOCK);
+            ast_t* main_block_node = find_last_node_by_type(cur->child, PASCAL_T_MAIN_BLOCK);
             if (main_block_node == NULL) {
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found, searching for BEGIN_BLOCK (typ=%d)\n", PASCAL_T_BEGIN_BLOCK);
                 }
-                main_block_node = find_node_by_type(cur->child, PASCAL_T_BEGIN_BLOCK);
+                main_block_node = find_last_node_by_type(cur->child, PASCAL_T_BEGIN_BLOCK);
             }
             /* Also try typ=112 which appears in the AST */
             if (main_block_node == NULL) {
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=112\n");
                 }
-                main_block_node = find_node_by_type(cur->child, 112);
+                main_block_node = find_last_node_by_type(cur->child, 112);
             }
             if (main_block_node != NULL) {
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
@@ -7159,7 +7173,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 if (getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found directly, searching for typ=100 wrapper\n");
                 }
-                ast_t* wrapper_node = find_node_by_type(cur->child, 100);
+                ast_t* wrapper_node = find_last_node_by_type(cur->child, 100);
                 if (wrapper_node != NULL && wrapper_node->child != NULL) {
                     if (getenv("KGPC_DEBUG_BODY") != NULL) {
                         fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found typ=100 wrapper, checking its children\n");

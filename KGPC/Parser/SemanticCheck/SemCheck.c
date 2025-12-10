@@ -41,6 +41,35 @@
 #include "NameMangling.h"
 #include <stdarg.h>
 
+/* Helper declared in SemCheck_expr.c */
+static int semcheck_map_builtin_type_name_local(const char *id)
+{
+    if (id == NULL)
+        return UNKNOWN_TYPE;
+
+    if (pascal_identifier_equals(id, "Integer"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "LongInt"))
+        return LONGINT_TYPE;
+    if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
+        return REAL_TYPE;
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
+        return STRING_TYPE;
+    if (pascal_identifier_equals(id, "ShortString"))
+        return SHORTSTRING_TYPE;
+    if (pascal_identifier_equals(id, "Char"))
+        return CHAR_TYPE;
+    if (pascal_identifier_equals(id, "Boolean"))
+        return BOOL;
+    if (pascal_identifier_equals(id, "Pointer"))
+        return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "Byte"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "Word"))
+        return INT_TYPE;
+    return UNKNOWN_TYPE;
+}
+
 static int map_var_type_to_type_tag(enum VarType var_type)
 {
     switch (var_type)
@@ -237,6 +266,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls);
+static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, Tree_t *parent_subprogram);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
@@ -678,6 +708,56 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 1;
             *out_value = -value;
             return 0;
+        }
+        case EXPR_TYPECAST:
+        {
+            long long inner_value = 0;
+            if (evaluate_const_expr(symtab, expr->expr_data.typecast_data.expr, &inner_value) != 0)
+                return 1;
+
+            int target_type = expr->expr_data.typecast_data.target_type;
+            if (target_type == UNKNOWN_TYPE &&
+                expr->expr_data.typecast_data.target_type_id != NULL)
+            {
+                const char *id = expr->expr_data.typecast_data.target_type_id;
+                if (strcasecmp(id, "Byte") == 0 || strcasecmp(id, "Word") == 0 ||
+                    strcasecmp(id, "Integer") == 0)
+                    target_type = INT_TYPE;
+                else if (strcasecmp(id, "LongInt") == 0)
+                    target_type = LONGINT_TYPE;
+                else if (strcasecmp(id, "Pointer") == 0)
+                    target_type = POINTER_TYPE;
+                else if (strcasecmp(id, "Char") == 0)
+                    target_type = CHAR_TYPE;
+                else if (strcasecmp(id, "Boolean") == 0)
+                    target_type = BOOL;
+            }
+
+            switch (target_type)
+            {
+                case CHAR_TYPE:
+                    if (inner_value < 0 || inner_value > 255)
+                    {
+                        fprintf(stderr, "Error: typecast value %lld out of range for Char.\n",
+                            inner_value);
+                        return 1;
+                    }
+                    *out_value = (unsigned char)inner_value;
+                    return 0;
+                case BOOL:
+                    *out_value = (inner_value != 0);
+                    return 0;
+                case INT_TYPE:
+                case LONGINT_TYPE:
+                case POINTER_TYPE:
+                case UNKNOWN_TYPE:
+                    /* Treat other (or unresolved) integer-like casts as passthrough */
+                    *out_value = inner_value;
+                    return 0;
+                default:
+                    fprintf(stderr, "Error: unsupported const typecast target.\n");
+                    return 1;
+            }
         }
         case EXPR_ADDOP:
         {
@@ -2592,6 +2672,19 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             {
                 /* Create KgpcType if this is a set constant or has an explicit type annotation */
                 KgpcType *const_type = NULL;
+                /* If the const expression is an explicit typecast, prefer that as the const's type. */
+                if (value_expr != NULL && value_expr->type == EXPR_TYPECAST)
+                {
+                    int target_tag = value_expr->resolved_type;
+                    if (target_tag == UNKNOWN_TYPE &&
+                        value_expr->expr_data.typecast_data.target_type_id != NULL)
+                    {
+                        target_tag = semcheck_map_builtin_type_name_local(
+                            value_expr->expr_data.typecast_data.target_type_id);
+                    }
+                    if (target_tag != UNKNOWN_TYPE)
+                        const_type = create_primitive_type(target_tag);
+                }
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
@@ -3196,6 +3289,12 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
+#endif
+
+    /* Predeclare subprograms so they can be referenced in const initializers */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -3292,6 +3391,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
+    /* Predeclare interface subprograms before const evaluation */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
@@ -3300,6 +3401,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    /* Ensure implementation procedures are visible to const initializers */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
@@ -4204,6 +4307,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
 
+    /* If already declared in the current scope (e.g., from an earlier predeclare), skip */
+    HashNode_t *existing = NULL;
+    int existing_scope = FindIdent(&existing, symtab, id_to_use_for_lookup);
+    if (existing_scope == 0 && existing != NULL &&
+        (existing->hash_type == HASHTYPE_PROCEDURE || existing->hash_type == HASHTYPE_FUNCTION))
+    {
+        return 0;
+    }
+
     /* Check if already declared (e.g., by predeclare_subprogram in two-pass approach) */
     HashNode_t *existing_decl = NULL;
     int already_declared = 0;
@@ -4735,6 +4847,30 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 /* Forward declaration - we'll define this after semcheck_subprogram */
 static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias);
+
+/* Predeclare a list of subprograms without processing bodies.
+ * Safe to call multiple times thanks to duplicate checks in predeclare_subprogram. */
+static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
+    Tree_t *parent_subprogram)
+{
+    int return_val = 0;
+    ListNode_t *cur = subprograms;
+    while (cur != NULL)
+    {
+        assert(cur->cur != NULL);
+        assert(cur->type == LIST_TREE);
+        Tree_t *child = (Tree_t *)cur->cur;
+        return_val += predeclare_subprogram(symtab, child, max_scope_lev);
+        /* Optionally predeclare nested subprograms so their names are also visible early */
+        if (child->tree_data.subprogram_data.subprograms != NULL)
+        {
+            return_val += predeclare_subprograms(symtab,
+                child->tree_data.subprogram_data.subprograms, max_scope_lev + 1, child);
+        }
+        cur = cur->next;
+    }
+    return return_val;
+}
 
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram)

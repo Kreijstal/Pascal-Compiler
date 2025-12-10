@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include "register_types.h"
 #include "codegen.h"
 #include "codegen_statement.h"
@@ -3566,9 +3567,44 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         struct Expression *expr = (struct Expression *)args->cur;
 
         int expr_type = (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
+
+        /* If we couldn't get a reliable type tag from the expression itself,
+         * try the symbol table (helps with string params/vars that lost their
+         * resolved_type during earlier passes). */
+        if (expr != NULL && ctx != NULL && ctx->symtab != NULL && expr->type == EXPR_VAR_ID)
+        {
+            HashNode_t *sym_node = NULL;
+            if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                sym_node != NULL && sym_node->type != NULL)
+            {
+                int sym_type = kgpc_type_get_legacy_tag(sym_node->type);
+                if (sym_type != UNKNOWN_TYPE)
+                    expr_type = sym_type;
+            }
+        }
+        
+        /* If still unknown, check stack metadata (captures parameter/local sizes when
+         * the symtab scope was already popped after semantic analysis). */
+        if (expr != NULL && expr->type == EXPR_VAR_ID && expr_type == UNKNOWN_TYPE)
+        {
+            int scope_depth = 0;
+            StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+            if (stack_node != NULL && stack_node->size == 8)
+                expr_type = STRING_TYPE;
+        }
+
+        /* Propagate the discovered type back into the expression so downstream
+         * codegen (expr trees, storage sizing) can make the right width choice. */
+        if (expr != NULL && expr_type != UNKNOWN_TYPE && expr->resolved_type == UNKNOWN_TYPE)
+            expr->resolved_type = expr_type;
         
         /* Treat char arrays as strings for printing */
         int treat_as_string = (expr_type == STRING_TYPE);
+        /* If type info is missing but the literal is a string (and not typed as CHAR),
+         * still treat it as a string for write/writeln. This fixes string literals that
+         * lost their resolved_type during parsing/semantics. */
+        if (!treat_as_string && expr != NULL && expr->type == EXPR_STRING && expr_type != CHAR_TYPE)
+            treat_as_string = 1;
         if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
         {
             treat_as_string = 1;
@@ -4394,6 +4430,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
 
+        if (var == NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, ctx->symtab, var_expr->expr_data.id) != -1 &&
+                target_node != NULL &&
+                (target_node->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                 target_node->hash_type == HASHTYPE_FUNCTION))
+            {
+                long long size_bytes = 0;
+                if (var_expr->resolved_kgpc_type != NULL)
+                    size_bytes = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                if (size_bytes <= 0 || size_bytes > INT_MAX)
+                    size_bytes = CODEGEN_POINTER_SIZE_BYTES;
+
+                var = add_l_x(var_expr->expr_data.id, (int)size_bytes);
+                scope_depth = 0;
+            }
+        }
+
         
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
@@ -4681,13 +4736,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), addr_reg);
 
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
-        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (value_reg == NULL)
-            return codegen_fail_register(ctx, inst_list, NULL,
-                "ERROR: Unable to allocate register for array value.");
+        }
 
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
@@ -4778,14 +4834,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), addr_reg);
 
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
-
-        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (value_reg == NULL)
-            return codegen_fail_register(ctx, inst_list, NULL,
-                "ERROR: Unable to allocate register for record value.");
+        }
 
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
@@ -5120,7 +5176,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
      * On some platforms (e.g., Cygwin), type information may not be properly set,
      * but hash_type is always reliable for distinguishing variables from procedures.
      */
-    int is_indirect_call = 0;
+    int is_indirect_call = stmt->stmt_data.procedure_call_data.is_procedural_var_call;
     
     /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
      * It MUST be an indirect call, regardless of whether type info is present. */
@@ -5153,13 +5209,27 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
 
         /* 1. Create a temporary expression to evaluate the procedure variable */
-        struct Expression *callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
-        callee_expr->resolved_type = PROCEDURE;
+        struct Expression *callee_expr = NULL;
+        int callee_owned = 0;
+        if (stmt->stmt_data.procedure_call_data.is_procedural_var_call &&
+            stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
+        {
+            callee_expr = stmt->stmt_data.procedure_call_data.procedural_var_expr;
+            if (callee_expr->resolved_type == UNKNOWN_TYPE)
+                callee_expr->resolved_type = PROCEDURE;
+        }
+        else
+        {
+            callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
+            callee_expr->resolved_type = PROCEDURE;
+            callee_owned = 1;
+        }
         
         /* 2. Generate code to load the procedure's address into a register */
         Register_t *addr_reg = NULL;
         inst_list = codegen_evaluate_expr(callee_expr, inst_list, ctx, &addr_reg);
-        destroy_expr(callee_expr);
+        if (callee_owned)
+            destroy_expr(callee_expr);
         
         if (codegen_had_error(ctx) || addr_reg == NULL)
         {
