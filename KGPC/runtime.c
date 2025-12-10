@@ -3447,32 +3447,33 @@ int kgpc_free_library(uintptr_t handle)
  * directives make these symbols resolve to our implementations when no user
  * definition is present, while avoiding duplicate-definition errors when user
  * code defines them. */
-uintptr_t kgpc_LoadLibrary_s(const char *path)
+/* Default implementations that can be adopted via COFF alternatename so
+ * user-emitted stubs override when present, while ELF uses weak aliases. */
+uintptr_t kgpc_default_LoadLibrary_s(const char *path)
 {
     return kgpc_load_library(path);
 }
 
-uintptr_t kgpc_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
+uintptr_t kgpc_default_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
 {
     return kgpc_get_proc_address(handle, symbol);
 }
 
-int kgpc_FreeLibrary_li(uintptr_t handle)
+int kgpc_default_FreeLibrary_li(uintptr_t handle)
 {
     return kgpc_free_library(handle);
 }
 
 #ifdef _WIN32
 __asm__(".section .drectve,\"yn\"\n"
-        ".ascii \" /alternatename:LoadLibrary_s=kgpc_LoadLibrary_s\"\n"
-        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_GetProcedureAddress_li_s\"\n"
-        ".ascii \" /alternatename:FreeLibrary_li=kgpc_FreeLibrary_li\"\n"
-        ".byte 0\n"
+        ".ascii \" /alternatename:LoadLibrary_s=kgpc_default_LoadLibrary_s\\0\"\n"
+        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_default_GetProcedureAddress_li_s\\0\"\n"
+        ".ascii \" /alternatename:FreeLibrary_li=kgpc_default_FreeLibrary_li\\0\"\n"
         ".text");
 #else
-uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_LoadLibrary_s")));
-uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_GetProcedureAddress_li_s")));
-int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_FreeLibrary_li")));
+uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_default_LoadLibrary_s")));
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_default_GetProcedureAddress_li_s")));
+int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_default_FreeLibrary_li")));
 #endif
 
 int kgpc_directory_create(const char *path)
