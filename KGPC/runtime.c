@@ -3442,19 +3442,37 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
+/* Provide shims for Pascal mangled runtime helpers so the runtime always
+ * satisfies references emitted by generated assembly. The COFF alternatename
+ * directives make these symbols resolve to our implementations when no user
+ * definition is present, while avoiding duplicate-definition errors when user
+ * code defines them. */
+uintptr_t kgpc_LoadLibrary_s(const char *path)
+{
+    return kgpc_load_library(path);
+}
+
+uintptr_t kgpc_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
+{
+    return kgpc_get_proc_address(handle, symbol);
+}
+
+int kgpc_FreeLibrary_li(uintptr_t handle)
+{
+    return kgpc_free_library(handle);
+}
+
 #ifdef _WIN32
-/* Inject COFF alternatename directives so unresolved Pascal stubs bind to the
- * runtime implementations when no stub is emitted. */
 __asm__(".section .drectve,\"yn\"\n"
-        ".ascii \" /alternatename:LoadLibrary_s=kgpc_load_library\"\n"
-        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_get_proc_address\"\n"
-        ".ascii \" /alternatename:FreeLibrary_li=kgpc_free_library\"\n"
+        ".ascii \" /alternatename:LoadLibrary_s=kgpc_LoadLibrary_s\"\n"
+        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_GetProcedureAddress_li_s\"\n"
+        ".ascii \" /alternatename:FreeLibrary_li=kgpc_FreeLibrary_li\"\n"
+        ".byte 0\n"
         ".text");
 #else
-/* ELF targets can rely on weak aliases directly. */
-uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_load_library")));
-uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_get_proc_address")));
-int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_free_library")));
+uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_LoadLibrary_s")));
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_GetProcedureAddress_li_s")));
+int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_FreeLibrary_li")));
 #endif
 
 int kgpc_directory_create(const char *path)
