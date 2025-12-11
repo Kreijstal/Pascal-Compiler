@@ -3442,23 +3442,44 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
-/* Weak aliases to satisfy pascal-level mangling when the SysUtils wrappers
- * are not emitted (e.g., when the compiler bypasses wrapper generation).
- * If a strong definition exists in generated assembly, it will override these. */
-__attribute__((weak)) uintptr_t LoadLibrary_s(const char *path)
+/* Provide shims for Pascal mangled runtime helpers so the runtime always
+ * satisfies references emitted by generated assembly. The COFF alternatename
+ * directives make these symbols resolve to our implementations when no user
+ * definition is present. MSVC/LLD handle this fine; MinGW’s ld does not,
+ * so we also emit strong fallback symbols (see below) to satisfy MinGW. */
+/* Default implementations that can be adopted via COFF alternatename so
+ * user-emitted stubs override when present, while ELF uses weak aliases. */
+uintptr_t kgpc_default_LoadLibrary_s(const char *path)
 {
     return kgpc_load_library(path);
 }
 
-__attribute__((weak)) uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
+uintptr_t kgpc_default_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
 {
     return kgpc_get_proc_address(handle, symbol);
 }
 
-__attribute__((weak)) int FreeLibrary_li(uintptr_t handle)
+int kgpc_default_FreeLibrary_li(uintptr_t handle)
 {
     return kgpc_free_library(handle);
 }
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+__asm__(".section .drectve,\"yn\"\n"
+        ".ascii \" /alternatename:LoadLibrary_s=kgpc_default_LoadLibrary_s\\0\"\n"
+        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_default_GetProcedureAddress_li_s\\0\"\n"
+        ".ascii \" /alternatename:FreeLibrary_li=kgpc_default_FreeLibrary_li\\0\"\n"
+        ".text");
+/* MinGW/Cygwin linkers can ignore .drectve alternatename; provide strong
+ * definitions so COFF linkers that don’t honor the directive still find the symbols. */
+uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
+int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
+#else
+uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_default_LoadLibrary_s")));
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_default_GetProcedureAddress_li_s")));
+int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_default_FreeLibrary_li")));
+#endif
 
 int kgpc_directory_create(const char *path)
 {
