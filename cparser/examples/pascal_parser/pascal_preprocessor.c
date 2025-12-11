@@ -1779,6 +1779,21 @@ static bool parse_factor(const char **cursor,
             size = 1;
             found = true;
         }
+        // Floating point types
+        else if (strcmp(type_name, "VALREAL") == 0 || strcmp(type_name, "EXTENDED") == 0 || strcmp(type_name, "LONGDOUBLE") == 0) {
+            // FPC on x86_64 maps ValReal/Extended to the 80-bit extended type (10 bytes)
+            size = 10;
+            found = true;
+        } else if (strcmp(type_name, "DOUBLE") == 0 || strcmp(type_name, "REAL") == 0) {
+            size = 8;
+            found = true;
+        } else if (strcmp(type_name, "SINGLE") == 0 || strcmp(type_name, "FLOAT") == 0) {
+            size = 4;
+            found = true;
+        } else if (strcmp(type_name, "COMP") == 0 || strcmp(type_name, "CURRENCY") == 0) {
+            size = 8;
+            found = true;
+        }
         // C types (for x86_64 Linux)
         else if (strcmp(type_name, "TIME_T") == 0 || strcmp(type_name, "CLONG") == 0 || 
                  strcmp(type_name, "CULONG") == 0 || strcmp(type_name, "CLONGLONG") == 0 || 
