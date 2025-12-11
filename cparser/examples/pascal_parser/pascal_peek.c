@@ -19,22 +19,38 @@ int skip_pascal_layout_preview(const input_t* in, int pos) {
             continue;
         }
         if (ch == '{') {
+            int depth = 1;
             pos++;
-            while (pos < length && buffer[pos] != '}') {
+            while (pos < length && depth > 0) {
+                if (buffer[pos] == '{') {
+                    depth++;
+                    pos++;
+                    continue;
+                }
+                if (buffer[pos] == '}') {
+                    depth--;
+                    pos++;
+                    continue;
+                }
                 pos++;
             }
-            if (pos < length) pos++;
             continue;
         }
         if (ch == '(' && (pos + 1) < length && buffer[pos + 1] == '*') {
+            int depth = 1;
             pos += 2;
-            while ((pos + 1) < length && !(buffer[pos] == '*' && buffer[pos + 1] == ')')) {
+            while (pos < length && depth > 0) {
+                if (buffer[pos] == '(' && (pos + 1) < length && buffer[pos + 1] == '*') {
+                    depth++;
+                    pos += 2;
+                    continue;
+                }
+                if (buffer[pos] == '*' && (pos + 1) < length && buffer[pos + 1] == ')') {
+                    depth--;
+                    pos += 2;
+                    continue;
+                }
                 pos++;
-            }
-            if ((pos + 1) < length) {
-                pos += 2;
-            } else {
-                pos = length;
             }
             continue;
         }

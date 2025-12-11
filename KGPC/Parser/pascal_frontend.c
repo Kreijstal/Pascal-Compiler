@@ -499,6 +499,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     buffer = preprocessed_buffer;
     length = preprocessed_length;
 
+    const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
+    if (dump_path != NULL && dump_path[0] != '\0')
+    {
+        FILE *dump = fopen(dump_path, "w");
+        if (dump != NULL)
+        {
+            fwrite(buffer, 1, length, dump);
+            fclose(dump);
+        }
+    }
+
     // Early semantic of dialect: reject C-style shift operators '<<' and '>>'
     // Scan preprocessed buffer while skipping strings and comments.
     {

@@ -776,6 +776,14 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
         if (c == ')') {
             break;
         } else if (c == ';') {
+            /* Allow an optional trailing semicolon before ')' */
+            while (isspace((unsigned char)(c = read1(in))));
+            if (c != EOF) in->start--;
+            c = read1(in);
+            if (c == ')') {
+                break;
+            }
+            if (c != EOF) in->start--; /* Put back the non-')' character */
             continue; // Parse next field
         } else {
             free_ast(record_node);

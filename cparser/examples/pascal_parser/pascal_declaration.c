@@ -455,6 +455,12 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (dispatch->reference_parser && pascal_word_equals_ci(&word, "reference")) {
             return run_type_branch(in, dispatch->reference_parser);
         }
+        if (dispatch->procedure_parser && pascal_word_equals_ci(&word, "procedure")) {
+            return run_type_branch(in, dispatch->procedure_parser);
+        }
+        if (dispatch->function_parser && pascal_word_equals_ci(&word, "function")) {
+            return run_type_branch(in, dispatch->function_parser);
+        }
         if (dispatch->interface_parser && pascal_word_equals_ci(&word, "interface")) {
             return run_type_branch(in, dispatch->interface_parser);
         }
@@ -1208,6 +1214,8 @@ void init_pascal_unit_parser(combinator_t** p) {
     memset(type_args, 0, sizeof(*type_args));
     type_args->helper_parser = type_helper_type;
     type_args->reference_parser = reference_type;
+    type_args->procedure_parser = procedure_type(PASCAL_T_PROCEDURE_TYPE);
+    type_args->function_parser = function_type(PASCAL_T_FUNCTION_TYPE);
     type_args->interface_parser = iface_type;
     type_args->class_parser = class_spec;
     type_args->record_parser = record_spec;

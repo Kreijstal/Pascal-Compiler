@@ -61,6 +61,37 @@ int col_num = 1;
 char *file_to_parse = NULL;
 static UnitSearchPaths g_unit_paths;
 
+/* Ensure program-defined subprograms are emitted even if reachability misses them */
+static void mark_program_subs_used(Tree_t *program)
+{
+    if (program == NULL || program->type != TREE_PROGRAM_TYPE)
+        return;
+    ListNode_t *cur = program->tree_data.program_data.subprograms;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)cur->cur;
+            if (sub->type == TREE_SUBPROGRAM)
+            {
+                if (sub->tree_data.subprogram_data.statement_list != NULL &&
+                    sub->tree_data.subprogram_data.defined_in_unit == 0)
+                {
+                    sub->tree_data.subprogram_data.is_used = 1;
+                }
+                if (sub->tree_data.subprogram_data.subprograms != NULL)
+                {
+                    Tree_t wrapper = {0};
+                    wrapper.type = TREE_PROGRAM_TYPE;
+                    wrapper.tree_data.program_data.subprograms = sub->tree_data.subprogram_data.subprograms;
+                    mark_program_subs_used(&wrapper);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
 static void print_usage(const char *prog_name)
 {
     fprintf(stderr, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
@@ -1128,6 +1159,7 @@ int main(int argc, char **argv)
         /* Mark which functions are actually used (dead code elimination) */
         extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
         mark_used_functions(user_tree, symtab);
+        mark_program_subs_used(user_tree);
 
         double codegen_start = track_time ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);
