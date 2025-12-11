@@ -835,7 +835,7 @@ static inline int type_is_file_like(int type_tag)
 
 int codegen_type_uses_qword(int type_tag)
 {
-    return (type_tag == LONGINT_TYPE || type_tag == REAL_TYPE ||
+    return (type_tag == REAL_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
         type_is_file_like(type_tag) || type_tag == PROCEDURE);
 }
@@ -922,9 +922,10 @@ long long expr_effective_size_bytes(const struct Expression *expr)
         case POINTER_TYPE:
         case FILE_TYPE:
         case TEXT_TYPE:
-        case LONGINT_TYPE:
         case REAL_TYPE:
             return 8;
+        case LONGINT_TYPE:
+            return 4;  // Match FPC's 32-bit LongInt
         default:
             return 0;
     }
@@ -1279,6 +1280,7 @@ static long long codegen_sizeof_type_tag(int type_tag)
         case ENUM_TYPE:
             return 4;
         case LONGINT_TYPE:
+            return 4;  // Match FPC's 32-bit LongInt
         case REAL_TYPE:
             return 8;
         case STRING_TYPE:
@@ -2711,6 +2713,13 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
             CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
             #endif
             return inst_list;
+        case EXPR_ADDR_OF_PROC:
+            CODEGEN_DEBUG("DEBUG: Processing address-of-procedure expression\n");
+            inst_list = codegen_expr_via_tree(expr, inst_list, ctx);
+            #ifdef DEBUG_CODEGEN
+            CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+            #endif
+            return inst_list;
         case EXPR_RELOP:
             CODEGEN_DEBUG("DEBUG: Processing relational operator expression\n");
             #ifdef DEBUG_CODEGEN
@@ -2793,6 +2802,66 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
     return inst_list;
 }
 
+static int codegen_get_indexable_element_size(struct Expression *array_expr,
+    CodeGenContext *ctx, long long *out_size)
+{
+    assert(array_expr != NULL);
+    assert(out_size != NULL);
+
+    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
+    int base_is_pointer = expr_has_type_tag(array_expr, POINTER_TYPE);
+    long long element_size_ll = 1;
+
+    if (base_is_string)
+    {
+        *out_size = 1;
+        return 1;
+    }
+
+    if (base_is_pointer)
+    {
+        /* For pointers, get the size of what the pointer points to */
+        if (codegen_sizeof_type(ctx, array_expr->pointer_subtype,
+                array_expr->pointer_subtype_id,
+                array_expr->record_type,
+                &element_size_ll, 0) != 0 || element_size_ll <= 0)
+        {
+            /* Default to pointer size if we can't determine */
+            element_size_ll = 8;
+        }
+        *out_size = element_size_ll;
+        return 1;
+    }
+
+    element_size_ll = expr_get_array_element_size(array_expr, ctx);
+
+    int need_element_size = 0;
+    if (element_size_ll <= 0)
+        need_element_size = 1;
+    else if (array_expr->array_element_record_type != NULL)
+        need_element_size = 1;
+    else if (array_expr->array_element_type == RECORD_TYPE)
+        need_element_size = 1;
+    else if (array_expr->array_element_type == UNKNOWN_TYPE &&
+        array_expr->array_element_type_id != NULL)
+        need_element_size = 1;
+
+    if (need_element_size)
+    {
+        if (codegen_sizeof_type(ctx, array_expr->array_element_type,
+                array_expr->array_element_type_id,
+                array_expr->array_element_record_type,
+                &element_size_ll, 0) != 0 || element_size_ll <= 0)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to determine element size for array access.");
+            return 0;
+        }
+    }
+
+    *out_size = element_size_ll;
+    return 1;
+}
+
 
 ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg)
 {
@@ -2867,55 +2936,11 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
 
     long long element_size_ll = 1;
-    
-    if (base_is_string)
+    if (!codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
     {
-        element_size_ll = 1;
-    }
-    else if (base_is_pointer)
-    {
-        /* For pointers, get the size of what the pointer points to */
-        int need_element_size = 1;
-        if (need_element_size)
-        {
-            if (codegen_sizeof_type(ctx, array_expr->pointer_subtype,
-                    array_expr->pointer_subtype_id,
-                    array_expr->record_type,
-                    &element_size_ll, 0) != 0 || element_size_ll <= 0)
-            {
-                /* Default to pointer size if we can't determine */
-                element_size_ll = 8;
-            }
-        }
-    }
-    else
-    {
-        element_size_ll = expr_get_array_element_size(array_expr, ctx);
-        
-        int need_element_size = 0;
-        if (element_size_ll <= 0)
-            need_element_size = 1;
-        else if (array_expr->array_element_record_type != NULL)
-            need_element_size = 1;
-        else if (array_expr->array_element_type == RECORD_TYPE)
-            need_element_size = 1;
-        else if (array_expr->array_element_type == UNKNOWN_TYPE &&
-            array_expr->array_element_type_id != NULL)
-            need_element_size = 1;
-
-        if (need_element_size)
-        {
-            if (codegen_sizeof_type(ctx, array_expr->array_element_type,
-                    array_expr->array_element_type_id,
-                    array_expr->array_element_record_type,
-                    &element_size_ll, 0) != 0 || element_size_ll <= 0)
-            {
-                codegen_report_error(ctx, "ERROR: Unable to determine element size for array access.");
-                free_reg(get_reg_stack(), base_reg);
-                free_reg(get_reg_stack(), index_reg);
-                return inst_list;
-            }
-        }
+        free_reg(get_reg_stack(), base_reg);
+        free_reg(get_reg_stack(), index_reg);
+        return inst_list;
     }
 
     int element_size = (int)element_size_ll;
@@ -2963,11 +2988,15 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     if (codegen_had_error(ctx) || addr_reg == NULL)
         return inst_list;
 
-    /* Get the element size from the array expression */
     struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
-    long long element_size = 4; /* default to 4-byte integer */
-    if (array_expr != NULL)
-        element_size = expr_get_array_element_size(array_expr, ctx);
+    long long element_size_ll = 4; /* default to 4-byte integer */
+    if (array_expr != NULL &&
+        !codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
+    {
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+    int element_size = (int)element_size_ll;
 
     char buffer[100];
     if (expr_uses_qword_kgpctype(expr))
@@ -3339,11 +3368,15 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     }
 
     int use_qword = expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
+    /* When either operand is 64-bit (pointers, qword ints), make sure we also
+     * use the 64-bit register names for the comparison. Using LONGINT_TYPE here
+     * used to work when LongInt was 8 bytes, but now emits 32-bit names (rXXd)
+     * which are invalid with a qword cmp suffix. */
     const char *left_name = use_qword
-        ? register_name_for_type(left_reg, LONGINT_TYPE)
+        ? left_reg->bit_64
         : register_name_for_expr(left_reg, left_expr);
     const char *right_name = use_qword
-        ? register_name_for_type(right_reg, LONGINT_TYPE)
+        ? right_reg->bit_64
         : register_name_for_expr(right_reg, right_expr);
     snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);

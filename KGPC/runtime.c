@@ -175,7 +175,7 @@ void kgpc_tfile_assign(KGPCTextFile **slot, const char *path)
     if (file->element_type == KGPC_BINARY_UNSPECIFIED)
     {
         file->element_type = KGPC_BINARY_INT32;
-        file->element_size = sizeof(long long);
+        file->element_size = sizeof(int32_t);
     }
 }
 
@@ -266,18 +266,27 @@ void kgpc_tfile_reset(KGPCTextFile **slot)
 
 void kgpc_tfile_close(KGPCTextFile **slot)
 {
-    if (slot == NULL)
+    if (slot == NULL) {
+        kgpc_ioresult_set(EINVAL);
         return;
+    }
 
     KGPCTextFile *file = *slot;
-    if (file == NULL)
+    if (file == NULL) {
+        kgpc_ioresult_set(EBADF);
         return;
-
-    if (file->handle != NULL)
-    {
-        fclose(file->handle);
-        file->handle = NULL;
     }
+    if (file->handle == NULL) {
+        kgpc_ioresult_set(0);
+        return;
+    }
+
+    if (fclose(file->handle) == 0) {
+        kgpc_ioresult_set(0);
+    } else {
+        kgpc_ioresult_set(errno);
+    }
+    file->handle = NULL;
 }
 
 int kgpc_tfile_read_int(KGPCTextFile **slot, int32_t *ptr)
@@ -301,8 +310,13 @@ int kgpc_tfile_read_int(KGPCTextFile **slot, int32_t *ptr)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(feof(file->handle) ? 0 : ferror(file->handle));
-    return 1;
+    if (feof(file->handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
+    return ferror(file->handle) ? 1 : 0;
 }
 
 int kgpc_tfile_read_char(KGPCTextFile **slot, char *ptr)
@@ -328,8 +342,13 @@ int kgpc_tfile_read_char(KGPCTextFile **slot, char *ptr)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(feof(file->handle) ? 0 : ferror(file->handle));
-    return 1;
+    if (feof(file->handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
+    return ferror(file->handle) ? 1 : 0;
 }
 
 int kgpc_tfile_read_real(KGPCTextFile **slot, double *ptr)
@@ -353,8 +372,13 @@ int kgpc_tfile_read_real(KGPCTextFile **slot, double *ptr)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(feof(file->handle) ? 0 : ferror(file->handle));
-    return 1;
+    if (feof(file->handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
+    return ferror(file->handle) ? 1 : 0;
 }
 
 int kgpc_tfile_write_int(KGPCTextFile **slot, int32_t value)
@@ -378,7 +402,7 @@ int kgpc_tfile_write_int(KGPCTextFile **slot, int32_t value)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(ferror(file->handle));
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -404,7 +428,7 @@ int kgpc_tfile_write_char(KGPCTextFile **slot, char value)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(ferror(file->handle));
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -429,7 +453,7 @@ int kgpc_tfile_write_real(KGPCTextFile **slot, double value)
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(ferror(file->handle));
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -458,7 +482,7 @@ int kgpc_tfile_blockread(KGPCTextFile **slot, void *buffer, size_t count, long l
             case KGPC_BINARY_INT32:
             case KGPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(long long);
+                elem_size = sizeof(int32_t);
                 break;
         }
         file->element_size = elem_size;
@@ -481,7 +505,12 @@ int kgpc_tfile_blockread(KGPCTextFile **slot, void *buffer, size_t count, long l
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(feof(file->handle) ? 0 : 1);
+    if (feof(file->handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -510,7 +539,7 @@ int kgpc_tfile_blockwrite(KGPCTextFile **slot, const void *buffer, size_t count,
             case KGPC_BINARY_INT32:
             case KGPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(long long);
+                elem_size = sizeof(int32_t);
                 break;
         }
         file->element_size = elem_size;
@@ -533,7 +562,7 @@ int kgpc_tfile_blockwrite(KGPCTextFile **slot, const void *buffer, size_t count,
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(ferror(file->handle));
+    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
     return 1;
 }
 
@@ -562,7 +591,7 @@ int kgpc_tfile_seek(KGPCTextFile **slot, long long index)
             case KGPC_BINARY_INT32:
             case KGPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(long long);
+                elem_size = sizeof(int32_t);
                 break;
         }
         file->element_size = elem_size;
@@ -601,7 +630,7 @@ int kgpc_tfile_filepos(KGPCTextFile **slot, long long *position)
             case KGPC_BINARY_INT32:
             case KGPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(long long);
+                elem_size = sizeof(int32_t);
                 break;
         }
         file->element_size = elem_size;
@@ -642,7 +671,7 @@ int kgpc_tfile_truncate(KGPCTextFile **slot, long long length)
             case KGPC_BINARY_INT32:
             case KGPC_BINARY_UNSPECIFIED:
             default:
-                elem_size = sizeof(long long);
+                elem_size = sizeof(int32_t);
                 break;
         }
         file->element_size = elem_size;
@@ -815,9 +844,9 @@ int kgpc_read_integer(KGPCTextFile *file, int32_t *ptr) {
     return kgpc_scanf_result_to_ioresult(res);
 }
 
-int kgpc_read_longint(KGPCTextFile *file, int64_t *ptr) {
+int kgpc_read_longint(KGPCTextFile *file, int32_t *ptr) {
     FILE *stream = kgpc_text_input_stream(file);
-    int res = fscanf(stream, "%" PRId64, ptr);
+    int res = fscanf(stream, "%" PRId32, ptr);
     return kgpc_scanf_result_to_ioresult(res);
 }
 
@@ -2269,6 +2298,13 @@ int64_t kgpc_string_compare(const char *lhs, const char *rhs)
     return 0;
 }
 
+char *kgpc_strpas(const char *p)
+{
+    if (p == NULL)
+        return kgpc_alloc_empty_string();
+    return kgpc_string_duplicate(p);
+}
+
 int64_t kgpc_string_pos(const char *substr, const char *value)
 {
     if (value == NULL)
@@ -3405,6 +3441,45 @@ int kgpc_free_library(uintptr_t handle)
     return (dlclose((void *)handle) == 0) ? 1 : 0;
 #endif
 }
+
+/* Provide shims for Pascal mangled runtime helpers so the runtime always
+ * satisfies references emitted by generated assembly. The COFF alternatename
+ * directives make these symbols resolve to our implementations when no user
+ * definition is present. MSVC/LLD handle this fine; MinGW’s ld does not,
+ * so we also emit strong fallback symbols (see below) to satisfy MinGW. */
+/* Default implementations that can be adopted via COFF alternatename so
+ * user-emitted stubs override when present, while ELF uses weak aliases. */
+uintptr_t kgpc_default_LoadLibrary_s(const char *path)
+{
+    return kgpc_load_library(path);
+}
+
+uintptr_t kgpc_default_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
+{
+    return kgpc_get_proc_address(handle, symbol);
+}
+
+int kgpc_default_FreeLibrary_li(uintptr_t handle)
+{
+    return kgpc_free_library(handle);
+}
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+__asm__(".section .drectve,\"yn\"\n"
+        ".ascii \" /alternatename:LoadLibrary_s=kgpc_default_LoadLibrary_s\\0\"\n"
+        ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_default_GetProcedureAddress_li_s\\0\"\n"
+        ".ascii \" /alternatename:FreeLibrary_li=kgpc_default_FreeLibrary_li\\0\"\n"
+        ".text");
+/* MinGW/Cygwin linkers can ignore .drectve alternatename; provide strong
+ * definitions so COFF linkers that don’t honor the directive still find the symbols. */
+uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
+int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
+#else
+uintptr_t LoadLibrary_s(const char *path) __attribute__((weak, alias("kgpc_default_LoadLibrary_s")));
+uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) __attribute__((weak, alias("kgpc_default_GetProcedureAddress_li_s")));
+int FreeLibrary_li(uintptr_t handle) __attribute__((weak, alias("kgpc_default_FreeLibrary_li")));
+#endif
 
 int kgpc_directory_create(const char *path)
 {

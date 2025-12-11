@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 #include "register_types.h"
 #include "codegen.h"
 #include "codegen_statement.h"
@@ -113,6 +114,69 @@ static int is_unsigned_type_name(const char *type_name)
     {
         return 1;
     }
+    return 0;
+}
+
+/**
+ * Check if an expression requires 64-bit (qword) storage for integers.
+ * This returns true for:
+ * - Int64, QWord, UInt64 types (storage_size=8)
+ * - Integer literals that don't fit in 32 bits
+ * - Const variables whose values don't fit in 32 bits
+ */
+static int expr_is_64bit_integer(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* Check storage_size in KgpcType for Int64/QWord/UInt64 */
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->storage_size >= 8)
+            return 1;
+    }
+    
+    /* Check for large integer literals that require 64 bits */
+    if (expr->type == EXPR_INUM)
+    {
+        long long val = expr->expr_data.i_num;
+        if (val > 2147483647LL || val < -2147483648LL)
+            return 1;
+    }
+    
+    return 0;
+}
+
+/**
+ * Check if an expression's effective value requires 64-bit storage.
+ * This is like expr_is_64bit_integer but also checks const variable values
+ * by looking up the symbol table.
+ */
+static int expr_value_requires_64bit(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+    
+    /* First check the standard 64-bit integer conditions */
+    if (expr_is_64bit_integer(expr))
+        return 1;
+    
+    /* For variable references, check if it's a const with a large value */
+    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
+        {
+            if (node->hash_type == HASHTYPE_CONST)
+            {
+                long long val = node->const_int_value;
+                if (val > 2147483647LL || val < -2147483648LL)
+                    return 1;
+            }
+        }
+    }
+    
     return 0;
 }
 
@@ -3503,9 +3567,44 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         struct Expression *expr = (struct Expression *)args->cur;
 
         int expr_type = (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
+
+        /* If we couldn't get a reliable type tag from the expression itself,
+         * try the symbol table (helps with string params/vars that lost their
+         * resolved_type during earlier passes). */
+        if (expr != NULL && ctx != NULL && ctx->symtab != NULL && expr->type == EXPR_VAR_ID)
+        {
+            HashNode_t *sym_node = NULL;
+            if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                sym_node != NULL && sym_node->type != NULL)
+            {
+                int sym_type = kgpc_type_get_legacy_tag(sym_node->type);
+                if (sym_type != UNKNOWN_TYPE)
+                    expr_type = sym_type;
+            }
+        }
+        
+        /* If still unknown, check stack metadata (captures parameter/local sizes when
+         * the symtab scope was already popped after semantic analysis). */
+        if (expr != NULL && expr->type == EXPR_VAR_ID && expr_type == UNKNOWN_TYPE)
+        {
+            int scope_depth = 0;
+            StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+            if (stack_node != NULL && stack_node->size == 8)
+                expr_type = STRING_TYPE;
+        }
+
+        /* Propagate the discovered type back into the expression so downstream
+         * codegen (expr trees, storage sizing) can make the right width choice. */
+        if (expr != NULL && expr_type != UNKNOWN_TYPE && expr->resolved_type == UNKNOWN_TYPE)
+            expr->resolved_type = expr_type;
         
         /* Treat char arrays as strings for printing */
         int treat_as_string = (expr_type == STRING_TYPE);
+        /* If type info is missing but the literal is a string (and not typed as CHAR),
+         * still treat it as a string for write/writeln. This fixes string literals that
+         * lost their resolved_type during parsing/semantics. */
+        if (!treat_as_string && expr != NULL && expr->type == EXPR_STRING && expr_type != CHAR_TYPE)
+            treat_as_string = 1;
         if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
         {
             treat_as_string = 1;
@@ -3661,10 +3760,22 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
         }
-        else if (expr_type == LONGINT_TYPE || expr_is_real || expr_type == POINTER_TYPE)
+        else if (expr_is_real || expr_type == POINTER_TYPE)
         {
+            /* REAL_TYPE and POINTER_TYPE are 64-bit - use movq */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
+        }
+        else if (expr_value_requires_64bit(expr, ctx))
+        {
+            /* Int64/QWord/UInt64 or large const values - use 64-bit move */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (expr_type == LONGINT_TYPE)
+        {
+            /* LONGINT_TYPE is now 4 bytes (to match FPC) - sign-extend to 64-bit */
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_dest64);
         }
         else
         {
@@ -4319,6 +4430,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int scope_depth = 0;
         var = find_label_with_depth(var_expr->expr_data.id, &scope_depth);
 
+        if (var == NULL)
+        {
+            HashNode_t *target_node = NULL;
+            if (FindIdent(&target_node, ctx->symtab, var_expr->expr_data.id) != -1 &&
+                target_node != NULL &&
+                (target_node->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                 target_node->hash_type == HASHTYPE_FUNCTION))
+            {
+                long long size_bytes = 0;
+                if (var_expr->resolved_kgpc_type != NULL)
+                    size_bytes = kgpc_type_sizeof(var_expr->resolved_kgpc_type);
+                if (size_bytes <= 0 || size_bytes > INT_MAX)
+                    size_bytes = CODEGEN_POINTER_SIZE_BYTES;
+
+                var = add_l_x(var_expr->expr_data.id, (int)size_bytes);
+                scope_depth = 0;
+            }
+        }
+
         
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
@@ -4606,13 +4736,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), addr_reg);
 
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
-        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (value_reg == NULL)
-            return codegen_fail_register(ctx, inst_list, NULL,
-                "ERROR: Unable to allocate register for array value.");
+        }
 
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
@@ -4703,14 +4834,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         inst_list = add_inst(inst_list, buffer);
         free_reg(get_reg_stack(), addr_reg);
 
-        inst_list = codegen_expr(assign_expr, inst_list, ctx);
-        if (codegen_had_error(ctx))
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
+        {
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
             return inst_list;
-
-        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (value_reg == NULL)
-            return codegen_fail_register(ctx, inst_list, NULL,
-                "ERROR: Unable to allocate register for record value.");
+        }
 
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
@@ -5045,7 +5176,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
      * On some platforms (e.g., Cygwin), type information may not be properly set,
      * but hash_type is always reliable for distinguishing variables from procedures.
      */
-    int is_indirect_call = 0;
+    int is_indirect_call = stmt->stmt_data.procedure_call_data.is_procedural_var_call;
     
     /* Case 1: If hash_type is VAR, this is a procedure variable or parameter.
      * It MUST be an indirect call, regardless of whether type info is present. */
@@ -5078,13 +5209,27 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         }
 
         /* 1. Create a temporary expression to evaluate the procedure variable */
-        struct Expression *callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
-        callee_expr->resolved_type = PROCEDURE;
+        struct Expression *callee_expr = NULL;
+        int callee_owned = 0;
+        if (stmt->stmt_data.procedure_call_data.is_procedural_var_call &&
+            stmt->stmt_data.procedure_call_data.procedural_var_expr != NULL)
+        {
+            callee_expr = stmt->stmt_data.procedure_call_data.procedural_var_expr;
+            if (callee_expr->resolved_type == UNKNOWN_TYPE)
+                callee_expr->resolved_type = PROCEDURE;
+        }
+        else
+        {
+            callee_expr = mk_varid(stmt->line_num, strdup(unmangled_name));
+            callee_expr->resolved_type = PROCEDURE;
+            callee_owned = 1;
+        }
         
         /* 2. Generate code to load the procedure's address into a register */
         Register_t *addr_reg = NULL;
         inst_list = codegen_evaluate_expr(callee_expr, inst_list, ctx, &addr_reg);
-        destroy_expr(callee_expr);
+        if (callee_owned)
+            destroy_expr(callee_expr);
         
         if (codegen_had_error(ctx) || addr_reg == NULL)
         {
@@ -5470,8 +5615,12 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     // Check if this is a TFPGList (specialized generic list)
     int is_fpglist = 0;
     struct RecordType *record_info = NULL;
-    if (array_type != NULL && array_type->kind == TYPE_KIND_RECORD) {
-        record_info = kgpc_type_get_record(array_type);
+    KgpcType *record_candidate = array_type;
+    if (array_type != NULL && array_type->kind == TYPE_KIND_POINTER)
+        record_candidate = array_type->info.points_to;
+
+    if (record_candidate != NULL && record_candidate->kind == TYPE_KIND_RECORD) {
+        record_info = kgpc_type_get_record(record_candidate);
         if (record_info != NULL && record_info->type_id != NULL) {
             const char *prefix = "TFPGList$";
             size_t prefix_len = strlen(prefix);
@@ -5625,7 +5774,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
                             switch (f->array_element_type) {
                                 case CHAR_TYPE: case BOOL: element_size = 1; break;
                                 case INT_TYPE: case ENUM_TYPE: element_size = 4; break;
-                                case LONGINT_TYPE: case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
+                                case LONGINT_TYPE: element_size = 4; break;  // 4 bytes to match FPC
+                                case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
                             }
                         }
                         break;

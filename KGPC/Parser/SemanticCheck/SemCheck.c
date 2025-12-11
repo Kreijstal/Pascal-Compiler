@@ -41,6 +41,35 @@
 #include "NameMangling.h"
 #include <stdarg.h>
 
+/* Helper declared in SemCheck_expr.c */
+static int semcheck_map_builtin_type_name_local(const char *id)
+{
+    if (id == NULL)
+        return UNKNOWN_TYPE;
+
+    if (pascal_identifier_equals(id, "Integer"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "LongInt"))
+        return LONGINT_TYPE;
+    if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
+        return REAL_TYPE;
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
+        return STRING_TYPE;
+    if (pascal_identifier_equals(id, "ShortString"))
+        return SHORTSTRING_TYPE;
+    if (pascal_identifier_equals(id, "Char"))
+        return CHAR_TYPE;
+    if (pascal_identifier_equals(id, "Boolean"))
+        return BOOL;
+    if (pascal_identifier_equals(id, "Pointer"))
+        return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "Byte"))
+        return INT_TYPE;
+    if (pascal_identifier_equals(id, "Word"))
+        return INT_TYPE;
+    return UNKNOWN_TYPE;
+}
+
 static int map_var_type_to_type_tag(enum VarType var_type)
 {
     switch (var_type)
@@ -237,6 +266,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls);
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
 static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls);
+static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, Tree_t *parent_subprogram);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
@@ -276,6 +306,7 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count)
 {
+    const char *debug_env = getenv("KGPC_DEBUG_RETURN_TYPE");
     if (subprogram == NULL || symtab == NULL)
         return NULL;
 
@@ -292,6 +323,19 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             if (error_count != NULL)
                 ++(*error_count);
         }
+    }
+
+    if (debug_env != NULL)
+    {
+        const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
+        int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
+        fprintf(stderr,
+            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d\n",
+            subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
+            rt_id ? rt_id : "<null>",
+            primitive_tag,
+            (void *)type_node,
+            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1);
     }
 
     return kgpc_type_build_function_return(
@@ -678,6 +722,56 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 1;
             *out_value = -value;
             return 0;
+        }
+        case EXPR_TYPECAST:
+        {
+            long long inner_value = 0;
+            if (evaluate_const_expr(symtab, expr->expr_data.typecast_data.expr, &inner_value) != 0)
+                return 1;
+
+            int target_type = expr->expr_data.typecast_data.target_type;
+            if (target_type == UNKNOWN_TYPE &&
+                expr->expr_data.typecast_data.target_type_id != NULL)
+            {
+                const char *id = expr->expr_data.typecast_data.target_type_id;
+                if (strcasecmp(id, "Byte") == 0 || strcasecmp(id, "Word") == 0 ||
+                    strcasecmp(id, "Integer") == 0)
+                    target_type = INT_TYPE;
+                else if (strcasecmp(id, "LongInt") == 0)
+                    target_type = LONGINT_TYPE;
+                else if (strcasecmp(id, "Pointer") == 0)
+                    target_type = POINTER_TYPE;
+                else if (strcasecmp(id, "Char") == 0)
+                    target_type = CHAR_TYPE;
+                else if (strcasecmp(id, "Boolean") == 0)
+                    target_type = BOOL;
+            }
+
+            switch (target_type)
+            {
+                case CHAR_TYPE:
+                    if (inner_value < 0 || inner_value > 255)
+                    {
+                        fprintf(stderr, "Error: typecast value %lld out of range for Char.\n",
+                            inner_value);
+                        return 1;
+                    }
+                    *out_value = (unsigned char)inner_value;
+                    return 0;
+                case BOOL:
+                    *out_value = (inner_value != 0);
+                    return 0;
+                case INT_TYPE:
+                case LONGINT_TYPE:
+                case POINTER_TYPE:
+                case UNKNOWN_TYPE:
+                    /* Treat other (or unresolved) integer-like casts as passthrough */
+                    *out_value = inner_value;
+                    return 0;
+                default:
+                    fprintf(stderr, "Error: unsupported const typecast target.\n");
+                    return 1;
+            }
         }
         case EXPR_ADDOP:
         {
@@ -1276,26 +1370,122 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 
                 /* Check if already declared (e.g., from a previous pass or builtin) */
                 HashNode_t *existing = NULL;
-                if (FindIdent(&existing, symtab, (char *)type_id) >= 0 && existing != NULL)
+                int scope_level = FindIdent(&existing, symtab, (char *)type_id);
+                if (scope_level == 0 && existing != NULL)
                 {
                     /* Already declared, skip */
                     cur = cur->next;
                     continue;
                 }
                 
-                /* Only handle simple TYPE_DECL_ALIAS that resolve to primitive types */
-                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                /* Predeclare record types so they can be referenced (e.g., as function returns) */
+                if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                {
+                    struct RecordType *record_info = tree->tree_data.type_decl_data.info.record;
+                    
+                    /* Annotate the record with its canonical name if missing */
+                    if (record_info != NULL && record_info->type_id == NULL)
+                        record_info->type_id = strdup(type_id);
+                    
+                    KgpcType *kgpc_type = create_record_type(record_info);
+                    if (record_type_is_class(record_info))
+                    {
+                        /* Classes are reference types - register as pointers to the record */
+                        kgpc_type = create_pointer_type(kgpc_type);
+                    }
+                    if (kgpc_type != NULL)
+                    {
+                        /* Store in tree for later reuse by semcheck_type_decls */
+                        if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                        {
+                            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                            kgpc_type_retain(kgpc_type);
+                        }
+                        
+                        int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        if (result > 0)
+                            errors += result;
+                    }
+                }
+                /* Only handle TYPE_DECL_ALIAS cases we can resolve early */
+                else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
                 {
                     struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
                     
-                    /* Skip complex types - let semcheck_type_decls handle them */
-                    if (alias->is_enum || alias->is_array || alias->is_pointer || 
-                        alias->is_set || alias->is_file || alias->inline_record_type != NULL)
+                    /* Handle inline record aliases (e.g., generic specializations) */
+                    if (alias->inline_record_type != NULL &&
+                        alias->inline_record_type->type_id != NULL)
+                    {
+                        const char *record_name = alias->inline_record_type->type_id;
+                        HashNode_t *existing_inline = NULL;
+                        int inline_scope = FindIdent(&existing_inline, symtab, (char *)record_name);
+                        if (inline_scope != 0 || existing_inline == NULL)
+                        {
+                            KgpcType *inline_kgpc = create_record_type(alias->inline_record_type);
+                            if (record_type_is_class(alias->inline_record_type))
+                                inline_kgpc = create_pointer_type(inline_kgpc);
+
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
+                                kgpc_type_retain(inline_kgpc);
+                            }
+
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)record_name, inline_kgpc);
+                            if (result > 0)
+                                errors += result;
+                        }
+
+                        /* Also register the alias name itself */
+                        KgpcType *alias_kgpc = create_record_type(alias->inline_record_type);
+                        if (record_type_is_class(alias->inline_record_type))
+                            alias_kgpc = create_pointer_type(alias_kgpc);
+                        kgpc_type_set_type_alias(alias_kgpc, alias);
+                        int alias_result = PushTypeOntoScope_Typed(symtab, (char *)type_id, alias_kgpc);
+                        if (alias_result > 0)
+                            errors += alias_result;
+
+                        cur = cur->next;
+                        continue;
+                    }
+
+                    /* Skip other complex types - let semcheck_type_decls handle them */
+                    if (alias->is_enum || alias->is_array || alias->is_set || 
+                        alias->is_file)
                     {
                         cur = cur->next;
                         continue;
                     }
                     
+                    /* Handle pointer aliases to already known element types */
+                    if (alias->is_pointer)
+                    {
+                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(alias, symtab);
+                        if (kgpc_type != NULL)
+                        {
+                            if (getenv("KGPC_DEBUG_PREDECLARE_POINTERS") != NULL)
+                            {
+                                fprintf(stderr, "[KGPC] predeclare pointer alias %s: ptr_type=%d ptr_id=%s kind=%d\n",
+                                    type_id,
+                                    alias->pointer_type,
+                                    alias->pointer_type_id ? alias->pointer_type_id : "<null>",
+                                    kgpc_type->kind);
+                            }
+                            if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                            {
+                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                kgpc_type_retain(kgpc_type);
+                            }
+
+                            int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                            if (result > 0)
+                                errors += result;
+
+                            cur = cur->next;
+                            continue;
+                        }
+                    }
+
                     /* Only pre-declare simple primitive type aliases */
                     KgpcType *kgpc_type = NULL;
                     
@@ -1328,7 +1518,9 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             pascal_identifier_equals(target, "LongWord") ||
                             pascal_identifier_equals(target, "DWord") ||
                             pascal_identifier_equals(target, "QWord") ||
-                            pascal_identifier_equals(target, "UInt64"))
+                            pascal_identifier_equals(target, "UInt64") ||
+                            pascal_identifier_equals(target, "SizeUInt") ||
+                            pascal_identifier_equals(target, "NativeUInt"))
                         {
                             kgpc_type = create_primitive_type(LONGINT_TYPE);
                         }
@@ -2321,6 +2513,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         int before_symtab_errors = return_val;
 
         KgpcType *kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
+        if (record_info != NULL && record_type_is_class(record_info) &&
+            kgpc_type != NULL && kgpc_type->kind == TYPE_KIND_RECORD)
+        {
+            /* Classes are reference types - represent them as pointers to the class record */
+            KgpcType *wrapped = create_pointer_type(kgpc_type);
+            kgpc_type = wrapped;
+            tree->tree_data.type_decl_data.kgpc_type = wrapped;
+        }
 
         /* Check if this type was already pre-declared by predeclare_types().
          * If so, skip the push to avoid "redeclaration" errors.
@@ -2590,6 +2790,19 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             {
                 /* Create KgpcType if this is a set constant or has an explicit type annotation */
                 KgpcType *const_type = NULL;
+                /* If the const expression is an explicit typecast, prefer that as the const's type. */
+                if (value_expr != NULL && value_expr->type == EXPR_TYPECAST)
+                {
+                    int target_tag = value_expr->resolved_type;
+                    if (target_tag == UNKNOWN_TYPE &&
+                        value_expr->expr_data.typecast_data.target_type_id != NULL)
+                    {
+                        target_tag = semcheck_map_builtin_type_name_local(
+                            value_expr->expr_data.typecast_data.target_type_id);
+                    }
+                    if (target_tag != UNKNOWN_TYPE)
+                        const_type = create_primitive_type(target_tag);
+                }
                 if (value_expr != NULL && value_expr->type == EXPR_SET)
                 {
                     const_type = create_primitive_type(SET_TYPE);
@@ -2671,7 +2884,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *int64_name = strdup("int64");
     if (int64_name != NULL) {
-        KgpcType *int64_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        /* Int64 is 8 bytes (64-bit signed integer) - different from LongInt which is 4 bytes */
+        KgpcType *int64_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
         assert(int64_type != NULL && "Failed to create int64 type");
         AddBuiltinType_Typed(symtab, int64_name, int64_type);
         destroy_kgpc_type(int64_type);
@@ -2835,10 +3049,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(smallint_type);
         free(smallint_name);
     }
-    /* QWord and UInt64 are 64-bit unsigned integers */
+    /* QWord and UInt64 are 64-bit unsigned integers (8 bytes) */
     char *qword_name = strdup("QWord");
     if (qword_name != NULL) {
-        KgpcType *qword_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *qword_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
         assert(qword_type != NULL && "Failed to create QWord type");
         AddBuiltinType_Typed(symtab, qword_name, qword_type);
         destroy_kgpc_type(qword_type);
@@ -2846,7 +3060,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *uint64_name = strdup("UInt64");
     if (uint64_name != NULL) {
-        KgpcType *uint64_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
+        KgpcType *uint64_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
         assert(uint64_type != NULL && "Failed to create UInt64 type");
         AddBuiltinType_Typed(symtab, uint64_name, uint64_type);
         destroy_kgpc_type(uint64_type);
@@ -3193,6 +3407,12 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
+#ifdef DEBUG
+    if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
+#endif
+
+    /* Predeclare subprograms so they can be referenced in const initializers */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -3289,6 +3509,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
+    /* Predeclare interface subprograms before const evaluation */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
@@ -3297,6 +3519,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    /* Ensure implementation procedures are visible to const initializers */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
@@ -3432,6 +3656,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_INTEGER;
                         else if (pascal_identifier_equals(type_id, "LongInt"))
                             var_type = HASHVAR_LONGINT;
+                        else if (pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") || 
+                                 pascal_identifier_equals(type_id, "NativeUInt"))
+                            var_type = HASHVAR_LONGINT;  /* Unsigned 64-bit on x86-64 */
                         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                             var_type = HASHVAR_REAL;
                         else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString"))
@@ -4657,6 +4884,42 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
     
+    /* Check if this specific overload is already declared (by matching mangled name) */
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
+        ListNode_t *cur = all_matches;
+        int already_exists = 0;
+        while (cur != NULL)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
+            {
+                already_exists = 1;
+                break;
+            }
+            /* If this exact subprogram was already registered (even with a different
+             * mangled name), reuse that declaration instead of creating a duplicate. */
+            if (candidate != NULL && candidate->type != NULL &&
+                candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                candidate->type->info.proc_info.definition == subprogram)
+            {
+                if (candidate->mangled_id != NULL)
+                    free(candidate->mangled_id);
+                candidate->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
+                already_exists = 1;
+                break;
+            }
+            cur = cur->next;
+        }
+        if (all_matches != NULL)
+            DestroyList(all_matches);
+        
+        if (already_exists)
+            return 0;  /* Already declared - skip to avoid duplicates */
+    }
+    
     /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
@@ -4729,6 +4992,30 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 /* Forward declaration - we'll define this after semcheck_subprogram */
 static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);
 static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias);
+
+/* Predeclare a list of subprograms without processing bodies.
+ * Safe to call multiple times thanks to duplicate checks in predeclare_subprogram. */
+static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
+    Tree_t *parent_subprogram)
+{
+    int return_val = 0;
+    ListNode_t *cur = subprograms;
+    while (cur != NULL)
+    {
+        assert(cur->cur != NULL);
+        assert(cur->type == LIST_TREE);
+        Tree_t *child = (Tree_t *)cur->cur;
+        return_val += predeclare_subprogram(symtab, child, max_scope_lev);
+        /* Optionally predeclare nested subprograms so their names are also visible early */
+        if (child->tree_data.subprogram_data.subprograms != NULL)
+        {
+            return_val += predeclare_subprograms(symtab,
+                child->tree_data.subprogram_data.subprograms, max_scope_lev + 1, child);
+        }
+        cur = cur->next;
+    }
+    return return_val;
+}
 
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram)
