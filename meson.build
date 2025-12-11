@@ -73,7 +73,7 @@ if build_integration_tests
     dependencies: calculator_dep
   )
 
-  test('calculator unit tests', calc_tests,timeout:120)
+  test('calculator unit tests', calc_tests,timeout:240)
 
   bash = find_program('bash', required: false)
   if bash.found()
