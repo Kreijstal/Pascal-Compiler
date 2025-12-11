@@ -2858,6 +2858,9 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
 /*TODO: these should be defined in pascal not in semantic analyzer */
 void semcheck_add_builtins(SymTab_t *symtab)
 {
+    /* Platform newline constants to support System/ObjPas resourcestring concatenations */
+    AddBuiltinStringConst(symtab, "LineEnding", "\n");
+    AddBuiltinStringConst(symtab, "sLineBreak", "\n");
     char *pchar_name = strdup("PChar");
     if (pchar_name != NULL) {
         KgpcType *pchar_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
