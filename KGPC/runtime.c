@@ -3464,14 +3464,14 @@ int kgpc_default_FreeLibrary_li(uintptr_t handle)
     return kgpc_free_library(handle);
 }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__CYGWIN__)
 __asm__(".section .drectve,\"yn\"\n"
         ".ascii \" /alternatename:LoadLibrary_s=kgpc_default_LoadLibrary_s\\0\"\n"
         ".ascii \" /alternatename:GetProcedureAddress_li_s=kgpc_default_GetProcedureAddress_li_s\\0\"\n"
         ".ascii \" /alternatename:FreeLibrary_li=kgpc_default_FreeLibrary_li\\0\"\n"
         ".text");
-/* MinGW ld (used under Wine) ignores .drectve alternatename; provide strong
- * definitions so linkers that don’t honor the directive still find the symbols. */
+/* MinGW/Cygwin linkers can ignore .drectve alternatename; provide strong
+ * definitions so COFF linkers that don’t honor the directive still find the symbols. */
 uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
 uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
 int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
