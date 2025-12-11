@@ -442,7 +442,38 @@ int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value)
             node->is_constant = 1;
             node->const_real_value = value;
         }
+    }
+    else
+    {
         destroy_kgpc_type(type);
+    }
+    return result;
+}
+
+int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    assert(value != NULL);
+
+    KgpcType *type = create_primitive_type(STRING_TYPE);
+    if (type == NULL)
+        return 1;
+
+    int result = AddIdentToTable(symtab->builtins, (char *)id, NULL, HASHTYPE_CONST, type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(symtab->builtins, (char *)id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_string_value = strdup(value);
+            if (node->const_string_value == NULL)
+            {
+                destroy_kgpc_type(type);
+                return 1;
+            }
+        }
     }
     else
     {
