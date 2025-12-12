@@ -2474,6 +2474,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
     expr->record_type = NULL;
+    expr->is_pointer_diff = 0;
     expr->is_array_expr = 0;
     expr->array_element_type = UNKNOWN_TYPE;
     expr->array_element_type_id = NULL;

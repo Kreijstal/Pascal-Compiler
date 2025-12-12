@@ -2495,23 +2495,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     
                     if (!is_real)
                     {
-                        /* Store result to Result variable instead of moving to eax */
-                        StackNode_t *result_var = find_label("Result");
-                        if (result_var != NULL)
-                        {
-                            /* Store to Result variable */
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n", result_reg->bit_32, result_var->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        else
-                        {
-                            /* Fallback: move to eax */
-                            if (strcmp(result_reg->bit_32, "%eax") != 0)
-                            {
-                                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
-                                inst_list = add_inst(inst_list, buffer);
-                            }
-                        }
+                        /* For integer types, move result to eax for return */
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
                     }
                     /* For real types, result is already in xmm0 */
                     
@@ -2529,27 +2515,8 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
                 inst_list = add_inst(inst_list, buffer);
             }
-            
-            /* Jump to function epilogue instead of generating leave/ret directly */
-            if (ctx->current_subprogram_mangled != NULL && ctx->current_subprogram_mangled[0] != '\0')
-            {
-                char buffer[64];
-                snprintf(buffer, sizeof(buffer), "\tjmp\t.L%s_epilogue\n", ctx->current_subprogram_mangled);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else if (ctx->current_subprogram_id != NULL && ctx->current_subprogram_id[0] != '\0')
-            {
-                /* Try using unmangled name */
-                char buffer[64];
-                snprintf(buffer, sizeof(buffer), "\tjmp\t.L%s_epilogue\n", ctx->current_subprogram_id);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            else
-            {
-                /* Fallback: generate leave/ret directly if we don't have function name */
-                inst_list = add_inst(inst_list, "\tleave\n");
-                inst_list = add_inst(inst_list, "\tret\n");
-            }
+            inst_list = add_inst(inst_list, "\tleave\n");
+            inst_list = add_inst(inst_list, "\tret\n");
             break;
         }
         case STMT_CASE:
