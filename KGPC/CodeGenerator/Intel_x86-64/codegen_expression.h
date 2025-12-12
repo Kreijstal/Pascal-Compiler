@@ -14,6 +14,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *);
 
 ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
+ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 ListNode_t *codegen_condition_expr(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
 ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx);
