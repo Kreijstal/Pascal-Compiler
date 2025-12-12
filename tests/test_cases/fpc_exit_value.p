@@ -6,7 +6,8 @@ program TestExitWithValue;
 
 function GetFive: Integer;
 begin
-  Exit(5);  { Should return 5 and exit function }
+  Exit(5);  { Should return 5 and exit function immediately }
+  { This line should never execute - Exit terminates the function }
   WriteLn('This should not print');
 end;
 

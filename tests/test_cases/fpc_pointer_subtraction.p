@@ -23,7 +23,8 @@ begin
   p := @arr[7];
   q := @arr[2];
   
-  { Pointer subtraction should give the difference in elements }
+  { p points to arr[7], q points to arr[2] }
+  { Pointer subtraction returns element difference: 7 - 2 = 5 }
   diff := p - q;  { Should be 5 }
   WriteLn(diff);
   
