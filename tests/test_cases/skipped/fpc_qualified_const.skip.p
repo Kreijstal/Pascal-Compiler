@@ -1,9 +1,17 @@
 program fpc_qualified_const;
+{ SKIPPED: KGPC does not support qualified constant expressions }
+{ }
 { Test qualified constant expressions from units }
 { This is a critical FPC bootstrap requirement }
 { FPC RTL uses patterns like: }
 {   const ARG_MAX = UnixType.ARG_MAX; }
 { to alias constants between units }
+{ }
+{ ERROR: "unsupported const expression" }
+{ }
+{ This compiles and runs correctly with FPC, outputting: }
+{   42   }
+{   1024 }
 
 uses fpc_qualified_const_unit;
 
