@@ -735,7 +735,20 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
           break;
 
         case STMT_EXIT:
-          fprintf(f, "[EXIT]\n");
+          fprintf(f, "[EXIT]");
+          if (stmt->stmt_data.exit_data.return_expr != NULL)
+          {
+            fprintf(f, ":\n");
+            ++num_indent;
+            print_indent(f, num_indent);
+            fprintf(f, "[RETURN_VALUE]:\n");
+            expr_print(stmt->stmt_data.exit_data.return_expr, f, num_indent + 1);
+            --num_indent;
+          }
+          else
+          {
+            fprintf(f, "\n");
+          }
           break;
 
         case STMT_CASE:
@@ -1328,6 +1341,10 @@ void destroy_stmt(struct Statement *stmt)
           break;
 
         case STMT_EXIT:
+          /* Free the optional return expression */
+          if (stmt->stmt_data.exit_data.return_expr != NULL)
+            destroy_expr(stmt->stmt_data.exit_data.return_expr);
+          break;
         case STMT_BREAK:
         case STMT_CONTINUE:
           /* No data to free for simple control flow statements */
@@ -2180,6 +2197,11 @@ struct Statement *mk_continue(int line_num)
 
 struct Statement *mk_exit(int line_num)
 {
+    return mk_exit_with_value(line_num, NULL);
+}
+
+struct Statement *mk_exit_with_value(int line_num, struct Expression *return_expr)
+{
     struct Statement *new_stmt = (struct Statement *)malloc(sizeof(struct Statement));
     assert(new_stmt != NULL);
 
@@ -2187,6 +2209,7 @@ struct Statement *mk_exit(int line_num)
     new_stmt->col_num = 0;
     new_stmt->type = STMT_EXIT;
     memset(&new_stmt->stmt_data, 0, sizeof(new_stmt->stmt_data));
+    new_stmt->stmt_data.exit_data.return_expr = return_expr;
 
     return new_stmt;
 }
@@ -2451,6 +2474,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->pointer_subtype = UNKNOWN_TYPE;
     expr->pointer_subtype_id = NULL;
     expr->record_type = NULL;
+    expr->is_pointer_diff = 0;
     expr->is_array_expr = 0;
     expr->array_element_type = UNKNOWN_TYPE;
     expr->array_element_type_id = NULL;

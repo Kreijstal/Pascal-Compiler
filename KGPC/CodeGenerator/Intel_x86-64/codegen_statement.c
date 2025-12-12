@@ -56,8 +56,45 @@ static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_li
 extern const char *g_reg_debug_context;
 #endif
 
+ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx);
+
 ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, int *relop_type);
+
+/* Emit rodata for a set-typed constant (supports 4-byte or 32-byte payloads) */
+ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (node == NULL || ctx == NULL || node->const_set_value == NULL || node->const_set_size <= 0)
+        return inst_list;
+
+    if (node->const_set_label == NULL)
+    {
+        char label[32];
+        snprintf(label, sizeof(label), ".LCSET%d", ctx->write_label_counter++);
+
+        const char *readonly_section = codegen_readonly_section_directive();
+        char rodata[2048];
+        size_t pos = 0;
+        pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "%s\n%s:\n",
+            readonly_section, label);
+
+        for (int i = 0; i < node->const_set_size; ++i)
+        {
+            if (pos + 24 >= sizeof(rodata))
+                break;
+            pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "\t.byte %u\n",
+                (unsigned)node->const_set_value[i]);
+        }
+
+        if (pos + 16 < sizeof(rodata))
+            pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "\t.text\n");
+
+        inst_list = add_inst(inst_list, rodata);
+        node->const_set_label = strdup(label);
+    }
+
+    return inst_list;
+}
 static int record_type_is_mp_integer(const struct RecordType *record_type);
 static int codegen_expr_is_mp_integer(struct Expression *expr);
 static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
@@ -859,6 +896,43 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         
         if (var_node == NULL)
         {
+            /* Constant set literals (set of char) are materialized in rodata */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *const_node = NULL;
+                if (FindIdent(&const_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
+                    const_node->const_set_value != NULL && const_node->const_set_size > 0)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (addr_reg == NULL)
+                        {
+                            inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                                "ERROR: Unable to allocate register for set constant.");
+                            goto cleanup;
+                        }
+                    }
+
+                    inst_list = codegen_emit_const_set_rodata(const_node, inst_list, ctx);
+                    if (const_node->const_set_label == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Failed to materialize set constant.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        const_node->const_set_label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
             if (nonlocal_flag() == 1)
             {
                 int offset = 0;
@@ -2405,6 +2479,32 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_EXIT:
         {
             inst_list = add_inst(inst_list, "\t# EXIT statement\n");
+            
+            /* Handle Exit(value) - evaluate value and return it */
+            struct Expression *return_expr = stmt->stmt_data.exit_data.return_expr;
+            if (return_expr != NULL)
+            {
+                /* Evaluate the return expression */
+                Register_t *result_reg = NULL;
+                inst_list = codegen_expr_with_result(return_expr, inst_list, ctx, &result_reg);
+                
+                if (result_reg != NULL && codegen_had_error(ctx) == 0)
+                {
+                    char buffer[128];
+                    int is_real = (return_expr->resolved_type == REAL_TYPE);
+                    
+                    if (!is_real)
+                    {
+                        /* For integer types, move result to eax for return */
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    /* For real types, result is already in xmm0 */
+                    
+                    free_reg(get_reg_stack(), result_reg);
+                }
+            }
+            
             if (codegen_has_finally(ctx))
             {
                 char exit_label[18];
@@ -3691,6 +3791,19 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             if (codegen_had_error(ctx))
             {
                 free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+        }
+        else if (expr != NULL && expr->type == EXPR_RELOP)
+        {
+            /* Use special relop handling for char set IN operations and other relops */
+            free_reg(get_reg_stack(), value_reg); /* Will get a new register from codegen_relop_to_value */
+            value_reg = NULL;
+            inst_list = codegen_relop_to_value(expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL)
+            {
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
                 return inst_list;
             }
         }

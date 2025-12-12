@@ -327,6 +327,12 @@ struct Statement
         {
             struct Expression *call_expr; /* Optional */
         } inherited_data;
+
+        /* EXIT with optional return value (FPC extension) */
+        struct Exit
+        {
+            struct Expression *return_expr; /* Optional return value for functions */
+        } exit_data;
     } stmt_data;
 };
 
@@ -531,6 +537,7 @@ struct Expression
     int pointer_subtype;
     char *pointer_subtype_id;
     /* struct RecordType *record_type; MOVED */
+    int is_pointer_diff; /* Flag for pointer-pointer subtraction */
     int is_array_expr;
     int array_element_type;
     char *array_element_type_id;
