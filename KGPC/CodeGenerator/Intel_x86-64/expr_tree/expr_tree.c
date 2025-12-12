@@ -2284,6 +2284,82 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         left, inst_list, sse_op);
                 break;
             }
+            /* Handle pointer-pointer subtraction: result is element difference */
+            if (expr->is_pointer_diff && type == MINUS)
+            {
+                struct Expression *left_expr = expr->expr_data.addop_data.left_expr;
+                
+                /* Convert operands to 64-bit for pointer operations */
+                char left64_buf[16], right64_buf[16];
+                const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
+                const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+                
+                /* Get element size from the pointer type.
+                 * For typed pointers like PByte (^Byte), use pointer_subtype_id to get correct size.
+                 * If pointer_subtype_id is set, use UNKNOWN_TYPE so lookup by name works properly.
+                 */
+                long long element_size = 1;
+                if (left_expr != NULL)
+                {
+                    int lookup_type = left_expr->pointer_subtype;
+                    const char *lookup_id = left_expr->pointer_subtype_id;
+                    
+                    /* If we have a type name, prioritize it over the type tag */
+                    if (lookup_id != NULL)
+                        lookup_type = UNKNOWN_TYPE;
+                    
+                    if (lookup_type != UNKNOWN_TYPE || lookup_id != NULL)
+                    {
+                        if (codegen_sizeof_type_reference(ctx, lookup_type, lookup_id,
+                                left_expr->record_type, &element_size) != 0 || element_size <= 0)
+                        {
+                            element_size = 1; /* Default to byte size */
+                        }
+                    }
+                }
+                /* Also check the expression's own type info (set during semcheck) */
+                else if (expr->pointer_subtype != UNKNOWN_TYPE || expr->pointer_subtype_id != NULL)
+                {
+                    int lookup_type = expr->pointer_subtype;
+                    const char *lookup_id = expr->pointer_subtype_id;
+                    
+                    /* If we have a type name, prioritize it over the type tag */
+                    if (lookup_id != NULL)
+                        lookup_type = UNKNOWN_TYPE;
+                    
+                    if (codegen_sizeof_type_reference(ctx, lookup_type, lookup_id,
+                            expr->record_type, &element_size) != 0 || element_size <= 0)
+                    {
+                        element_size = 1;
+                    }
+                }
+                
+                /* Subtract pointers: left64 = left64 - right64 (in bytes) */
+                snprintf(buffer, sizeof(buffer), "\tsubq\t%s, %s\n", right64, left64);
+                inst_list = add_inst(inst_list, buffer);
+                
+                /* Divide by element size to get element count */
+                if (element_size > 1)
+                {
+                    /* Use signed division (idiv) to handle negative differences */
+                    /* Result in RAX, remainder in RDX, we need to set up dividend in RDX:RAX */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", left64);
+                    inst_list = add_inst(inst_list, buffer);
+                    /* Sign-extend RAX into RDX:RAX */
+                    snprintf(buffer, sizeof(buffer), "\tcqto\n");
+                    inst_list = add_inst(inst_list, buffer);
+                    /* Load divisor */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", element_size);
+                    inst_list = add_inst(inst_list, buffer);
+                    /* Divide */
+                    snprintf(buffer, sizeof(buffer), "\tidivq\t%%r11\n");
+                    inst_list = add_inst(inst_list, buffer);
+                    /* Move result back to left64 */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                break;
+            }
             /* Handle pointer arithmetic: pointer + integer or integer + pointer */
             if (expr->resolved_type == POINTER_TYPE && (type == PLUS || type == MINUS))
             {

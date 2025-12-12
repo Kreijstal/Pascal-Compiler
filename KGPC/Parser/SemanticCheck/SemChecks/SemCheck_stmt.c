@@ -1232,7 +1232,23 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_EXIT:
-            /* No semantic checking needed for simple control flow statements */
+            /* Exit statement with optional return expression */
+            {
+                struct Expression *return_expr = stmt->stmt_data.exit_data.return_expr;
+                if (return_expr != NULL)
+                {
+                    /* Type-check the return expression */
+                    int expr_type;
+                    return_val += semcheck_expr(&expr_type, symtab, return_expr, max_scope_lev, 0);
+                    
+                    /* Mark Result as assigned if we're in a function context */
+                    HashNode_t *result_node = NULL;
+                    if (FindIdent(&result_node, symtab, "Result") == 0 && result_node != NULL)
+                    {
+                        result_node->mutated = MUTATE;
+                    }
+                }
+            }
             break;
 
         case STMT_CASE:

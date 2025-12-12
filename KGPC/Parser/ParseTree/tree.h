@@ -253,6 +253,7 @@ struct Statement *mk_for_in(int line_num, struct Expression *loop_var, struct Ex
 struct Statement *mk_asmblock(int line_num, char *code);
 
 struct Statement *mk_exit(int line_num);
+struct Statement *mk_exit_with_value(int line_num, struct Expression *return_expr);
 
 struct Statement *mk_break(int line_num);
 struct Statement *mk_continue(int line_num);
