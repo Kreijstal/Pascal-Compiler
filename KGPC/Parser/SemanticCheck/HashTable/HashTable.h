@@ -71,6 +71,10 @@ typedef struct HashNode
     long long const_int_value;
     double const_real_value;
     char *const_string_value;  /* Owned by HashNode, must be freed */
+    /* Typed constant support */
+    unsigned char *const_set_value; /* Owned by HashNode, must be freed */
+    int const_set_size;             /* Bytes used in const_set_value (4 for small sets, 32 for char sets) */
+    char *const_set_label;          /* Optional emitted label for codegen reuse */
 
     int is_var_parameter;
     int requires_static_link;

@@ -41,6 +41,10 @@ int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value);
 /* Pushes a string constant onto the current scope (head) */
 int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value);
 
+/* Pushes a set constant (supports 4-byte small sets and 32-byte char sets) */
+int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
+    int size_bytes, KgpcType *type);
+
 /* Pushes a new type onto the current scope (head) */
 int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
     struct RecordType *record_type, struct TypeAlias *type_alias);

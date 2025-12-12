@@ -174,6 +174,46 @@ int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
     return result;
 }
 
+/* Pushes a set constant with explicit KgpcType and raw bytes */
+int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
+    int size_bytes, KgpcType *type)
+{
+    assert(symtab != NULL);
+    assert(symtab->stack_head != NULL);
+    assert(id != NULL);
+    assert(data != NULL);
+    assert(size_bytes > 0);
+
+    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+    int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
+    if (result == 0)
+    {
+        HashNode_t *node = FindIdentInTable(cur_hash, id);
+        if (node != NULL)
+        {
+            node->is_constant = 1;
+            node->const_set_size = size_bytes;
+            node->const_set_value = (unsigned char *)malloc((size_t)size_bytes);
+            if (node->const_set_value == NULL)
+            {
+                return 1;
+            }
+            memcpy(node->const_set_value, data, (size_t)size_bytes);
+            /* For small sets (<=32 bits) also expose the integer mask */
+            if (size_bytes <= (int)sizeof(long long))
+            {
+                long long mask = 0;
+                for (int i = 0; i < size_bytes; ++i)
+                {
+                    mask |= ((long long)node->const_set_value[i]) << (i * 8);
+                }
+                node->const_int_value = mask;
+            }
+        }
+    }
+    return result;
+}
+
 /* Pushes a new procedure onto the current scope (head) */
 /* NOTE: args can be NULL to represent no args */
 /* Searches for an identifier and sets the hash_return that contains the id and type information */

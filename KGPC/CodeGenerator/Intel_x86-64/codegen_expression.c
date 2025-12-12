@@ -1013,6 +1013,12 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
                     return 1;
             }
+            if (node->hash_type == HASHTYPE_CONST &&
+                node->const_set_value != NULL &&
+                node->const_set_size >= 32)
+            {
+                return 1;
+            }
         }
     }
     
@@ -3188,7 +3194,21 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             *relop_type = NE;
 
         /* Check if this is a character set IN operation */
-        if (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx))
+        HashNode_t *right_const_set = NULL;
+        int right_is_char_set = (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx));
+        if (right_expr != NULL && right_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, right_expr->expr_data.id) >= 0 && node != NULL &&
+                node->hash_type == HASHTYPE_CONST && node->const_set_value != NULL &&
+                node->const_set_size > 0)
+            {
+                right_const_set = node;
+                right_is_char_set = 1;
+            }
+        }
+
+        if (right_is_char_set)
         {
             /* For character sets: right operand is 32-byte array, left is char value (0-255)
              * Algorithm:
@@ -3200,14 +3220,38 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
             /* Get address of the set variable */
             Register_t *set_addr_reg = NULL;
-            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
-            if (codegen_had_error(ctx) || set_addr_reg == NULL)
+            if (right_const_set != NULL && right_const_set->const_set_value != NULL)
             {
-                if (set_addr_reg != NULL)
-                    free_reg(get_reg_stack(), set_addr_reg);
-                free_reg(get_reg_stack(), left_reg);
-                free_reg(get_reg_stack(), right_reg);
-                return inst_list;
+                inst_list = codegen_emit_const_set_rodata(right_const_set, inst_list, ctx);
+                if (codegen_had_error(ctx) || right_const_set->const_set_label == NULL)
+                {
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), right_reg);
+                    return inst_list;
+                }
+                set_addr_reg = codegen_try_get_reg(&inst_list, ctx, "char set const addr");
+                if (set_addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), right_reg);
+                    return inst_list;
+                }
+                char buffer_addr[96];
+                snprintf(buffer_addr, sizeof(buffer_addr), "\tleaq\t%s(%%rip), %s\n",
+                    right_const_set->const_set_label, set_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer_addr);
+            }
+            else
+            {
+                inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+                if (codegen_had_error(ctx) || set_addr_reg == NULL)
+                {
+                    if (set_addr_reg != NULL)
+                        free_reg(get_reg_stack(), set_addr_reg);
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), right_reg);
+                    return inst_list;
+                }
             }
 
             /* Calculate dword index: value / 32 (shift right by 5) */

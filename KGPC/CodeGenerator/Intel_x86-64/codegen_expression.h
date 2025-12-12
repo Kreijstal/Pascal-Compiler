@@ -16,6 +16,7 @@ ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
 ListNode_t *codegen_condition_expr(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
+ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx);
 
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_with_result(struct Expression *, ListNode_t *, CodeGenContext *ctx, Register_t **out_reg);
