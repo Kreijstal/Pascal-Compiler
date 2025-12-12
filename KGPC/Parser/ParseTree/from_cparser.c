@@ -5823,8 +5823,43 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
 
         return mk_for_in(stmt_node->line, var_expr, collection_expr, body_stmt);
     }
-    case PASCAL_T_EXIT_STMT:
-        return mk_exit(stmt_node->line);
+    case PASCAL_T_EXIT_STMT: {
+        /* Exit statement may have an optional return expression: exit(expression) */
+        ast_t *child = stmt_node->child;
+        struct Expression *return_expr = NULL;
+        
+        /* Skip the 'exit' keyword token if present */
+        while (child != NULL && child->typ == PASCAL_T_NONE && child->child == NULL) {
+            child = child->next;
+        }
+        
+        /* Check for a parenthesized expression - the NONE node with a child expression */
+        if (child != NULL) {
+            ast_t *unwrapped = unwrap_pascal_node(child);
+            /* Look inside the optional NONE wrapper that contains: '(' expr ')' */
+            if (unwrapped != NULL && unwrapped->typ == PASCAL_T_NONE && unwrapped->child != NULL) {
+                /* Skip opening paren, get the expression */
+                ast_t *expr_node = unwrapped->child;
+                /* Skip to actual expression (skip the opening parenthesis) */
+                while (expr_node != NULL && 
+                       (expr_node->typ == PASCAL_T_NONE || expr_node->typ == PASCAL_T_CHAR) &&
+                       expr_node->child == NULL) {
+                    expr_node = expr_node->next;
+                }
+                if (expr_node != NULL) {
+                    ast_t *actual_expr = unwrap_pascal_node(expr_node);
+                    if (actual_expr != NULL) {
+                        return_expr = convert_expression(actual_expr);
+                    }
+                }
+            } else if (unwrapped != NULL) {
+                /* Try to convert as expression (shouldn't happen but handle anyway) */
+                return_expr = convert_expression(unwrapped);
+            }
+        }
+        
+        return mk_exit_with_value(stmt_node->line, return_expr);
+    }
     case PASCAL_T_WITH_STMT: {
         ast_t *contexts_wrapper = stmt_node->child;
         ast_t *body_node = unwrap_pascal_node(contexts_wrapper != NULL ? contexts_wrapper->next : NULL);

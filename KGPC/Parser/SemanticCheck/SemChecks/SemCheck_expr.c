@@ -6199,6 +6199,26 @@ int semcheck_addop(int *type_return,
             
             return return_val;
         }
+
+        /* pointer - pointer: result is the element difference (integer) */
+        if (op_type == MINUS && left_is_pointer && right_is_pointer)
+        {
+            /* Result is an integer (element count difference) */
+            *type_return = LONGINT_TYPE;
+            expr->resolved_type = LONGINT_TYPE;
+            /* Mark this expression as a pointer difference operation */
+            expr->is_pointer_diff = 1;
+            /* Store pointer element size from left operand for codegen */
+            if (expr1->pointer_subtype != UNKNOWN_TYPE)
+            {
+                expr->pointer_subtype = expr1->pointer_subtype;
+            }
+            if (expr1->pointer_subtype_id != NULL)
+            {
+                expr->pointer_subtype_id = strdup(expr1->pointer_subtype_id);
+            }
+            return return_val;
+        }
     }
 
     /* Check for operator overloading for record types */
