@@ -1013,6 +1013,12 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 if (alias != NULL && alias->is_set && alias->set_element_type == CHAR_TYPE)
                     return 1;
             }
+            if (node->hash_type == HASHTYPE_CONST &&
+                node->const_set_value != NULL &&
+                node->const_set_size > 0)
+            {
+                return 1;
+            }
         }
     }
     
@@ -3187,8 +3193,35 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (relop_type != NULL)
             *relop_type = NE;
 
-        /* Check if this is a character set IN operation */
-        if (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx))
+        /* Check if this is a character set IN operation (32-byte set for values 0..255)
+         * vs. a small integer set (4-byte bitmask for values 0..31).
+         * 
+         * Character sets require memory-based indexing (32-byte array).
+         * Small integer sets can use simple btl instruction on a 32-bit register.
+         */
+        HashNode_t *right_const_set = NULL;
+        int right_is_char_set = 0; /* Only set to 1 if actually a char set */
+        
+        if (right_expr != NULL && right_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, right_expr->expr_data.id) >= 0 && node != NULL &&
+                node->hash_type == HASHTYPE_CONST && node->const_set_value != NULL &&
+                node->const_set_size > 0)
+            {
+                right_const_set = node;
+                /* Check if this is a char set (32 bytes) or small set (4 bytes) */
+                right_is_char_set = (node->const_set_size > 4);
+            }
+        }
+        
+        /* For set expressions (literals and variables), check if they are char sets */
+        if (!right_is_char_set && right_expr != NULL)
+        {
+            right_is_char_set = expr_is_char_set_ctx(right_expr, ctx);
+        }
+
+        if (right_is_char_set)
         {
             /* For character sets: right operand is 32-byte array, left is char value (0-255)
              * Algorithm:
@@ -3200,14 +3233,38 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
             /* Get address of the set variable */
             Register_t *set_addr_reg = NULL;
-            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
-            if (codegen_had_error(ctx) || set_addr_reg == NULL)
+            if (right_const_set != NULL && right_const_set->const_set_value != NULL)
             {
-                if (set_addr_reg != NULL)
-                    free_reg(get_reg_stack(), set_addr_reg);
-                free_reg(get_reg_stack(), left_reg);
-                free_reg(get_reg_stack(), right_reg);
-                return inst_list;
+                inst_list = codegen_emit_const_set_rodata(right_const_set, inst_list, ctx);
+                if (codegen_had_error(ctx) || right_const_set->const_set_label == NULL)
+                {
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), right_reg);
+                    return inst_list;
+                }
+                set_addr_reg = codegen_try_get_reg(&inst_list, ctx, "char set const addr");
+                if (set_addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), right_reg);
+                    return inst_list;
+                }
+                char buffer_addr[96];
+                snprintf(buffer_addr, sizeof(buffer_addr), "\tleaq\t%s(%%rip), %s\n",
+                    right_const_set->const_set_label, set_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer_addr);
+            }
+            else
+            {
+                inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+                if (codegen_had_error(ctx) || set_addr_reg == NULL)
+                {
+                    if (set_addr_reg != NULL)
+                        free_reg(get_reg_stack(), set_addr_reg);
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), right_reg);
+                    return inst_list;
+                }
             }
 
             /* Calculate dword index: value / 32 (shift right by 5) */
@@ -3386,6 +3443,112 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+    return inst_list;
+}
+
+/* Code generation for relop expressions that need a value result (not just flags).
+ * This is used by builtin write functions that need the boolean value in a register.
+ * Returns the result in out_reg as 0 or 1.
+ */
+ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+    {
+        if (out_reg != NULL)
+            *out_reg = NULL;
+        return inst_list;
+    }
+
+    if (expr->type != EXPR_RELOP)
+    {
+        /* Not a relop - fall back to normal expression evaluation */
+        return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
+    }
+
+    int relop_kind = expr->expr_data.relop_data.type;
+    struct Expression *right_expr = expr->expr_data.relop_data.right;
+
+    /* Check if this is an IN operation on a char set - requires special handling */
+    int is_char_set_in = 0;
+    if (relop_kind == IN && right_expr != NULL)
+    {
+        is_char_set_in = expr_is_char_set_ctx(right_expr, ctx);
+        /* Also check for char set constants via variable reference */
+        if (!is_char_set_in && right_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, right_expr->expr_data.id) >= 0 && node != NULL &&
+                node->hash_type == HASHTYPE_CONST && node->const_set_value != NULL &&
+                node->const_set_size > 4) /* 32-byte char set */
+            {
+                is_char_set_in = 1;
+            }
+        }
+    }
+
+    if (!is_char_set_in)
+    {
+        /* For non-char-set operations, the expression tree approach works */
+        return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
+    }
+
+    /* For char set IN operations, we need to use codegen_simple_relop
+     * which properly handles the 32-byte set, then convert flags to value */
+    
+    int relop_type = 0;
+    inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
+    
+    /* codegen_simple_relop sets CPU flags. We need to convert to a 0/1 value.
+     * The relop_type tells us what condition was tested:
+     * - NE means "not equal" - we want setnz to get 1 when flag is set
+     */
+    Register_t *result_reg = codegen_try_get_reg(&inst_list, ctx, "relop result");
+    if (result_reg == NULL)
+    {
+        *out_reg = NULL;
+        return inst_list;
+    }
+
+    char buffer[64];
+    const char *set_instr = "setnz"; /* Default for set membership */
+    
+    /* Convert flags to value based on relop type */
+    switch (relop_type)
+    {
+        case EQ:
+            set_instr = "sete";
+            break;
+        case NE:
+            set_instr = "setne";
+            break;
+        case LT:
+            set_instr = "setl";
+            break;
+        case LE:
+            set_instr = "setle";
+            break;
+        case GT:
+            set_instr = "setg";
+            break;
+        case GE:
+            set_instr = "setge";
+            break;
+        default:
+            set_instr = "setnz";
+            break;
+    }
+
+    const char *reg8 = codegen_register_name8(result_reg);
+    if (reg8 != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\t%s\t%s\n", set_instr, reg8);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", reg8, result_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    *out_reg = result_reg;
     return inst_list;
 }
 

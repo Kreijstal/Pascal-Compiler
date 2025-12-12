@@ -406,6 +406,91 @@ static int expression_is_string(struct Expression *expr)
     return 0;
 }
 
+static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
+
+/* Evaluate a set literal into a byte array (supports up to 0..255) */
+static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
+    unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,
+    long long *out_mask, int *is_char_set)
+{
+    if (expr == NULL || out_bytes == NULL || out_bytes_size < 32)
+        return 1;
+
+    memset(out_bytes, 0, out_bytes_size);
+    size_t used = 0;
+    long long mask = 0;
+    long long max_value = 0;
+    int char_set = 0;
+
+    ListNode_t *element = expr->expr_data.set_data.elements;
+    while (element != NULL)
+    {
+        if (element->cur != NULL)
+        {
+            struct SetElement *set_element = (struct SetElement *)element->cur;
+            long long lower = 0;
+            long long upper = 0;
+            if (set_element->lower == NULL ||
+                evaluate_const_expr(symtab, set_element->lower, &lower) != 0)
+            {
+                fprintf(stderr, "Error: set element is not a constant expression.\n");
+                return 1;
+            }
+            if (set_element->upper != NULL)
+            {
+                if (evaluate_const_expr(symtab, set_element->upper, &upper) != 0)
+                {
+                    fprintf(stderr, "Error: set element upper bound is not a constant expression.\n");
+                    return 1;
+                }
+            }
+            else
+            {
+                upper = lower;
+            }
+
+            if (lower > upper)
+            {
+                long long tmp = lower;
+                lower = upper;
+                upper = tmp;
+            }
+
+            if (upper > max_value)
+                max_value = upper;
+            if (upper > 31)
+                char_set = 1;
+
+            if (upper < 0 || upper > 255 || lower < 0)
+            {
+                fprintf(stderr, "Error: set literal value %lld out of supported range 0..255.\n", upper);
+                return 1;
+            }
+
+            for (long long value = lower; value <= upper; ++value)
+            {
+                size_t byte_index = (size_t)(value / 8);
+                unsigned bit_mask = 1u << (value % 8);
+                out_bytes[byte_index] |= (unsigned char)bit_mask;
+            }
+        }
+        element = element->next;
+    }
+
+    used = (max_value <= 31) ? 4 : 32;
+    if (out_size != NULL)
+        *out_size = used;
+    if (out_mask != NULL && used <= sizeof(long long))
+    {
+        for (size_t i = 0; i < used; ++i)
+            mask |= ((long long)out_bytes[i]) << (i * 8);
+        *out_mask = mask;
+    }
+    if (is_char_set != NULL)
+        *is_char_set = (char_set || max_value > 31);
+    return 0;
+}
+
 /* Evaluates a string constant expression, allocating a new string */
 static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr, char **out_value)
 {
@@ -704,6 +789,9 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             }
             fprintf(stderr, "Error: string literal in const expression must be a single character.\n");
             return 1;
+        case EXPR_CHAR_CODE:
+            *out_value = (unsigned char)(expr->expr_data.char_code & 0xFF);
+            return 0;
         case EXPR_VAR_ID:
         {
             HashNode_t *node = NULL;
@@ -828,56 +916,17 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         }
         case EXPR_SET:
         {
-            unsigned long long mask = 0;
-            ListNode_t *element = expr->expr_data.set_data.elements;
-            while (element != NULL)
+            unsigned char bytes[32];
+            size_t used = 0;
+            long long mask = 0;
+            if (evaluate_set_const_bytes(symtab, expr, bytes, sizeof(bytes), &used, &mask, NULL) != 0)
+                return 1;
+            if (used > 8)
             {
-                if (element->cur == NULL)
-                {
-                    element = element->next;
-                    continue;
-                }
-
-                struct SetElement *set_element = (struct SetElement *)element->cur;
-                long long lower = 0;
-                long long upper = 0;
-                if (set_element->lower == NULL ||
-                    evaluate_const_expr(symtab, set_element->lower, &lower) != 0)
-                {
-                    return 1;
-                }
-
-                if (set_element->upper != NULL)
-                {
-                    if (evaluate_const_expr(symtab, set_element->upper, &upper) != 0)
-                        return 1;
-                }
-                else
-                {
-                    upper = lower;
-                }
-
-                if (lower > upper)
-                {
-                    long long tmp = lower;
-                    lower = upper;
-                    upper = tmp;
-                }
-
-                for (long long value = lower; value <= upper; ++value)
-                {
-                    if (value < 0 || value >= 32)
-                    {
-                        fprintf(stderr, "Error: set literal value %lld out of supported range 0..31.\n", value);
-                        return 1;
-                    }
-                    mask |= (1ull << value);
-                }
-
-                element = element->next;
+                fprintf(stderr, "Error: set literal requires 32-byte storage and cannot be reduced to integer const.\n");
+                return 1;
             }
-
-            *out_value = (long long)mask;
+            *out_value = mask;
             return 0;
         }
         case EXPR_FUNCTION_CALL:
@@ -2759,6 +2808,47 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             else
             {
                 int push_result = PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, real_value);
+                if (push_result > 0)
+                {
+                    fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                            tree->line_num, tree->tree_data.const_decl_data.id);
+                    ++return_val;
+                }
+                else
+                {
+                    HashNode_t *const_node = NULL;
+                    if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                    {
+                        mark_hashnode_unit_info(const_node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                    }
+                }
+            }
+        }
+        else if (value_expr != NULL && value_expr->type == EXPR_SET)
+        {
+            /* Evaluate as set constant (supports char sets up to 0..255) */
+            unsigned char set_bytes[32];
+            size_t set_size = 0;
+            long long mask = 0;
+            int is_char_set = 0;
+            if (evaluate_set_const_bytes(symtab, value_expr, set_bytes, sizeof(set_bytes),
+                    &set_size, &mask, &is_char_set) != 0)
+            {
+                fprintf(stderr, "Error on line %d, unsupported const expression.\n", tree->line_num);
+                ++return_val;
+            }
+            else
+            {
+                KgpcType *const_type = create_primitive_type_with_size(SET_TYPE, (int)set_size);
+                if (const_type != NULL && const_type->type_alias != NULL)
+                {
+                    const_type->type_alias->is_set = 1;
+                    const_type->type_alias->set_element_type = is_char_set ? CHAR_TYPE : INT_TYPE;
+                }
+                int push_result = PushSetConstOntoScope(symtab, tree->tree_data.const_decl_data.id,
+                    set_bytes, (int)set_size, const_type);
                 if (push_result > 0)
                 {
                     fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",

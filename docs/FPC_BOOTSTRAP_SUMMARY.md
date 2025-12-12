@@ -8,26 +8,30 @@ Successfully investigated FPC (Free Pascal Compiler) bootstrap requirements and 
 
 ### Critical Missing Features (Blocking FPC Bootstrap)
 
-1. **Pointer Indexing (`p[i]` syntax)**
+1. **Set Constants in const Sections (set of char / ranges)**
    - Status: ❌ NOT IMPLEMENTED
-   - Impact: HIGH - Used extensively in FPC RTL for string and memory operations
+   - Impact: HIGH - `system.pp` relies on `AllowDirectorySeparators`/`AllowDriveSeparators`
+   - Test: `tests/test_cases/fpc_set_constant_char.p`
+   - FPC compiles and runs ✓
+   - KGPC compilation fails during const evaluation ✗
+
+2. **Pointer Indexing (`p[i]` syntax)** *(tracked from earlier investigation)*
+   - Status: ⚠️ Needs re-validation against latest KGPC
+   - Impact: HIGH - Used throughout FPC RTL
    - Test: `tests/test_cases/fpc_pointer_indexing.p`
    - FPC compiles and runs ✓
-   - KGPC compilation fails ✗
 
-2. **Pointer Arithmetic with +/- Operators**
-   - Status: ❌ NOT IMPLEMENTED  
+3. **Pointer Arithmetic with +/- Operators** *(tracked from earlier investigation)*
+   - Status: ⚠️ Needs re-validation against latest KGPC
    - Impact: HIGH - Essential for efficient pointer manipulation
    - Test: `tests/test_cases/fpc_pointer_arithmetic.p`
    - FPC compiles and runs ✓
-   - KGPC compilation fails ✗
 
-3. **ShortString Type**
-   - Status: ❌ NOT IMPLEMENTED
+4. **ShortString Type** *(tracked from earlier investigation)*
+   - Status: ⚠️ Needs re-validation against latest KGPC
    - Impact: HIGH - Default string type in FPC, critical for RTL
    - Test: `tests/test_cases/fpc_shortstring_type.p`
    - FPC compiles and runs ✓
-   - KGPC compilation fails ✗
 
 ### Features Already Supported ✓
 
@@ -54,20 +58,8 @@ All tests follow this validation pattern:
 
 ### Test Execution Results
 
-**Updated Status:** Tests are now properly marked as skipped to prevent breaking the test suite.
-
-```
-Test Suite: Compiler tests
-Status: 3 gap demonstration tests added, automatically skipped
-
-- test_auto_fpc_pointer_indexing     SKIP (demonstrates missing feature)
-- test_auto_fpc_pointer_arithmetic   SKIP (demonstrates missing feature)  
-- test_auto_fpc_shortstring_type     SKIP (demonstrates missing feature)
-```
-
-These tests are skipped automatically by the test runner because they demonstrate
-features that KGPC doesn't yet support. They serve as documentation of the gaps
-and can be enabled once the features are implemented.
+- **New failing coverage test:** `fpc_set_constant_char.p` (fails to compile on KGPC with `unsupported const expression`)
+- Prior gap tests remain as coverage markers (`fpc_pointer_indexing`, `fpc_pointer_arithmetic`, `fpc_shortstring_type`) and should be re-run after any feature work.
 
 ## Investigation Methodology
 
