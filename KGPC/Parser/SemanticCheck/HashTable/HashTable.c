@@ -263,6 +263,10 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->canonical_id);
             if (hash_node->const_string_value != NULL)
                 free(hash_node->const_string_value);
+            if (hash_node->const_set_value != NULL)
+                free(hash_node->const_set_value);
+            if (hash_node->const_set_label != NULL)
+                free(hash_node->const_set_label);
             if (hash_node->mangled_id != NULL)
                 free(hash_node->mangled_id);
             if (hash_node->type != NULL)
@@ -379,6 +383,9 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->is_constant = 0;
     hash_node->const_int_value = 0;
     hash_node->const_string_value = NULL;
+    hash_node->const_set_value = NULL;
+    hash_node->const_set_size = 0;
+    hash_node->const_set_label = NULL;
     hash_node->is_var_parameter = 0;
     hash_node->requires_static_link = 0;
     hash_node->defined_in_unit = 0;
