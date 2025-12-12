@@ -115,7 +115,30 @@ Error on line 5: undefined type ShortString
 - Path operations
 - Executable path storage (see `execpathstr` in system.pp)
 
-### 3. Features KGPC Already Supports ✓
+### 3. Set Constants in const Sections (CRITICAL - BLOCKING)
+
+**Status:** ❌ NOT SUPPORTED  
+**Priority:** HIGH  
+**Impact:** BLOCKING for FPC RTL
+
+KGPC cannot evaluate set constants such as `set of char` literals or ranges used inside `const` blocks.  
+FPC's `system.pp` defines directory separator sets this way:
+
+```pascal
+const
+  AllowDirectorySeparators : set of char = ['\', '/'];
+  AllowDriveSeparators     : set of char = [];
+```
+
+**Test Case:** `tests/test_cases/fpc_set_constant_char.p`  
+**KGPC Error:**
+```
+Error on line 4, unsupported const expression.
+```
+
+**FPC Usage:** Needed early in `system.pp` for path parsing; failure stops RTL bootstrap.
+
+### 4. Features KGPC Already Supports ✓
 
 The following FPC features ARE supported by KGPC:
 
