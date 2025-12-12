@@ -10,8 +10,9 @@ program fpc_qualified_const;
 { ERROR: "unsupported const expression" }
 { }
 { This compiles and runs correctly with FPC, outputting: }
-{   42   }
+{   42 }
 {   1024 }
+{   1023 }
 
 uses fpc_qualified_const_unit;
 
@@ -25,10 +26,15 @@ type
   TLocal = fpc_qualified_const_unit.TConstType;
 
 var
-  { Use qualified constant in array bounds }
+  { Use qualified constant in array bounds - also demonstrates qualified type }
   data: array[0..LOCAL_MAX-1] of TLocal;
+  i: Integer;
 
 begin
+  { Initialize array to verify qualified constant works in bounds }
+  for i := 0 to LOCAL_MAX - 1 do
+    data[i] := i;
   WriteLn(LOCAL_VALUE);
   WriteLn(LOCAL_MAX);
+  WriteLn(data[LOCAL_MAX - 1]);  { Should print 1023 }
 end.
