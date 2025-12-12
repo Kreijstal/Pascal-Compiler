@@ -3768,6 +3768,19 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                 return inst_list;
             }
         }
+        else if (expr != NULL && expr->type == EXPR_RELOP)
+        {
+            /* Use special relop handling for char set IN operations and other relops */
+            free_reg(get_reg_stack(), value_reg); /* Will get a new register from codegen_relop_to_value */
+            value_reg = NULL;
+            inst_list = codegen_relop_to_value(expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL)
+            {
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+        }
         else
         {
             /* Load value normally */
