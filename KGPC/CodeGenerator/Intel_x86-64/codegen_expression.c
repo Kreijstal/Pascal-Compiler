@@ -1015,7 +1015,7 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
-                node->const_set_size >= 32)
+                node->const_set_size > 0)
             {
                 return 1;
             }
@@ -3195,7 +3195,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
         /* Check if this is a character set IN operation */
         HashNode_t *right_const_set = NULL;
-        int right_is_char_set = (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx));
+        int right_is_char_set = 1; /* Treat IN as set membership using set address (works for small and char sets). */
         if (right_expr != NULL && right_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
@@ -3206,6 +3206,13 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
                 right_const_set = node;
                 right_is_char_set = 1;
             }
+        }
+        /* Heuristic: if the right side is any set-typed expression, use set-address path
+         * (works for both 4-byte small sets and 32-byte char sets). */
+        if (!right_is_char_set && right_expr != NULL &&
+            expr_has_type_tag(right_expr, SET_TYPE))
+        {
+            right_is_char_set = 1;
         }
 
         if (right_is_char_set)

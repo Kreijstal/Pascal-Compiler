@@ -211,6 +211,32 @@ int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
             }
         }
     }
+    /* Also register in builtins for later codegen lookup (symbol table scopes may be popped). */
+    if (result == 0 && symtab->builtins != NULL)
+    {
+        int builtins_result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_CONST, type);
+        if (builtins_result == 0)
+        {
+            HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, id);
+            if (builtin_node != NULL)
+            {
+                builtin_node->is_constant = 1;
+                builtin_node->const_set_size = size_bytes;
+                builtin_node->const_set_value = (unsigned char *)malloc((size_t)size_bytes);
+                if (builtin_node->const_set_value != NULL)
+                {
+                    memcpy(builtin_node->const_set_value, data, (size_t)size_bytes);
+                    if (size_bytes <= (int)sizeof(long long))
+                    {
+                        long long mask = 0;
+                        for (int i = 0; i < size_bytes; ++i)
+                            mask |= ((long long)builtin_node->const_set_value[i]) << (i * 8);
+                        builtin_node->const_int_value = mask;
+                    }
+                }
+            }
+        }
+    }
     return result;
 }
 
