@@ -2479,6 +2479,32 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
         case STMT_EXIT:
         {
             inst_list = add_inst(inst_list, "\t# EXIT statement\n");
+            
+            /* Handle Exit(value) - evaluate value and return it */
+            struct Expression *return_expr = stmt->stmt_data.exit_data.return_expr;
+            if (return_expr != NULL)
+            {
+                /* Evaluate the return expression */
+                Register_t *result_reg = NULL;
+                inst_list = codegen_expr_with_result(return_expr, inst_list, ctx, &result_reg);
+                
+                if (result_reg != NULL && codegen_had_error(ctx) == 0)
+                {
+                    char buffer[128];
+                    int is_real = (return_expr->resolved_type == REAL_TYPE);
+                    
+                    if (!is_real)
+                    {
+                        /* For integer types, move result to eax for return */
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    /* For real types, result is already in xmm0 */
+                    
+                    free_reg(get_reg_stack(), result_reg);
+                }
+            }
+            
             if (codegen_has_finally(ctx))
             {
                 char exit_label[18];
