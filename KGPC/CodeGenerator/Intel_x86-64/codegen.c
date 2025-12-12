@@ -928,7 +928,8 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
     #endif
     assert(func_name != NULL);
     assert(ctx != NULL);
-    fprintf(ctx->output_file, "\tnop\n\tleave\n\tret\n");
+    /* leave/ret is now generated in the function epilogue */
+    fprintf(ctx->output_file, "\tnop\n");
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -1972,6 +1973,16 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
     
+    /* Add epilogue label for Exit statements to jump to */
+    char epilogue_label[32];
+    if (sub_id != NULL && sub_id[0] != '\0')
+        snprintf(epilogue_label, sizeof(epilogue_label), ".L%s_epilogue", sub_id);
+    else
+        snprintf(epilogue_label, sizeof(epilogue_label), ".Lunknown_epilogue");
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "%s:\n", epilogue_label);
+    inst_list = add_inst(inst_list, buffer);
+    
     /* For constructors (methods with __Create in name), return Self in %rax.
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
@@ -1997,7 +2008,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     if (self_var != NULL)
                     {
                         /* Self parameter is on the stack - load it into %rax for return */
-                        char buffer[128];
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", self_var->offset);
                         inst_list = add_inst(inst_list, buffer);
                     }
@@ -2005,6 +2015,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
+    
+    /* Generate leave/ret in epilogue */
+    inst_list = add_inst(inst_list, "\tleave\n");
+    inst_list = add_inst(inst_list, "\tret\n");
     
     codegen_function_header(sub_id, ctx);
     codegen_stack_space(ctx);
@@ -2507,6 +2521,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 is_real_return = 1;
         }
         
+        /* Add epilogue label for Exit statements to jump to */
+        char epilogue_label[32];
+        if (sub_id != NULL && sub_id[0] != '\0')
+            snprintf(epilogue_label, sizeof(epilogue_label), ".L%s_epilogue", sub_id);
+        else
+            snprintf(epilogue_label, sizeof(epilogue_label), ".Lunknown_epilogue");
+        snprintf(buffer, sizeof(buffer), "%s:\n", epilogue_label);
+        inst_list = add_inst(inst_list, buffer);
+        
         /* Use movsd for Real types (return in xmm0), movq/movl for others (return in rax/eax) */
         if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
@@ -2515,6 +2538,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         else
             snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
         inst_list = add_inst(inst_list, buffer);
+        
+        /* Generate leave/ret in epilogue */
+        inst_list = add_inst(inst_list, "\tleave\n");
+        inst_list = add_inst(inst_list, "\tret\n");
     }
     
     codegen_function_header(sub_id, ctx);
