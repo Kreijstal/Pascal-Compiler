@@ -1474,6 +1474,181 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
     return fallback_value; /* Not found */
 }
 
+/* Evaluate simple const expression like "NUM-1" or "NUM+1" */
+static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
+    if (expr == NULL || result == NULL)
+        return -1;
+    
+    /* Try to find '-' or '+' operator */
+    const char *minus = strstr(expr, "-");
+    const char *plus = strstr(expr, "+");
+    
+    if (minus == NULL && plus == NULL) {
+        /* No operator - try as simple identifier */
+        int val = resolve_const_int_from_ast(expr, const_section, INT_MIN);
+        if (val != INT_MIN) {
+            *result = val;
+            return 0;
+        }
+        /* Try as numeric literal */
+        char *endptr;
+        long num = strtol(expr, &endptr, 10);
+        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
+            *result = (int)num;
+            return 0;
+        }
+        return -1;
+    }
+    
+    const char *op = (minus != NULL) ? minus : plus;
+    int is_minus = (minus != NULL);
+    
+    /* Extract left and right parts */
+    size_t left_len = op - expr;
+    char *left_part = (char *)malloc(left_len + 1);
+    if (left_part == NULL)
+        return -1;
+    strncpy(left_part, expr, left_len);
+    left_part[left_len] = '\0';
+    
+    const char *right_part = op + 1;
+    
+    /* Trim leading whitespace from left_part using pointer advance */
+    char *trimmed_left = left_part;
+    while (*trimmed_left == ' ' || *trimmed_left == '\t') trimmed_left++;
+    /* If we advanced, shift content to beginning */
+    if (trimmed_left != left_part) {
+        memmove(left_part, trimmed_left, strlen(trimmed_left) + 1);
+    }
+    /* Trim trailing whitespace */
+    size_t len = strlen(left_part);
+    char *p = (len > 0) ? (left_part + len - 1) : left_part;
+    while (p > left_part && (*p == ' ' || *p == '\t')) *p-- = '\0';
+    
+    /* Skip leading whitespace from right_part */
+    while (*right_part == ' ' || *right_part == '\t') right_part++;
+    
+    /* Evaluate left part */
+    int left_val;
+    int left_result = resolve_const_int_from_ast(left_part, const_section, INT_MIN);
+    if (left_result != INT_MIN) {
+        left_val = left_result;
+    } else {
+        char *endptr;
+        long num = strtol(left_part, &endptr, 10);
+        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
+            left_val = (int)num;
+        } else {
+            free(left_part);
+            return -1;
+        }
+    }
+    free(left_part);
+    
+    /* Evaluate right part */
+    int right_val;
+    int right_result = resolve_const_int_from_ast(right_part, const_section, INT_MIN);
+    if (right_result != INT_MIN) {
+        right_val = right_result;
+    } else {
+        char *endptr;
+        long num = strtol(right_part, &endptr, 10);
+        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
+            right_val = (int)num;
+        } else {
+            return -1;
+        }
+    }
+    
+    /* Compute result */
+    if (is_minus) {
+        *result = left_val - right_val;
+    } else {
+        *result = left_val + right_val;
+    }
+    return 0;
+}
+
+/* Serialize an expression AST node to a string representation.
+ * Handles simple identifiers, literals, and binary operations (+, -).
+ * Returns a malloc'd string or NULL on failure. */
+static char *serialize_expr_to_string(ast_t *expr) {
+    if (expr == NULL)
+        return NULL;
+    
+    /* Simple identifier or literal with a symbol */
+    if (expr->sym != NULL && expr->sym->name != NULL) {
+        return strdup(expr->sym->name);
+    }
+    
+    /* Unary minus: -X */
+    if (expr->typ == PASCAL_T_NEG && expr->child != NULL) {
+        char *inner = serialize_expr_to_string(expr->child);
+        if (inner == NULL)
+            return NULL;
+        size_t len = strlen(inner) + 2;  /* '-' + inner + '\0' */
+        char *result = (char *)malloc(len);
+        if (result == NULL) {
+            free(inner);
+            return NULL;
+        }
+        snprintf(result, len, "-%s", inner);
+        free(inner);
+        return result;
+    }
+    
+    /* Binary subtraction: X - Y */
+    if (expr->typ == PASCAL_T_SUB && expr->child != NULL && expr->child->next != NULL) {
+        char *left = serialize_expr_to_string(expr->child);
+        char *right = serialize_expr_to_string(expr->child->next);
+        if (left == NULL || right == NULL) {
+            if (left) free(left);
+            if (right) free(right);
+            return NULL;
+        }
+        size_t len = strlen(left) + strlen(right) + 4;  /* left + '-' + right + '\0' + extra */
+        char *result = (char *)malloc(len);
+        if (result == NULL) {
+            free(left);
+            free(right);
+            return NULL;
+        }
+        snprintf(result, len, "%s-%s", left, right);
+        free(left);
+        free(right);
+        return result;
+    }
+    
+    /* Binary addition: X + Y */
+    if (expr->typ == PASCAL_T_ADD && expr->child != NULL && expr->child->next != NULL) {
+        char *left = serialize_expr_to_string(expr->child);
+        char *right = serialize_expr_to_string(expr->child->next);
+        if (left == NULL || right == NULL) {
+            if (left) free(left);
+            if (right) free(right);
+            return NULL;
+        }
+        size_t len = strlen(left) + strlen(right) + 4;
+        char *result = (char *)malloc(len);
+        if (result == NULL) {
+            free(left);
+            free(right);
+            return NULL;
+        }
+        snprintf(result, len, "%s+%s", left, right);
+        free(left);
+        free(right);
+        return result;
+    }
+    
+    /* If we have a child with a symbol (wrapped expression) */
+    if (expr->child != NULL && expr->child->sym != NULL && expr->child->sym->name != NULL) {
+        return strdup(expr->child->sym->name);
+    }
+    
+    return NULL;
+}
+
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
@@ -1677,52 +1852,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     
                     /* Extract lower and upper bound strings, handling various AST structures:
                      * - Simple literals/identifiers (e.g., "1", "N") have sym->name set
-                     * - Unary expressions (e.g., "-1") have child->sym->name set
-                     * This fixes array[1..N] where N is a const, and array[-1..10] with negative bounds */
-                    char *lower_str = NULL;
-                    char *upper_str = NULL;
-                    
-                    /* Get lower bound string */
-                    if (lower != NULL) {
-                        if (lower->sym != NULL && lower->sym->name != NULL) {
-                            /* Simple identifier or literal */
-                            lower_str = strdup(lower->sym->name);
-                            assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
-                        } else if (lower->child != NULL && lower->child->sym != NULL && lower->child->sym->name != NULL) {
-                            /* Unary expression like -1 */
-                            if (lower->typ == PASCAL_T_NEG) {
-                                char buffer[64];
-                                int written = snprintf(buffer, sizeof(buffer), "-%s", lower->child->sym->name);
-                                assert(written >= 0 && written < (int)sizeof(buffer) && "Buffer overflow in lower bound formatting");
-                                lower_str = strdup(buffer);
-                                assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
-                            } else {
-                                lower_str = strdup(lower->child->sym->name);
-                                assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
-                            }
-                        }
-                    }
-                    
-                    /* Get upper bound string */
-                    if (upper != NULL) {
-                        if (upper->sym != NULL && upper->sym->name != NULL) {
-                            /* Simple identifier or literal */
-                            upper_str = strdup(upper->sym->name);
-                            assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
-                        } else if (upper->child != NULL && upper->child->sym != NULL && upper->child->sym->name != NULL) {
-                            /* Unary expression */
-                            if (upper->typ == PASCAL_T_NEG) {
-                                char buffer[64];
-                                int written = snprintf(buffer, sizeof(buffer), "-%s", upper->child->sym->name);
-                                assert(written >= 0 && written < (int)sizeof(buffer) && "Buffer overflow in upper bound formatting");
-                                upper_str = strdup(buffer);
-                                assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
-                            } else {
-                                upper_str = strdup(upper->child->sym->name);
-                                assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
-                            }
-                        }
-                    }
+                     * - Unary expressions (e.g., "-1") are PASCAL_T_NEG
+                     * - Binary expressions (e.g., "N-1") are PASCAL_T_SUB
+                     * Use serialize_expr_to_string to handle all cases uniformly */
+                    char *lower_str = serialize_expr_to_string(lower);
+                    char *upper_str = serialize_expr_to_string(upper);
                     
                     if (lower_str != NULL && upper_str != NULL) {
                         if (dims_builder.head == NULL) {
@@ -3487,29 +3621,40 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     start = start_ordinal;
                     end = end_ordinal;
                 } else {
-                    /* Try to resolve as const integer identifiers */
-                    int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
-                    int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
-                    
-                    /* Check if we got non-zero values or if the original identifiers weren't "0" */
-                    if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
-                        start = resolved_start;
+                    /* Try to evaluate start as const expression */
+                    int start_val;
+                    if (evaluate_simple_const_expr(start_id, const_section, &start_val) == 0) {
+                        start = start_val;
                     } else {
-                        /* Try numeric parsing as fallback */
-                        char *endptr;
-                        long num = strtol(start_id, &endptr, 10);
-                        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                            start = (int)num;
+                        /* Try to resolve as const integer identifier */
+                        int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
+                        if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
+                            start = resolved_start;
+                        } else {
+                            /* Try numeric parsing as fallback */
+                            char *endptr;
+                            long num = strtol(start_id, &endptr, 10);
+                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                start = (int)num;
+                        }
                     }
                     
-                    if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
-                        end = resolved_end;
+                    /* Try to evaluate end as const expression */
+                    int end_val;
+                    if (evaluate_simple_const_expr(end_id, const_section, &end_val) == 0) {
+                        end = end_val;
                     } else {
-                        /* Try numeric parsing as fallback */
-                        char *endptr;
-                        long num = strtol(end_id, &endptr, 10);
-                        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                            end = (int)num;
+                        /* Try to resolve as const integer identifier */
+                        int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
+                        if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
+                            end = resolved_end;
+                        } else {
+                            /* Try numeric parsing as fallback */
+                            char *endptr;
+                            long num = strtol(end_id, &endptr, 10);
+                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                end = (int)num;
+                        }
                     }
                 }
             } else {
