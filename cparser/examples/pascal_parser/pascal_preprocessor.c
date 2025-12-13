@@ -12,6 +12,7 @@
 typedef struct {
     char *name;
     char *value;
+    bool is_macro;  // true if explicitly defined with := (should expand), false if just defined
 } DefineEntry;
 
 struct PascalPreprocessor {
@@ -118,6 +119,7 @@ static bool parse_factor(const char **cursor,
                          PascalPreprocessor *pp,
                          char **error_message);
 static const char *get_symbol_value(const PascalPreprocessor *pp, const char *symbol);
+static const char *get_macro_value(const PascalPreprocessor *pp, const char *symbol);
 
 PascalPreprocessor *pascal_preprocessor_create(void) {
     PascalPreprocessor *pp = malloc(sizeof(PascalPreprocessor));
@@ -1169,8 +1171,9 @@ static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, s
     memcpy(identifier, &input[start], id_len);
     identifier[id_len] = '\0';
     
-    // Look up the macro
-    const char *value = get_symbol_value(pp, identifier);
+    // Look up the macro - only expand if it's an actual macro (defined with :=)
+    // Simple conditional defines (like UNIX, LINUX) should NOT be expanded
+    const char *value = get_macro_value(pp, identifier);
     free(identifier);
     
     if (value) {
@@ -1190,9 +1193,11 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
     // Format: NAME [:= VALUE]
     char *name_part = NULL;
     char *value_part = NULL;
+    bool is_macro = false;  // Track if this is an explicit macro (with := assignment)
 
     const char *assign_pos = strstr(symbol, ":=");
     if (assign_pos) {
+        is_macro = true;  // Explicit assignment makes this a macro
         size_t name_len = (size_t)(assign_pos - symbol);
         char *temp_name = malloc(name_len + 1);
         if (!temp_name) return false;
@@ -1218,8 +1223,10 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
         free(temp_val);
     } else {
         name_part = strdup(symbol);
-        // Default value for simple defines is "1"
-        value_part = strdup("1"); 
+        // Default value for simple defines is "1" (for conditional evaluation)
+        // But this is NOT a macro - should not be expanded in text
+        value_part = strdup("1");
+        is_macro = false;
     }
 
     if (!name_part || !value_part) {
@@ -1230,11 +1237,12 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
 
     uppercase(name_part);
 
-    // Check if already defined, if so update value
+    // Check if already defined, if so update value and macro status
     for (size_t i = 0; i < pp->define_count; ++i) {
         if (strcmp(pp->defines[i].name, name_part) == 0) {
             free(pp->defines[i].value);
             pp->defines[i].value = value_part;
+            pp->defines[i].is_macro = is_macro;
             free(name_part);
             return true;
         }
@@ -1248,6 +1256,7 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol) {
 
     pp->defines[pp->define_count].name = name_part;
     pp->defines[pp->define_count].value = value_part;
+    pp->defines[pp->define_count].is_macro = is_macro;
     pp->define_count++;
     return true;
 }
@@ -1473,6 +1482,26 @@ static const char *get_symbol_value(const PascalPreprocessor *pp, const char *sy
         if (strcmp(pp->defines[i].name, upper) == 0) {
             free(upper);
             return pp->defines[i].value;
+        }
+    }
+    free(upper);
+    return NULL;
+}
+
+/* Get macro value only if it's an actual text-replacement macro (defined with :=) */
+static const char *get_macro_value(const PascalPreprocessor *pp, const char *symbol) {
+    if (!pp || !symbol) return NULL;
+    char *upper = strdup(symbol);
+    if (!upper) return NULL;
+    uppercase(upper);
+    for (size_t i = 0; i < pp->define_count; ++i) {
+        if (strcmp(pp->defines[i].name, upper) == 0) {
+            free(upper);
+            /* Only return value if this is an actual macro (defined with :=) */
+            if (pp->defines[i].is_macro) {
+                return pp->defines[i].value;
+            }
+            return NULL;
         }
     }
     free(upper);

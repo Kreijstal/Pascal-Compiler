@@ -929,6 +929,25 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             *out_value = mask;
             return 0;
         }
+        case EXPR_RECORD_ACCESS:
+        {
+            /* Handle qualified constants like UnitName.ConstName */
+            /* The field_id is the constant name, look it up directly in the symbol table */
+            /* since unit exports are already imported into the current scope */
+            char *field_id = expr->expr_data.record_access_data.field_id;
+            if (field_id != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindIdent(&node, symtab, field_id) >= 0 && node != NULL && node->hash_type == HASHTYPE_CONST)
+                {
+                    *out_value = node->const_int_value;
+                    return 0;
+                }
+            }
+            fprintf(stderr, "Error: qualified constant '%s' is undefined or not a const.\n",
+                    field_id ? field_id : "(null)");
+            return 1;
+        }
         case EXPR_FUNCTION_CALL:
         {
             /* Handle Ord() function for constant expressions */
