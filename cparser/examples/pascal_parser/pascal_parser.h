@@ -130,6 +130,7 @@ typedef enum {
     PASCAL_T_ANONYMOUS_PROCEDURE,    // Anonymous procedure literal
     PASCAL_T_ENUMERATED_TYPE,
     PASCAL_T_CLASS_TYPE,
+    PASCAL_T_CLASS_OF_TYPE,          // Class reference type like "class of TObject"
     PASCAL_T_INTERFACE_TYPE,         // Interface type like interface ... end
     PASCAL_T_DISTINCT_TYPE,          // Distinct (strong) type alias like "type Double"
     // Generic type tags
