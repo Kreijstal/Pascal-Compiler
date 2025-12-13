@@ -68,6 +68,8 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return INT_TYPE;
     if (pascal_identifier_equals(id, "Word"))
         return INT_TYPE;
+    if (pascal_identifier_equals(id, "TSystemCodePage"))
+        return INT_TYPE;
     return UNKNOWN_TYPE;
 }
 
@@ -3006,6 +3008,96 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                 }
             }
         }
+        else if (value_expr != NULL && value_expr->type == EXPR_ADDR &&
+                 value_expr->expr_data.addr_data.expr != NULL &&
+                 value_expr->expr_data.addr_data.expr->type == EXPR_VAR_ID)
+        {
+            /* Procedure address constant: const MyProcRef: TProc = @MyProc;
+             * Handle forward-declared procedure references.
+             * The procedure might be declared as forward and implemented later,
+             * so we store the procedure name for later resolution in codegen. */
+            char *proc_name = value_expr->expr_data.addr_data.expr->expr_data.id;
+            if (proc_name != NULL)
+            {
+                /* Look up the procedure/function in the symbol table.
+                 * It may be forward-declared, so we check if it exists at all. */
+                HashNode_t *proc_node = NULL;
+                int found_scope = FindIdent(&proc_node, symtab, proc_name);
+                
+                /* Accept if it's a procedure, function, or not yet defined (forward ref).
+                 * Forward references will be resolved later during codegen. */
+                if (found_scope >= 0 && proc_node != NULL &&
+                    (proc_node->hash_type == HASHTYPE_PROCEDURE ||
+                     proc_node->hash_type == HASHTYPE_FUNCTION))
+                {
+                    /* Found the procedure - store as a procedure address constant */
+                    KgpcType *const_type = create_procedure_type(NULL, NULL);
+                    
+                    /* Use 0 as the value - actual address will be resolved at link time */
+                    int push_result = PushConstOntoScope_Typed(symtab, 
+                        tree->tree_data.const_decl_data.id, 0, const_type);
+                    
+                    if (push_result > 0)
+                    {
+                        fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                                tree->line_num, tree->tree_data.const_decl_data.id);
+                        ++return_val;
+                    }
+                    else
+                    {
+                        /* Store the procedure name in the const node for codegen */
+                        HashNode_t *const_node = NULL;
+                        if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                        {
+                            /* Store the procedure name as const_string_value for codegen to use */
+                            const_node->const_string_value = strdup(proc_name);
+                            mark_hashnode_unit_info(const_node,
+                                tree->tree_data.const_decl_data.defined_in_unit,
+                                tree->tree_data.const_decl_data.unit_is_public);
+                        }
+                    }
+                }
+                else if (found_scope < 0)
+                {
+                    /* Not found - might be a forward-declared procedure.
+                     * Create the constant anyway; codegen will resolve it. */
+                    KgpcType *const_type = create_procedure_type(NULL, NULL);
+                    
+                    int push_result = PushConstOntoScope_Typed(symtab, 
+                        tree->tree_data.const_decl_data.id, 0, const_type);
+                    
+                    if (push_result > 0)
+                    {
+                        fprintf(stderr, "Error on line %d, redeclaration of const %s!\n",
+                                tree->line_num, tree->tree_data.const_decl_data.id);
+                        ++return_val;
+                    }
+                    else
+                    {
+                        HashNode_t *const_node = NULL;
+                        if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
+                        {
+                            const_node->const_string_value = strdup(proc_name);
+                            mark_hashnode_unit_info(const_node,
+                                tree->tree_data.const_decl_data.defined_in_unit,
+                                tree->tree_data.const_decl_data.unit_is_public);
+                        }
+                    }
+                }
+                else
+                {
+                    fprintf(stderr, "Error on line %d, '%s' is not a procedure or function.\n",
+                            tree->line_num, proc_name);
+                    ++return_val;
+                }
+            }
+            else
+            {
+                fprintf(stderr, "Error on line %d, invalid procedure address expression.\n",
+                        tree->line_num);
+                ++return_val;
+            }
+        }
         else
         {
             /* Evaluate as integer constant */
@@ -3306,6 +3398,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, word_name, word_type);
         destroy_kgpc_type(word_type);
         free(word_name);
+    }
+    /* TSystemCodePage is a type alias for Word used to indicate code pages in FPC RTL */
+    char *tsystemcodepage_name = strdup("TSystemCodePage");
+    if (tsystemcodepage_name != NULL) {
+        KgpcType *tsystemcodepage_type = create_primitive_type_with_size(INT_TYPE, 2);
+        assert(tsystemcodepage_type != NULL && "Failed to create TSystemCodePage type");
+        AddBuiltinType_Typed(symtab, tsystemcodepage_name, tsystemcodepage_type);
+        destroy_kgpc_type(tsystemcodepage_type);
+        free(tsystemcodepage_name);
     }
     char *shortint_name = strdup("ShortInt");
     if (shortint_name != NULL) {

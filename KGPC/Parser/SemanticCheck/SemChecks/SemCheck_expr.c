@@ -4435,6 +4435,48 @@ static int semcheck_recordaccess(int *type_return,
                 free(field_id_copy);
             }
         }
+        /* Scoped enum support: TEnumType.EnumValue
+         * When unit_check is found and it's a type with an enum, look up the field_id
+         * as an enum literal and transform to its ordinal constant. */
+        else if (unit_check != NULL && unit_check->hash_type == HASHTYPE_TYPE)
+        {
+            /* Check if the type has an enum type alias - look up field_id as enum literal */
+            struct TypeAlias *type_alias = hashnode_get_type_alias(unit_check);
+            if (type_alias != NULL && type_alias->is_enum && type_alias->enum_literals != NULL)
+            {
+                /* Search for field_id in enum_literals */
+                int ordinal = 0;
+                ListNode_t *literal_node = type_alias->enum_literals;
+                while (literal_node != NULL)
+                {
+                    if (literal_node->cur != NULL)
+                    {
+                        char *literal_name = (char *)literal_node->cur;
+                        if (strcasecmp(literal_name, field_id) == 0)
+                        {
+                            /* Found the enum literal - transform to integer constant */
+                            expr->type = EXPR_INUM;
+                            expr->expr_data.i_num = ordinal;
+                            expr->resolved_type = ENUM_TYPE;
+                            if (type_alias->kgpc_type != NULL)
+                            {
+                                /* Use the shared type setter to properly manage reference counting */
+                                semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                            }
+                            *type_return = ENUM_TYPE;
+                            return 0;
+                        }
+                    }
+                    ++ordinal;
+                    literal_node = literal_node->next;
+                }
+                /* Enum literal not found in this type */
+                fprintf(stderr, "Error on line %d, '%s' is not a member of enum type '%s'.\n\n",
+                    expr->line_num, field_id, unit_id);
+                *type_return = UNKNOWN_TYPE;
+                return 1;
+            }
+        }
     }
 
     int error_count = 0;
