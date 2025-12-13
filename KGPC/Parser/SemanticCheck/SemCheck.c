@@ -944,26 +944,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     return 0;
                 }
             }
-            /* If not found as a direct constant, try looking for it with the qualifier prefix */
-            /* This handles cases where the constant wasn't directly imported */
-            if (expr->expr_data.record_access_data.record_expr != NULL &&
-                expr->expr_data.record_access_data.record_expr->type == EXPR_VAR_ID)
-            {
-                /* The qualifier (e.g., "UnitName") is just a namespace prefix in this context */
-                /* The actual constant should already be in scope from the uses clause */
-                char *field_id2 = expr->expr_data.record_access_data.field_id;
-                if (field_id2 != NULL)
-                {
-                    HashNode_t *node = NULL;
-                    if (FindIdent(&node, symtab, field_id2) >= 0 && node != NULL && node->hash_type == HASHTYPE_CONST)
-                    {
-                        *out_value = node->const_int_value;
-                        return 0;
-                    }
-                }
-            }
             fprintf(stderr, "Error: qualified constant '%s' is undefined or not a const.\n",
-                    expr->expr_data.record_access_data.field_id ? expr->expr_data.record_access_data.field_id : "(null)");
+                    field_id ? field_id : "(null)");
             return 1;
         }
         case EXPR_FUNCTION_CALL:
