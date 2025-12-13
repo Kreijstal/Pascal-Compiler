@@ -1704,38 +1704,45 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 target_node->type != NULL)
                             {
                                 /* Target type already exists, retain and use it.
-                                 * Mark that we're reusing an existing type so we don't
-                                 * overwrite its alias info. */
+                                 * Flag that we're reusing an existing type so we don't
+                                 * overwrite its alias info later. */
                                 kgpc_type = target_node->type;
                                 kgpc_type_retain(kgpc_type);
-                                /* Skip alias manipulation when reusing existing type */
-                                goto push_type;
                             }
                             /* Otherwise, skip - can't resolve this type yet */
                         }
                     }
                     
+                    /* Flag to track if we're reusing an existing type (vs creating new) */
+                    int reusing_existing = (kgpc_type != NULL && 
+                        kgpc_type_get_type_alias(kgpc_type) != NULL &&
+                        kgpc_type_get_type_alias(kgpc_type) != alias);
+                    
                     if (kgpc_type != NULL)
                     {
                         if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                         {
-                            fprintf(stderr, "[predeclare] SUCCESS type '%s' kgpc_type=%p kind=%d\n",
-                                type_id, (void*)kgpc_type, kgpc_type->kind);
+                            fprintf(stderr, "[predeclare] SUCCESS type '%s' kgpc_type=%p kind=%d reusing=%d\n",
+                                type_id, (void*)kgpc_type, kgpc_type->kind, reusing_existing);
                         }
-                        /* IMPORTANT: Inherit storage_size from the original type's alias.
-                         * This is critical for types like WideChar (2 bytes) where we retain
-                         * the original type but need to preserve its custom storage_size. */
-                        struct TypeAlias *original_alias = kgpc_type_get_type_alias(kgpc_type);
-                        if (original_alias != NULL && original_alias->storage_size > 0 &&
-                            alias->storage_size <= 0)
+                        
+                        /* Only modify alias info for newly created types, not reused ones */
+                        if (!reusing_existing)
                         {
-                            alias->storage_size = original_alias->storage_size;
+                            /* IMPORTANT: Inherit storage_size from the original type's alias.
+                             * This is critical for types like WideChar (2 bytes) where we retain
+                             * the original type but need to preserve its custom storage_size. */
+                            struct TypeAlias *original_alias = kgpc_type_get_type_alias(kgpc_type);
+                            if (original_alias != NULL && original_alias->storage_size > 0 &&
+                                alias->storage_size <= 0)
+                            {
+                                alias->storage_size = original_alias->storage_size;
+                            }
+                            
+                            /* Set type_alias on KgpcType - only for newly created types */
+                            kgpc_type_set_type_alias(kgpc_type, alias);
                         }
                         
-                        /* Set type_alias on KgpcType - only for newly created types */
-                        kgpc_type_set_type_alias(kgpc_type, alias);
-                        
-push_type:
                         /* Store in tree for later use by semcheck_type_decls */
                         if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                         {
