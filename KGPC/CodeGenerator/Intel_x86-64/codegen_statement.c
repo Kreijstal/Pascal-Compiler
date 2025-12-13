@@ -3739,6 +3739,23 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             }
         }
         
+        /* Check for pointer type with char subtype (covers PAnsiChar, PChar, etc.) */
+        if (expr != NULL && expr_type == POINTER_TYPE && expr->pointer_subtype == CHAR_TYPE)
+        {
+            treat_as_string = 1;
+        }
+        
+        /* Check for array access expressions where element type is PAnsiChar/PChar by name */
+        if (expr != NULL && expr->is_array_expr && expr->array_element_type_id != NULL)
+        {
+            if (strcasecmp(expr->array_element_type_id, "PAnsiChar") == 0 ||
+                strcasecmp(expr->array_element_type_id, "PChar") == 0 ||
+                strcasecmp(expr->array_element_type_id, "pcchar") == 0)
+            {
+                treat_as_string = 1;
+            }
+        }
+        
         const int expr_is_real = (expr_type == REAL_TYPE);
         const char *file_dest64 = current_arg_reg64(0);
         const char *width_dest64 = current_arg_reg64(1);

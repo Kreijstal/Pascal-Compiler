@@ -6,10 +6,10 @@ program fpc_bootstrap_const_array_expr_bounds;
 
 const
   NUM_ITEMS = 3;
-  Items: array[0..NUM_ITEMS-1] of Integer = (
-    10,
-    20,
-    30
+  Items: array[0..NUM_ITEMS-1] of PAnsiChar = (
+    'First',
+    'Second',
+    'Third'
   );
 
 begin
