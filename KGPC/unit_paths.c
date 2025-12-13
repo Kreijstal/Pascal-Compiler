@@ -44,14 +44,23 @@ static char *build_candidate_unit_path(const char *dir, const char *unit_name)
         return NULL;
 
     char candidate[PATH_MAX];
+    
+    /* Try .p extension first (kgpc convention) */
     int written = snprintf(candidate, sizeof(candidate), "%s/%s.p", dir, unit_name);
-    if (written <= 0 || written >= (int)sizeof(candidate))
-        return NULL;
+    if (written > 0 && written < (int)sizeof(candidate) && file_is_readable(candidate))
+        return duplicate_path(candidate);
+    
+    /* Try .pp extension (FPC convention) */
+    written = snprintf(candidate, sizeof(candidate), "%s/%s.pp", dir, unit_name);
+    if (written > 0 && written < (int)sizeof(candidate) && file_is_readable(candidate))
+        return duplicate_path(candidate);
+    
+    /* Try .pas extension (common convention) */
+    written = snprintf(candidate, sizeof(candidate), "%s/%s.pas", dir, unit_name);
+    if (written > 0 && written < (int)sizeof(candidate) && file_is_readable(candidate))
+        return duplicate_path(candidate);
 
-    if (!file_is_readable(candidate))
-        return NULL;
-
-    return duplicate_path(candidate);
+    return NULL;
 }
 
 void unit_search_paths_init(UnitSearchPaths *paths)

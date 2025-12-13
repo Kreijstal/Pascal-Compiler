@@ -645,10 +645,79 @@ static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
     }
 }
 
-static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
+/* Helper macros to get declaration lists from either program or unit trees */
+static ListNode_t **get_type_decl_list(Tree_t *target)
 {
-    if (program == NULL || unit_tree == NULL)
+    assert(target != NULL);
+    if (target->type == TREE_PROGRAM_TYPE)
+        return &target->tree_data.program_data.type_declaration;
+    else if (target->type == TREE_UNIT)
+        return &target->tree_data.unit_data.interface_type_decls;
+    else
+        return NULL;
+}
+
+static ListNode_t **get_const_decl_list(Tree_t *target)
+{
+    assert(target != NULL);
+    if (target->type == TREE_PROGRAM_TYPE)
+        return &target->tree_data.program_data.const_declaration;
+    else if (target->type == TREE_UNIT)
+        return &target->tree_data.unit_data.interface_const_decls;
+    else
+        return NULL;
+}
+
+static ListNode_t **get_var_decl_list(Tree_t *target)
+{
+    assert(target != NULL);
+    if (target->type == TREE_PROGRAM_TYPE)
+        return &target->tree_data.program_data.var_declaration;
+    else if (target->type == TREE_UNIT)
+        return &target->tree_data.unit_data.interface_var_decls;
+    else
+        return NULL;
+}
+
+static ListNode_t **get_subprograms_list(Tree_t *target)
+{
+    assert(target != NULL);
+    if (target->type == TREE_PROGRAM_TYPE)
+        return &target->tree_data.program_data.subprograms;
+    else if (target->type == TREE_UNIT)
+        return &target->tree_data.unit_data.subprograms;
+    else
+        return NULL;
+}
+
+static ListNode_t **get_finalization_list(Tree_t *target)
+{
+    assert(target != NULL);
+    if (target->type == TREE_PROGRAM_TYPE)
+        return &target->tree_data.program_data.finalization_statements;
+    /* Units don't accumulate finalization statements from other units */
+    return NULL;
+}
+
+/* Merges a loaded unit's declarations into the target tree.
+ * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
+static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
+{
+    if (target == NULL || unit_tree == NULL)
         return;
+    
+    assert(target->type == TREE_PROGRAM_TYPE || target->type == TREE_UNIT);
+    
+    ListNode_t **type_list = get_type_decl_list(target);
+    ListNode_t **const_list = get_const_decl_list(target);
+    ListNode_t **var_list = get_var_decl_list(target);
+    ListNode_t **sub_list = get_subprograms_list(target);
+    ListNode_t **final_list = get_finalization_list(target);
+    
+    assert(type_list != NULL);
+    assert(const_list != NULL);
+    assert(var_list != NULL);
+    assert(sub_list != NULL);
 
     mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1);
     if (getenv("KGPC_DEBUG_TFPG") != NULL) {
@@ -668,21 +737,38 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    program->tree_data.program_data.type_declaration =
-        ConcatList(program->tree_data.program_data.type_declaration,
-                   unit_tree->tree_data.unit_data.interface_type_decls);
+    /* Append interface types AFTER existing types to preserve dependency order.
+     * Dependencies (like ctypes) are loaded before dependents (like Windows),
+     * so ctypes types should be processed first when predeclare_types runs. */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
-    program->tree_data.program_data.const_declaration =
-        ConcatList(program->tree_data.program_data.const_declaration,
-                   unit_tree->tree_data.unit_data.interface_const_decls);
+    if (getenv("KGPC_DEBUG_CONST") != NULL) {
+        ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_const_decls;
+        while (dbg != NULL) {
+            if (dbg->type == LIST_TREE) {
+                Tree_t *decl = (Tree_t *)dbg->cur;
+                if (decl != NULL && decl->type == TREE_CONST_DECL &&
+                    decl->tree_data.const_decl_data.id != NULL)
+                {
+                    fprintf(stderr, "[KGPC] merging interface const '%s' from unit '%s' into target type %d\n",
+                            decl->tree_data.const_decl_data.id,
+                            unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                unit_tree->tree_data.unit_data.unit_id : "<unknown>",
+                            target->type);
+                }
+            }
+            dbg = dbg->next;
+        }
+    }
+    /* IMPORTANT: Prepend imported constants so they're available before the importing unit's
+     * own constants. This allows const X = ImportedUnit.Y to work correctly. */
+    *const_list = ConcatList(unit_tree->tree_data.unit_data.interface_const_decls, *const_list);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
-    program->tree_data.program_data.var_declaration =
-        ConcatList(program->tree_data.program_data.var_declaration,
-                   unit_tree->tree_data.unit_data.interface_var_decls);
+    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
     mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
@@ -703,41 +789,44 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    program->tree_data.program_data.type_declaration =
-        ConcatList(program->tree_data.program_data.type_declaration,
-                   unit_tree->tree_data.unit_data.implementation_type_decls);
+    /* Append implementation types to preserve dependency order */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    program->tree_data.program_data.const_declaration =
-        ConcatList(program->tree_data.program_data.const_declaration,
-                   unit_tree->tree_data.unit_data.implementation_const_decls);
+    /* Prepend implementation constants so they're available for the importing unit's constants */
+    *const_list = ConcatList(unit_tree->tree_data.unit_data.implementation_const_decls, *const_list);
     unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    program->tree_data.program_data.var_declaration =
-        ConcatList(program->tree_data.program_data.var_declaration,
-                   unit_tree->tree_data.unit_data.implementation_var_decls);
+    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
     unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
     mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
-    program->tree_data.program_data.subprograms =
-        ConcatList(program->tree_data.program_data.subprograms,
-                   unit_tree->tree_data.unit_data.subprograms);
+    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
     unit_tree->tree_data.unit_data.subprograms = NULL;
 
-    append_initialization_statement(program, unit_tree->tree_data.unit_data.initialization);
-    unit_tree->tree_data.unit_data.initialization = NULL;
+    /* Only programs accumulate initialization/finalization */
+    if (target->type == TREE_PROGRAM_TYPE) {
+        append_initialization_statement(target, unit_tree->tree_data.unit_data.initialization);
+        unit_tree->tree_data.unit_data.initialization = NULL;
 
-    // Prepend finalization to the list (for LIFO execution order)
-    if (unit_tree->tree_data.unit_data.finalization != NULL) {
-        ListNode_t *final_node = CreateListNode(unit_tree->tree_data.unit_data.finalization, LIST_STMT);
-        if (final_node != NULL) {
-            final_node->next = program->tree_data.program_data.finalization_statements;
-            program->tree_data.program_data.finalization_statements = final_node;
+        // Prepend finalization to the list (for LIFO execution order)
+        if (unit_tree->tree_data.unit_data.finalization != NULL && final_list != NULL) {
+            ListNode_t *final_node = CreateListNode(unit_tree->tree_data.unit_data.finalization, LIST_STMT);
+            if (final_node != NULL) {
+                final_node->next = *final_list;
+                *final_list = final_node;
+            }
+            unit_tree->tree_data.unit_data.finalization = NULL;
         }
-        unit_tree->tree_data.unit_data.finalization = NULL;
     }
+}
+
+/* Legacy wrapper for backward compatibility */
+static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
+{
+    merge_unit_into_target(program, unit_tree);
 }
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
@@ -1109,6 +1198,33 @@ int main(int argc, char **argv)
         last->next = user_subs;
         user_tree->tree_data.program_data.subprograms = prelude_subs;
         prelude_tree->tree_data.program_data.subprograms = NULL;
+    }
+
+    /* Merge stdlib types into program for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+    ListNode_t *prelude_types = prelude_tree->tree_data.program_data.type_declaration;
+    if (prelude_types != NULL)
+    {
+        user_tree->tree_data.program_data.type_declaration =
+            ConcatList(prelude_types, user_tree->tree_data.program_data.type_declaration);
+        prelude_tree->tree_data.program_data.type_declaration = NULL;
+    }
+
+    /* Merge stdlib constants into program */
+    ListNode_t *prelude_consts = prelude_tree->tree_data.program_data.const_declaration;
+    if (prelude_consts != NULL)
+    {
+        user_tree->tree_data.program_data.const_declaration =
+            ConcatList(prelude_consts, user_tree->tree_data.program_data.const_declaration);
+        prelude_tree->tree_data.program_data.const_declaration = NULL;
+    }
+
+    /* Merge stdlib variables into program */
+    ListNode_t *prelude_vars = prelude_tree->tree_data.program_data.var_declaration;
+    if (prelude_vars != NULL)
+    {
+        user_tree->tree_data.program_data.var_declaration =
+            ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
+        prelude_tree->tree_data.program_data.var_declaration = NULL;
     }
 
     load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);

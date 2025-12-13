@@ -228,7 +228,12 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     /* Handle simple type aliases: type MyInt = Integer */
     if (alias->base_type != UNKNOWN_TYPE && alias->target_type_id == NULL) {
         /* Simple primitive type alias */
-        result = create_primitive_type(alias->base_type);
+        if (alias->storage_size > 0) {
+            /* Preserve storage size if specified */
+            result = create_primitive_type_with_size(alias->base_type, alias->storage_size);
+        } else {
+            result = create_primitive_type(alias->base_type);
+        }
         if (result != NULL) {
             kgpc_type_set_type_alias(result, alias);
         }

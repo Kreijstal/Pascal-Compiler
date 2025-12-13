@@ -5003,6 +5003,15 @@ static int semcheck_addressof(int *type_return,
         pointed_to_type = create_primitive_type(STRING_TYPE);
     } else if (inner_type == RECORD_TYPE && record_info != NULL) {
         pointed_to_type = create_record_type(record_info);
+    } else if (inner_type == POINTER_TYPE) {
+        /* For pointer types, get the resolved KgpcType of the inner expression */
+        if (inner->resolved_kgpc_type != NULL) {
+            pointed_to_type = inner->resolved_kgpc_type;
+            kgpc_type_retain(pointed_to_type);  /* We're taking a reference */
+        } else {
+            /* Fallback: create untyped pointer */
+            pointed_to_type = NULL;
+        }
     } else if (inner_type == PROCEDURE) {
         int proc_type_owned = 0;
         KgpcType *proc_type = NULL;
