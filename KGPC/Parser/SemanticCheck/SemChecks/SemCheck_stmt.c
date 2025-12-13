@@ -2758,7 +2758,11 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     {
         HashNode_t *proc_var = NULL;
         int proc_scope = FindIdent(&proc_var, symtab, proc_id);
-        if (proc_scope != -1 && proc_var != NULL && proc_var->hash_type == HASHTYPE_VAR &&
+        /* Check for procedure variables (HASHTYPE_VAR) or procedure constants (HASHTYPE_CONST)
+         * with a procedural type. This allows calling procedure variables and typed constants
+         * that hold procedure addresses like: const MyProcRef: TProc = @MyProc; */
+        if (proc_scope != -1 && proc_var != NULL && 
+            (proc_var->hash_type == HASHTYPE_VAR || proc_var->hash_type == HASHTYPE_CONST) &&
             proc_var->type != NULL && proc_var->type->kind == TYPE_KIND_PROCEDURE)
         {
             DestroyList(overload_candidates);

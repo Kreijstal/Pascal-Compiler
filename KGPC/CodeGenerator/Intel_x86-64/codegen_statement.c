@@ -5297,6 +5297,14 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         is_indirect_call = 1;
     }
+    /* Case 1b: If hash_type is CONST with procedure type, this is a typed constant 
+     * holding a procedure address. Treat as indirect call. */
+    else if (call_hash_type == HASHTYPE_CONST &&
+             call_kgpc_type != NULL && 
+             call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        is_indirect_call = 1;
+    }
     /* Case 2: If hash_type is PROCEDURE but type info indicates it's a procedure type,
      * and either proc_name is NULL or doesn't match, treat as indirect call.
      * This handles corrupted or improperly resolved procedure nodes. */
