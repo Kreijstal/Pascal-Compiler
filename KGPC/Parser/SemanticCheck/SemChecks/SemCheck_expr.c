@@ -4471,7 +4471,7 @@ static int semcheck_recordaccess(int *type_return,
                     literal_node = literal_node->next;
                 }
                 /* Enum literal not found in this type */
-                fprintf(stderr, "Error on line %d, '%s' is not a member of enum type '%s'.\n\n",
+                fprintf(stderr, "Error on line %d, '%s' is not a value of enum type '%s'.\n\n",
                     expr->line_num, field_id, unit_id);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
