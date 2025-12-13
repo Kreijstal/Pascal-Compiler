@@ -971,6 +971,14 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     }
                     *out_value = left % right;
                     return 0;
+                case SHL:
+                    /* Shift left: left shl right */
+                    *out_value = left << right;
+                    return 0;
+                case SHR:
+                    /* Shift right: left shr right */
+                    *out_value = (unsigned long long)left >> right;
+                    return 0;
                 default:
                     break;
             }
@@ -1380,6 +1388,7 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     assert(sem_result != NULL);
 
     symtab = InitSymTab();
+    PushScope(symtab);  /* Push global scope for built-in constants and types */
     semcheck_add_builtins(symtab);
     /*PrintSymTab(symtab, stderr, 0);*/
 
@@ -3092,6 +3101,36 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Platform newline constants to support System/ObjPas resourcestring concatenations */
     AddBuiltinStringConst(symtab, "LineEnding", "\n");
     AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+    
+    /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
+    {
+        char *name;
+        /* MaxLongint: Maximum value for LongInt (32-bit signed) = 2^31 - 1 */
+        name = strdup("MaxLongint");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 2147483647LL);
+            free(name);
+        }
+        /* MaxSmallint: Maximum value for SmallInt (16-bit signed) = 2^15 - 1 */
+        name = strdup("MaxSmallint");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 32767LL);
+            free(name);
+        }
+        /* MaxShortint: Maximum value for ShortInt (8-bit signed) = 2^7 - 1 */
+        name = strdup("MaxShortint");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 127LL);
+            free(name);
+        }
+        /* MaxInt64: Maximum value for Int64 (64-bit signed) = 2^63 - 1 */
+        name = strdup("MaxInt64");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 9223372036854775807LL);
+            free(name);
+        }
+    }
+    
     char *pchar_name = strdup("PChar");
     if (pchar_name != NULL) {
         KgpcType *pchar_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
