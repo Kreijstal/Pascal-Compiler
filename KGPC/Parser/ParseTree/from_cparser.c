@@ -1513,11 +1513,19 @@ static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, in
     
     const char *right_part = op + 1;
     
-    /* Trim whitespace */
-    while (*left_part == ' ' || *left_part == '\t') memmove(left_part, left_part + 1, strlen(left_part));
-    char *p = left_part + strlen(left_part) - 1;
+    /* Trim leading whitespace from left_part using pointer advance */
+    char *trimmed_left = left_part;
+    while (*trimmed_left == ' ' || *trimmed_left == '\t') trimmed_left++;
+    /* If we advanced, shift content to beginning */
+    if (trimmed_left != left_part) {
+        memmove(left_part, trimmed_left, strlen(trimmed_left) + 1);
+    }
+    /* Trim trailing whitespace */
+    size_t len = strlen(left_part);
+    char *p = (len > 0) ? (left_part + len - 1) : left_part;
     while (p > left_part && (*p == ' ' || *p == '\t')) *p-- = '\0';
     
+    /* Skip leading whitespace from right_part */
     while (*right_part == ' ' || *right_part == '\t') right_part++;
     
     /* Evaluate left part */
