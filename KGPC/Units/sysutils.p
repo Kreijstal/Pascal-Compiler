@@ -9,8 +9,6 @@ type
     TDateTime = Int64;
     AnsiString = string;
     PChar = ^Char;
-    NativeInt = cint64;
-    NativeUInt = cuint64;
     Uint64 = cuint64;
 
     // Added for Unix support

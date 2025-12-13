@@ -1198,6 +1198,33 @@ int main(int argc, char **argv)
         prelude_tree->tree_data.program_data.subprograms = NULL;
     }
 
+    /* Merge stdlib types into program for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+    ListNode_t *prelude_types = prelude_tree->tree_data.program_data.type_declaration;
+    if (prelude_types != NULL)
+    {
+        user_tree->tree_data.program_data.type_declaration =
+            ConcatList(prelude_types, user_tree->tree_data.program_data.type_declaration);
+        prelude_tree->tree_data.program_data.type_declaration = NULL;
+    }
+
+    /* Merge stdlib constants into program */
+    ListNode_t *prelude_consts = prelude_tree->tree_data.program_data.const_declaration;
+    if (prelude_consts != NULL)
+    {
+        user_tree->tree_data.program_data.const_declaration =
+            ConcatList(prelude_consts, user_tree->tree_data.program_data.const_declaration);
+        prelude_tree->tree_data.program_data.const_declaration = NULL;
+    }
+
+    /* Merge stdlib variables into program */
+    ListNode_t *prelude_vars = prelude_tree->tree_data.program_data.var_declaration;
+    if (prelude_vars != NULL)
+    {
+        user_tree->tree_data.program_data.var_declaration =
+            ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
+        prelude_tree->tree_data.program_data.var_declaration = NULL;
+    }
+
     load_units_from_list(user_tree, prelude_tree->tree_data.program_data.uses_units, &visited_units);
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
     user_tree->tree_data.program_data.type_declaration =

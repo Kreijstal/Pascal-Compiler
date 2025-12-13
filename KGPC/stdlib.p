@@ -6,11 +6,12 @@ program stdlib;
 
 type
   { Size types - platform dependent }
-  SizeInt = LongInt;        { Signed size type }
-  SizeUInt = LongWord;      { Unsigned size type }
+  SizeInt = Int64;          { Signed size type - matches pointer size on 64-bit }
+  SizeUInt = QWord;         { Unsigned size type - matches pointer size on 64-bit }
   
   { Pointer types }
   PAnsiChar = ^Char;        { Pointer to ANSI character }
+  PPAnsiChar = ^PAnsiChar;  { Pointer to pointer to ANSI character }
   PChar = ^Char;            { Alias for PAnsiChar }
   PPointer = ^Pointer;      { Pointer to pointer }
   

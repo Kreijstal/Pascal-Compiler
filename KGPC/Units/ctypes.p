@@ -35,6 +35,10 @@ type
     cintptr = -9223372036854775808..9223372036854775807;
     cuintptr = 0..18446744073709551615;
     cbool = 0..1;
+    
+    // FPC compatibility aliases
+    NativeUInt = cuint64;
+    NativeInt = cint64;
 
     // Floating point types
     cfloat = real;
@@ -70,6 +74,8 @@ type
     pcfloat = ^cfloat;
     pcdouble = ^cdouble;
     pclongdouble = ^clongdouble;
+    pNativeUInt = ^NativeUInt;
+    pNativeInt = ^NativeInt;
 
     // C-style strings
     cstring = string;

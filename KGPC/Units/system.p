@@ -9,8 +9,8 @@ interface
 
 type
   { Size types - platform dependent }
-  SizeInt = LongInt;        { Signed size type }
-  SizeUInt = LongWord;      { Unsigned size type }
+  SizeInt = Int64;          { Signed size type - matches pointer size on 64-bit }
+  SizeUInt = QWord;         { Unsigned size type - matches pointer size on 64-bit }
   
   { Pointer types }
   PAnsiChar = ^Char;        { Pointer to ANSI character }
