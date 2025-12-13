@@ -1668,11 +1668,14 @@ cleanup_constructor:
     }
     else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
-        /* Check if this is a string constant reference */
+        /* Check if this is a string constant reference (but not a procedure address constant) */
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
             node != NULL && node->hash_type == HASHTYPE_CONST &&
-            node->const_string_value != NULL)
+            node->const_string_value != NULL &&
+            /* Skip if this is a procedure address constant - those use const_string_value
+             * to store the procedure name, not an actual string value */
+            !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
         {
             /* String constant - treat it like a string literal */
             char label[20];
@@ -1745,6 +1748,15 @@ cleanup_constructor:
         HashNode_t *symbol_node = NULL;
         if (ctx != NULL && ctx->symtab != NULL)
             FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+        /* Check if this is a procedure address constant - need leaq to get the label address */
+        if (symbol_node != NULL && symbol_node->hash_type == HASHTYPE_CONST &&
+            symbol_node->type != NULL && symbol_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            /* For procedure address constants, use leaq to get the procedure's address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
 
         /* Check if this is a VMT label - need address, not value */
         const char *var_name = expr->expr_data.id;
@@ -2092,8 +2104,21 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
                 if (found && node->hash_type == HASHTYPE_CONST)
                 {
+                    /* Check if this is a procedure address constant */
+                    if (node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE &&
+                        node->const_string_value != NULL)
+                    {
+                        /* Procedure address constant - load address of the referenced procedure.
+                         * The const_string_value holds the original procedure name.
+                         * We need to mangle it and use RIP-relative addressing so the 
+                         * generated code will use leaq for proper label loading. */
+                        char mangled_name[256];
+                        snprintf(mangled_name, sizeof(mangled_name), "%s_void", node->const_string_value);
+                        /* Use RIP-relative format for label - this causes leaq to be generated */
+                        snprintf(buffer, buf_len, "%s(%%rip)", mangled_name);
+                    }
                     /* Check if this is a real constant */
-                    if (node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
+                    else if (node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
                     {
                         /* Real constant - encode as bit pattern using union for safe type punning */
                         union {
