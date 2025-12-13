@@ -53,7 +53,8 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return LONGINT_TYPE;
     if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
-    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString") ||
+        pascal_identifier_equals(id, "RawByteString"))
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "ShortString"))
         return SHORTSTRING_TYPE;
@@ -3916,6 +3917,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 kgpc_type_retain(resolved_type->type);
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
             }
+            else if (resolved_type == NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            {
+                /* Fallback: Create KgpcType for built-in type names not in symbol table */
+                const char *type_id = tree->tree_data.var_decl_data.type_id;
+                int builtin_tag = semcheck_map_builtin_type_name_local(type_id);
+                if (builtin_tag != UNKNOWN_TYPE)
+                {
+                    tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
+                }
+            }
         }
         while(ids != NULL)
         {
@@ -3951,7 +3962,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_LONGINT;  /* Unsigned 64-bit on x86-64 */
                         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                             var_type = HASHVAR_REAL;
-                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString"))
+                        else if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
+                                 pascal_identifier_equals(type_id, "RawByteString"))
                             var_type = HASHVAR_PCHAR;
                         else if (pascal_identifier_equals(type_id, "ShortString"))
                         {

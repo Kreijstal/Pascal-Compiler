@@ -11,6 +11,7 @@
 #include "type_tags.h"
 #include "tree_types.h"
 #include "../../format_arg.h"
+#include "../../identifier_utils.h"
 
 /* Include symbol table headers for type resolution */
 #include "../SemanticCheck/HashTable/HashTable.h"
@@ -398,6 +399,53 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             kgpc_type_retain(type_node->type);
             return type_node->type;
         }
+        
+        /* Fallback: Check for built-in type names not in symbol table */
+        const char *type_id = var_decl->tree_data.var_decl_data.type_id;
+        int builtin_tag = UNKNOWN_TYPE;
+        
+        /* String types */
+        if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
+            pascal_identifier_equals(type_id, "RawByteString")) {
+            builtin_tag = STRING_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "ShortString")) {
+            builtin_tag = SHORTSTRING_TYPE;
+        }
+        /* Integer types */
+        else if (pascal_identifier_equals(type_id, "Integer")) {
+            builtin_tag = INT_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "LongInt") || pascal_identifier_equals(type_id, "Int64") ||
+                 pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") ||
+                 pascal_identifier_equals(type_id, "NativeUInt") || pascal_identifier_equals(type_id, "NativeInt") ||
+                 pascal_identifier_equals(type_id, "PtrInt") || pascal_identifier_equals(type_id, "PtrUInt")) {
+            builtin_tag = LONGINT_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "SmallInt") ||
+                 pascal_identifier_equals(type_id, "Word")) {
+            builtin_tag = INT_TYPE;
+        }
+        /* Other types */
+        else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double")) {
+            builtin_tag = REAL_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar")) {
+            builtin_tag = CHAR_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "Boolean")) {
+            builtin_tag = BOOL;
+        }
+        else if (pascal_identifier_equals(type_id, "Pointer")) {
+            builtin_tag = POINTER_TYPE;
+        }
+        
+        if (builtin_tag != UNKNOWN_TYPE) {
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_primitive_type(builtin_tag);
+        }
+        
         /* If we couldn't resolve the named type, return NULL */
         return NULL;
     }
