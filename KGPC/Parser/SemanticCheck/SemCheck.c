@@ -664,7 +664,8 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
  * This follows type aliases until we reach a known primitive type.
  * Returns the resolved type name (caller should not free), or NULL if unknown.
  */
-/* Track recursion depth to prevent stack overflow from circular type definitions */
+/* Track recursion depth to prevent stack overflow from circular type definitions.
+ * Note: This compiler is single-threaded, so static variable is safe. */
 static int resolve_type_depth = 0;
 #define MAX_RESOLVE_TYPE_DEPTH 100
 
@@ -675,6 +676,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
     /* Prevent infinite recursion from circular type definitions */
     if (resolve_type_depth >= MAX_RESOLVE_TYPE_DEPTH)
     {
+        fprintf(stderr, "Warning: Type resolution depth limit reached for type '%s' - possible circular type definition\n", type_name);
         return type_name;  /* Return as-is to avoid stack overflow */
     }
     
