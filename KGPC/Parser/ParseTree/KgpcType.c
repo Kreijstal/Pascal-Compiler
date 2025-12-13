@@ -398,6 +398,53 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             kgpc_type_retain(type_node->type);
             return type_node->type;
         }
+        
+        /* Fallback: Check for built-in type names not in symbol table */
+        const char *type_id = var_decl->tree_data.var_decl_data.type_id;
+        int builtin_tag = UNKNOWN_TYPE;
+        
+        /* String types */
+        if (strcasecmp(type_id, "String") == 0 || strcasecmp(type_id, "AnsiString") == 0 ||
+            strcasecmp(type_id, "RawByteString") == 0) {
+            builtin_tag = STRING_TYPE;
+        }
+        else if (strcasecmp(type_id, "ShortString") == 0) {
+            builtin_tag = SHORTSTRING_TYPE;
+        }
+        /* Integer types */
+        else if (strcasecmp(type_id, "Integer") == 0) {
+            builtin_tag = INT_TYPE;
+        }
+        else if (strcasecmp(type_id, "LongInt") == 0 || strcasecmp(type_id, "Int64") == 0 ||
+                 strcasecmp(type_id, "SizeUInt") == 0 || strcasecmp(type_id, "QWord") == 0 ||
+                 strcasecmp(type_id, "NativeUInt") == 0 || strcasecmp(type_id, "NativeInt") == 0 ||
+                 strcasecmp(type_id, "PtrInt") == 0 || strcasecmp(type_id, "PtrUInt") == 0) {
+            builtin_tag = LONGINT_TYPE;
+        }
+        else if (strcasecmp(type_id, "Byte") == 0 || strcasecmp(type_id, "SmallInt") == 0 ||
+                 strcasecmp(type_id, "Word") == 0) {
+            builtin_tag = INT_TYPE;
+        }
+        /* Other types */
+        else if (strcasecmp(type_id, "Real") == 0 || strcasecmp(type_id, "Double") == 0) {
+            builtin_tag = REAL_TYPE;
+        }
+        else if (strcasecmp(type_id, "Char") == 0 || strcasecmp(type_id, "AnsiChar") == 0) {
+            builtin_tag = CHAR_TYPE;
+        }
+        else if (strcasecmp(type_id, "Boolean") == 0) {
+            builtin_tag = BOOL;
+        }
+        else if (strcasecmp(type_id, "Pointer") == 0) {
+            builtin_tag = POINTER_TYPE;
+        }
+        
+        if (builtin_tag != UNKNOWN_TYPE) {
+            if (owns_type != NULL)
+                *owns_type = 1;
+            return create_primitive_type(builtin_tag);
+        }
+        
         /* If we couldn't resolve the named type, return NULL */
         return NULL;
     }
