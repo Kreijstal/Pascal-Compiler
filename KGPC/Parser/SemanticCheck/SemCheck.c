@@ -664,9 +664,21 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
  * This follows type aliases until we reach a known primitive type.
  * Returns the resolved type name (caller should not free), or NULL if unknown.
  */
+/* Track recursion depth to prevent stack overflow from circular type definitions.
+ * Note: This compiler is single-threaded, so static variable is safe. */
+static int resolve_type_depth = 0;
+#define MAX_RESOLVE_TYPE_DEPTH 100
+
 static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_name)
 {
     if (type_name == NULL) return NULL;
+    
+    /* Prevent infinite recursion from circular type definitions */
+    if (resolve_type_depth >= MAX_RESOLVE_TYPE_DEPTH)
+    {
+        fprintf(stderr, "Warning: Type resolution depth limit reached for type '%s' - possible circular type definition\n", type_name);
+        return type_name;  /* Return as-is to avoid stack overflow */
+    }
     
     /* First, check if it's already a known primitive type */
     if (pascal_identifier_equals(type_name, "Int64") ||
@@ -698,8 +710,40 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
     {
         HashNode_t *type_node = NULL;
         /* Cast away const for FindIdent - it doesn't modify the string */
-        if (FindIdent(&type_node, symtab, (char *)type_name) >= 0 && type_node != NULL)
+        const char *lookup_name = type_name;
+        
+        /* Handle qualified type names like "UnixType.culong" - try full name first */
+        int found = FindIdent(&type_node, symtab, (char *)lookup_name);
+        
+        if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
+            fprintf(stderr, "[resolve_type] '%s' initial lookup found=%d node=%p\n",
+                type_name, found, (void*)type_node);
+        }
+        
+        /* If lookup failed and this is a qualified name, try the unqualified part */
+        if (found < 0 || type_node == NULL)
+        {
+            const char *dot = strrchr(type_name, '.');
+            if (dot != NULL && dot[1] != '\0')
+            {
+                lookup_name = dot + 1;  /* Skip past the dot to get unqualified name */
+                found = FindIdent(&type_node, symtab, (char *)lookup_name);
+                if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+                {
+                    fprintf(stderr, "[resolve_type] '%s' unqualified '%s' found=%d node=%p\n",
+                        type_name, lookup_name, found, (void*)type_node);
+                }
+            }
+        }
+        
+        if (found >= 0 && type_node != NULL)
+        {
+            if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+            {
+                fprintf(stderr, "[resolve_type] '%s' hash_type=%d type=%p\n",
+                    type_name, type_node->hash_type, (void*)type_node->type);
+            }
             if (type_node->hash_type == HASHTYPE_TYPE && type_node->type != NULL)
             {
                 /* Get the underlying type from KgpcType */
@@ -710,6 +754,17 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                  * which are all mapped to LONGINT_TYPE by the predeclare_types function but need
                  * to retain their original type semantics for SizeOf/High/Low operations. */
                 struct TypeAlias *alias = kgpc_type_get_type_alias(kgpc_type);
+                if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+                {
+                    fprintf(stderr, "[resolve_type] '%s' kgpc_type kind=%d alias=%p\n",
+                        type_name, kgpc_type->kind, (void*)alias);
+                    if (alias != NULL)
+                    {
+                        fprintf(stderr, "[resolve_type] '%s' alias target_type_id='%s' base_type=%d\n",
+                            type_name, alias->target_type_id ? alias->target_type_id : "<null>",
+                            alias->base_type);
+                    }
+                }
                 if (alias != NULL)
                 {
                     /* Recursively resolve via target_type_id if available.
@@ -717,7 +772,14 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                      * which are handled by the builtin check at the top of this function. */
                     if (alias->target_type_id != NULL)
                     {
-                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                        /* Prevent recursion on same type name */
+                        if (pascal_identifier_equals(alias->target_type_id, type_name))
+                            return type_name;
+                        
+                        resolve_type_depth++;
+                        const char *result = resolve_type_to_base_name(symtab, alias->target_type_id);
+                        resolve_type_depth--;
+                        return result;
                     }
                     /* Check for base_type tag if no target_type_id */
                     if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0)
@@ -908,6 +970,14 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         return 1;
                     }
                     *out_value = left % right;
+                    return 0;
+                case SHL:
+                    /* Shift left: left shl right */
+                    *out_value = left << right;
+                    return 0;
+                case SHR:
+                    /* Shift right: left shr right */
+                    *out_value = (unsigned long long)left >> right;
                     return 0;
                 default:
                     break;
@@ -1318,6 +1388,7 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     assert(sem_result != NULL);
 
     symtab = InitSymTab();
+    PushScope(symtab);  /* Push global scope for built-in constants and types */
     semcheck_add_builtins(symtab);
     /*PrintSymTab(symtab, stderr, 0);*/
 
@@ -1434,6 +1505,18 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     cur = cur->next;
                     continue;
+                }
+                
+                /* Debug: print predeclare order */
+                if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
+                {
+                    fprintf(stderr, "[predeclare] type '%s'", type_id);
+                    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                    {
+                        struct TypeAlias *a = &tree->tree_data.type_decl_data.info.alias;
+                        fprintf(stderr, " alias target='%s'", a->target_type_id ? a->target_type_id : "<null>");
+                    }
+                    fprintf(stderr, "\n");
                 }
                 
                 /* Check if already declared (e.g., from a previous pass or builtin) */
@@ -1610,11 +1693,28 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         else
                         {
                             HashNode_t *target_node = NULL;
-                            if (FindIdent(&target_node, symtab, (char *)target) >= 0 &&
+                            const char *lookup_target = target;
+                            
+                            /* Handle qualified type names like "UnixType.culong" */
+                            int found = FindIdent(&target_node, symtab, (char *)lookup_target);
+                            if (found < 0 || target_node == NULL)
+                            {
+                                /* Try unqualified name if it contains a dot */
+                                const char *dot = strrchr(target, '.');
+                                if (dot != NULL && dot[1] != '\0')
+                                {
+                                    lookup_target = dot + 1;
+                                    found = FindIdent(&target_node, symtab, (char *)lookup_target);
+                                }
+                            }
+                            
+                            if (found >= 0 &&
                                 target_node != NULL && target_node->hash_type == HASHTYPE_TYPE &&
                                 target_node->type != NULL)
                             {
-                                /* Target type already exists, retain and use it */
+                                /* Target type already exists, retain and use it.
+                                 * Flag that we're reusing an existing type so we don't
+                                 * overwrite its alias info later. */
                                 kgpc_type = target_node->type;
                                 kgpc_type_retain(kgpc_type);
                             }
@@ -1622,20 +1722,35 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         }
                     }
                     
+                    /* Flag to track if we're reusing an existing type (vs creating new) */
+                    int reusing_existing = (kgpc_type != NULL && 
+                        kgpc_type_get_type_alias(kgpc_type) != NULL &&
+                        kgpc_type_get_type_alias(kgpc_type) != alias);
+                    
                     if (kgpc_type != NULL)
                     {
-                        /* IMPORTANT: Inherit storage_size from the original type's alias.
-                         * This is critical for types like WideChar (2 bytes) where we retain
-                         * the original type but need to preserve its custom storage_size. */
-                        struct TypeAlias *original_alias = kgpc_type_get_type_alias(kgpc_type);
-                        if (original_alias != NULL && original_alias->storage_size > 0 &&
-                            alias->storage_size <= 0)
+                        if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                         {
-                            alias->storage_size = original_alias->storage_size;
+                            fprintf(stderr, "[predeclare] SUCCESS type '%s' kgpc_type=%p kind=%d reusing=%d\n",
+                                type_id, (void*)kgpc_type, kgpc_type->kind, reusing_existing);
                         }
                         
-                        /* Set type_alias on KgpcType */
-                        kgpc_type_set_type_alias(kgpc_type, alias);
+                        /* Only modify alias info for newly created types, not reused ones */
+                        if (!reusing_existing)
+                        {
+                            /* IMPORTANT: Inherit storage_size from the original type's alias.
+                             * This is critical for types like WideChar (2 bytes) where we retain
+                             * the original type but need to preserve its custom storage_size. */
+                            struct TypeAlias *original_alias = kgpc_type_get_type_alias(kgpc_type);
+                            if (original_alias != NULL && original_alias->storage_size > 0 &&
+                                alias->storage_size <= 0)
+                            {
+                                alias->storage_size = original_alias->storage_size;
+                            }
+                            
+                            /* Set type_alias on KgpcType - only for newly created types */
+                            kgpc_type_set_type_alias(kgpc_type, alias);
+                        }
                         
                         /* Store in tree for later use by semcheck_type_decls */
                         if (tree->tree_data.type_decl_data.kgpc_type == NULL)
@@ -1651,6 +1766,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Should not happen since we checked above, but handle gracefully */
                             errors++;
                         }
+                    }
+                    else if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
+                    {
+                        fprintf(stderr, "[predeclare] SKIP type '%s' - kgpc_type is NULL\n", type_id);
                     }
                 }
                 /* Skip TYPE_DECL_RECORD, TYPE_DECL_GENERIC, TYPE_DECL_RANGE - 
@@ -2897,6 +3016,18 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             }
             else
             {
+                /* Check if constant already exists with same value (for re-exports like ARG_MAX = UnixType.ARG_MAX) */
+                HashNode_t *existing = NULL;
+                int existing_scope = FindIdent(&existing, symtab, tree->tree_data.const_decl_data.id);
+                if (existing_scope >= 0 && existing != NULL && 
+                    existing->hash_type == HASHTYPE_CONST && 
+                    existing->const_int_value == value)
+                {
+                    /* Same constant with same value - treat as re-export, skip silently */
+                    cur = cur->next;
+                    continue;
+                }
+                
                 /* Create KgpcType if this is a set constant or has an explicit type annotation */
                 KgpcType *const_type = NULL;
                 /* If the const expression is an explicit typecast, prefer that as the const's type. */
@@ -2970,6 +3101,36 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Platform newline constants to support System/ObjPas resourcestring concatenations */
     AddBuiltinStringConst(symtab, "LineEnding", "\n");
     AddBuiltinStringConst(symtab, "sLineBreak", "\n");
+    
+    /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
+    {
+        char *name;
+        /* MaxLongint: Maximum value for LongInt (32-bit signed) = 2^31 - 1 */
+        name = strdup("MaxLongint");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 2147483647LL);
+            free(name);
+        }
+        /* MaxSmallint: Maximum value for SmallInt (16-bit signed) = 2^15 - 1 */
+        name = strdup("MaxSmallint");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 32767LL);
+            free(name);
+        }
+        /* MaxShortint: Maximum value for ShortInt (8-bit signed) = 2^7 - 1 */
+        name = strdup("MaxShortint");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 127LL);
+            free(name);
+        }
+        /* MaxInt64: Maximum value for Int64 (64-bit signed) = 2^63 - 1 */
+        name = strdup("MaxInt64");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 9223372036854775807LL);
+            free(name);
+        }
+    }
+    
     char *pchar_name = strdup("PChar");
     if (pchar_name != NULL) {
         KgpcType *pchar_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
@@ -3177,6 +3338,23 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, uint64_name, uint64_type);
         destroy_kgpc_type(uint64_type);
         free(uint64_name);
+    }
+    /* SizeUInt and SizeInt for FPC compatibility */
+    char *sizeuint_name = strdup("SizeUInt");
+    if (sizeuint_name != NULL) {
+        KgpcType *sizeuint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        assert(sizeuint_type != NULL && "Failed to create SizeUInt type");
+        AddBuiltinType_Typed(symtab, sizeuint_name, sizeuint_type);
+        destroy_kgpc_type(sizeuint_type);
+        free(sizeuint_name);
+    }
+    char *sizeint_name = strdup("SizeInt");
+    if (sizeint_name != NULL) {
+        KgpcType *sizeint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        assert(sizeint_type != NULL && "Failed to create SizeInt type");
+        AddBuiltinType_Typed(symtab, sizeint_name, sizeint_type);
+        destroy_kgpc_type(sizeint_type);
+        free(sizeint_name);
     }
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
