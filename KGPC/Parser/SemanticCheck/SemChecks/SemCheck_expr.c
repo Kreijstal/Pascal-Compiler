@@ -428,7 +428,8 @@ static int semcheck_map_builtin_type_name(const char *id)
         return LONGINT_TYPE;
     if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
-    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString"))
+    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString") ||
+        pascal_identifier_equals(id, "RawByteString"))
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "ShortString"))
         return SHORTSTRING_TYPE;
@@ -4362,6 +4363,78 @@ static int semcheck_recordaccess(int *type_return,
 
         /* Now expr is the NOT expression wrapping record access; re-run semantic check as relop */
         return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+    }
+
+    /* FPC Bootstrap Feature: Handle unit-qualified identifiers in runtime expressions.
+     * When we see UnitName.ConstName and UnitName is an unresolvable identifier,
+     * check if ConstName is a known constant/var in the current scope (since unit
+     * exports are merged). If so, transform the expression to just the identifier. */
+    if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+    {
+        char *unit_id = record_expr->expr_data.id;
+        HashNode_t *unit_check = NULL;
+        
+        /* Check if the "unit name" identifier exists in symbol table */
+        if (FindIdent(&unit_check, symtab, unit_id) == -1)
+        {
+            /* Identifier not found - might be a unit qualifier.
+             * Try to look up the field_id directly as it may be an exported constant/var. */
+            HashNode_t *field_node = NULL;
+            char *field_id_copy = strdup(field_id);
+            if (field_id_copy != NULL && FindIdent(&field_node, symtab, field_id_copy) >= 0 && field_node != NULL)
+            {
+                free(field_id_copy);
+                /* Found the field as a direct identifier - transform the expression */
+                if (field_node->hash_type == HASHTYPE_CONST)
+                {
+                    /* Transform to integer literal for constants */
+                    expr->type = EXPR_INUM;
+                    expr->expr_data.i_num = field_node->const_int_value;
+                    expr->resolved_type = LONGINT_TYPE;
+                    if (field_node->type != NULL)
+                    {
+                        expr->resolved_kgpc_type = field_node->type;
+                    }
+                    *type_return = LONGINT_TYPE;
+                    return 0;
+                }
+                else if (field_node->hash_type == HASHTYPE_VAR || 
+                         field_node->hash_type == HASHTYPE_ARRAY)
+                {
+                    /* Transform to simple variable reference */
+                    char *field_copy = strdup(field_id);
+                    if (field_copy == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d: failed to allocate memory for unit-qualified variable.\n",
+                            expr->line_num);
+                        *type_return = UNKNOWN_TYPE;
+                        return 1;
+                    }
+                    expr->type = EXPR_VAR_ID;
+                    expr->expr_data.id = field_copy;
+                    return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+                }
+                else if (field_node->hash_type == HASHTYPE_TYPE)
+                {
+                    /* Unit.TypeName - transform to simple type reference */
+                    char *field_copy = strdup(field_id);
+                    if (field_copy == NULL)
+                    {
+                        fprintf(stderr, "Error on line %d: failed to allocate memory for unit-qualified type.\n",
+                            expr->line_num);
+                        *type_return = UNKNOWN_TYPE;
+                        return 1;
+                    }
+                    expr->type = EXPR_VAR_ID;
+                    expr->expr_data.id = field_copy;
+                    return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+                }
+            }
+            else
+            {
+                free(field_id_copy);
+            }
+        }
     }
 
     int error_count = 0;
