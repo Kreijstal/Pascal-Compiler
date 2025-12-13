@@ -1569,6 +1569,86 @@ static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, in
     return 0;
 }
 
+/* Serialize an expression AST node to a string representation.
+ * Handles simple identifiers, literals, and binary operations (+, -).
+ * Returns a malloc'd string or NULL on failure. */
+static char *serialize_expr_to_string(ast_t *expr) {
+    if (expr == NULL)
+        return NULL;
+    
+    /* Simple identifier or literal with a symbol */
+    if (expr->sym != NULL && expr->sym->name != NULL) {
+        return strdup(expr->sym->name);
+    }
+    
+    /* Unary minus: -X */
+    if (expr->typ == PASCAL_T_NEG && expr->child != NULL) {
+        char *inner = serialize_expr_to_string(expr->child);
+        if (inner == NULL)
+            return NULL;
+        size_t len = strlen(inner) + 2;  /* '-' + inner + '\0' */
+        char *result = (char *)malloc(len);
+        if (result == NULL) {
+            free(inner);
+            return NULL;
+        }
+        snprintf(result, len, "-%s", inner);
+        free(inner);
+        return result;
+    }
+    
+    /* Binary subtraction: X - Y */
+    if (expr->typ == PASCAL_T_SUB && expr->child != NULL && expr->child->next != NULL) {
+        char *left = serialize_expr_to_string(expr->child);
+        char *right = serialize_expr_to_string(expr->child->next);
+        if (left == NULL || right == NULL) {
+            if (left) free(left);
+            if (right) free(right);
+            return NULL;
+        }
+        size_t len = strlen(left) + strlen(right) + 4;  /* left + '-' + right + '\0' + extra */
+        char *result = (char *)malloc(len);
+        if (result == NULL) {
+            free(left);
+            free(right);
+            return NULL;
+        }
+        snprintf(result, len, "%s-%s", left, right);
+        free(left);
+        free(right);
+        return result;
+    }
+    
+    /* Binary addition: X + Y */
+    if (expr->typ == PASCAL_T_ADD && expr->child != NULL && expr->child->next != NULL) {
+        char *left = serialize_expr_to_string(expr->child);
+        char *right = serialize_expr_to_string(expr->child->next);
+        if (left == NULL || right == NULL) {
+            if (left) free(left);
+            if (right) free(right);
+            return NULL;
+        }
+        size_t len = strlen(left) + strlen(right) + 4;
+        char *result = (char *)malloc(len);
+        if (result == NULL) {
+            free(left);
+            free(right);
+            return NULL;
+        }
+        snprintf(result, len, "%s+%s", left, right);
+        free(left);
+        free(right);
+        return result;
+    }
+    
+    /* If we have a child with a symbol (wrapped expression) */
+    if (expr->child != NULL && expr->child->sym != NULL && expr->child->sym->name != NULL) {
+        return strdup(expr->child->sym->name);
+    }
+    
+    return NULL;
+}
+
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
@@ -1772,52 +1852,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     
                     /* Extract lower and upper bound strings, handling various AST structures:
                      * - Simple literals/identifiers (e.g., "1", "N") have sym->name set
-                     * - Unary expressions (e.g., "-1") have child->sym->name set
-                     * This fixes array[1..N] where N is a const, and array[-1..10] with negative bounds */
-                    char *lower_str = NULL;
-                    char *upper_str = NULL;
-                    
-                    /* Get lower bound string */
-                    if (lower != NULL) {
-                        if (lower->sym != NULL && lower->sym->name != NULL) {
-                            /* Simple identifier or literal */
-                            lower_str = strdup(lower->sym->name);
-                            assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
-                        } else if (lower->child != NULL && lower->child->sym != NULL && lower->child->sym->name != NULL) {
-                            /* Unary expression like -1 */
-                            if (lower->typ == PASCAL_T_NEG) {
-                                char buffer[64];
-                                int written = snprintf(buffer, sizeof(buffer), "-%s", lower->child->sym->name);
-                                assert(written >= 0 && written < (int)sizeof(buffer) && "Buffer overflow in lower bound formatting");
-                                lower_str = strdup(buffer);
-                                assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
-                            } else {
-                                lower_str = strdup(lower->child->sym->name);
-                                assert(lower_str != NULL && "Failed to allocate memory for lower bound string");
-                            }
-                        }
-                    }
-                    
-                    /* Get upper bound string */
-                    if (upper != NULL) {
-                        if (upper->sym != NULL && upper->sym->name != NULL) {
-                            /* Simple identifier or literal */
-                            upper_str = strdup(upper->sym->name);
-                            assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
-                        } else if (upper->child != NULL && upper->child->sym != NULL && upper->child->sym->name != NULL) {
-                            /* Unary expression */
-                            if (upper->typ == PASCAL_T_NEG) {
-                                char buffer[64];
-                                int written = snprintf(buffer, sizeof(buffer), "-%s", upper->child->sym->name);
-                                assert(written >= 0 && written < (int)sizeof(buffer) && "Buffer overflow in upper bound formatting");
-                                upper_str = strdup(buffer);
-                                assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
-                            } else {
-                                upper_str = strdup(upper->child->sym->name);
-                                assert(upper_str != NULL && "Failed to allocate memory for upper bound string");
-                            }
-                        }
-                    }
+                     * - Unary expressions (e.g., "-1") are PASCAL_T_NEG
+                     * - Binary expressions (e.g., "N-1") are PASCAL_T_SUB
+                     * Use serialize_expr_to_string to handle all cases uniformly */
+                    char *lower_str = serialize_expr_to_string(lower);
+                    char *upper_str = serialize_expr_to_string(upper);
                     
                     if (lower_str != NULL && upper_str != NULL) {
                         if (dims_builder.head == NULL) {
