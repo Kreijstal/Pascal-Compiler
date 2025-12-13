@@ -1,0 +1,2 @@
+SizeOf MyLong alias: 4
+SizeOf LongInt direct: 4

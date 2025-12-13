@@ -664,9 +664,19 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
  * This follows type aliases until we reach a known primitive type.
  * Returns the resolved type name (caller should not free), or NULL if unknown.
  */
+/* Track recursion depth to prevent stack overflow from circular type definitions */
+static int resolve_type_depth = 0;
+#define MAX_RESOLVE_TYPE_DEPTH 100
+
 static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_name)
 {
     if (type_name == NULL) return NULL;
+    
+    /* Prevent infinite recursion from circular type definitions */
+    if (resolve_type_depth >= MAX_RESOLVE_TYPE_DEPTH)
+    {
+        return type_name;  /* Return as-is to avoid stack overflow */
+    }
     
     /* First, check if it's already a known primitive type */
     if (pascal_identifier_equals(type_name, "Int64") ||
@@ -717,7 +727,14 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                      * which are handled by the builtin check at the top of this function. */
                     if (alias->target_type_id != NULL)
                     {
-                        return resolve_type_to_base_name(symtab, alias->target_type_id);
+                        /* Prevent recursion on same type name */
+                        if (pascal_identifier_equals(alias->target_type_id, type_name))
+                            return type_name;
+                        
+                        resolve_type_depth++;
+                        const char *result = resolve_type_to_base_name(symtab, alias->target_type_id);
+                        resolve_type_depth--;
+                        return result;
                     }
                     /* Check for base_type tag if no target_type_id */
                     if (alias->base_type != UNKNOWN_TYPE && alias->base_type != 0)
