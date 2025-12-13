@@ -737,8 +737,10 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Prepend interface types so they're available for SizeOf() in const expressions */
-    *type_list = ConcatList(unit_tree->tree_data.unit_data.interface_type_decls, *type_list);
+    /* Append interface types AFTER existing types to preserve dependency order.
+     * Dependencies (like ctypes) are loaded before dependents (like Windows),
+     * so ctypes types should be processed first when predeclare_types runs. */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
@@ -787,8 +789,8 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Prepend types so they're available for SizeOf() in const expressions */
-    *type_list = ConcatList(unit_tree->tree_data.unit_data.implementation_type_decls, *type_list);
+    /* Append implementation types to preserve dependency order */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
