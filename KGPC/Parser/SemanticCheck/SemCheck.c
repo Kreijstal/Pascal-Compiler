@@ -3339,6 +3339,23 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(uint64_type);
         free(uint64_name);
     }
+    /* SizeUInt and SizeInt for FPC compatibility */
+    char *sizeuint_name = strdup("SizeUInt");
+    if (sizeuint_name != NULL) {
+        KgpcType *sizeuint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        assert(sizeuint_type != NULL && "Failed to create SizeUInt type");
+        AddBuiltinType_Typed(symtab, sizeuint_name, sizeuint_type);
+        destroy_kgpc_type(sizeuint_type);
+        free(sizeuint_name);
+    }
+    char *sizeint_name = strdup("SizeInt");
+    if (sizeint_name != NULL) {
+        KgpcType *sizeint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        assert(sizeint_type != NULL && "Failed to create SizeInt type");
+        AddBuiltinType_Typed(symtab, sizeint_name, sizeint_type);
+        destroy_kgpc_type(sizeint_type);
+        free(sizeint_name);
+    }
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 
