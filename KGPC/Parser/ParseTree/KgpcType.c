@@ -11,6 +11,7 @@
 #include "type_tags.h"
 #include "tree_types.h"
 #include "../../format_arg.h"
+#include "../../identifier_utils.h"
 
 /* Include symbol table headers for type resolution */
 #include "../SemanticCheck/HashTable/HashTable.h"
@@ -404,38 +405,38 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         int builtin_tag = UNKNOWN_TYPE;
         
         /* String types */
-        if (strcasecmp(type_id, "String") == 0 || strcasecmp(type_id, "AnsiString") == 0 ||
-            strcasecmp(type_id, "RawByteString") == 0) {
+        if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
+            pascal_identifier_equals(type_id, "RawByteString")) {
             builtin_tag = STRING_TYPE;
         }
-        else if (strcasecmp(type_id, "ShortString") == 0) {
+        else if (pascal_identifier_equals(type_id, "ShortString")) {
             builtin_tag = SHORTSTRING_TYPE;
         }
         /* Integer types */
-        else if (strcasecmp(type_id, "Integer") == 0) {
+        else if (pascal_identifier_equals(type_id, "Integer")) {
             builtin_tag = INT_TYPE;
         }
-        else if (strcasecmp(type_id, "LongInt") == 0 || strcasecmp(type_id, "Int64") == 0 ||
-                 strcasecmp(type_id, "SizeUInt") == 0 || strcasecmp(type_id, "QWord") == 0 ||
-                 strcasecmp(type_id, "NativeUInt") == 0 || strcasecmp(type_id, "NativeInt") == 0 ||
-                 strcasecmp(type_id, "PtrInt") == 0 || strcasecmp(type_id, "PtrUInt") == 0) {
+        else if (pascal_identifier_equals(type_id, "LongInt") || pascal_identifier_equals(type_id, "Int64") ||
+                 pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") ||
+                 pascal_identifier_equals(type_id, "NativeUInt") || pascal_identifier_equals(type_id, "NativeInt") ||
+                 pascal_identifier_equals(type_id, "PtrInt") || pascal_identifier_equals(type_id, "PtrUInt")) {
             builtin_tag = LONGINT_TYPE;
         }
-        else if (strcasecmp(type_id, "Byte") == 0 || strcasecmp(type_id, "SmallInt") == 0 ||
-                 strcasecmp(type_id, "Word") == 0) {
+        else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "SmallInt") ||
+                 pascal_identifier_equals(type_id, "Word")) {
             builtin_tag = INT_TYPE;
         }
         /* Other types */
-        else if (strcasecmp(type_id, "Real") == 0 || strcasecmp(type_id, "Double") == 0) {
+        else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double")) {
             builtin_tag = REAL_TYPE;
         }
-        else if (strcasecmp(type_id, "Char") == 0 || strcasecmp(type_id, "AnsiChar") == 0) {
+        else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar")) {
             builtin_tag = CHAR_TYPE;
         }
-        else if (strcasecmp(type_id, "Boolean") == 0) {
+        else if (pascal_identifier_equals(type_id, "Boolean")) {
             builtin_tag = BOOL;
         }
-        else if (strcasecmp(type_id, "Pointer") == 0) {
+        else if (pascal_identifier_equals(type_id, "Pointer")) {
             builtin_tag = POINTER_TYPE;
         }
         
