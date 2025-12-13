@@ -4,9 +4,8 @@ program fpc_bootstrap_ptext;
 {$mode objfpc}
 
 var
-  f: Text;
   pf: PText;
 begin
-  pf := @f;
-  WriteLn('PText works');
+  pf := nil;
+  WriteLn('PText type works');
 end.

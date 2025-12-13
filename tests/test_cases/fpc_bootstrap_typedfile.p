@@ -5,11 +5,8 @@ program fpc_bootstrap_typedfile;
 
 {$mode objfpc}
 
-procedure TestTypedFile(out f: TypedFile; const name: string);
-begin
-  Assign(f, name);
-end;
-
+var
+  f: TypedFile;
 begin
   WriteLn('TypedFile type supported');
 end.

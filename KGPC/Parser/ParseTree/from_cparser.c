@@ -1474,6 +1474,93 @@ static int resolve_const_int_from_ast(const char *identifier, ast_t *const_secti
     return fallback_value; /* Not found */
 }
 
+/* Evaluate simple const expression like "NUM-1" or "NUM+1" */
+static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
+    if (expr == NULL || result == NULL)
+        return -1;
+    
+    /* Try to find '-' or '+' operator */
+    const char *minus = strstr(expr, "-");
+    const char *plus = strstr(expr, "+");
+    
+    if (minus == NULL && plus == NULL) {
+        /* No operator - try as simple identifier */
+        int val = resolve_const_int_from_ast(expr, const_section, INT_MIN);
+        if (val != INT_MIN) {
+            *result = val;
+            return 0;
+        }
+        /* Try as numeric literal */
+        char *endptr;
+        long num = strtol(expr, &endptr, 10);
+        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
+            *result = (int)num;
+            return 0;
+        }
+        return -1;
+    }
+    
+    const char *op = (minus != NULL) ? minus : plus;
+    int is_minus = (minus != NULL);
+    
+    /* Extract left and right parts */
+    size_t left_len = op - expr;
+    char *left_part = (char *)malloc(left_len + 1);
+    if (left_part == NULL)
+        return -1;
+    strncpy(left_part, expr, left_len);
+    left_part[left_len] = '\0';
+    
+    const char *right_part = op + 1;
+    
+    /* Trim whitespace */
+    while (*left_part == ' ' || *left_part == '\t') memmove(left_part, left_part + 1, strlen(left_part));
+    char *p = left_part + strlen(left_part) - 1;
+    while (p > left_part && (*p == ' ' || *p == '\t')) *p-- = '\0';
+    
+    while (*right_part == ' ' || *right_part == '\t') right_part++;
+    
+    /* Evaluate left part */
+    int left_val;
+    int left_result = resolve_const_int_from_ast(left_part, const_section, INT_MIN);
+    if (left_result != INT_MIN) {
+        left_val = left_result;
+    } else {
+        char *endptr;
+        long num = strtol(left_part, &endptr, 10);
+        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
+            left_val = (int)num;
+        } else {
+            free(left_part);
+            return -1;
+        }
+    }
+    free(left_part);
+    
+    /* Evaluate right part */
+    int right_val;
+    int right_result = resolve_const_int_from_ast(right_part, const_section, INT_MIN);
+    if (right_result != INT_MIN) {
+        right_val = right_result;
+    } else {
+        char *endptr;
+        long num = strtol(right_part, &endptr, 10);
+        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX) {
+            right_val = (int)num;
+        } else {
+            return -1;
+        }
+    }
+    
+    /* Compute result */
+    if (is_minus) {
+        *result = left_val - right_val;
+    } else {
+        *result = left_val + right_val;
+    }
+    return 0;
+}
+
 static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
@@ -3487,29 +3574,40 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     start = start_ordinal;
                     end = end_ordinal;
                 } else {
-                    /* Try to resolve as const integer identifiers */
-                    int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
-                    int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
-                    
-                    /* Check if we got non-zero values or if the original identifiers weren't "0" */
-                    if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
-                        start = resolved_start;
+                    /* Try to evaluate start as const expression */
+                    int start_val;
+                    if (evaluate_simple_const_expr(start_id, const_section, &start_val) == 0) {
+                        start = start_val;
                     } else {
-                        /* Try numeric parsing as fallback */
-                        char *endptr;
-                        long num = strtol(start_id, &endptr, 10);
-                        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                            start = (int)num;
+                        /* Try to resolve as const integer identifier */
+                        int resolved_start = resolve_const_int_from_ast(start_id, const_section, 0);
+                        if (resolved_start != 0 || strcmp(start_id, "0") == 0) {
+                            start = resolved_start;
+                        } else {
+                            /* Try numeric parsing as fallback */
+                            char *endptr;
+                            long num = strtol(start_id, &endptr, 10);
+                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                start = (int)num;
+                        }
                     }
                     
-                    if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
-                        end = resolved_end;
+                    /* Try to evaluate end as const expression */
+                    int end_val;
+                    if (evaluate_simple_const_expr(end_id, const_section, &end_val) == 0) {
+                        end = end_val;
                     } else {
-                        /* Try numeric parsing as fallback */
-                        char *endptr;
-                        long num = strtol(end_id, &endptr, 10);
-                        if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                            end = (int)num;
+                        /* Try to resolve as const integer identifier */
+                        int resolved_end = resolve_const_int_from_ast(end_id, const_section, 0);
+                        if (resolved_end != 0 || strcmp(end_id, "0") == 0) {
+                            end = resolved_end;
+                        } else {
+                            /* Try numeric parsing as fallback */
+                            char *endptr;
+                            long num = strtol(end_id, &endptr, 10);
+                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                end = (int)num;
+                        }
                     }
                 }
             } else {

@@ -1365,6 +1365,62 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 0;
             }
             
+            /* Handle Pointer() typecast for constant expressions (FPC bootstrap dl.pp) */
+            if (id != NULL && pascal_identifier_equals(id, "Pointer"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Pointer in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Pointer argument is NULL.\n");
+                    return 1;
+                }
+                
+                /* Evaluate the argument as a const expression */
+                long long ptr_value;
+                if (evaluate_const_expr(symtab, arg, &ptr_value) != 0)
+                {
+                    fprintf(stderr, "Error: Pointer argument must be a const expression.\n");
+                    return 1;
+                }
+                
+                *out_value = ptr_value;
+                return 0;
+            }
+            
+            /* Handle PtrInt() and PtrUInt() typecasts for constant expressions */
+            if (id != NULL && (pascal_identifier_equals(id, "PtrInt") || pascal_identifier_equals(id, "PtrUInt")))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
+                    return 1;
+                }
+                
+                /* Evaluate the argument as a const expression */
+                long long int_value;
+                if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                {
+                    fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
+                    return 1;
+                }
+                
+                *out_value = int_value;
+                return 0;
+            }
+            
             fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), and Chr() function calls are supported in const expressions.\n");
             return 1;
         }
@@ -3198,6 +3254,13 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
     {
         char *name;
+        /* MaxInt: Default for Integer (16-bit in classic Pascal, but FPC often maps to 32-bit) */
+        /* For FPC compatibility, MaxInt = MaxSmallInt = 32767 */
+        name = strdup("MaxInt");
+        if (name != NULL) {
+            PushConstOntoScope(symtab, name, 32767LL);
+            free(name);
+        }
         /* MaxLongint: Maximum value for LongInt (32-bit signed) = 2^31 - 1 */
         name = strdup("MaxLongint");
         if (name != NULL) {
@@ -3457,6 +3520,61 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, sizeint_name, sizeint_type);
         destroy_kgpc_type(sizeint_type);
         free(sizeint_name);
+    }
+    /* PtrUInt and PtrInt for FPC compatibility (pointer-sized integers) */
+    char *ptruint_name = strdup("PtrUInt");
+    if (ptruint_name != NULL) {
+        KgpcType *ptruint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        assert(ptruint_type != NULL && "Failed to create PtrUInt type");
+        AddBuiltinType_Typed(symtab, ptruint_name, ptruint_type);
+        destroy_kgpc_type(ptruint_type);
+        free(ptruint_name);
+    }
+    char *ptrint_name = strdup("PtrInt");
+    if (ptrint_name != NULL) {
+        KgpcType *ptrint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        assert(ptrint_type != NULL && "Failed to create PtrInt type");
+        AddBuiltinType_Typed(symtab, ptrint_name, ptrint_type);
+        destroy_kgpc_type(ptrint_type);
+        free(ptrint_name);
+    }
+    /* PText - pointer to Text file (for FPC bootstrap heaptrc.pp) */
+    char *ptext_name = strdup("PText");
+    if (ptext_name != NULL) {
+        KgpcType *file_type = create_primitive_type(FILE_TYPE);
+        KgpcType *ptext_type = create_pointer_type(file_type);
+        assert(ptext_type != NULL && "Failed to create PText type");
+        AddBuiltinType_Typed(symtab, ptext_name, ptext_type);
+        destroy_kgpc_type(ptext_type);
+        free(ptext_name);
+    }
+    /* TClass - class reference type (for FPC bootstrap objpas.pp) */
+    char *tclass_name = strdup("TClass");
+    if (tclass_name != NULL) {
+        KgpcType *tclass_type = create_pointer_type(NULL);  /* Class reference is essentially a pointer */
+        assert(tclass_type != NULL && "Failed to create TClass type");
+        AddBuiltinType_Typed(symtab, tclass_name, tclass_type);
+        destroy_kgpc_type(tclass_type);
+        free(tclass_name);
+    }
+    /* TypedFile - generic typed file (for FPC bootstrap objpas.pp) */
+    char *typedfile_name = strdup("TypedFile");
+    if (typedfile_name != NULL) {
+        KgpcType *typedfile_type = create_primitive_type(FILE_TYPE);  /* Untyped file type */
+        assert(typedfile_type != NULL && "Failed to create TypedFile type");
+        AddBuiltinType_Typed(symtab, typedfile_name, typedfile_type);
+        destroy_kgpc_type(typedfile_type);
+        free(typedfile_name);
+    }
+    /* TRTLCriticalSection - critical section record (for FPC bootstrap heaptrc.pp) */
+    char *trtlcs_name = strdup("TRTLCriticalSection");
+    if (trtlcs_name != NULL) {
+        /* TRTLCriticalSection is a record type - we create it as a simple record placeholder */
+        KgpcType *trtlcs_type = create_primitive_type_with_size(LONGINT_TYPE, 40);  /* Placeholder size */
+        assert(trtlcs_type != NULL && "Failed to create TRTLCriticalSection type");
+        AddBuiltinType_Typed(symtab, trtlcs_name, trtlcs_type);
+        destroy_kgpc_type(trtlcs_type);
+        free(trtlcs_name);
     }
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
