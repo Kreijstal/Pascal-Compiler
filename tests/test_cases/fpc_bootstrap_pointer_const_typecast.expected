@@ -1,0 +1,2 @@
+RTLD_NEXT = -3
+RTLD_DEFAULT = -1

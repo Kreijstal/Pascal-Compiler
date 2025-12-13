@@ -2905,6 +2905,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         all_declarations,   // Procedures/functions (keywords "procedure", "function", etc.)
         create_label_section(),    // Label declarations
         const_section,      // const
+        local_resourcestring_section,   // resourcestring (FPC extension, treated like const)
         type_section,       // type
         var_section,        // var
         module_property_decl, // Module-level property declarations (FPC extension)
