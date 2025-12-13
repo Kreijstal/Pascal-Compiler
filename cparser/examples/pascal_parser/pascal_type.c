@@ -1446,6 +1446,22 @@ combinator_t* pointer_type(tag_t tag) {
     );
 }
 
+// Class reference type parser: class of TObject
+combinator_t* class_of_type(tag_t tag) {
+    combinator_t* base_class = multi(new_combinator(), PASCAL_T_NONE,
+        type_name(PASCAL_T_IDENTIFIER),             // built-in types (TObject, etc.)
+        token(pascal_identifier(PASCAL_T_IDENTIFIER)), // user-defined type identifiers
+        NULL
+    );
+
+    return seq(new_combinator(), tag,
+        token(keyword_ci("class")),
+        token(keyword_ci("of")),
+        base_class,
+        NULL
+    );
+}
+
 // Enumerated type parser: (Value1, Value2, Value3)
 static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;

@@ -277,6 +277,7 @@ typedef struct type_dispatch_args {
     combinator_t* reference_parser;
     combinator_t* interface_parser;
     combinator_t* class_parser;
+    combinator_t* class_of_parser;       /* For "class of <typename>" class reference type */
     combinator_t* record_parser;
     combinator_t* enumerated_parser;
     combinator_t* array_parser;

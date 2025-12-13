@@ -464,8 +464,18 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (dispatch->interface_parser && pascal_word_equals_ci(&word, "interface")) {
             return run_type_branch(in, dispatch->interface_parser);
         }
-        if (dispatch->class_parser && pascal_word_equals_ci(&word, "class")) {
-            return run_type_branch(in, dispatch->class_parser);
+        if (pascal_word_equals_ci(&word, "class")) {
+            pascal_word_slice_t next;
+            if (pascal_peek_word_after(in, word.end_pos, &next)) {
+                // "class of" is a class reference type
+                if (dispatch->class_of_parser && pascal_word_equals_ci(&next, "of")) {
+                    return run_type_branch(in, dispatch->class_of_parser);
+                }
+            }
+            // Regular class type
+            if (dispatch->class_parser) {
+                return run_type_branch(in, dispatch->class_parser);
+            }
         }
         if (dispatch->record_parser && pascal_word_equals_ci(&word, "record")) {
             return run_type_branch(in, dispatch->record_parser);
@@ -1218,6 +1228,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     type_args->function_parser = function_type(PASCAL_T_FUNCTION_TYPE);
     type_args->interface_parser = iface_type;
     type_args->class_parser = class_spec;
+    type_args->class_of_parser = class_of_type(PASCAL_T_CLASS_OF_TYPE);
     type_args->record_parser = record_spec;
     type_args->enumerated_parser = enum_spec;
     type_args->array_parser = array_spec;
@@ -1244,6 +1255,21 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t* const_value = lazy(const_expr_parser);
 
+    // Hint directives for constants: deprecated, platform, library
+    // Pattern: deprecated ['message'] | platform | library
+    combinator_t* const_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            token(keyword_ci("experimental")),
+            token(keyword_ci("unimplemented")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message for deprecated
+        NULL
+    ));
+
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -1253,6 +1279,7 @@ void init_pascal_unit_parser(combinator_t** p) {
         )),
         token(match("=")),                           // equals sign
         const_value,                                 // constant value (simplified for now)
+        const_hint_directive,                        // optional: deprecated, platform, library
         token(match(";")),                           // semicolon
         NULL
     );
@@ -1271,10 +1298,25 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     );
 
+    // Resourcestring can also have hint directives (e.g., deprecated in rtlconsts.pp)
+    combinator_t* resourcestring_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            token(keyword_ci("experimental")),
+            token(keyword_ci("unimplemented")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message
+        NULL
+    ));
+
     combinator_t* resourcestring_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match("=")),
         resourcestring_value,
+        resourcestring_hint_directive,              // optional: deprecated, etc.
         token(match(";")),
         NULL
     );
@@ -2124,6 +2166,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         distinct_type_spec_prog,                        // distinct types like "type Double" (must be first to catch "type" keyword)
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),  // reference to procedure/function
         interface_type(PASCAL_T_INTERFACE_TYPE),        // interface types like interface ... end
+        class_of_type(PASCAL_T_CLASS_OF_TYPE),          // class reference types like "class of TObject" (must be before class_type)
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
@@ -2297,6 +2340,21 @@ void init_pascal_complete_program_parser(combinator_t** p) {
 
     combinator_t* const_value = lazy(program_const_expr_parser);
 
+    // Hint directives for constants: deprecated, platform, library
+    // Pattern: deprecated ['message'] | platform | library
+    combinator_t* program_const_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            token(keyword_ci("experimental")),
+            token(keyword_ci("unimplemented")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message for deprecated
+        NULL
+    ));
+
     combinator_t* const_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),          // constant name
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -2311,6 +2369,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         )),
         token(match("=")),                           // equals
         const_value,
+        program_const_hint_directive,                // optional: deprecated, platform, library
         token(match(";")),                           // semicolon
         NULL
     );
