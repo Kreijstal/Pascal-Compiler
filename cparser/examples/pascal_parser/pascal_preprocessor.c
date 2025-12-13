@@ -1155,14 +1155,15 @@ static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, s
         return NULL;
     }
     
-    // Extract the full identifier
+    // Extract only the first identifier segment (stop at dot for qualified names)
+    // FPC macros expand just the macro name, e.g., UT in UT.ARG_MAX expands to UnixType.ARG_MAX
     size_t start = pos;
     size_t end = pos;
-    while (end < length && (isalnum((unsigned char)input[end]) || input[end] == '_' || input[end] == '.')) {
+    while (end < length && (isalnum((unsigned char)input[end]) || input[end] == '_')) {
         ++end;
     }
     
-    // Create identifier string
+    // Create identifier string (without any trailing dot or qualified parts)
     size_t id_len = end - start;
     char *identifier = malloc(id_len + 1);
     if (!identifier) {
