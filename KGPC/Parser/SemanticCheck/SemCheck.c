@@ -2897,6 +2897,18 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
             }
             else
             {
+                /* Check if constant already exists with same value (for re-exports like ARG_MAX = UnixType.ARG_MAX) */
+                HashNode_t *existing = NULL;
+                int existing_scope = FindIdent(&existing, symtab, tree->tree_data.const_decl_data.id);
+                if (existing_scope >= 0 && existing != NULL && 
+                    existing->hash_type == HASHTYPE_CONST && 
+                    existing->const_int_value == value)
+                {
+                    /* Same constant with same value - treat as re-export, skip silently */
+                    cur = cur->next;
+                    continue;
+                }
+                
                 /* Create KgpcType if this is a set constant or has an explicit type annotation */
                 KgpcType *const_type = NULL;
                 /* If the const expression is an explicit typecast, prefer that as the const's type. */
