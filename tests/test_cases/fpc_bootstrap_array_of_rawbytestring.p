@@ -6,7 +6,7 @@ program fpc_bootstrap_array_of_rawbytestring;
 
 function CountStrings(const S: Array of RawByteString): Integer;
 begin
-  Result := High(s) - Low(s) + 1;
+  Result := High(S) - Low(S) + 1;
 end;
 
 begin
