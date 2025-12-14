@@ -651,8 +651,8 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                             if (strcasecmp(lhs_alias->pointer_type_id, rhs_record->type_id) == 0) {
                                 return 1;  /* Same class */
                             }
-                            /* Check inheritance */
-                            if (is_record_subclass(rhs_record, NULL, symtab)) {
+                            /* Check inheritance - if RHS has a parent, walk up to find if LHS target is an ancestor */
+                            if (rhs_record->parent_class_name != NULL) {
                                 /* Walk up parent chain to find if LHS target is an ancestor */
                                 const char *parent = rhs_record->parent_class_name;
                                 while (parent != NULL) {
@@ -699,7 +699,43 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         if (strcasecmp(lhs_alias->pointer_type_id, rhs_alias->pointer_type_id) == 0) {
                             return 1;  /* Same target class */
                         }
-                        /* TODO: Check subclass relationship for class references */
+                        /* Check subclass relationship for class references */
+                        /* RHS must be a subclass of LHS (e.g., "class of TChild" assigned to "class of TParent" is allowed) */
+                        if (symtab != NULL) {
+                            struct HashNode *rhs_class_node = NULL;
+                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                                rhs_class_node != NULL && rhs_class_node->type != NULL &&
+                                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
+                                rhs_class_node->type->info.points_to != NULL &&
+                                rhs_class_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                struct RecordType *rhs_record = rhs_class_node->type->info.points_to->info.record_info;
+                                if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
+                                    /* Walk up parent chain to find if LHS target is an ancestor */
+                                    const char *parent = rhs_record->parent_class_name;
+                                    while (parent != NULL) {
+                                        if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
+                                            return 1;  /* RHS is class ref to subclass of LHS target */
+                                        }
+                                        /* Look up parent record to continue walking */
+                                        struct HashNode *parent_node = NULL;
+                                        if (FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                            parent_node != NULL && parent_node->type != NULL &&
+                                            parent_node->type->kind == TYPE_KIND_POINTER &&
+                                            parent_node->type->info.points_to != NULL &&
+                                            parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                            struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
+                                            if (parent_record != NULL) {
+                                                parent = parent_record->parent_class_name;
+                                            } else {
+                                                parent = NULL;
+                                            }
+                                        } else {
+                                            parent = NULL;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         return 0;  /* Different target classes */
                     }
                     /* Fall through if no alias info */
