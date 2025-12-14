@@ -6,7 +6,8 @@ program fpc_bootstrap_system_qualified_proccall;
 var
   t: Text;
 begin
-  System.Assign(t, '/tmp/test_output.txt');
+  { Use a repo-local path so Windows runs do not depend on /tmp existing }
+  System.Assign(t, 'tests/output/system_assign_test.txt');
   Rewrite(t);
   WriteLn(t, 'Hello from System.Assign');
   System.Close(t);
