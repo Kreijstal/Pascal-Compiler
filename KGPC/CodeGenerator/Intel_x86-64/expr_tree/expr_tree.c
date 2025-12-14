@@ -2183,10 +2183,47 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     size_t name_len = var_name != NULL ? strlen(var_name) : 0;
                     int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
                     
+                    /* Check if this is a builtin file variable (stdin, stdout, stderr, Input, Output) */
+                    int is_builtin_file = 0;
+                    const char *global_ptr_name = NULL;
+                    if (var_name != NULL)
+                    {
+                        if (strcasecmp(var_name, "stdin") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stdin_ptr";
+                        }
+                        else if (strcasecmp(var_name, "stdout") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stdout_ptr";
+                        }
+                        else if (strcasecmp(var_name, "stderr") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stderr_ptr";
+                        }
+                        else if (strcasecmp(var_name, "Input") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "Input_ptr";
+                        }
+                        else if (strcasecmp(var_name, "Output") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "Output_ptr";
+                        }
+                    }
+                    
                     if (is_vmt_label)
                     {
                         /* VMT is a global label - use RIP-relative addressing */
                         snprintf(buffer, buf_len, "%s(%%rip)", var_name);
+                    }
+                    else if (is_builtin_file)
+                    {
+                        /* Builtin file variable - load from global runtime pointer */
+                        snprintf(buffer, buf_len, "%s(%%rip)", global_ptr_name);
                     }
                     else
                     {
