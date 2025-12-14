@@ -981,6 +981,28 @@ class TestCompiler(unittest.TestCase):
         stderr = cm.exception.stderr or ""
         self.assertIn("unterminated conditional", stderr)
 
+    def test_classof_nonclass_target_reports_error(self):
+        """'class of Integer' must be rejected - Integer is not a class type."""
+        input_file, asm_file, _ = self._get_test_paths("bug_classof_nonclass_target")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        self.assertIn("class of", stderr.lower())
+        self.assertIn("class type", stderr.lower())
+
+    def test_classref_incompatible_assignment_reports_error(self):
+        """Assigning TB to 'class of TA' must be rejected - unrelated classes."""
+        input_file, asm_file, _ = self._get_test_paths("bug_classref_incompatible_assignment")
+
+        with self.assertRaises(subprocess.CalledProcessError) as cm:
+            run_compiler(input_file, asm_file)
+
+        stderr = cm.exception.stderr or ""
+        # Should report incompatible types
+        self.assertIn("incompatible", stderr.lower())
+
     def test_bitwise_operations_execute(self):
         """Bitwise shifts and rotates should execute correctly and match expected output."""
         input_file, asm_file, executable_file = self._get_test_paths("bitwise_ops")

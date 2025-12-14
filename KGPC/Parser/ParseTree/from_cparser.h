@@ -8,6 +8,10 @@
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast);
 
+/* Frontend error tracking */
+void from_cparser_reset_error_count(void);
+int from_cparser_get_error_count(void);
+
 /* Forward declaration for symbol table - avoid circular dependency */
 struct SymTab;
 

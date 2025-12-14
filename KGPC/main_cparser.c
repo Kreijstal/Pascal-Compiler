@@ -1239,11 +1239,18 @@ int main(int argc, char **argv)
 
     unit_set_destroy(&visited_units);
 
+    /* Check for frontend (parser/tree conversion) errors */
+    int frontend_errors = from_cparser_get_error_count();
+    
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
+    
+    /* Add frontend errors to semantic result */
+    sem_result += frontend_errors;
+    
     int exit_code = 0;
 
     if (sem_result <= 0)

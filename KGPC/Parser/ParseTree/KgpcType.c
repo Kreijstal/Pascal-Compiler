@@ -7,6 +7,11 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#ifndef _WIN32
+#include <strings.h>
+#else
+#define strcasecmp _stricmp
+#endif
 #include "KgpcType.h"
 #include "type_tags.h"
 #include "tree_types.h"
@@ -611,6 +616,166 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 return 1;
             if (lhs_type->info.points_to == NULL || rhs_type->info.points_to == NULL)
                 return 1; /* nil can be assigned to any pointer */
+            
+            /* Special case for class references ("class of T"):
+             * When both sides are pointers and at least one of them points to a pointer
+             * to a record (indicating a class reference type), check if they point to
+             * the same class or compatible classes.
+             * 
+             * Pattern: class of TClass = ^(^TClass_record)
+             * Assigning: ClassRef := TClass, where TClass is ^TClass_record
+             * 
+             * We need to "unwrap" the extra indirection level for class references.
+             */
+            {
+                KgpcType *lhs_inner = lhs_type->info.points_to;
+                KgpcType *rhs_inner = rhs_type->info.points_to;
+                
+                /* Special case: LHS points to primitive(RECORD_TYPE) and RHS points to record.
+                 * This happens with "class of T" types where the TypeInfo created a primitive
+                 * type with RECORD_TYPE tag instead of an actual pointer to the class record.
+                 * For class references, we need to verify the RHS is compatible with the target class. */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD)
+                {
+                    /* LHS is "class of T" (represented as ^primitive(RECORD_TYPE))
+                     * RHS is a class type (represented as ^record)
+                     * Check if LHS has type_alias info to validate the target class */
+                    struct TypeAlias *lhs_alias = lhs_type->type_alias;
+                    if (lhs_alias != NULL && lhs_alias->pointer_type_id != NULL) {
+                        /* LHS has target class info - validate compatibility */
+                        struct RecordType *rhs_record = rhs_inner->info.record_info;
+                        if (rhs_record != NULL && rhs_record->type_id != NULL) {
+                            /* Check if RHS is the same as or subclass of target */
+                            if (strcasecmp(lhs_alias->pointer_type_id, rhs_record->type_id) == 0) {
+                                return 1;  /* Same class */
+                            }
+                            /* Check inheritance - if RHS has a parent, walk up to find if LHS target is an ancestor */
+                            if (rhs_record->parent_class_name != NULL) {
+                                /* Walk up parent chain to find if LHS target is an ancestor */
+                                const char *parent = rhs_record->parent_class_name;
+                                while (parent != NULL) {
+                                    if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
+                                        return 1;  /* RHS is subclass of LHS target */
+                                    }
+                                    /* Look up parent record to continue walking */
+                                    struct HashNode *parent_node = NULL;
+                                    if (symtab != NULL && FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                        parent_node != NULL && parent_node->type != NULL &&
+                                        parent_node->type->kind == TYPE_KIND_POINTER &&
+                                        parent_node->type->info.points_to != NULL &&
+                                        parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                        struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
+                                        if (parent_record != NULL) {
+                                            parent = parent_record->parent_class_name;
+                                        } else {
+                                            parent = NULL;
+                                        }
+                                    } else {
+                                        parent = NULL;
+                                    }
+                                }
+                            }
+                            return 0;  /* Incompatible classes */
+                        }
+                    }
+                    /* No target class info or can't verify - allow (for backwards compatibility) */
+                    return 1;
+                }
+                
+                /* Symmetric case: both are ^primitive(RECORD_TYPE) - class ref to class ref */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    rhs_inner->info.primitive_type_tag == RECORD_TYPE)
+                {
+                    /* Both are class reference types - check type_alias for target compatibility */
+                    struct TypeAlias *lhs_alias = lhs_type->type_alias;
+                    struct TypeAlias *rhs_alias = rhs_type->type_alias;
+                    if (lhs_alias != NULL && lhs_alias->pointer_type_id != NULL &&
+                        rhs_alias != NULL && rhs_alias->pointer_type_id != NULL) {
+                        /* Both have target class info - must be same or compatible */
+                        if (strcasecmp(lhs_alias->pointer_type_id, rhs_alias->pointer_type_id) == 0) {
+                            return 1;  /* Same target class */
+                        }
+                        /* Check subclass relationship for class references */
+                        /* RHS must be a subclass of LHS (e.g., "class of TChild" assigned to "class of TParent" is allowed) */
+                        if (symtab != NULL) {
+                            struct HashNode *rhs_class_node = NULL;
+                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                                rhs_class_node != NULL && rhs_class_node->type != NULL &&
+                                rhs_class_node->type->kind == TYPE_KIND_POINTER &&
+                                rhs_class_node->type->info.points_to != NULL &&
+                                rhs_class_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                struct RecordType *rhs_record = rhs_class_node->type->info.points_to->info.record_info;
+                                if (rhs_record != NULL && rhs_record->parent_class_name != NULL) {
+                                    /* Walk up parent chain to find if LHS target is an ancestor */
+                                    const char *parent = rhs_record->parent_class_name;
+                                    while (parent != NULL) {
+                                        if (strcasecmp(lhs_alias->pointer_type_id, parent) == 0) {
+                                            return 1;  /* RHS is class ref to subclass of LHS target */
+                                        }
+                                        /* Look up parent record to continue walking */
+                                        struct HashNode *parent_node = NULL;
+                                        if (FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                            parent_node != NULL && parent_node->type != NULL &&
+                                            parent_node->type->kind == TYPE_KIND_POINTER &&
+                                            parent_node->type->info.points_to != NULL &&
+                                            parent_node->type->info.points_to->kind == TYPE_KIND_RECORD) {
+                                            struct RecordType *parent_record = parent_node->type->info.points_to->info.record_info;
+                                            if (parent_record != NULL) {
+                                                parent = parent_record->parent_class_name;
+                                            } else {
+                                                parent = NULL;
+                                            }
+                                        } else {
+                                            parent = NULL;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return 0;  /* Different target classes */
+                    }
+                    /* Fall through if no alias info */
+                    return 1;
+                }
+                
+                /* Check if LHS is ^(^record) and RHS is ^record */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD)
+                {
+                    KgpcType *lhs_record_ptr = lhs_inner->info.points_to;
+                    if (lhs_record_ptr != NULL && lhs_record_ptr->kind == TYPE_KIND_RECORD)
+                    {
+                        /* LHS is class of T (^(^record)), RHS is T (^record) */
+                        /* Check if they point to the same or compatible records */
+                        if (lhs_record_ptr->info.record_info == rhs_inner->info.record_info)
+                            return 1;
+                        if (is_record_subclass(rhs_inner->info.record_info, lhs_record_ptr->info.record_info, symtab))
+                            return 1;
+                    }
+                }
+                
+                /* Check if both are ^(^record) - class reference to class reference */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *lhs_record = lhs_inner->info.points_to;
+                    KgpcType *rhs_record = rhs_inner->info.points_to;
+                    if (lhs_record != NULL && lhs_record->kind == TYPE_KIND_RECORD &&
+                        rhs_record != NULL && rhs_record->kind == TYPE_KIND_RECORD)
+                    {
+                        /* Both are class references - check record compatibility */
+                        if (lhs_record->info.record_info == rhs_record->info.record_info)
+                            return 1;
+                        if (is_record_subclass(rhs_record->info.record_info, lhs_record->info.record_info, symtab))
+                            return 1;
+                    }
+                }
+            }
+            
             return are_types_compatible_for_assignment(
                 lhs_type->info.points_to,
                 rhs_type->info.points_to,
