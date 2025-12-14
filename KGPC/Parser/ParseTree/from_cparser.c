@@ -7571,19 +7571,46 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         if (initialization_node != NULL && initialization_node->typ == PASCAL_T_INITIALIZATION_SECTION) {
-            // initialization_node->child is a PASCAL_T_NONE seq with stmt_list as first child
+            /* The initialization section's child can be:
+             * 1. A PASCAL_T_NONE wrapper from make_stmt_list_parser, with stmt_list as child
+             * 2. The first statement directly (if the wrapper was optimized away)
+             * We handle both cases by checking if child is PASCAL_T_NONE. */
             ast_t *stmt_list_seq = initialization_node->child;
-            if (stmt_list_seq != NULL && stmt_list_seq->child != NULL) {
-                ListNode_t *stmts = convert_statement_list(stmt_list_seq->child);
+            if (getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
+                fprintf(stderr, "[KGPC] initialization_node: typ=%d line=%d\n", 
+                        initialization_node->typ, initialization_node->line);
+                if (stmt_list_seq != NULL) {
+                    fprintf(stderr, "[KGPC]   stmt_list_seq: typ=%d line=%d\n", 
+                            stmt_list_seq->typ, stmt_list_seq->line);
+                }
+            }
+            if (stmt_list_seq != NULL) {
+                ListNode_t *stmts = NULL;
+                if (stmt_list_seq->typ == PASCAL_T_NONE) {
+                    /* Wrapped structure: NONE -> child is stmt list */
+                    if (stmt_list_seq->child != NULL) {
+                        stmts = convert_statement_list(stmt_list_seq->child);
+                    }
+                } else {
+                    /* Direct structure: child IS the first statement in a linked list */
+                    stmts = convert_statement_list(stmt_list_seq);
+                }
                 initialization = mk_compoundstatement(initialization_node->line, stmts);
             }
         }
 
         if (finalization_node != NULL && finalization_node->typ == PASCAL_T_FINALIZATION_SECTION) {
-            // finalization_node->child is a PASCAL_T_NONE seq with stmt_list as first child
+            /* Same structure handling as initialization */
             ast_t *stmt_list_seq = finalization_node->child;
-            if (stmt_list_seq != NULL && stmt_list_seq->child != NULL) {
-                ListNode_t *stmts = convert_statement_list(stmt_list_seq->child);
+            if (stmt_list_seq != NULL) {
+                ListNode_t *stmts = NULL;
+                if (stmt_list_seq->typ == PASCAL_T_NONE) {
+                    if (stmt_list_seq->child != NULL) {
+                        stmts = convert_statement_list(stmt_list_seq->child);
+                    }
+                } else {
+                    stmts = convert_statement_list(stmt_list_seq);
+                }
                 finalization = mk_compoundstatement(finalization_node->line, stmts);
             }
         }
