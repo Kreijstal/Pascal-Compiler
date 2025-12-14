@@ -24,6 +24,9 @@ type
   PCardinal = ^Cardinal;
   PShortInt = ^ShortInt;
   PSmallInt = ^SmallInt;
+  
+  { Code page types - for FPC bootstrap compatibility }
+  TSystemCodePage = Word;
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -154,6 +157,15 @@ begin
     end
 end;
 
+{ Assign with PAnsiChar - used by FPC bootstrap (objpas.pp) }
+procedure assign_text_pchar_internal(var f: text; filename: PAnsiChar);
+begin
+    assembler;
+    asm
+        call kgpc_text_assign
+    end
+end;
+
 procedure rewrite_text_internal(var f: text);
 begin
     assembler;
@@ -193,6 +205,12 @@ begin
     assign_text_internal(f, filename);
 end;
 
+{ Assign with PAnsiChar - used by FPC bootstrap (objpas.pp) }
+procedure assign(var f: text; filename: PAnsiChar); overload;
+begin
+    assign_text_pchar_internal(f, filename);
+end;
+
 procedure rewrite(var f: text); overload;
 begin
     rewrite_text_internal(f);
@@ -212,6 +230,14 @@ begin
     asm
         call kgpc_text_close
     end
+end;
+
+{ SetTextCodePage - Sets the code page for text file encoding
+  Note: This is a stub for FPC bootstrap compatibility.
+  Currently does nothing as KGPC does not yet implement code page handling. }
+procedure SetTextCodePage(var T: Text; CodePage: TSystemCodePage);
+begin
+    { Stub implementation - code page handling not yet implemented }
 end;
 
 procedure MkDir(path: string);
@@ -250,6 +276,24 @@ begin
     asm
         call kgpc_tfile_assign
     end
+end;
+
+{ Assign with PAnsiChar for typed/untyped files - FPC bootstrap compatibility }
+procedure assign(var f: file; filename: PAnsiChar); overload;
+begin
+    assembler;
+    asm
+        call kgpc_tfile_assign
+    end
+end;
+
+{ Assign with AnsiChar (single character filename) for files - FPC bootstrap compatibility }
+procedure assign(var f: file; filename: AnsiChar); overload;
+var
+    s: String;
+begin
+    s := filename;
+    assign(f, s);
 end;
 
 procedure rewrite(var f: file); overload;
