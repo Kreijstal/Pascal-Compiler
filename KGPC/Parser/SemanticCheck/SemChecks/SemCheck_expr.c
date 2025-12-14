@@ -4756,10 +4756,20 @@ static int semcheck_recordaccess(int *type_return,
             pascal_identifier_equals(field_id, "Create"))
         {
             /* Transform this EXPR_RECORD_ACCESS into EXPR_FUNCTION_CALL */
-            /* The record_expr should be a type name (EXPR_VAR_ID) */
+            /* The record_expr could be either:
+             * 1. A type name (EXPR_VAR_ID) like TMyClass.Create - use static VMT
+             * 2. A class reference variable like ClassRef.Create - use variable's value as VMT
+             */
             if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
             {
-                const char *class_name = record_expr->expr_data.id;
+                const char *expr_name = record_expr->expr_data.id;
+                
+                /* Check if this is a type name or a variable name */
+                HashNode_t *ident_node = NULL;
+                int is_type = 0;
+                if (FindIdent(&ident_node, symtab, (char*)expr_name) >= 0 && ident_node != NULL) {
+                    is_type = (ident_node->hash_type == HASHTYPE_TYPE);
+                }
                 
                 /* Clean up the old record_access_data before transforming */
                 expr->expr_data.record_access_data.record_expr = NULL;
@@ -4768,7 +4778,7 @@ static int semcheck_recordaccess(int *type_return,
                 KgpcType *record_kgpc = create_record_type(record_info);
                 if (record_kgpc == NULL) {
                     fprintf(stderr, "Error on line %d: Unable to create KgpcType for class %s\n", 
-                        expr->line_num, class_name);
+                        expr->line_num, expr_name);
                     destroy_expr(record_expr);
                     return error_count + 1;
                 }
@@ -4776,7 +4786,7 @@ static int semcheck_recordaccess(int *type_return,
                 long long class_size = kgpc_type_sizeof(record_kgpc);
                 if (class_size <= 0) {
                     fprintf(stderr, "Error on line %d: Unable to determine size for class %s\n", 
-                        expr->line_num, class_name);
+                        expr->line_num, expr_name);
                     destroy_expr(record_expr);
                     return error_count + 1;
                 }
@@ -4787,14 +4797,22 @@ static int semcheck_recordaccess(int *type_return,
                 size_arg->expr_data.i_num = class_size;
                 size_arg->resolved_type = INT_TYPE;
                 
-                /* Create argument 2: VMT pointer (address of global VMT label) */
-                /* The VMT is a global label - codegen will handle it specially */
-                struct Expression *vmt_arg = (struct Expression *)calloc(1, sizeof(struct Expression));
-                vmt_arg->type = EXPR_VAR_ID;
-                char vmt_label[256];
-                snprintf(vmt_label, sizeof(vmt_label), "%s_VMT", class_name);
-                vmt_arg->expr_data.id = strdup(vmt_label);
-                vmt_arg->resolved_type = POINTER_TYPE;
+                /* Create argument 2: VMT pointer */
+                struct Expression *vmt_arg;
+                if (is_type) {
+                    /* Static class type: use address of global VMT label */
+                    vmt_arg = (struct Expression *)calloc(1, sizeof(struct Expression));
+                    vmt_arg->type = EXPR_VAR_ID;
+                    char vmt_label[256];
+                    snprintf(vmt_label, sizeof(vmt_label), "%s_VMT", expr_name);
+                    vmt_arg->expr_data.id = strdup(vmt_label);
+                    vmt_arg->resolved_type = POINTER_TYPE;
+                } else {
+                    /* Class reference variable: use the variable's value as VMT */
+                    /* The variable already holds a pointer to the VMT */
+                    vmt_arg = record_expr;  /* Reuse the record_expr directly */
+                    record_expr = NULL;     /* Prevent double-free */
+                }
                 
                 /* Create argument list */
                 ListNode_t *arg1_node = CreateListNode(size_arg, LIST_EXPR);
@@ -4821,11 +4839,12 @@ static int semcheck_recordaccess(int *type_return,
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_recordaccess: Transformed '%s.%s' to __kgpc_default_create(%lld, %s) call\n",
-                        class_name, field_id, class_size, vmt_label);
+                        expr_name, field_id, class_size, is_type ? "(static VMT)" : "(runtime VMT)");
                 }
                 
-                /* Free the record_expr since we're not using it anymore */
-                destroy_expr(record_expr);
+                /* Free the record_expr only if we didn't reuse it for vmt_arg */
+                if (record_expr != NULL)
+                    destroy_expr(record_expr);
                 
                 return error_count;
             }

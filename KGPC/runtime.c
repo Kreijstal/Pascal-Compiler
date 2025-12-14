@@ -91,6 +91,38 @@ typedef struct KGPCTextFile
     size_t element_size;
 } KGPCTextFile;
 
+/* Global standard I/O file variables for Pascal programs */
+/* These are initialized lazily in the output/input stream functions */
+static KGPCTextFile kgpc_stdin_file = { NULL, NULL, 0, KGPC_FILE_KIND_TEXT, KGPC_BINARY_UNSPECIFIED, 0 };
+static KGPCTextFile kgpc_stdout_file = { NULL, NULL, 0, KGPC_FILE_KIND_TEXT, KGPC_BINARY_UNSPECIFIED, 0 };
+static KGPCTextFile kgpc_stderr_file = { NULL, NULL, 0, KGPC_FILE_KIND_TEXT, KGPC_BINARY_UNSPECIFIED, 0 };
+
+/* Global pointers exported for Pascal programs to reference */
+KGPCTextFile *stdin_ptr = NULL;
+KGPCTextFile *stdout_ptr = NULL;
+KGPCTextFile *stderr_ptr = NULL;
+KGPCTextFile *Input_ptr = NULL;   /* Standard Pascal Input */
+KGPCTextFile *Output_ptr = NULL;  /* Standard Pascal Output */
+
+/* Initialize standard I/O file handles (called once) */
+static void kgpc_init_stdio(void)
+{
+    static int initialized = 0;
+    if (initialized)
+        return;
+    initialized = 1;
+    
+    kgpc_stdin_file.handle = stdin;
+    kgpc_stdout_file.handle = stdout;
+    kgpc_stderr_file.handle = stderr;
+    
+    stdin_ptr = &kgpc_stdin_file;
+    stdout_ptr = &kgpc_stdout_file;
+    stderr_ptr = &kgpc_stderr_file;
+    Input_ptr = &kgpc_stdin_file;   /* Input = stdin */
+    Output_ptr = &kgpc_stdout_file; /* Output = stdout */
+}
+
 int kgpc_file_is_text(void **slot)
 {
     if (slot == NULL)
@@ -103,6 +135,7 @@ int kgpc_file_is_text(void **slot)
 
 static FILE *kgpc_text_output_stream(KGPCTextFile *file)
 {
+    kgpc_init_stdio();  /* Ensure stdio is initialized */
     if (file != NULL && file->handle != NULL)
         return file->handle;
 #ifdef _WIN32
@@ -119,6 +152,7 @@ static FILE *kgpc_text_output_stream(KGPCTextFile *file)
 
 static FILE *kgpc_text_input_stream(KGPCTextFile *file)
 {
+    kgpc_init_stdio();  /* Ensure stdio is initialized */
     if (file != NULL)
         return file->handle;
     return stdin;

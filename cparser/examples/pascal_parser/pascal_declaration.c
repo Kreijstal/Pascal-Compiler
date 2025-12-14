@@ -1292,11 +1292,9 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     const_section->extra_to_free = const_expr_parser;
 
-    combinator_t* resourcestring_value = multi(new_combinator(), PASCAL_T_NONE,
-        token(pascal_string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+    /* Resourcestring values - now use expression parser to support concatenation 
+     * (e.g., 'Part one' + LineEnding + 'Part two' as used in FPC RTL sysconst.pp) */
+    combinator_t* resourcestring_value = lazy(const_expr_parser);
 
     // Resourcestring can also have hint directives (e.g., deprecated in rtlconsts.pp)
     combinator_t* resourcestring_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -2441,11 +2439,13 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Local-only resourcestring and threadvar sections (routine scope tolerance)
-    combinator_t* local_resourcestring_value = multi(new_combinator(), PASCAL_T_NONE,
-        token(pascal_string(PASCAL_T_STRING)),
-        token(cident(PASCAL_T_IDENTIFIER)),
-        NULL
-    );
+    /* Create expression parser for local resourcestring values first */
+    combinator_t** local_var_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *local_var_expr_parser = new_combinator();
+    init_pascal_expression_parser(local_var_expr_parser, NULL);
+    
+    /* Resourcestring now uses full expression parser to support concatenation */
+    combinator_t* local_resourcestring_value = lazy(local_var_expr_parser);
     combinator_t* local_resourcestring_decl = seq(new_combinator(), PASCAL_T_CONST_DECL,
         token(cident(PASCAL_T_IDENTIFIER)),
         token(match("=")),
@@ -2458,9 +2458,6 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         many(local_resourcestring_decl),
         NULL
     );
-    combinator_t** local_var_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
-    *local_var_expr_parser = new_combinator();
-    init_pascal_expression_parser(local_var_expr_parser, NULL);
     combinator_t* local_threadvar_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
         token(match(":")),

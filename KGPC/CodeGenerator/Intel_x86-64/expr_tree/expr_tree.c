@@ -1758,6 +1758,20 @@ cleanup_constructor:
             return add_inst(inst_list, buffer);
         }
 
+        /* Check if this is a class type used as a value (for class references).
+         * The buf_leaf will be "ClassName_VMT(%rip)" and we need leaq to get the address. */
+        if (symbol_node != NULL && symbol_node->hash_type == HASHTYPE_TYPE &&
+            symbol_node->type != NULL && symbol_node->type->kind == TYPE_KIND_POINTER &&
+            symbol_node->type->info.points_to != NULL &&
+            symbol_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+            symbol_node->type->info.points_to->info.record_info != NULL &&
+            record_type_is_class(symbol_node->type->info.points_to->info.record_info))
+        {
+            /* For class type used as value, use leaq to get the VMT address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", buf_leaf, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
+
         /* Check if this is a VMT label - need address, not value */
         const char *var_name = expr->expr_data.id;
         size_t name_len = var_name != NULL ? strlen(var_name) : 0;
@@ -2141,8 +2155,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                          node->type->info.points_to->info.record_info != NULL &&
                          record_type_is_class(node->type->info.points_to->info.record_info))
                 {
-                     /* Class type used as value -> Address of VMT */
-                     snprintf(buffer, buf_len, "$%s_VMT", expr->expr_data.id);
+                     /* Class type used as value -> Address of VMT
+                      * Use RIP-relative addressing for cross-platform compatibility
+                      * (Windows x64 doesn't support $symbol immediates) */
+                     snprintf(buffer, buf_len, "%s_VMT(%%rip)", expr->expr_data.id);
                 }
                 else if(stack_node != NULL)
                 {
@@ -2183,10 +2199,47 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     size_t name_len = var_name != NULL ? strlen(var_name) : 0;
                     int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
                     
+                    /* Check if this is a builtin file variable (stdin, stdout, stderr, Input, Output) */
+                    int is_builtin_file = 0;
+                    const char *global_ptr_name = NULL;
+                    if (var_name != NULL)
+                    {
+                        if (strcasecmp(var_name, "stdin") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stdin_ptr";
+                        }
+                        else if (strcasecmp(var_name, "stdout") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stdout_ptr";
+                        }
+                        else if (strcasecmp(var_name, "stderr") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stderr_ptr";
+                        }
+                        else if (strcasecmp(var_name, "Input") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "Input_ptr";
+                        }
+                        else if (strcasecmp(var_name, "Output") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "Output_ptr";
+                        }
+                    }
+                    
                     if (is_vmt_label)
                     {
                         /* VMT is a global label - use RIP-relative addressing */
                         snprintf(buffer, buf_len, "%s(%%rip)", var_name);
+                    }
+                    else if (is_builtin_file)
+                    {
+                        /* Builtin file variable - load from global runtime pointer */
+                        snprintf(buffer, buf_len, "%s(%%rip)", global_ptr_name);
                     }
                     else
                     {

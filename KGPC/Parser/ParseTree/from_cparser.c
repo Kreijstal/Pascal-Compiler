@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <limits.h>
 #ifndef _WIN32
 #include <strings.h>
@@ -176,7 +177,31 @@ typedef struct {
     int range_known;
     long long range_start;
     long long range_end;
+    int is_class_reference;  /* For "class of T" types */
 } TypeInfo;
+
+/* Frontend error counter for errors during AST to tree conversion */
+static int g_frontend_error_count = 0;
+
+/* Reset the frontend error counter */
+void from_cparser_reset_error_count(void) {
+    g_frontend_error_count = 0;
+}
+
+/* Get the frontend error count */
+int from_cparser_get_error_count(void) {
+    return g_frontend_error_count;
+}
+
+/* Report a frontend error and increment the counter */
+static void frontend_error(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    g_frontend_error_count++;
+}
 
 typedef struct PendingGenericAlias {
     Tree_t *decl;
@@ -2055,6 +2080,44 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return UNKNOWN_TYPE;
     }
 
+    /* Handle "class of T" - class reference type */
+    if (spec_node->typ == PASCAL_T_CLASS_OF_TYPE) {
+        /* Class reference type (class of TMyClass).
+         * In Pascal, when T is a class type, T is already a pointer to the class record.
+         * "class of T" is semantically a reference to the class itself (metaclass),
+         * but structurally it's the same as T - a pointer to the class record.
+         * 
+         * We treat "class of T" the same as T, which allows:
+         *   var ClassRef: class of TMyClass;
+         *   ClassRef := TMyClass;  // Works because both are ^record
+         */
+        if (type_info != NULL) {
+            type_info->is_class_reference = 1;
+            ast_t *target = spec_node->child;
+            while (target != NULL && target->typ != PASCAL_T_IDENTIFIER)
+                target = target->next;
+            if (target != NULL) {
+                char *dup = dup_symbol(target);
+                /* Check if this is a builtin type (non-class) - reject it */
+                int mapped = map_type_name(dup, NULL);
+                if (mapped != UNKNOWN_TYPE) {
+                    /* Builtin types like Integer, String, etc. are not class types */
+                    frontend_error("Error: 'class of' requires a class type, but got %s", dup);
+                    free(dup);
+                    return UNKNOWN_TYPE;
+                }
+                /* Not a builtin type - assume it's a class type.
+                 * Further validation will happen during semantic checking. */
+                type_info->pointer_type_id = dup;
+                if (type_id_out != NULL && *type_id_out == NULL)
+                    *type_id_out = strdup(dup);
+                type_info->is_pointer = 1;
+                type_info->pointer_type = RECORD_TYPE;
+            }
+        }
+        return POINTER_TYPE;
+    }
+
     return UNKNOWN_TYPE;
 }
 
@@ -2398,6 +2461,15 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         /* Note: We can't get the class name here because we're inside the type spec, not the type decl.
          * For now, we return NULL to let the class be handled by the legacy path.
          * The class's RecordType will be properly populated during semantic checking. */
+        return NULL;
+    }
+
+    /* Handle "class of T" - class reference type */
+    if (spec_node->typ == PASCAL_T_CLASS_OF_TYPE) {
+        /* Class reference type (class of TMyClass).
+         * This is structurally the same as the target class type - a pointer to the class record.
+         * Return NULL here to let it be handled by the convert_type_spec path which creates
+         * the appropriate pointer type. */
         return NULL;
     }
 
@@ -4033,6 +4105,20 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
         } else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
                    spec_node->child->typ == PASCAL_T_CLASS_TYPE) {
             class_spec = spec_node->child;
+        }
+        /* Handle "class of T" - check if TYPE_SPEC wraps CLASS_OF_TYPE */
+        else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
+                 spec_node->child->typ == PASCAL_T_CLASS_OF_TYPE) {
+            /* For class of T, we need to find T's record type and use it */
+            ast_t *class_of_node = spec_node->child;
+            ast_t *target_name = class_of_node->child;
+            while (target_name != NULL && target_name->typ != PASCAL_T_IDENTIFIER)
+                target_name = target_name->next;
+            if (target_name != NULL && getenv("KGPC_DEBUG_TFPG") != NULL) {
+                fprintf(stderr, "[KGPC] convert_type_decl: class of target=%s for id=%s\n",
+                    (target_name->sym && target_name->sym->name) ? target_name->sym->name : "<null>",
+                    id);
+            }
         }
 
         if (class_spec != NULL) {
@@ -7571,19 +7657,46 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         if (initialization_node != NULL && initialization_node->typ == PASCAL_T_INITIALIZATION_SECTION) {
-            // initialization_node->child is a PASCAL_T_NONE seq with stmt_list as first child
+            /* The initialization section's child can be:
+             * 1. A PASCAL_T_NONE wrapper from make_stmt_list_parser, with stmt_list as child
+             * 2. The first statement directly (if the wrapper was optimized away)
+             * We handle both cases by checking if child is PASCAL_T_NONE. */
             ast_t *stmt_list_seq = initialization_node->child;
-            if (stmt_list_seq != NULL && stmt_list_seq->child != NULL) {
-                ListNode_t *stmts = convert_statement_list(stmt_list_seq->child);
+            if (getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
+                fprintf(stderr, "[KGPC] initialization_node: typ=%d line=%d\n", 
+                        initialization_node->typ, initialization_node->line);
+                if (stmt_list_seq != NULL) {
+                    fprintf(stderr, "[KGPC]   stmt_list_seq: typ=%d line=%d\n", 
+                            stmt_list_seq->typ, stmt_list_seq->line);
+                }
+            }
+            if (stmt_list_seq != NULL) {
+                ListNode_t *stmts = NULL;
+                if (stmt_list_seq->typ == PASCAL_T_NONE) {
+                    /* Wrapped structure: NONE -> child is stmt list */
+                    if (stmt_list_seq->child != NULL) {
+                        stmts = convert_statement_list(stmt_list_seq->child);
+                    }
+                } else {
+                    /* Direct structure: child IS the first statement in a linked list */
+                    stmts = convert_statement_list(stmt_list_seq);
+                }
                 initialization = mk_compoundstatement(initialization_node->line, stmts);
             }
         }
 
         if (finalization_node != NULL && finalization_node->typ == PASCAL_T_FINALIZATION_SECTION) {
-            // finalization_node->child is a PASCAL_T_NONE seq with stmt_list as first child
+            /* Same structure handling as initialization */
             ast_t *stmt_list_seq = finalization_node->child;
-            if (stmt_list_seq != NULL && stmt_list_seq->child != NULL) {
-                ListNode_t *stmts = convert_statement_list(stmt_list_seq->child);
+            if (stmt_list_seq != NULL) {
+                ListNode_t *stmts = NULL;
+                if (stmt_list_seq->typ == PASCAL_T_NONE) {
+                    if (stmt_list_seq->child != NULL) {
+                        stmts = convert_statement_list(stmt_list_seq->child);
+                    }
+                } else {
+                    stmts = convert_statement_list(stmt_list_seq);
+                }
                 finalization = mk_compoundstatement(finalization_node->line, stmts);
             }
         }

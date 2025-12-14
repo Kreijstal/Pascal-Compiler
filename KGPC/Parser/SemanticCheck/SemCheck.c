@@ -3364,6 +3364,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(ansistring_type);
         free(ansistring_name);
     }
+    /* RawByteString - byte string with no encoding */
+    char *rawbytestring_name = strdup("RawByteString");
+    if (rawbytestring_name != NULL) {
+        KgpcType *rawbytestring_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(rawbytestring_type != NULL && "Failed to create RawByteString type");
+        AddBuiltinType_Typed(symtab, rawbytestring_name, rawbytestring_type);
+        destroy_kgpc_type(rawbytestring_type);
+        free(rawbytestring_name);
+    }
     }
     char *unicode_name = strdup("UnicodeString");
     if (unicode_name != NULL) {
@@ -3891,6 +3900,48 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinFunction_Typed(symtab, high_name, high_type);
         destroy_kgpc_type(high_type);
         free(high_name);
+    }
+
+    /* Standard I/O file variables - stdin, stdout, stderr */
+    /* These are Text file variables that can be passed to Write/WriteLn/Read/ReadLn */
+    {
+        char *stdin_name = strdup("stdin");
+        if (stdin_name != NULL) {
+            KgpcType *stdin_type = kgpc_type_from_var_type(HASHVAR_TEXT);
+            assert(stdin_type != NULL && "Failed to create stdin type");
+            PushVarOntoScope_Typed(symtab, stdin_name, stdin_type);
+            destroy_kgpc_type(stdin_type);
+            /* Note: stdin_name ownership transferred to symtab, don't free */
+        }
+        char *stdout_name = strdup("stdout");
+        if (stdout_name != NULL) {
+            KgpcType *stdout_type = kgpc_type_from_var_type(HASHVAR_TEXT);
+            assert(stdout_type != NULL && "Failed to create stdout type");
+            PushVarOntoScope_Typed(symtab, stdout_name, stdout_type);
+            destroy_kgpc_type(stdout_type);
+        }
+        char *stderr_name = strdup("stderr");
+        if (stderr_name != NULL) {
+            KgpcType *stderr_type = kgpc_type_from_var_type(HASHVAR_TEXT);
+            assert(stderr_type != NULL && "Failed to create stderr type");
+            PushVarOntoScope_Typed(symtab, stderr_name, stderr_type);
+            destroy_kgpc_type(stderr_type);
+        }
+        /* Input and Output - standard Pascal file variables */
+        char *input_name = strdup("Input");
+        if (input_name != NULL) {
+            KgpcType *input_type = kgpc_type_from_var_type(HASHVAR_TEXT);
+            assert(input_type != NULL && "Failed to create Input type");
+            PushVarOntoScope_Typed(symtab, input_name, input_type);
+            destroy_kgpc_type(input_type);
+        }
+        char *output_name = strdup("Output");
+        if (output_name != NULL) {
+            KgpcType *output_type = kgpc_type_from_var_type(HASHVAR_TEXT);
+            assert(output_type != NULL && "Failed to create Output type");
+            PushVarOntoScope_Typed(symtab, output_name, output_type);
+            destroy_kgpc_type(output_type);
+        }
     }
 
     /* Builtins are now in stdlib.p */
