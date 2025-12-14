@@ -58,7 +58,7 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "ShortString"))
         return SHORTSTRING_TYPE;
-    if (pascal_identifier_equals(id, "Char"))
+    if (pascal_identifier_equals(id, "Char") || pascal_identifier_equals(id, "AnsiChar"))
         return CHAR_TYPE;
     if (pascal_identifier_equals(id, "Boolean"))
         return BOOL;
@@ -698,6 +698,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
         pascal_identifier_equals(type_name, "Byte") ||
         pascal_identifier_equals(type_name, "Boolean") ||
         pascal_identifier_equals(type_name, "Char") ||
+        pascal_identifier_equals(type_name, "AnsiChar") ||
         pascal_identifier_equals(type_name, "WideChar") ||
         pascal_identifier_equals(type_name, "Pointer") ||
         pascal_identifier_equals(type_name, "PChar") ||
@@ -1173,7 +1174,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         *out_value = 1LL;
                         return 0;
                     }
-                    if (pascal_identifier_equals(type_name, "Char")) {
+                    if (pascal_identifier_equals(type_name, "Char") ||
+                        pascal_identifier_equals(type_name, "AnsiChar")) {
                         *out_value = 255LL;
                         return 0;
                     }
@@ -1250,7 +1252,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         *out_value = 0LL;
                         return 0;
                     }
-                    if (pascal_identifier_equals(type_name, "Char")) {
+                    if (pascal_identifier_equals(type_name, "Char") ||
+                        pascal_identifier_equals(type_name, "AnsiChar")) {
                         *out_value = 0LL;
                         return 0;
                     }
@@ -1319,6 +1322,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     if (pascal_identifier_equals(type_name, "ShortInt") ||
                         pascal_identifier_equals(type_name, "Byte") ||
                         pascal_identifier_equals(type_name, "Char") ||
+                        pascal_identifier_equals(type_name, "AnsiChar") ||
                         pascal_identifier_equals(type_name, "Boolean")) {
                         *out_value = 1LL;
                         return 0;
@@ -1744,7 +1748,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             kgpc_type = create_primitive_type(BOOL);
                         }
-                        else if (pascal_identifier_equals(target, "Char"))
+                        else if (pascal_identifier_equals(target, "Char") ||
+                                 pascal_identifier_equals(target, "AnsiChar"))
                         {
                             kgpc_type = create_primitive_type(CHAR_TYPE);
                         }
@@ -4189,7 +4194,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             /* ShortString is array[0..255] of Char with length at index 0 */
                             var_type = HASHVAR_ARRAY;
                         }
-                        else if (pascal_identifier_equals(type_id, "Char"))
+                        else if (pascal_identifier_equals(type_id, "Char") ||
+                                 pascal_identifier_equals(type_id, "AnsiChar"))
                             var_type = HASHVAR_CHAR;
                         else if (pascal_identifier_equals(type_id, "Boolean"))
                             var_type = HASHVAR_BOOLEAN;
