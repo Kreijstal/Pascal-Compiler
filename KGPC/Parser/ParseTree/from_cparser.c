@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <limits.h>
 #ifndef _WIN32
 #include <strings.h>
@@ -178,6 +179,29 @@ typedef struct {
     long long range_end;
     int is_class_reference;  /* For "class of T" types */
 } TypeInfo;
+
+/* Frontend error counter for errors during AST to tree conversion */
+static int g_frontend_error_count = 0;
+
+/* Reset the frontend error counter */
+void from_cparser_reset_error_count(void) {
+    g_frontend_error_count = 0;
+}
+
+/* Get the frontend error count */
+int from_cparser_get_error_count(void) {
+    return g_frontend_error_count;
+}
+
+/* Report a frontend error and increment the counter */
+static void frontend_error(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+    fprintf(stderr, "\n");
+    g_frontend_error_count++;
+}
 
 typedef struct PendingGenericAlias {
     Tree_t *decl;
@@ -2074,17 +2098,17 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 target = target->next;
             if (target != NULL) {
                 char *dup = dup_symbol(target);
-                /* Don't add is_pointer flag - the target class is already a pointer type.
-                 * Just record the class name so we can look it up. */
-                type_info->pointer_type_id = dup;
-                /* Return the type of the target class, not POINTER_TYPE */
+                /* Check if this is a builtin type (non-class) - reject it */
                 int mapped = map_type_name(dup, NULL);
                 if (mapped != UNKNOWN_TYPE) {
-                    return mapped;
+                    /* Builtin types like Integer, String, etc. are not class types */
+                    frontend_error("Error: 'class of' requires a class type, but got %s", dup);
+                    free(dup);
+                    return UNKNOWN_TYPE;
                 }
-                /* If not a builtin type, the target is a class type.
-                 * Set the output type_id and return POINTER_TYPE to indicate
-                 * this is a pointer to the class record. */
+                /* Not a builtin type - assume it's a class type.
+                 * Further validation will happen during semantic checking. */
+                type_info->pointer_type_id = dup;
                 if (type_id_out != NULL && *type_id_out == NULL)
                     *type_id_out = strdup(dup);
                 type_info->is_pointer = 1;

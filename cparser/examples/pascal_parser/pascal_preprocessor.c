@@ -1346,6 +1346,53 @@ static bool symbol_is_declared_in_source(const char *source, size_t source_len, 
         }
         if (pos >= end) break;
         
+        /* Skip comments: { }, (* *), and // */
+        if (*pos == '{') {
+            /* Brace comment - skip until closing brace */
+            pos++;
+            while (pos < end && *pos != '}') {
+                pos++;
+            }
+            if (pos < end) pos++;  /* Skip closing brace */
+            continue;
+        }
+        if (pos + 1 < end && *pos == '(' && *(pos + 1) == '*') {
+            /* (* *) comment - skip until closing *) */
+            pos += 2;
+            while (pos + 1 < end && !(*pos == '*' && *(pos + 1) == ')')) {
+                pos++;
+            }
+            if (pos + 1 < end) pos += 2;  /* Skip closing *) */
+            continue;
+        }
+        if (pos + 1 < end && *pos == '/' && *(pos + 1) == '/') {
+            /* // comment - skip until end of line */
+            pos += 2;
+            while (pos < end && *pos != '\n') {
+                pos++;
+            }
+            if (pos < end) pos++;  /* Skip newline */
+            continue;
+        }
+        
+        /* Skip string literals: 'string' */
+        if (*pos == '\'') {
+            pos++;
+            while (pos < end) {
+                if (*pos == '\'') {
+                    pos++;
+                    /* Check for escaped quote ('') */
+                    if (pos < end && *pos == '\'') {
+                        pos++;  /* Skip second quote of escaped pair */
+                        continue;
+                    }
+                    break;  /* End of string */
+                }
+                pos++;
+            }
+            continue;
+        }
+        
         /* Check for declaration keywords */
         bool found_keyword = false;
         for (int i = 0; decl_keywords[i] != NULL; i++) {
