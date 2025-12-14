@@ -23,6 +23,9 @@ struct PascalPreprocessor {
     char **include_paths;
     size_t include_path_count;
     size_t include_path_capacity;
+    /* For declared() support - points to current output buffer during preprocessing */
+    const char *current_output;
+    size_t current_output_len;
 };
 
 typedef struct {
@@ -133,6 +136,8 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->include_paths = NULL;
     pp->include_path_count = 0;
     pp->include_path_capacity = 0;
+    pp->current_output = NULL;
+    pp->current_output_len = 0;
     return pp;
 }
 
@@ -693,6 +698,9 @@ static bool handle_directive(PascalPreprocessor *pp,
     } else if (strcmp(keyword, "IF") == 0) {
         handled = true;
         bool cond_value = false;
+        /* Update output context for declared() support */
+        pp->current_output = output->data;
+        pp->current_output_len = output->length;
         if (!evaluate_if_directive(pp, rest, &cond_value, error_message)) {
             free(keyword);
             free(content);
@@ -786,6 +794,9 @@ static bool handle_directive(PascalPreprocessor *pp,
             activate_fallback_branch(frame);
         } else {
             bool cond_value = false;
+            /* Update output context for declared() support */
+            pp->current_output = output->data;
+            pp->current_output_len = output->length;
             if (!evaluate_if_directive(pp, rest, &cond_value, error_message)) {
                 free(keyword);
                 free(content);
@@ -1304,6 +1315,130 @@ static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol) 
         }
     }
     free(upper);
+    return false;
+}
+
+/* Scan source text for Pascal declarations of the given identifier.
+ * This is used by declared() to check if an identifier has been declared
+ * in the Pascal source (var, const, type, function, procedure).
+ * Returns true if a declaration pattern is found. */
+static bool symbol_is_declared_in_source(const char *source, size_t source_len, const char *symbol) {
+    if (!source || !symbol || source_len == 0) {
+        return false;
+    }
+    
+    size_t sym_len = strlen(symbol);
+    if (sym_len == 0) {
+        return false;
+    }
+    
+    /* Declaration keywords to look for */
+    static const char *decl_keywords[] = { "var", "const", "type", "function", "procedure", NULL };
+    
+    /* Scan the source for declaration patterns */
+    const char *pos = source;
+    const char *end = source + source_len;
+    
+    while (pos < end) {
+        /* Skip whitespace */
+        while (pos < end && isspace((unsigned char)*pos)) {
+            pos++;
+        }
+        if (pos >= end) break;
+        
+        /* Check for declaration keywords */
+        bool found_keyword = false;
+        for (int i = 0; decl_keywords[i] != NULL; i++) {
+            size_t kw_len = strlen(decl_keywords[i]);
+            if ((size_t)(end - pos) >= kw_len && 
+                ascii_strncasecmp(pos, decl_keywords[i], kw_len) == 0 &&
+                (pos + kw_len >= end || !isalnum((unsigned char)pos[kw_len]))) {
+                pos += kw_len;
+                found_keyword = true;
+                break;
+            }
+        }
+        
+        if (found_keyword) {
+            /* After a declaration keyword, look for the identifier */
+            /* Skip whitespace */
+            while (pos < end && isspace((unsigned char)*pos)) {
+                pos++;
+            }
+            
+            /* Now check identifiers after this keyword until we hit another keyword or section */
+            while (pos < end) {
+                /* Skip whitespace */
+                while (pos < end && isspace((unsigned char)*pos)) {
+                    pos++;
+                }
+                if (pos >= end) break;
+                
+                /* Check if we hit a new section keyword */
+                bool is_section = false;
+                const char *section_keywords[] = { "var", "const", "type", "begin", "end", 
+                    "implementation", "interface", "uses", "unit", "program", NULL };
+                for (int i = 0; section_keywords[i] != NULL; i++) {
+                    size_t kw_len = strlen(section_keywords[i]);
+                    if ((size_t)(end - pos) >= kw_len && 
+                        ascii_strncasecmp(pos, section_keywords[i], kw_len) == 0 &&
+                        (pos + kw_len >= end || !isalnum((unsigned char)pos[kw_len]))) {
+                        is_section = true;
+                        break;
+                    }
+                }
+                if (is_section) break;
+                
+                /* Extract identifier */
+                if (isalpha((unsigned char)*pos) || *pos == '_') {
+                    const char *ident_start = pos;
+                    while (pos < end && (isalnum((unsigned char)*pos) || *pos == '_')) {
+                        pos++;
+                    }
+                    size_t ident_len = (size_t)(pos - ident_start);
+                    
+                    /* Check if this identifier matches */
+                    if (ident_len == sym_len && ascii_strncasecmp(ident_start, symbol, sym_len) == 0) {
+                        return true;
+                    }
+                    
+                    /* Skip until semicolon or next identifier (comma-separated list) */
+                    while (pos < end && *pos != ';' && *pos != ',') {
+                        if (*pos == '(') {
+                            /* Skip parenthesized content (e.g., function parameters) */
+                            int depth = 1;
+                            pos++;
+                            while (pos < end && depth > 0) {
+                                if (*pos == '(') depth++;
+                                else if (*pos == ')') depth--;
+                                pos++;
+                            }
+                        } else {
+                            pos++;
+                        }
+                    }
+                    if (pos < end && *pos == ',') {
+                        pos++;  /* Continue with next identifier in list */
+                        continue;
+                    }
+                    if (pos < end && *pos == ';') {
+                        pos++;  /* Continue to next declaration */
+                        continue;
+                    }
+                } else {
+                    /* Skip non-identifier character */
+                    pos++;
+                }
+            }
+        } else {
+            /* Not a declaration keyword, skip to next word */
+            while (pos < end && (isalnum((unsigned char)*pos) || *pos == '_')) {
+                pos++;
+            }
+            if (pos < end) pos++;
+        }
+    }
+    
     return false;
 }
 
@@ -1967,7 +2102,21 @@ static bool parse_factor(const char **cursor,
             ++(*cursor);
         }
         
-        *value = symbol_is_defined(pp, sym) ? 1 : 0;
+        /* For declared(), also check if identifier appears in Pascal declarations */
+        if (is_declared) {
+            /* Check preprocessor defines first */
+            if (symbol_is_defined(pp, sym)) {
+                *value = 1;
+            } else if (pp->current_output != NULL && pp->current_output_len > 0) {
+                /* Then check Pascal source declarations */
+                *value = symbol_is_declared_in_source(pp->current_output, pp->current_output_len, sym) ? 1 : 0;
+            } else {
+                *value = 0;
+            }
+        } else {
+            /* For defined(), only check preprocessor defines */
+            *value = symbol_is_defined(pp, sym) ? 1 : 0;
+        }
         free(sym);
         return true;
     }
