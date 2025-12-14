@@ -3364,6 +3364,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         destroy_kgpc_type(ansistring_type);
         free(ansistring_name);
     }
+    /* RawByteString - byte string with no encoding */
+    char *rawbytestring_name = strdup("RawByteString");
+    if (rawbytestring_name != NULL) {
+        KgpcType *rawbytestring_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
+        assert(rawbytestring_type != NULL && "Failed to create RawByteString type");
+        AddBuiltinType_Typed(symtab, rawbytestring_name, rawbytestring_type);
+        destroy_kgpc_type(rawbytestring_type);
+        free(rawbytestring_name);
+    }
     }
     char *unicode_name = strdup("UnicodeString");
     if (unicode_name != NULL) {
