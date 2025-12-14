@@ -2130,6 +2130,75 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (handled_builtin)
         return return_val;
 
+    /* FPC Bootstrap Feature: Handle unit-qualified procedure calls.
+     * When the parser sees Unit.Procedure(args), it creates a procedure call with id "__Procedure"
+     * and passes Unit as the first argument (as if it were a method call).
+     * We need to detect this pattern and transform it back to a direct procedure call.
+     * 
+     * Pattern: proc_id starts with "__", first arg is a VAR_ID that doesn't exist in symbol table
+     * (it's the unit name), and the procedure name (without "__" prefix) exists in symbol table.
+     */
+    if (proc_id != NULL && strncmp(proc_id, "__", 2) == 0 && args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
+        {
+            char *potential_unit_name = first_arg->expr_data.id;
+            HashNode_t *unit_check = NULL;
+            
+            /* Check if the first argument is NOT a known variable (i.e., it's a unit qualifier) */
+            if (FindIdent(&unit_check, symtab, potential_unit_name) == -1)
+            {
+                /* First arg is not a known identifier - might be a unit qualifier.
+                 * Try to look up the procedure name without the "__" prefix. */
+                char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
+                if (real_proc_name == NULL)
+                {
+                    /* strdup failed - skip transformation, will report error later */
+                }
+                else
+                {
+                    ListNode_t *proc_candidates = FindAllIdents(symtab, real_proc_name);
+                    
+                    if (proc_candidates != NULL)
+                    {
+                        /* Found the procedure by name. Transform the call:
+                         * 1. Remove the first argument (the unit qualifier)
+                         * 2. Change proc_id to the real procedure name (without "__")
+                         */
+                        /* Save the remaining args before modifying the list */
+                        ListNode_t *remaining_args = args_given->next;
+                        
+                        /* Free the unit qualifier expression and list node.
+                         * Note: remaining_args holds the saved pointer value, so
+                         * freeing args_given doesn't affect it. */
+                        destroy_expr(first_arg);
+                        args_given->cur = NULL;
+                        free(args_given);
+                        
+                        /* Update the statement with the transformed call */
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                        
+                        /* Update proc_id - we already have real_proc_name allocated */
+                        free(proc_id);
+                        proc_id = real_proc_name;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                        args_given = remaining_args;
+                        
+                        DestroyList(proc_candidates);
+                        
+                        /* Continue with normal procedure call handling using the transformed call */
+                    }
+                    else
+                    {
+                        /* Procedure not found - free real_proc_name and fall through to report error */
+                        free(real_proc_name);
+                    }
+                }
+            }
+        }
+    }
+
     /* Handle procedural fields on records (advanced records) similarly to function calls */
     if (proc_id != NULL && args_given != NULL)
     {
