@@ -2152,38 +2152,48 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 /* First arg is not a known identifier - might be a unit qualifier.
                  * Try to look up the procedure name without the "__" prefix. */
                 char *real_proc_name = strdup(proc_id + 2);  /* Skip the "__" prefix */
-                ListNode_t *proc_candidates = (real_proc_name != NULL) ? FindAllIdents(symtab, real_proc_name) : NULL;
-                
-                if (proc_candidates != NULL)
+                if (real_proc_name == NULL)
                 {
-                    /* Found the procedure by name. Transform the call:
-                     * 1. Remove the first argument (the unit qualifier)
-                     * 2. Change proc_id to the real procedure name (without "__")
-                     */
-                    ListNode_t *remaining_args = args_given->next;
-                    
-                    /* Free the unit qualifier expression and list node */
-                    destroy_expr(first_arg);
-                    args_given->cur = NULL;
-                    free(args_given);
-                    
-                    /* Update the statement with the transformed call */
-                    stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-                    
-                    /* Update proc_id - we already have real_proc_name allocated */
-                    free(proc_id);
-                    proc_id = real_proc_name;
-                    stmt->stmt_data.procedure_call_data.id = proc_id;
-                    args_given = remaining_args;
-                    
-                    DestroyList(proc_candidates);
-                    
-                    /* Continue with normal procedure call handling using the transformed call */
+                    /* strdup failed - skip transformation, will report error later */
                 }
                 else
                 {
-                    /* Procedure not found - will fall through and report error normally */
-                    free(real_proc_name);
+                    ListNode_t *proc_candidates = FindAllIdents(symtab, real_proc_name);
+                    
+                    if (proc_candidates != NULL)
+                    {
+                        /* Found the procedure by name. Transform the call:
+                         * 1. Remove the first argument (the unit qualifier)
+                         * 2. Change proc_id to the real procedure name (without "__")
+                         */
+                        /* Save the remaining args before modifying the list */
+                        ListNode_t *remaining_args = args_given->next;
+                        
+                        /* Free the unit qualifier expression and list node.
+                         * Note: remaining_args holds the saved pointer value, so
+                         * freeing args_given doesn't affect it. */
+                        destroy_expr(first_arg);
+                        args_given->cur = NULL;
+                        free(args_given);
+                        
+                        /* Update the statement with the transformed call */
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                        
+                        /* Update proc_id - we already have real_proc_name allocated */
+                        free(proc_id);
+                        proc_id = real_proc_name;
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                        args_given = remaining_args;
+                        
+                        DestroyList(proc_candidates);
+                        
+                        /* Continue with normal procedure call handling using the transformed call */
+                    }
+                    else
+                    {
+                        /* Procedure not found - free real_proc_name and fall through to report error */
+                        free(real_proc_name);
+                    }
                 }
             }
         }
