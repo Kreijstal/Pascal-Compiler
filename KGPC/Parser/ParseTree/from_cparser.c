@@ -176,6 +176,7 @@ typedef struct {
     int range_known;
     long long range_start;
     long long range_end;
+    int is_class_reference;  /* For "class of T" types */
 } TypeInfo;
 
 typedef struct PendingGenericAlias {
@@ -2055,6 +2056,44 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return UNKNOWN_TYPE;
     }
 
+    /* Handle "class of T" - class reference type */
+    if (spec_node->typ == PASCAL_T_CLASS_OF_TYPE) {
+        /* Class reference type (class of TMyClass).
+         * In Pascal, when T is a class type, T is already a pointer to the class record.
+         * "class of T" is semantically a reference to the class itself (metaclass),
+         * but structurally it's the same as T - a pointer to the class record.
+         * 
+         * We treat "class of T" the same as T, which allows:
+         *   var ClassRef: class of TMyClass;
+         *   ClassRef := TMyClass;  // Works because both are ^record
+         */
+        if (type_info != NULL) {
+            type_info->is_class_reference = 1;
+            ast_t *target = spec_node->child;
+            while (target != NULL && target->typ != PASCAL_T_IDENTIFIER)
+                target = target->next;
+            if (target != NULL) {
+                char *dup = dup_symbol(target);
+                /* Don't add is_pointer flag - the target class is already a pointer type.
+                 * Just record the class name so we can look it up. */
+                type_info->pointer_type_id = dup;
+                /* Return the type of the target class, not POINTER_TYPE */
+                int mapped = map_type_name(dup, NULL);
+                if (mapped != UNKNOWN_TYPE) {
+                    return mapped;
+                }
+                /* If not a builtin type, the target is a class type.
+                 * Set the output type_id and return POINTER_TYPE to indicate
+                 * this is a pointer to the class record. */
+                if (type_id_out != NULL && *type_id_out == NULL)
+                    *type_id_out = strdup(dup);
+                type_info->is_pointer = 1;
+                type_info->pointer_type = RECORD_TYPE;
+            }
+        }
+        return POINTER_TYPE;
+    }
+
     return UNKNOWN_TYPE;
 }
 
@@ -2398,6 +2437,15 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         /* Note: We can't get the class name here because we're inside the type spec, not the type decl.
          * For now, we return NULL to let the class be handled by the legacy path.
          * The class's RecordType will be properly populated during semantic checking. */
+        return NULL;
+    }
+
+    /* Handle "class of T" - class reference type */
+    if (spec_node->typ == PASCAL_T_CLASS_OF_TYPE) {
+        /* Class reference type (class of TMyClass).
+         * This is structurally the same as the target class type - a pointer to the class record.
+         * Return NULL here to let it be handled by the convert_type_spec path which creates
+         * the appropriate pointer type. */
         return NULL;
     }
 
@@ -4033,6 +4081,20 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
         } else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
                    spec_node->child->typ == PASCAL_T_CLASS_TYPE) {
             class_spec = spec_node->child;
+        }
+        /* Handle "class of T" - check if TYPE_SPEC wraps CLASS_OF_TYPE */
+        else if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL &&
+                 spec_node->child->typ == PASCAL_T_CLASS_OF_TYPE) {
+            /* For class of T, we need to find T's record type and use it */
+            ast_t *class_of_node = spec_node->child;
+            ast_t *target_name = class_of_node->child;
+            while (target_name != NULL && target_name->typ != PASCAL_T_IDENTIFIER)
+                target_name = target_name->next;
+            if (target_name != NULL && getenv("KGPC_DEBUG_TFPG") != NULL) {
+                fprintf(stderr, "[KGPC] convert_type_decl: class of target=%s for id=%s\n",
+                    (target_name->sym && target_name->sym->name) ? target_name->sym->name : "<null>",
+                    id);
+            }
         }
 
         if (class_spec != NULL) {

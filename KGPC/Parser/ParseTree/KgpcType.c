@@ -611,6 +611,79 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 return 1;
             if (lhs_type->info.points_to == NULL || rhs_type->info.points_to == NULL)
                 return 1; /* nil can be assigned to any pointer */
+            
+            /* Special case for class references ("class of T"):
+             * When both sides are pointers and at least one of them points to a pointer
+             * to a record (indicating a class reference type), check if they point to
+             * the same class or compatible classes.
+             * 
+             * Pattern: class of TClass = ^(^TClass_record)
+             * Assigning: ClassRef := TClass, where TClass is ^TClass_record
+             * 
+             * We need to "unwrap" the extra indirection level for class references.
+             */
+            {
+                KgpcType *lhs_inner = lhs_type->info.points_to;
+                KgpcType *rhs_inner = rhs_type->info.points_to;
+                
+                /* Special case: LHS points to primitive(RECORD_TYPE) and RHS points to record.
+                 * This happens with "class of T" types where the TypeInfo created a primitive
+                 * type with RECORD_TYPE tag instead of an actual pointer to the class record.
+                 * Treat them as compatible if RHS is a record (class). */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD)
+                {
+                    /* LHS is "class of T" (represented as ^primitive(RECORD_TYPE))
+                     * RHS is a class type (represented as ^record)
+                     * Allow this assignment pattern */
+                    return 1;
+                }
+                
+                /* Symmetric case: both are ^primitive(RECORD_TYPE) */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    lhs_inner->info.primitive_type_tag == RECORD_TYPE &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_PRIMITIVE &&
+                    rhs_inner->info.primitive_type_tag == RECORD_TYPE)
+                {
+                    /* Both are class reference types - allow */
+                    return 1;
+                }
+                
+                /* Check if LHS is ^(^record) and RHS is ^record */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD)
+                {
+                    KgpcType *lhs_record_ptr = lhs_inner->info.points_to;
+                    if (lhs_record_ptr != NULL && lhs_record_ptr->kind == TYPE_KIND_RECORD)
+                    {
+                        /* LHS is class of T (^(^record)), RHS is T (^record) */
+                        /* Check if they point to the same or compatible records */
+                        if (lhs_record_ptr->info.record_info == rhs_inner->info.record_info)
+                            return 1;
+                        if (is_record_subclass(rhs_inner->info.record_info, lhs_record_ptr->info.record_info, symtab))
+                            return 1;
+                    }
+                }
+                
+                /* Check if both are ^(^record) - class reference to class reference */
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_POINTER &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_POINTER)
+                {
+                    KgpcType *lhs_record = lhs_inner->info.points_to;
+                    KgpcType *rhs_record = rhs_inner->info.points_to;
+                    if (lhs_record != NULL && lhs_record->kind == TYPE_KIND_RECORD &&
+                        rhs_record != NULL && rhs_record->kind == TYPE_KIND_RECORD)
+                    {
+                        /* Both are class references - check record compatibility */
+                        if (lhs_record->info.record_info == rhs_record->info.record_info)
+                            return 1;
+                        if (is_record_subclass(rhs_record->info.record_info, lhs_record->info.record_info, symtab))
+                            return 1;
+                    }
+                }
+            }
+            
             return are_types_compatible_for_assignment(
                 lhs_type->info.points_to,
                 rhs_type->info.points_to,
