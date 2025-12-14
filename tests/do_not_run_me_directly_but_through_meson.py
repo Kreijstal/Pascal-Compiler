@@ -476,7 +476,9 @@ class TestCompiler(unittest.TestCase):
                     "CC environment variable must be set by Meson before running tests"
                 )
         cls.c_compiler_display = cc_raw
-        cls.c_compiler_cmd = shlex.split(cc_raw)
+        # Use Windows-style splitting when running on Windows to avoid mangling
+        # backslashes in paths such as "E:\msys64\...".
+        cls.c_compiler_cmd = shlex.split(cc_raw, posix=(os.name != "nt"))
         if not cls.c_compiler_cmd:
             raise RuntimeError("CC environment variable did not contain an executable")
 
