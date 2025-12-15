@@ -762,9 +762,12 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* IMPORTANT: Prepend imported constants so they're available before the importing unit's
-     * own constants. This allows const X = ImportedUnit.Y to work correctly. */
-    *const_list = ConcatList(unit_tree->tree_data.unit_data.interface_const_decls, *const_list);
+    /* IMPORTANT: Append imported constants so dependencies are processed FIRST.
+     * Since units are loaded in dependency order (UnixType before BaseUnix),
+     * appending means UnixType's constants are earlier in the list and are
+     * pushed to the symbol table before BaseUnix's constants need them.
+     * This allows const X = ImportedUnit.Y to work correctly. */
+    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.interface_const_decls);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
@@ -794,8 +797,8 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Prepend implementation constants so they're available for the importing unit's constants */
-    *const_list = ConcatList(unit_tree->tree_data.unit_data.implementation_const_decls, *const_list);
+    /* Append implementation constants to maintain dependency order */
+    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
     unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);

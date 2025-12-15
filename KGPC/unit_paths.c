@@ -1,4 +1,5 @@
 #include "unit_paths.h"
+#include "Parser/pascal_frontend.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -169,6 +170,16 @@ char *unit_search_paths_resolve(const UnitSearchPaths *paths, const char *unit_n
     path = build_candidate_unit_path(paths->user_dir, unit_name);
     if (path != NULL)
         return path;
+
+    /* Search in preprocessor include paths (from -I flags) */
+    int include_count = 0;
+    const char * const *include_paths = pascal_frontend_get_include_paths(&include_count);
+    for (int i = 0; i < include_count; ++i)
+    {
+        path = build_candidate_unit_path(include_paths[i], unit_name);
+        if (path != NULL)
+            return path;
+    }
 
     return build_candidate_unit_path(".", unit_name);
 }

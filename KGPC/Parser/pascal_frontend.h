@@ -17,4 +17,7 @@ void pascal_frontend_add_include_path(const char *path);
 void pascal_frontend_add_define(const char *define);
 void pascal_frontend_clear_user_config(void);
 
+/* Get the list of user-defined include paths for unit search */
+const char * const *pascal_frontend_get_include_paths(int *count);
+
 #endif
