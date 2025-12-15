@@ -2025,10 +2025,14 @@ static int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symta
     new_args = PushListNodeBack(new_args, CreateListNode(lower_expr, LIST_EXPR));
     expr->expr_data.function_call_data.args_expr = new_args;
 
+    /* Change function ID so it won't be processed as built-in High again */
+    if (expr->expr_data.function_call_data.id != NULL)
+        free(expr->expr_data.function_call_data.id);
+    expr->expr_data.function_call_data.id = strdup("kgpc_dynarray_compute_high");
+    
     if (expr->expr_data.function_call_data.mangled_id != NULL)
         free(expr->expr_data.function_call_data.mangled_id);
     expr->expr_data.function_call_data.mangled_id = strdup("kgpc_dynarray_compute_high");
-    semcheck_reset_function_call_cache(expr);
 
     int error_count = 0;
     int arg_type = UNKNOWN_TYPE;
@@ -2036,7 +2040,11 @@ static int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symta
     arg_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&arg_type, symtab, lower_expr, max_scope_lev, NO_MUTATE);
 
+    /* Mark as fully resolved internal runtime call */
     expr->resolved_type = LONGINT_TYPE;
+    expr->expr_data.function_call_data.is_call_info_valid = 1;
+    expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+    
     if (type_return != NULL)
         *type_return = LONGINT_TYPE;
     return error_count;
@@ -7427,6 +7435,16 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && pascal_identifier_equals(id, "High"))
         return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
+
+    /* Internal runtime function for open/dynamic array High - already resolved */
+    if (id != NULL && strcmp(id, "kgpc_dynarray_compute_high") == 0)
+    {
+        /* This function was already set up by semcheck_builtin_lowhigh for dynamic arrays.
+         * Just confirm it returns LONGINT_TYPE and proceed. */
+        expr->resolved_type = LONGINT_TYPE;
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
 
     if (id != NULL && pascal_identifier_equals(id, "Assigned"))
         return semcheck_builtin_assigned(type_return, symtab, expr, max_scope_lev);

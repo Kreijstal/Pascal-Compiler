@@ -27,6 +27,9 @@ type
   
   { Code page types - for FPC bootstrap compatibility }
   TSystemCodePage = Word;
+  
+  { String types - for FPC bootstrap compatibility }
+  RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
 
 { ============================================================================
   Compiler Intrinsic Functions
