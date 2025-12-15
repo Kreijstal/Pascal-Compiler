@@ -5610,6 +5610,36 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 }
             }
 
+            /* Handle pointer indexing result (e.g., p[i] where p: PPAnsiChar) */
+            if (expr->pointer_subtype != UNKNOWN_TYPE || expr->pointer_subtype_id != NULL)
+            {
+                /* The result of array access is a pointer type */
+                KgpcType *points_to = NULL;
+                
+                /* Try to get the pointed-to type from the symbol table */
+                if (expr->pointer_subtype_id != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, (char *)expr->pointer_subtype_id) != -1 &&
+                        type_node != NULL && type_node->type != NULL)
+                    {
+                        kgpc_type_retain(type_node->type);
+                        points_to = type_node->type;
+                    }
+                }
+                
+                /* If not found, try to create from primitive type tag */
+                if (points_to == NULL && expr->pointer_subtype != UNKNOWN_TYPE)
+                {
+                    points_to = create_primitive_type(expr->pointer_subtype);
+                }
+                
+                /* Create a pointer type pointing to the target */
+                if (owns_type != NULL)
+                    *owns_type = 1;
+                return create_pointer_type(points_to);
+            }
+
             if (expr->is_array_expr)
             {
                 int start_index = expr->array_lower_bound;
