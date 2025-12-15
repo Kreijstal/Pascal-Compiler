@@ -51,6 +51,14 @@ void pascal_frontend_clear_user_config(void)
     }
     g_user_define_count = 0;
 }
+
+const char * const *pascal_frontend_get_include_paths(int *count)
+{
+    if (count != NULL)
+        *count = g_user_include_path_count;
+    return (const char * const *)g_user_include_paths;
+}
+
 #include "ParseTree/from_cparser.h"
 #include "ParseTree/tree.h"
 #include "ParseTree/generic_types.h"
