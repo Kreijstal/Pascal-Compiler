@@ -2034,6 +2034,9 @@ static int semcheck_prepare_dynarray_high_call(int *type_return, SymTab_t *symta
         free(expr->expr_data.function_call_data.mangled_id);
     expr->expr_data.function_call_data.mangled_id = strdup("kgpc_dynarray_compute_high");
 
+    /* Note: We don't call semcheck_reset_function_call_cache here because we want to 
+     * mark this as fully resolved (is_call_info_valid=1) rather than reset it */
+
     int error_count = 0;
     int arg_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&arg_type, symtab, array_expr, max_scope_lev, NO_MUTATE);
