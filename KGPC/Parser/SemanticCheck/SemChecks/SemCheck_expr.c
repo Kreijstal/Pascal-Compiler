@@ -5632,9 +5632,13 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (points_to == NULL && expr->pointer_subtype != UNKNOWN_TYPE)
                 {
                     points_to = create_primitive_type(expr->pointer_subtype);
+                    /* Note: create_primitive_type uses assert and cannot return NULL,
+                     * but we pass NULL to create_pointer_type below which is valid
+                     * (creates a generic/untyped pointer). */
                 }
                 
-                /* Create a pointer type pointing to the target */
+                /* Create a pointer type pointing to the target.
+                 * points_to can be NULL here, which creates an untyped pointer (like Pointer). */
                 if (owns_type != NULL)
                     *owns_type = 1;
                 return create_pointer_type(points_to);
