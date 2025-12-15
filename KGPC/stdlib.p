@@ -211,6 +211,15 @@ begin
     assign_text_pchar_internal(f, filename);
 end;
 
+{ Assign with AnsiChar (single character) - used by FPC bootstrap (objpas.pp) }
+procedure assign(var f: text; filename: AnsiChar); overload;
+var
+    s: string;
+begin
+    s := filename;
+    assign_text_internal(f, s);
+end;
+
 procedure rewrite(var f: text); overload;
 begin
     rewrite_text_internal(f);
@@ -489,25 +498,9 @@ begin
     end
 end;
 
-procedure GetMem(var target; size: integer); overload;
-var
-    size_long: longint;
-begin
-    size_long := size;
-    getmem_impl(target, size_long);
-end;
-
 procedure GetMem(var target; size: longint); overload;
 begin
     getmem_impl(target, size);
-end;
-
-procedure ReallocMem(var target; size: integer); overload;
-var
-    size_long: longint;
-begin
-    size_long := size;
-    reallocmem_impl(target, size_long);
 end;
 
 procedure ReallocMem(var target; size: longint); overload;
@@ -527,14 +520,6 @@ var
 begin
     getmem_impl(p, size);
     GetMem := p;
-end;
-
-function GetMem(size: integer): Pointer; overload;
-var
-    size_long: longint;
-begin
-    size_long := size;
-    GetMem := GetMem(size_long);
 end;
 
 procedure FreeMem(p: Pointer; size: longint); overload;

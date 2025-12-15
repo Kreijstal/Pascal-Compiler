@@ -82,6 +82,51 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
     return HASHVAR_UNTYPED;
 }
 
+// Helper to map built-in type names to VarType (case-insensitive)
+static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
+    if (type_name == NULL)
+        return HASHVAR_UNTYPED;
+    
+    // Character types
+    if (strcasecmp(type_name, "Char") == 0 || strcasecmp(type_name, "AnsiChar") == 0)
+        return HASHVAR_CHAR;
+    
+    // String types
+    if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0 ||
+        strcasecmp(type_name, "RawByteString") == 0)
+        return HASHVAR_PCHAR;
+    
+    // Integer types
+    if (strcasecmp(type_name, "Integer") == 0 || strcasecmp(type_name, "Byte") == 0 ||
+        strcasecmp(type_name, "Word") == 0 || strcasecmp(type_name, "TSystemCodePage") == 0)
+        return HASHVAR_INTEGER;
+    
+    if (strcasecmp(type_name, "LongInt") == 0 || strcasecmp(type_name, "Int64") == 0 ||
+        strcasecmp(type_name, "QWord") == 0 || strcasecmp(type_name, "SizeInt") == 0 ||
+        strcasecmp(type_name, "SizeUInt") == 0)
+        return HASHVAR_LONGINT;
+    
+    // Real types
+    if (strcasecmp(type_name, "Real") == 0 || strcasecmp(type_name, "Double") == 0)
+        return HASHVAR_REAL;
+    
+    // Boolean type
+    if (strcasecmp(type_name, "Boolean") == 0)
+        return HASHVAR_BOOLEAN;
+    
+    // File types
+    if (strcasecmp(type_name, "Text") == 0)
+        return HASHVAR_TEXT;
+    if (strcasecmp(type_name, "File") == 0)
+        return HASHVAR_FILE;
+    
+    // Pointer type
+    if (strcasecmp(type_name, "Pointer") == 0)
+        return HASHVAR_POINTER;
+    
+    return HASHVAR_UNTYPED;
+}
+
 // Helper function to flatten argument lists into a list of HASHVAR_ types.
 static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab) { // <-- Add symtab
     assert(symtab != NULL);
@@ -100,10 +145,17 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             ids = decl_tree->tree_data.var_decl_data.ids;
             // --- THIS IS THE CORE LOGIC ---
             if (decl_tree->tree_data.var_decl_data.type_id != NULL) {
-                // It's a custom type, look it up in the symbol table
-                HashNode_t* type_node;
-                if (FindIdent(&type_node, symtab, decl_tree->tree_data.var_decl_data.type_id) != -1 && type_node->hash_type == HASHTYPE_TYPE) {
-                    resolved_type = GetVarTypeFromTypeNode(type_node);
+                const char *type_id = decl_tree->tree_data.var_decl_data.type_id;
+                
+                // First try to map built-in type names directly
+                resolved_type = MapBuiltinTypeNameToVarType(type_id);
+                
+                // If not a built-in type, look it up in the symbol table
+                if (resolved_type == HASHVAR_UNTYPED) {
+                    HashNode_t* type_node;
+                    if (FindIdent(&type_node, symtab, (char *)type_id) != -1 && type_node->hash_type == HASHTYPE_TYPE) {
+                        resolved_type = GetVarTypeFromTypeNode(type_node);
+                    }
                 }
             } else {
                 // It's a built-in type, convert from parser token to semantic type
@@ -171,6 +223,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
             case HASHVAR_SET:     type_suffix = "_set"; break;
             case HASHVAR_ENUM:    type_suffix = "_e"; break;
             case HASHVAR_FILE:    type_suffix = "_f"; break;
+            case HASHVAR_TEXT:    type_suffix = "_t"; break; // For text files
             case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
             case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
             default:              type_suffix = "_u"; break; // Unknown/unsupported
