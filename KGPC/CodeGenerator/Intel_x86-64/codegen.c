@@ -2286,7 +2286,10 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             else switch (tag)
             {
                 case LONGINT_TYPE:
-                    return_size = DOUBLEWORD;  // 4 bytes for FPC's 32-bit LongInt
+                    return_size = DOUBLEWORD;  /* 32-bit FPC-compatible LongInt */
+                    break;
+                case INT64_TYPE:
+                    return_size = 8;  /* 64-bit Int64 */
                     break;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
@@ -2314,10 +2317,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         struct TypeAlias *alias = kgpc_type_get_type_alias(func_node->type);
         if (alias != NULL && alias->storage_size > 0)
             return_size = (int)alias->storage_size;
-        else if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE)
+        else if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE ||
+                 tag == INT64_TYPE)
             return_size = 8;
         else if (tag == LONGINT_TYPE)
-            return_size = DOUBLEWORD;
+            return_size = DOUBLEWORD;  /* 32-bit FPC-compatible LongInt */
         else if (tag == BOOL)
             return_size = DOUBLEWORD;
     }
@@ -2537,7 +2541,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 static int get_return_type_size(int return_type)
 {
     if (return_type == STRING_TYPE || 
-        return_type == POINTER_TYPE || return_type == REAL_TYPE)
+        return_type == POINTER_TYPE || return_type == REAL_TYPE ||
+        return_type == INT64_TYPE)
         return 8;
     return 4; /* Default for INT_TYPE, LONGINT_TYPE, BOOL, CHAR_TYPE, etc. */
 }
@@ -2734,7 +2739,8 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     {
         char buffer[64];
         int uses_qword = (anon->return_type == STRING_TYPE || 
-                         anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE);
+                         anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE ||
+                         anon->return_type == INT64_TYPE);
         if (uses_qword)
         {
             if (anon->return_type == REAL_TYPE)

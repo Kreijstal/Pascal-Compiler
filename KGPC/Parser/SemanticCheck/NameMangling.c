@@ -30,6 +30,8 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_INTEGER;
         case LONGINT_TYPE:
             return HASHVAR_LONGINT;
+        case INT64_TYPE:
+            return HASHVAR_INT64;
         case REAL_TYPE:
             return HASHVAR_REAL;
         case STRING_TYPE:
@@ -215,6 +217,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
         switch (type) {
             case HASHVAR_INTEGER: type_suffix = "_i"; break;
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
+            case HASHVAR_INT64:   type_suffix = "_i64"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
             case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
             case HASHVAR_BOOLEAN: type_suffix = "_b"; break;

@@ -421,11 +421,14 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         else if (pascal_identifier_equals(type_id, "Integer")) {
             builtin_tag = INT_TYPE;
         }
-        else if (pascal_identifier_equals(type_id, "LongInt") || pascal_identifier_equals(type_id, "Int64") ||
+        else if (pascal_identifier_equals(type_id, "LongInt")) {
+            builtin_tag = LONGINT_TYPE;  /* 32-bit for FPC compatibility */
+        }
+        else if (pascal_identifier_equals(type_id, "Int64") ||
                  pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") ||
                  pascal_identifier_equals(type_id, "NativeUInt") || pascal_identifier_equals(type_id, "NativeInt") ||
                  pascal_identifier_equals(type_id, "PtrInt") || pascal_identifier_equals(type_id, "PtrUInt")) {
-            builtin_tag = LONGINT_TYPE;
+            builtin_tag = INT64_TYPE;  /* 64-bit integer types */
         }
         else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "SmallInt") ||
                  pascal_identifier_equals(type_id, "Word")) {
@@ -1005,7 +1008,9 @@ long long kgpc_type_sizeof(KgpcType *type)
                     return 4;
                 }
                 case LONGINT_TYPE:
-                    return 4;  // Match FPC's 32-bit LongInt
+                    return 4;  /* 32-bit for FPC-compatible LongInt */
+                case INT64_TYPE:
+                    return 8;  /* 64-bit Int64 */
                 case REAL_TYPE:
                     return 8;
                 case STRING_TYPE:
@@ -1301,6 +1306,7 @@ int kgpc_type_uses_qword(KgpcType *type)
                 case STRING_TYPE:
                 case FILE_TYPE:
                 case TEXT_TYPE:
+                case INT64_TYPE:
                     return 1;
                 default:
                     return 0;
@@ -1335,6 +1341,7 @@ int kgpc_type_is_signed(KgpcType *type)
     switch (type->info.primitive_type_tag) {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case INT64_TYPE:
             return 1;
         default:
             return 0;

@@ -51,6 +51,11 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return INT_TYPE;
     if (pascal_identifier_equals(id, "LongInt"))
         return LONGINT_TYPE;
+    if (pascal_identifier_equals(id, "Int64") || pascal_identifier_equals(id, "QWord") ||
+        pascal_identifier_equals(id, "NativeInt") || pascal_identifier_equals(id, "NativeUInt") ||
+        pascal_identifier_equals(id, "SizeUInt") || pascal_identifier_equals(id, "PtrInt") ||
+        pascal_identifier_equals(id, "PtrUInt"))
+        return INT64_TYPE;
     if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString") ||
@@ -81,6 +86,8 @@ static int map_var_type_to_type_tag(enum VarType var_type)
             return INT_TYPE;
         case HASHVAR_LONGINT:
             return LONGINT_TYPE;
+        case HASHVAR_INT64:
+            return INT64_TYPE;
         case HASHVAR_REAL:
             return REAL_TYPE;
         case HASHVAR_BOOLEAN:

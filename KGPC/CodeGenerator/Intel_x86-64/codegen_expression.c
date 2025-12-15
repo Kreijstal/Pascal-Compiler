@@ -835,7 +835,7 @@ static inline int type_is_file_like(int type_tag)
 
 int codegen_type_uses_qword(int type_tag)
 {
-    return (type_tag == REAL_TYPE ||
+    return (type_tag == REAL_TYPE || type_tag == INT64_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
         type_is_file_like(type_tag) || type_tag == PROCEDURE);
 }
