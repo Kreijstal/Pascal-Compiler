@@ -4223,6 +4223,51 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 {
                     HashNode_t *type_node = resolved_type;
                     const char *type_id = tree->tree_data.var_decl_data.type_id;
+                    int declared_type = tree->tree_data.var_decl_data.type;
+                    
+                    /* If declared as pointer type (^TypeName), handle inline pointer */
+                    if (declared_type == POINTER_TYPE)
+                    {
+                        /* This is ^TypeName where TypeName is stored in type_id.
+                         * We need to create a pointer type pointing to TypeName. */
+                        KgpcType *points_to = NULL;
+                        
+                        /* Try to resolve the target type */
+                        if (type_node != NULL && type_node->type != NULL)
+                        {
+                            kgpc_type_retain(type_node->type);
+                            points_to = type_node->type;
+                        }
+                        else
+                        {
+                            /* Check builtin types for the pointer target */
+                            int target_tag = semcheck_map_builtin_type_name_local(type_id);
+                            if (target_tag != UNKNOWN_TYPE)
+                            {
+                                points_to = create_primitive_type(target_tag);
+                            }
+                            else
+                            {
+                                /* Unknown target type - create a placeholder */
+                                points_to = NULL;
+                            }
+                        }
+                        
+                        KgpcType *pointer_type = create_pointer_type(points_to);
+                        func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
+                        if (func_return == 0)
+                        {
+                            HashNode_t *var_node = NULL;
+                            if (FindIdent(&var_node, symtab, (char *)ids->cur) != -1 && var_node != NULL)
+                            {
+                                var_node->is_var_parameter = tree->tree_data.var_decl_data.is_var_param ? 1 : 0;
+                                mark_hashnode_unit_info(var_node,
+                                    tree->tree_data.var_decl_data.defined_in_unit,
+                                    tree->tree_data.var_decl_data.unit_is_public);
+                            }
+                        }
+                        goto next_identifier;
+                    }
                     
                     /* Check if it's a builtin type even if not in symbol table */
                     if (type_node == NULL)
