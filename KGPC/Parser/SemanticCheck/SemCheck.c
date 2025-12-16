@@ -2969,18 +2969,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     return return_val;
 }
 
-int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
+/* Helper function to process a single constant declaration */
+static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
 {
-    ListNode_t *cur = const_decls;
     int return_val = 0;
+    assert(tree != NULL);
+    assert(tree->type == TREE_CONST_DECL);
 
-    while (cur != NULL)
-    {
-        assert(cur->type == LIST_TREE);
-        Tree_t *tree = (Tree_t *)cur->cur;
-        assert(tree->type == TREE_CONST_DECL);
-
-        struct Expression *value_expr = tree->tree_data.const_decl_data.value;
+    struct Expression *value_expr = tree->tree_data.const_decl_data.value;
         
         /* Determine the type of constant by checking the expression */
         int is_string_const = expression_is_string(value_expr);
@@ -3197,8 +3193,7 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                     existing->const_int_value == value)
                 {
                     /* Same constant with same value - treat as re-export, skip silently */
-                    cur = cur->next;
-                    continue;
+                    return 0;
                 }
                 
                 /* Create KgpcType if this is a set constant or has an explicit type annotation */
@@ -3259,6 +3254,59 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
                     }
                 }
             }
+        }
+
+    return return_val;
+}
+
+/* Semantic check on constant declarations.
+ * 
+ * ARCHITECTURAL FIX: Two-pass processing to handle qualified constant references.
+ * When a unit (e.g., baseunix) imports another unit (e.g., UnixType) and re-aliases
+ * constants like: ARG_MAX = UnixType.ARG_MAX;
+ * 
+ * The imported unit's constants must be pushed to the symbol table BEFORE the
+ * local constants are evaluated. This requires:
+ *   Pass 1: Process only constants from imported units (defined_in_unit=1)
+ *   Pass 2: Process remaining constants (local constants that may reference imported ones)
+ */
+int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
+{
+    int return_val = 0;
+    ListNode_t *cur;
+
+    /* Pass 1: Process constants from imported units first.
+     * These need to be in the symbol table before local constants
+     * can reference them via qualified names (e.g., UnixType.ARG_MAX) */
+    cur = const_decls;
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_TREE);
+        Tree_t *tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_CONST_DECL);
+
+        /* Only process imported unit constants in this pass */
+        if (tree->tree_data.const_decl_data.defined_in_unit)
+        {
+            return_val += semcheck_single_const_decl(symtab, tree);
+        }
+
+        cur = cur->next;
+    }
+
+    /* Pass 2: Process local constants (not from imported units).
+     * These may reference constants from imported units via qualified names. */
+    cur = const_decls;
+    while (cur != NULL)
+    {
+        assert(cur->type == LIST_TREE);
+        Tree_t *tree = (Tree_t *)cur->cur;
+        assert(tree->type == TREE_CONST_DECL);
+
+        /* Only process local constants in this pass */
+        if (!tree->tree_data.const_decl_data.defined_in_unit)
+        {
+            return_val += semcheck_single_const_decl(symtab, tree);
         }
 
         cur = cur->next;
