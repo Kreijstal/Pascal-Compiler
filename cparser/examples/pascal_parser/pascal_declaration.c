@@ -1101,17 +1101,26 @@ static ParseResult skip_to_final_period_fn(input_t* in, void* args, char* parser
     if (after_whitespace < last) {
         // There's significant content (not just whitespace/comments) before the final '.'
         // This is a syntax error - we should not silently ignore it
+        #define ERROR_CONTEXT_MAX_LEN 40
+        #define ERROR_CONTEXT_BUFFER_SIZE 50
+        
         char msg[256];
-        int context_len = last - after_whitespace;
-        if (context_len > 40) context_len = 40;
-        char context[50];
-        memcpy(context, in->buffer + after_whitespace, context_len);
+        int content_len = last - after_whitespace;
+        int context_len = (content_len > ERROR_CONTEXT_MAX_LEN) ? ERROR_CONTEXT_MAX_LEN : content_len;
+        char context[ERROR_CONTEXT_BUFFER_SIZE];
+        memcpy(context, in->buffer + after_whitespace, (size_t)context_len);
         context[context_len] = '\0';
         // Replace newlines with spaces for cleaner error message
         for (int i = 0; i < context_len; i++) {
             if (context[i] == '\n' || context[i] == '\r') context[i] = ' ';
         }
-        snprintf(msg, sizeof(msg), "Unexpected content before final '.': '%s...'", context);
+        // Only append '...' if content was actually truncated
+        const char* ellipsis = (content_len > ERROR_CONTEXT_MAX_LEN) ? "..." : "";
+        snprintf(msg, sizeof(msg), "Unexpected content before final '.': '%s%s'", context, ellipsis);
+        
+        #undef ERROR_CONTEXT_MAX_LEN
+        #undef ERROR_CONTEXT_BUFFER_SIZE
+        
         return make_failure_v2(in, "skip_to_final_period", strdup(msg), NULL);
     }
     
