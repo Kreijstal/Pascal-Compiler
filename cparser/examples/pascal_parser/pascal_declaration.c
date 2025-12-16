@@ -480,6 +480,9 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (dispatch->record_parser && pascal_word_equals_ci(&word, "record")) {
             return run_type_branch(in, dispatch->record_parser);
         }
+        if (dispatch->object_parser && pascal_word_equals_ci(&word, "object")) {
+            return run_type_branch(in, dispatch->object_parser);
+        }
         if (dispatch->array_parser && pascal_word_equals_ci(&word, "array")) {
             return run_type_branch(in, dispatch->array_parser);
         }
@@ -492,11 +495,14 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         if (dispatch->specialize_parser && pascal_word_equals_ci(&word, "specialize")) {
             return run_type_branch(in, dispatch->specialize_parser);
         }
-        if (dispatch->record_parser && pascal_word_equals_ci(&word, "packed")) {
+        if (pascal_word_equals_ci(&word, "packed")) {
             pascal_word_slice_t next;
             if (pascal_peek_word_after(in, word.end_pos, &next)) {
                 if (dispatch->record_parser && pascal_word_equals_ci(&next, "record")) {
                     return run_type_branch(in, dispatch->record_parser);
+                }
+                if (dispatch->object_parser && pascal_word_equals_ci(&next, "object")) {
+                    return run_type_branch(in, dispatch->object_parser);
                 }
                 if (dispatch->array_parser && pascal_word_equals_ci(&next, "array")) {
                     return run_type_branch(in, dispatch->array_parser);
@@ -1243,6 +1249,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* iface_type = interface_type(PASCAL_T_INTERFACE_TYPE);
     combinator_t* class_spec = class_type(PASCAL_T_CLASS_TYPE);
     combinator_t* record_spec = record_type(PASCAL_T_RECORD_TYPE);
+    combinator_t* object_spec = object_type(PASCAL_T_OBJECT_TYPE);
     combinator_t* enum_spec = enumerated_type(PASCAL_T_ENUMERATED_TYPE);
     combinator_t* array_spec = array_type(PASCAL_T_ARRAY_TYPE);
     combinator_t* file_spec = file_type(PASCAL_T_FILE_TYPE);
@@ -1284,6 +1291,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     type_args->class_parser = class_spec;
     type_args->class_of_parser = class_of_type(PASCAL_T_CLASS_OF_TYPE);
     type_args->record_parser = record_spec;
+    type_args->object_parser = object_spec;
     type_args->enumerated_parser = enum_spec;
     type_args->array_parser = array_spec;
     type_args->file_parser = file_spec;
@@ -2221,6 +2229,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         class_of_type(PASCAL_T_CLASS_OF_TYPE),          // class reference types like "class of TObject" (must be before class_type)
         class_type(PASCAL_T_CLASS_TYPE),                // class types like class ... end
         record_type(PASCAL_T_RECORD_TYPE),              // record types like record ... end
+        object_type(PASCAL_T_OBJECT_TYPE),              // legacy object types like object ... end
         enumerated_type(PASCAL_T_ENUMERATED_TYPE),      // enumerated types like (Value1, Value2, Value3)
         array_type(PASCAL_T_ARRAY_TYPE),                // array types like ARRAY[0..9] OF integer
         procedure_type(PASCAL_T_PROCEDURE_TYPE),        // procedure types like procedure(x: Integer)

@@ -2050,7 +2050,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         return PROCEDURE;
     }
 
-    if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
+    if (spec_node->typ == PASCAL_T_RECORD_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE) {
         struct RecordType *record = convert_record_type(spec_node);
         if (type_info != NULL) {
             type_info->is_record = 1;
@@ -2439,8 +2439,8 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         return NULL;
     }
 
-    /* Handle record types */
-    if (spec_node->typ == PASCAL_T_RECORD_TYPE) {
+    /* Handle record types and legacy object types */
+    if (spec_node->typ == PASCAL_T_RECORD_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE) {
         struct RecordType *record = convert_record_type(spec_node);
         if (record != NULL) {
             return create_record_type(record);
@@ -2512,8 +2512,8 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
 
     /* Skip to the type specification */
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
-           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER &&
-           cursor->typ != PASCAL_T_ARRAY_TYPE) {
+           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
+           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE) {
         cursor = cursor->next;
     }
 
@@ -3003,7 +3003,8 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     }
 
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
-           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_IDENTIFIER) {
+           cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
+           cursor->typ != PASCAL_T_IDENTIFIER) {
         cursor = cursor->next;
     }
 
@@ -4091,7 +4092,8 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
 
     ast_t *spec_node = id_node->next;
     while (spec_node != NULL && spec_node->typ != PASCAL_T_TYPE_SPEC &&
-           spec_node->typ != PASCAL_T_RECORD_TYPE && spec_node->typ != PASCAL_T_CLASS_TYPE) {
+           spec_node->typ != PASCAL_T_RECORD_TYPE && spec_node->typ != PASCAL_T_OBJECT_TYPE &&
+           spec_node->typ != PASCAL_T_CLASS_TYPE) {
         spec_node = spec_node->next;
     }
 
@@ -4368,7 +4370,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
                 record_template = convert_class_type(id, spec_body);
             }
-            else if (spec_body->typ == PASCAL_T_RECORD_TYPE)
+            else if (spec_body->typ == PASCAL_T_RECORD_TYPE || spec_body->typ == PASCAL_T_OBJECT_TYPE)
                 record_template = convert_record_type(spec_body);
         }
     }
