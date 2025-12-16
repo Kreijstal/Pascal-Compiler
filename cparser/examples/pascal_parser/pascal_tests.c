@@ -535,6 +535,58 @@ void test_pascal_invalid_input(void) {
     free_input(input);
 }
 
+/*
+ * Regression test for GitHub issue: stray identifiers between declaration sections
+ * and main block should cause a parse error, not be silently ignored.
+ *
+ * Bug case:
+ *   program colors;
+ *   const cyan=#27+'[36m';
+ *   clear=#27+'[0m';
+ *   rot      <-- stray identifier (should be an error)
+ *   begin
+ *     writeln('Hello');
+ *   end.
+ *
+ * Previously this would silently compile but produce no output.
+ */
+void test_pascal_stray_identifier_before_begin(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    
+    const char* source = 
+        "program colors;\n"
+        "const cyan=#27+'[36m';\n"
+        "clear=#27+'[0m';\n"
+        "rot\n"                           // stray identifier - should be an error
+        "begin\n"
+        "  writeln('Hello');\n"
+        "end.\n";
+    
+    input->buffer = strdup(source);
+    input->length = strlen(source);
+    
+    ParseResult res = parse(input, p);
+    
+    // This should FAIL to parse - the 'rot' identifier is not valid
+    TEST_ASSERT(!res.is_success);
+    TEST_MSG("Parser should reject stray identifiers between const section and begin block");
+    
+    if (res.is_success) {
+        free_ast(res.value.ast);
+    } else {
+        TEST_ASSERT(res.value.error != NULL);
+        // Check that the error mentions the problem area
+        if (res.value.error->message != NULL) {
+            TEST_MSG("Error message: %s", res.value.error->message);
+        }
+        free_error(res.value.error);
+    }
+    
+    free(input->buffer);
+    free_input(input);
+}
+
 void test_pascal_preprocessor_conditionals(void) {
     PascalPreprocessor *pp = pascal_preprocessor_create();
     TEST_ASSERT(pp != NULL);
@@ -4939,6 +4991,7 @@ void test_delphi_form_unit(void) {
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
+    { "test_pascal_stray_identifier_before_begin", test_pascal_stray_identifier_before_begin },
     { "test_pascal_preprocessor_conditionals", test_pascal_preprocessor_conditionals },
     { "test_pascal_preprocessor_comment_mixing", test_pascal_preprocessor_comment_mixing },
     { "test_pascal_preprocessor_numeric_comparisons", test_pascal_preprocessor_numeric_comparisons },

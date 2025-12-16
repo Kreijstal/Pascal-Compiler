@@ -767,6 +767,19 @@ static combinator_t* create_param_name_list(void) {
     return sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
 }
 
+// Shared expression parser for parameter default values
+// This is lazily initialized to avoid circular dependencies
+static combinator_t** g_param_default_expr_parser = NULL;
+
+static combinator_t* get_param_default_expr_parser(void) {
+    if (g_param_default_expr_parser == NULL) {
+        g_param_default_expr_parser = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+        *g_param_default_expr_parser = new_combinator();
+        init_pascal_expression_parser(g_param_default_expr_parser, NULL);
+    }
+    return lazy(g_param_default_expr_parser);
+}
+
 static combinator_t* create_param_type_spec(void) {
     combinator_t* type_reference = multi(new_combinator(), PASCAL_T_TYPE_SPEC,
         reference_to_type(PASCAL_T_REFERENCE_TO_TYPE),
@@ -782,9 +795,18 @@ static combinator_t* create_param_type_spec(void) {
         NULL
     );
 
+    // Default value for parameter: = expression
+    // Supports default parameter values like: procedure Test(x: Integer = 10);
+    combinator_t* default_value = optional(seq(new_combinator(), PASCAL_T_DEFAULT_VALUE,
+        token(match("=")),
+        get_param_default_expr_parser(),
+        NULL
+    ));
+
     return optional(seq(new_combinator(), PASCAL_T_NONE,
         token(match(":")),
         type_reference,
+        default_value,
         NULL
     ));
 }
@@ -1056,7 +1078,9 @@ static ast_t* build_main_block_ast(ast_t* ast) {
 }
 
 // Fallback: skip forward to the last '.' in the file and consume it.
-// Used to tolerate trailing constructs that confuse strict parsing.
+// Only succeeds if the content between the current position and the final '.'
+// consists solely of whitespace and comments - no significant Pascal tokens.
+// This prevents silently ignoring syntax errors like stray identifiers.
 static ParseResult skip_to_final_period_fn(input_t* in, void* args, char* parser_name) {
     (void)args; (void)parser_name;
     if (in == NULL || in->buffer == NULL) {
@@ -1070,6 +1094,27 @@ static ParseResult skip_to_final_period_fn(input_t* in, void* args, char* parser
     if (last < 0) {
         return make_failure_v2(in, "skip_to_final_period", strdup("No '.' found"), NULL);
     }
+    
+    // Check that only whitespace and comments appear between current position and the final '.'
+    // Use skip_pascal_layout_preview to skip whitespace/comments
+    int after_whitespace = skip_pascal_layout_preview(in, in->start);
+    if (after_whitespace < last) {
+        // There's significant content (not just whitespace/comments) before the final '.'
+        // This is a syntax error - we should not silently ignore it
+        char msg[256];
+        int context_len = last - after_whitespace;
+        if (context_len > 40) context_len = 40;
+        char context[50];
+        memcpy(context, in->buffer + after_whitespace, context_len);
+        context[context_len] = '\0';
+        // Replace newlines with spaces for cleaner error message
+        for (int i = 0; i < context_len; i++) {
+            if (context[i] == '\n' || context[i] == '\r') context[i] = ' ';
+        }
+        snprintf(msg, sizeof(msg), "Unexpected content before final '.': '%s...'", context);
+        return make_failure_v2(in, "skip_to_final_period", strdup(msg), NULL);
+    }
+    
     // Move to just after the '.' and succeed
     in->start = last + 1;
     return make_success(ast_nil);
