@@ -124,6 +124,7 @@ typedef enum {
     PASCAL_T_ARRAY_TYPE,
     PASCAL_T_FILE_TYPE,
     PASCAL_T_RECORD_TYPE,
+    PASCAL_T_OBJECT_TYPE,            // Legacy object type (similar to record but with methods)
     PASCAL_T_PROCEDURE_TYPE,
     PASCAL_T_FUNCTION_TYPE,
     PASCAL_T_REFERENCE_TO_TYPE,      // "reference to" type modifier

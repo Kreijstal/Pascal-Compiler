@@ -1964,8 +1964,14 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     if (args->class_parser) {
                         free_combinator_recursive(args->class_parser, visited, extras);
                     }
+                    if (args->class_of_parser) {
+                        free_combinator_recursive(args->class_of_parser, visited, extras);
+                    }
                     if (args->record_parser) {
                         free_combinator_recursive(args->record_parser, visited, extras);
+                    }
+                    if (args->object_parser) {
+                        free_combinator_recursive(args->object_parser, visited, extras);
                     }
                     if (args->enumerated_parser) {
                         free_combinator_recursive(args->enumerated_parser, visited, extras);
@@ -1993,6 +1999,15 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     }
                     if (args->identifier_parser) {
                         free_combinator_recursive(args->identifier_parser, visited, extras);
+                    }
+                    if (args->distinct_type_parser) {
+                        free_combinator_recursive(args->distinct_type_parser, visited, extras);
+                    }
+                    if (args->procedure_parser) {
+                        free_combinator_recursive(args->procedure_parser, visited, extras);
+                    }
+                    if (args->function_parser) {
+                        free_combinator_recursive(args->function_parser, visited, extras);
                     }
                     free(args);
                 }
