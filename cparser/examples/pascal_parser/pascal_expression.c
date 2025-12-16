@@ -274,6 +274,114 @@ combinator_t* hex_integer(tag_t tag) {
     return comb;
 }
 
+// Custom parser for binary integers (e.g., %1010, %11110000)
+static ParseResult binary_integer_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    int start_pos = in->start;
+    int c = read1(in);
+
+    // Must start with %
+    if (c != '%') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '%' for binary literal"), NULL);
+    }
+
+    // Must have at least one binary digit after %
+    c = read1(in);
+    if (c == EOF || (c != '0' && c != '1')) {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+    }
+
+    // Continue reading binary digits
+    while ((c = read1(in)) != EOF && (c == '0' || c == '1'));
+    if (c != EOF) in->start--;
+
+    // Extract the binary text (including the %)
+    int len = in->start - start_pos;
+    char* text = (char*)safe_malloc(len + 1);
+    strncpy(text, in->buffer + start_pos, len);
+    text[len] = '\0';
+
+    // Create AST node with the binary literal value
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    free(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    return make_success(ast);
+}
+
+combinator_t* binary_integer(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY; // Reuse existing type for custom parser
+    comb->fn = binary_integer_fn;
+    comb->args = args;
+    return comb;
+}
+
+// Custom parser for octal integers (e.g., &777, &0755)
+static ParseResult octal_integer_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state;
+    save_input_state(in, &state);
+
+    int start_pos = in->start;
+    int c = read1(in);
+
+    // Must start with &
+    if (c != '&') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected '&' for octal literal"), NULL);
+    }
+
+    // Must have at least one octal digit after &
+    c = read1(in);
+    if (c == EOF || c < '0' || c > '7') {
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected octal digit after '&'"), NULL);
+    }
+
+    // Continue reading octal digits
+    while ((c = read1(in)) != EOF && c >= '0' && c <= '7');
+    if (c != EOF) in->start--;
+
+    // Extract the octal text (including the &)
+    int len = in->start - start_pos;
+    char* text = (char*)safe_malloc(len + 1);
+    strncpy(text, in->buffer + start_pos, len);
+    text[len] = '\0';
+
+    // Create AST node with the octal literal value
+    ast_t* ast = new_ast();
+    ast->typ = pargs->tag;
+    ast->sym = sym_lookup(text);
+    free(text);
+    ast->child = NULL;
+    ast->next = NULL;
+    set_ast_position(ast, in);
+
+    return make_success(ast);
+}
+
+combinator_t* octal_integer(tag_t tag) {
+    prim_args* args = (prim_args*)safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    combinator_t* comb = new_combinator();
+    comb->type = P_SATISFY; // Reuse existing type for custom parser
+    comb->fn = octal_integer_fn;
+    comb->args = args;
+    return comb;
+}
+
 // Custom parser for character literals (e.g., 'A', 'x')
 static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
     prim_args* pargs = (prim_args*)args;
@@ -1204,6 +1312,8 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p, stmt_parser)), // Anonymous procedures
         token(real_number(PASCAL_T_REAL)),        // Real numbers (3.14) - try first
         token(hex_integer(PASCAL_T_INTEGER)),     // Hex integers ($FF) - try before decimal
+        token(binary_integer(PASCAL_T_INTEGER)),  // Binary integers (%1010) - FPC extension
+        token(octal_integer(PASCAL_T_INTEGER)),   // Octal integers (&777) - FPC extension
         token(integer(PASCAL_T_INTEGER)),         // Integers (123)
         implicit_string_concat(PASCAL_T_NONE),    // Strings and char codes with implicit concatenation (handles char/string detection)
         token(set_constructor(PASCAL_T_SET, p)),  // Set constructors [1, 2, 3]

@@ -1545,7 +1545,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* external_name_clause = map(
         seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("name")),
-            token(string(PASCAL_T_STRING)),
+            token(pascal_string(PASCAL_T_STRING)),
             NULL
         ),
         wrap_external_name_clause
@@ -1559,7 +1559,7 @@ void init_pascal_unit_parser(combinator_t** p) {
 
     combinator_t* extended_external_argument = seq(new_combinator(), PASCAL_T_NONE,
         multi(new_combinator(), PASCAL_T_NONE,
-            token(string(PASCAL_T_STRING)),
+            token(pascal_string(PASCAL_T_STRING)),
             token(cident(PASCAL_T_IDENTIFIER)),
             NULL
         ),
@@ -1577,7 +1577,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* directive_argument = optional(multi(new_combinator(), PASCAL_T_NONE,
         external_name_only_argument,
         extended_external_argument,                  // extended external arguments
-        token(string(PASCAL_T_STRING)),            // simple string argument
+        token(pascal_string(PASCAL_T_STRING)),            // simple string argument
         token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
         NULL
     ));
