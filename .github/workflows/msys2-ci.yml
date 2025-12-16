@@ -42,10 +42,10 @@ jobs:
     - name: Run tests
       shell: msys2 {0}
       env:
-        # Meson runs tests with the build directory as CWD, so keep this path builddir-relative.
-        KGPC_CI_FAILURE_DIR: failing-tests
+        # Meson test() sets workdir to the project source root, so this must be source-root relative.
+        KGPC_CI_FAILURE_DIR: builddir/failing-tests
       run: |
-        rm -rf builddir/failing-tests
+        rm -rf builddir/failing-tests failing-tests
         meson test -v -C builddir
 
     - name: Upload meson logs (on failure)

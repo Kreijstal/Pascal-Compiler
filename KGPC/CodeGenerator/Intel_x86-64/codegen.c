@@ -2788,7 +2788,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
     StackNode_t *arg_stack;
     int next_gpr_index = 0;
     int next_sse_index = 0;
-    int stack_arg_offset = 16;
+    /* Positive offsets from %rbp to reach stack-passed arguments.
+     * System V: 16(%rbp) is the first stack arg (after saved rbp + return addr).
+     * Windows x64: 48(%rbp) is the first stack arg (after saved rbp + return addr + 32-byte shadow space). */
+    int stack_arg_offset = codegen_target_is_windows() ? 48 : 16;
 
     assert(ctx != NULL);
 
