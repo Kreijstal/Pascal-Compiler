@@ -1166,6 +1166,15 @@ static const char *try_expand_macro(PascalPreprocessor *pp, const char *input, s
         return NULL;
     }
     
+    // Check if we're in the middle of an identifier (not at the start)
+    // If the previous character is alphanumeric or underscore, we're not at the start
+    if (pos > 0) {
+        char prev = input[pos - 1];
+        if (isalnum((unsigned char)prev) || prev == '_') {
+            return NULL;
+        }
+    }
+    
     // Extract only the first identifier segment (stop at dot for qualified names)
     // FPC macros expand just the macro name, e.g., UT in UT.ARG_MAX expands to UnixType.ARG_MAX
     size_t start = pos;

@@ -1186,10 +1186,26 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
 
     combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
     combinator_t* field_type = create_record_field_type_spec();
+    
+    // Hint directives for record fields: deprecated, platform, library, experimental
+    // FPC allows these after the field type without requiring a semicolon
+    combinator_t* field_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            token(keyword_ci("experimental")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional message for deprecated
+        NULL
+    ));
+    
     combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
         field_name_list,
         token(match(":")),
         field_type,
+        field_hint_directive,                        // optional hint directive
         NULL
     );
     set_combinator_name(field_decl, "record_field_decl");
