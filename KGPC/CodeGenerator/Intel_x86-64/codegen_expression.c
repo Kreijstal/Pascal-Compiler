@@ -3171,27 +3171,32 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
                      left_reg->bit_64, left_spill->offset);
             inst_list = add_inst(inst_list, buffer);
+
+            /* Free left_reg temporarily; we will get a fresh register after right eval */
+            free_reg(get_reg_stack(), left_reg);
+            left_reg = NULL;
         }
-        
-        /* Free left_reg temporarily; we will get a fresh register after right eval */
-        free_reg(get_reg_stack(), left_reg);
-        left_reg = NULL;
         
         /* Evaluate right operand */
         inst_list = codegen_expr_with_result(right_expr, inst_list, ctx, &right_reg);
         if (codegen_had_error(ctx) || right_reg == NULL)
-            return inst_list;
-        
-        /* Get a new register for the left operand and reload from stack */
-        left_reg = codegen_try_get_reg(&inst_list, ctx, "relop_left_reload");
-        if (left_reg == NULL)
         {
-            free_reg(get_reg_stack(), right_reg);
+            if (left_reg != NULL)
+                free_reg(get_reg_stack(), left_reg);
             return inst_list;
         }
         
+        /* If we spilled the left operand, get a fresh register and reload it.
+         * Otherwise, the original left_reg is still live. */
         if (left_spill != NULL)
         {
+            left_reg = codegen_try_get_reg(&inst_list, ctx, "relop_left_reload");
+            if (left_reg == NULL)
+            {
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+
             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", 
                      left_spill->offset, left_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
