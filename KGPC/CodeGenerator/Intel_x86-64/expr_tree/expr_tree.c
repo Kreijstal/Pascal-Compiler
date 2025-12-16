@@ -1957,6 +1957,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     expr = node->expr;
     right_expr = node->right_expr->expr;
     struct Expression *left_expr = node->left_expr != NULL ? node->left_expr->expr : NULL;
+    assert(left_expr != NULL);
     assert(right_expr != NULL);
     int rhs_requires_reference = leaf_expr_requires_reference_value(right_expr, ctx);
 
@@ -2023,6 +2024,9 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     struct Expression *right_expr = node->right_expr->expr;
     struct Expression *left_expr = node->left_expr->expr;
 
+    assert(left_expr != NULL);
+    assert(right_expr != NULL);
+
     temp_reg = get_free_reg(get_reg_stack(), &inst_list);
     if(temp_reg == NULL)
     {
@@ -2071,6 +2075,9 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     Register_t *temp_reg;
     struct Expression *left_expr = node->left_expr->expr;
     struct Expression *right_expr = node->right_expr->expr;
+
+    assert(left_expr != NULL);
+    assert(right_expr != NULL);
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
     temp_reg = get_free_reg(get_reg_stack(), &inst_list);

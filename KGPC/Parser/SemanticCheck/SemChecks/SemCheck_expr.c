@@ -3558,7 +3558,7 @@ int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
 int is_type_ir(int *type)
 {
     assert(type != NULL);
-    return (*type == INT_TYPE || *type == REAL_TYPE || *type == LONGINT_TYPE || *type == INT64_TYPE);
+    return (is_integer_type(*type) || *type == REAL_TYPE);
 }
 
 static int types_numeric_compatible(int lhs, int rhs)
@@ -3566,12 +3566,11 @@ static int types_numeric_compatible(int lhs, int rhs)
     if (lhs == rhs)
         return 1;
     /* All integer types are compatible with each other */
-    if ((lhs == INT_TYPE || lhs == LONGINT_TYPE || lhs == INT64_TYPE) &&
-        (rhs == INT_TYPE || rhs == LONGINT_TYPE || rhs == INT64_TYPE))
+    if (is_integer_type(lhs) && is_integer_type(rhs))
         return 1;
     /* Real is compatible with any integer type */
-    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE || rhs == INT64_TYPE)) ||
-        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE || lhs == INT64_TYPE)))
+    if ((lhs == REAL_TYPE && is_integer_type(rhs)) ||
+        (rhs == REAL_TYPE && is_integer_type(lhs)))
         return 1;
     return 0;
 }
@@ -6120,8 +6119,8 @@ int semcheck_relop(int *type_return,
                         expr->line_num);
                     ++return_val;
                 }
-                if (type_first != INT_TYPE && type_first != LONGINT_TYPE &&
-                    type_first != ENUM_TYPE && type_first != CHAR_TYPE && type_first != BOOL)
+                if (!is_integer_type(type_first) && type_first != ENUM_TYPE &&
+                    type_first != CHAR_TYPE && type_first != BOOL)
                 {
                     fprintf(stderr, "Error on line %d, expected integer operand on left side of IN expression!\n\n",
                         expr->line_num);
@@ -6572,8 +6571,7 @@ int semcheck_mulop(int *type_return,
         }
         
         /* Integer bitwise operations */
-        if ((type_first == INT_TYPE || type_first == LONGINT_TYPE || type_first == INT64_TYPE) &&
-            (type_second == INT_TYPE || type_second == LONGINT_TYPE || type_second == INT64_TYPE))
+        if (is_integer_type(type_first) && is_integer_type(type_second))
         {
             /* Both operands are integers - bitwise operation */
             /* INT64_TYPE takes precedence as the largest integer type */
@@ -8417,8 +8415,7 @@ skip_overload_resolution:
                 {
                     /* Allow integer type conversion (INT_TYPE, LONGINT_TYPE, INT64_TYPE all compatible) */
                     int type_compatible = 0;
-                    if ((arg_type == INT_TYPE || arg_type == LONGINT_TYPE || arg_type == INT64_TYPE) &&
-                        (expected_type == INT_TYPE || expected_type == LONGINT_TYPE || expected_type == INT64_TYPE))
+                    if (is_integer_type(arg_type) && is_integer_type(expected_type))
                     {
                         type_compatible = 1;
                     }
@@ -8426,8 +8423,7 @@ skip_overload_resolution:
                     {
                         type_compatible = 1;
                     }
-                    else if (expected_type == REAL_TYPE &&
-                        (arg_type == INT_TYPE || arg_type == LONGINT_TYPE || arg_type == INT64_TYPE))
+                    else if (expected_type == REAL_TYPE && is_integer_type(arg_type))
                     {
                         type_compatible = 1;
                     }
