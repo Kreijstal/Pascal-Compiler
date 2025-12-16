@@ -550,7 +550,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
 
     int length_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
-    if (length_type != INT_TYPE && length_type != LONGINT_TYPE)
+    if (!is_integer_type(length_type))
     {
         fprintf(stderr, "Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
         ++return_val;
@@ -676,7 +676,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
 
     int value_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
-    if (value_type != INT_TYPE && value_type != LONGINT_TYPE)
+    if (!is_integer_type(value_type))
     {
         fprintf(stderr, "Error on line %d, Str value must be an integer.\n", stmt->line_num);
         ++return_val;
@@ -732,7 +732,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
 
     int index_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    if (!is_integer_type(index_type))
     {
         fprintf(stderr, "Error on line %d, Insert index must be an integer.\n",
             stmt->line_num);
@@ -772,7 +772,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
 
     int index_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    if (index_type != INT_TYPE && index_type != LONGINT_TYPE)
+    if (!is_integer_type(index_type))
     {
         fprintf(stderr, "Error on line %d, Delete index must be an integer.\n",
             stmt->line_num);
@@ -781,7 +781,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
 
     int count_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
-    if (count_type != INT_TYPE && count_type != LONGINT_TYPE)
+    if (!is_integer_type(count_type))
     {
         fprintf(stderr, "Error on line %d, Delete count must be an integer.\n",
             stmt->line_num);
@@ -820,7 +820,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, MUTATE);
-    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != REAL_TYPE)
+    if (!is_integer_type(value_type) && value_type != REAL_TYPE)
     {
         fprintf(stderr,
             "Error on line %d, Val target must be an integer, longint, or real variable.\n",
@@ -831,7 +831,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *code_expr = (struct Expression *)args->next->next->cur;
     int code_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
-    if (code_type != INT_TYPE && code_type != LONGINT_TYPE)
+    if (!is_integer_type(code_type))
     {
         fprintf(stderr, "Error on line %d, Val code argument must be an integer variable.\n",
             stmt->line_num);
@@ -858,7 +858,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     int target_is_pointer = (target_type == POINTER_TYPE);
-    if (target_type != INT_TYPE && target_type != LONGINT_TYPE && !target_is_pointer)
+    if (!is_integer_type(target_type) && !target_is_pointer)
     {
         fprintf(stderr, "Error on line %d, Inc target must be an integer or pointer variable.\n", stmt->line_num);
         ++return_val;
@@ -869,7 +869,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
         struct Expression *value_expr = (struct Expression *)args->next->cur;
         int value_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-        if (value_type != INT_TYPE && value_type != LONGINT_TYPE)
+        if (!is_integer_type(value_type))
         {
             fprintf(stderr, "Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
             ++return_val;
@@ -912,7 +912,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    if (value_type != INT_TYPE && value_type != LONGINT_TYPE && value_type != CHAR_TYPE)
+    if (!is_integer_type(value_type) && value_type != CHAR_TYPE)
     {
         fprintf(stderr, "Error on line %d, %s element must be an ordinal value.\n",
             stmt->line_num, display_name);
@@ -954,7 +954,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
             continue;
         }
 
-        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && expr_type != CHAR_TYPE && expr_type != ENUM_TYPE)
+        if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && expr_type != CHAR_TYPE && expr_type != ENUM_TYPE)
         {
             fprintf(stderr, "Error on line %d, write argument %d must be integer, longint, real, boolean, string, pointer, or enum.\n",
                     stmt->line_num, arg_index);
@@ -965,7 +965,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         {
             int width_type = UNKNOWN_TYPE;
             return_val += semcheck_expr_main(&width_type, symtab, expr->field_width, INT_MAX, NO_MUTATE);
-            if (width_type != INT_TYPE && width_type != LONGINT_TYPE)
+            if (!is_integer_type(width_type))
             {
                 fprintf(stderr, "Error on line %d, field width for argument %d must be an integer.\n",
                         stmt->line_num, arg_index);
@@ -977,7 +977,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
         {
             int precision_type = UNKNOWN_TYPE;
             return_val += semcheck_expr_main(&precision_type, symtab, expr->field_precision, INT_MAX, NO_MUTATE);
-            if (precision_type != INT_TYPE && precision_type != LONGINT_TYPE)
+            if (!is_integer_type(precision_type))
             {
                 fprintf(stderr, "Error on line %d, field precision for argument %d must be an integer.\n",
                         stmt->line_num, arg_index);
@@ -1023,7 +1023,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         expr_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&expr_type, symtab, expr, max_scope_lev, MUTATE);
         
-        if (expr_type != INT_TYPE && expr_type != LONGINT_TYPE && expr_type != CHAR_TYPE && expr_type != STRING_TYPE && expr_type != REAL_TYPE)
+        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE && expr_type != REAL_TYPE)
         {
             fprintf(stderr, "Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",
                     stmt->line_num, arg_index);

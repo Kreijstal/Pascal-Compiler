@@ -49,6 +49,8 @@ function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function Pos(Substr: AnsiString; S: AnsiString): integer;
 function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiString;
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
+function TimeToStr(DateTime: TDateTime): AnsiString;
+function UnixToDateTime(UnixTime: Int64): TDateTime;
 function Format(const Fmt: string; const Args: array of const): string;
 function StrPas(P: PAnsiChar): AnsiString;
 function StrPas(P: PChar): AnsiString;
@@ -389,6 +391,18 @@ end;
 function DateTimeToStr(DateTime: TDateTime): AnsiString;
 begin
     DateTimeToStr := FormatDateTime('yyyy-mm-dd hh:nn:ss', DateTime);
+end;
+
+function TimeToStr(DateTime: TDateTime): AnsiString;
+begin
+    TimeToStr := FormatDateTime('hh:nn:ss', DateTime);
+end;
+
+function UnixToDateTime(UnixTime: Int64): TDateTime;
+begin
+    { Unix time is seconds since 1970-01-01 00:00:00 UTC }
+    { TDateTime is milliseconds since 1970-01-01 00:00:00 UTC }
+    UnixToDateTime := UnixTime * 1000;
 end;
 
 function Format(const Fmt: string; const Args: array of const): string;

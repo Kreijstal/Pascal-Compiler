@@ -1276,6 +1276,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("longint");
         return LONGINT_TYPE;
     }
+    if (strcasecmp(name, "int64") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("int64");
+        return INT64_TYPE;
+    }
     if (strcasecmp(name, "real") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("real");
@@ -4010,10 +4015,10 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
 static int select_range_primitive_tag(const TypeInfo *info)
 {
     if (info == NULL || !info->is_range)
-        return LONGINT_TYPE;
+        return INT_TYPE;
 
     if (!info->range_known)
-        return LONGINT_TYPE;
+        return INT_TYPE;
 
     long long start = info->range_start;
     long long end = info->range_end;
@@ -4026,7 +4031,8 @@ static int select_range_primitive_tag(const TypeInfo *info)
     if (start >= INT_MIN && end <= INT_MAX)
         return INT_TYPE;
 
-    return LONGINT_TYPE;
+    /* Range exceeds 32-bit, use 64-bit Int64 */
+    return INT64_TYPE;
 }
 
 static long long compute_range_storage_size(const TypeInfo *info)

@@ -835,7 +835,7 @@ static inline int type_is_file_like(int type_tag)
 
 int codegen_type_uses_qword(int type_tag)
 {
-    return (type_tag == REAL_TYPE ||
+    return (type_tag == REAL_TYPE || type_tag == INT64_TYPE ||
         type_tag == POINTER_TYPE || type_tag == STRING_TYPE ||
         type_is_file_like(type_tag) || type_tag == PROCEDURE);
 }
@@ -3144,10 +3144,72 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
-    inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
-    Register_t *left_reg = get_free_reg(get_reg_stack(), &inst_list);
-    inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
-    Register_t *right_reg = front_reg_stack(get_reg_stack());
+    /* For floating-point comparisons, use expr_tree-based evaluation with spilling
+     * to preserve the left operand across function calls that may occur when
+     * evaluating the right operand. Without this, caller-saved registers like
+     * %rax would be clobbered by subsequent function calls.
+     */
+    int left_is_real = (left_expr != NULL && expr_has_type_tag(left_expr, REAL_TYPE));
+    int right_is_real = (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE));
+    
+    Register_t *left_reg = NULL;
+    Register_t *right_reg = NULL;
+    StackNode_t *left_spill = NULL;
+    
+    if (left_is_real || right_is_real)
+    {
+        /* Evaluate left operand using expr_tree which properly handles results */
+        inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &left_reg);
+        if (codegen_had_error(ctx) || left_reg == NULL)
+            return inst_list;
+        
+        /* Spill left result to stack to preserve it across the right operand evaluation
+         * which may involve function calls that clobber caller-saved registers */
+        left_spill = add_l_t("relop_left_spill");
+        if (left_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", 
+                     left_reg->bit_64, left_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            /* Free left_reg temporarily; we will get a fresh register after right eval */
+            free_reg(get_reg_stack(), left_reg);
+            left_reg = NULL;
+        }
+        
+        /* Evaluate right operand */
+        inst_list = codegen_expr_with_result(right_expr, inst_list, ctx, &right_reg);
+        if (codegen_had_error(ctx) || right_reg == NULL)
+        {
+            if (left_reg != NULL)
+                free_reg(get_reg_stack(), left_reg);
+            return inst_list;
+        }
+        
+        /* If we spilled the left operand, get a fresh register and reload it.
+         * Otherwise, the original left_reg is still live. */
+        if (left_spill != NULL)
+        {
+            left_reg = codegen_try_get_reg(&inst_list, ctx, "relop_left_reload");
+            if (left_reg == NULL)
+            {
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", 
+                     left_spill->offset, left_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    else
+    {
+        /* Original path for non-floating-point comparisons */
+        inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
+        left_reg = get_free_reg(get_reg_stack(), &inst_list);
+        inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
+        right_reg = front_reg_stack(get_reg_stack());
+    }
 
     if (left_reg == NULL || right_reg == NULL)
         return inst_list;
@@ -4216,11 +4278,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
     }
 
-    if (stack_slot_count > 0)
+    if (stack_slot_count > 0 || codegen_target_is_windows())
     {
+        /* Windows x64 requires the caller to reserve 32 bytes of shadow space for
+         * *every* call, even when all args fit in registers. Stack-passed args are
+         * placed after that shadow space. */
+        int shadow_space = codegen_target_is_windows() ? 32 : 0;
         int stack_bytes = stack_slot_count * CODEGEN_POINTER_SIZE_BYTES;
         int padding = codegen_expr_align_to(stack_bytes, REQUIRED_OFFSET) - stack_bytes;
-        int total_stack_area = stack_bytes + padding;
+        int total_stack_area = shadow_space + stack_bytes + padding;
         if (total_stack_area > 0)
         {
             snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", total_stack_area);
@@ -4230,7 +4296,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             for (int i = 0; i < arg_num; ++i)
             {
                 if (arg_infos[i].pass_via_stack)
-                    arg_infos[i].stack_offset = padding + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
+                    arg_infos[i].stack_offset =
+                        shadow_space + padding + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
             }
         }
     }
