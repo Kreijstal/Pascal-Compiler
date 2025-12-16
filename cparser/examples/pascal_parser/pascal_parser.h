@@ -65,6 +65,7 @@ typedef enum {
     PASCAL_T_FUNCTION_BODY,
     PASCAL_T_PARAM_LIST,
     PASCAL_T_PARAM,
+    PASCAL_T_DEFAULT_VALUE,  // Default parameter value: = expression
     PASCAL_T_RETURN_TYPE,
     // Statement types
     PASCAL_T_ASSIGNMENT,
