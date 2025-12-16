@@ -30,6 +30,8 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
             return HASHVAR_INTEGER;
         case LONGINT_TYPE:
             return HASHVAR_LONGINT;
+        case INT64_TYPE:
+            return HASHVAR_INT64;
         case REAL_TYPE:
             return HASHVAR_REAL;
         case STRING_TYPE:
@@ -101,10 +103,13 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
         strcasecmp(type_name, "Word") == 0 || strcasecmp(type_name, "TSystemCodePage") == 0)
         return HASHVAR_INTEGER;
     
-    if (strcasecmp(type_name, "LongInt") == 0 || strcasecmp(type_name, "Int64") == 0 ||
+    if (strcasecmp(type_name, "LongInt") == 0)
+        return HASHVAR_LONGINT;
+    
+    if (strcasecmp(type_name, "Int64") == 0 ||
         strcasecmp(type_name, "QWord") == 0 || strcasecmp(type_name, "SizeInt") == 0 ||
         strcasecmp(type_name, "SizeUInt") == 0)
-        return HASHVAR_LONGINT;
+        return HASHVAR_INT64;
     
     // Real types
     if (strcasecmp(type_name, "Real") == 0 || strcasecmp(type_name, "Double") == 0)
@@ -215,6 +220,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
         switch (type) {
             case HASHVAR_INTEGER: type_suffix = "_i"; break;
             case HASHVAR_LONGINT: type_suffix = "_li"; break;
+            case HASHVAR_INT64:   type_suffix = "_i64"; break;
             case HASHVAR_REAL:    type_suffix = "_r"; break;
             case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For string
             case HASHVAR_BOOLEAN: type_suffix = "_b"; break;

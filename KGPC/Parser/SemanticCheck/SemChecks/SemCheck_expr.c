@@ -3558,17 +3558,19 @@ int semcheck_compute_record_size(SymTab_t *symtab, struct RecordType *record,
 int is_type_ir(int *type)
 {
     assert(type != NULL);
-    return (*type == INT_TYPE || *type == REAL_TYPE || *type == LONGINT_TYPE);
+    return (is_integer_type(*type) || *type == REAL_TYPE);
 }
 
 static int types_numeric_compatible(int lhs, int rhs)
 {
     if (lhs == rhs)
         return 1;
-    if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+    /* All integer types are compatible with each other */
+    if (is_integer_type(lhs) && is_integer_type(rhs))
         return 1;
-    if ((lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE)) ||
-        (rhs == REAL_TYPE && (lhs == INT_TYPE || lhs == LONGINT_TYPE)))
+    /* Real is compatible with any integer type */
+    if ((lhs == REAL_TYPE && is_integer_type(rhs)) ||
+        (rhs == REAL_TYPE && is_integer_type(lhs)))
         return 1;
     return 0;
 }
@@ -5845,12 +5847,11 @@ int semcheck_expr_main(int *type_return,
         case EXPR_INUM:
             if (expr->expr_data.i_num > INT_MAX || expr->expr_data.i_num < INT_MIN)
             {
-                *type_return = LONGINT_TYPE;
-                /* For values that don't fit in 32 bits, create a KgpcType with storage_size=8
-                 * to indicate this is a true 64-bit value (Int64), not a 4-byte LongInt */
+                *type_return = INT64_TYPE;
+                /* For values that don't fit in 32 bits, use INT64_TYPE (true 64-bit integer) */
                 if (expr->resolved_kgpc_type != NULL)
                     destroy_kgpc_type(expr->resolved_kgpc_type);
-                expr->resolved_kgpc_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+                expr->resolved_kgpc_type = create_primitive_type_with_size(INT64_TYPE, 8);
             }
             else
                 *type_return = INT_TYPE;
@@ -6118,8 +6119,8 @@ int semcheck_relop(int *type_return,
                         expr->line_num);
                     ++return_val;
                 }
-                if (type_first != INT_TYPE && type_first != LONGINT_TYPE &&
-                    type_first != ENUM_TYPE && type_first != CHAR_TYPE && type_first != BOOL)
+                if (!is_integer_type(type_first) && type_first != ENUM_TYPE &&
+                    type_first != CHAR_TYPE && type_first != BOOL)
                 {
                     fprintf(stderr, "Error on line %d, expected integer operand on left side of IN expression!\n\n",
                         expr->line_num);
@@ -6570,11 +6571,13 @@ int semcheck_mulop(int *type_return,
         }
         
         /* Integer bitwise operations */
-        if ((type_first == INT_TYPE || type_first == LONGINT_TYPE) &&
-            (type_second == INT_TYPE || type_second == LONGINT_TYPE))
+        if (is_integer_type(type_first) && is_integer_type(type_second))
         {
             /* Both operands are integers - bitwise operation */
-            if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+            /* INT64_TYPE takes precedence as the largest integer type */
+            if (type_first == INT64_TYPE || type_second == INT64_TYPE)
+                *type_return = INT64_TYPE;
+            else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
                 *type_return = LONGINT_TYPE;
             else
                 *type_return = INT_TYPE;
@@ -6731,7 +6734,10 @@ int semcheck_mulop(int *type_return,
             ++return_val;
         }
         /* DIV and MOD produce integer results */
-        if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+        /* INT64_TYPE takes precedence as the largest integer type */
+        if (type_first == INT64_TYPE || type_second == INT64_TYPE)
+            *type_return = INT64_TYPE;
+        else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
             *type_return = LONGINT_TYPE;
         else
             *type_return = INT_TYPE;
@@ -6741,6 +6747,8 @@ int semcheck_mulop(int *type_return,
     /* SLASH (/) always produces REAL_TYPE in Pascal, regardless of operand types */
     if (type_first == REAL_TYPE || type_second == REAL_TYPE || op_type == SLASH)
         *type_return = REAL_TYPE;
+    else if (type_first == INT64_TYPE || type_second == INT64_TYPE)
+        *type_return = INT64_TYPE;
     else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
         *type_return = LONGINT_TYPE;
     else
@@ -8405,10 +8413,9 @@ skip_overload_resolution:
                 }
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
-                    /* Allow integer/longint conversion */
+                    /* Allow integer type conversion (INT_TYPE, LONGINT_TYPE, INT64_TYPE all compatible) */
                     int type_compatible = 0;
-                    if ((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
-                        (arg_type == LONGINT_TYPE && expected_type == INT_TYPE))
+                    if (is_integer_type(arg_type) && is_integer_type(expected_type))
                     {
                         type_compatible = 1;
                     }
@@ -8416,8 +8423,7 @@ skip_overload_resolution:
                     {
                         type_compatible = 1;
                     }
-                    else if (expected_type == REAL_TYPE &&
-                        (arg_type == INT_TYPE || arg_type == LONGINT_TYPE))
+                    else if (expected_type == REAL_TYPE && is_integer_type(arg_type))
                     {
                         type_compatible = 1;
                     }

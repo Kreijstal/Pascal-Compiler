@@ -338,7 +338,16 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
             return add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", operand, xmm_reg);
+        const char *source_operand = operand;
+        char source_buf[16];
+        if (operand[0] == '%')
+        {
+            const char *converted = reg32_to_reg64(operand, source_buf, sizeof(source_buf));
+            if (converted != NULL)
+                source_operand = converted;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
         return add_inst(inst_list, buffer);
     }
 
@@ -1947,6 +1956,8 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     expr = node->expr;
     right_expr = node->right_expr->expr;
+    struct Expression *left_expr = node->left_expr != NULL ? node->left_expr->expr : NULL;
+    assert(left_expr != NULL);
     assert(right_expr != NULL);
     int rhs_requires_reference = leaf_expr_requires_reference_value(right_expr, ctx);
 
@@ -1968,18 +1979,19 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 inst_list = add_inst(inst_list, buffer);
             }
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-            const char *target_name = select_register_name(target_reg, expr, expr->resolved_type);
+            const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? left_expr->resolved_type : expr->resolved_type);
             inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
         }
         else
         {
             StackNode_t *lhs_spill = add_l_t("case1_lhs");
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-            inst_list = emit_store_to_stack(inst_list, target_reg, expr, expr->resolved_type, lhs_spill->offset);
+            /* Use the left operand's type for spilling, not the binary expr's result type */
+            inst_list = emit_store_to_stack(inst_list, target_reg, left_expr, left_expr->resolved_type, lhs_spill->offset);
             inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
-            inst_list = emit_load_from_stack(inst_list, target_reg, expr, expr->resolved_type, lhs_spill->offset);
-            const char *target_name = select_register_name(target_reg, expr, expr->resolved_type);
-            const char *rhs_name = select_register_name(rhs_reg, expr, expr->resolved_type);
+            inst_list = emit_load_from_stack(inst_list, target_reg, left_expr, left_expr->resolved_type, lhs_spill->offset);
+            const char *target_name = select_register_name(target_reg, left_expr, left_expr->resolved_type);
+            const char *rhs_name = select_register_name(rhs_reg, right_expr, right_expr->resolved_type);
             inst_list = gencode_op(expr, target_name, rhs_name, inst_list, ctx);
             free_reg(get_reg_stack(), rhs_reg);
         }
@@ -1990,7 +2002,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, sizeof(name_buf));
 
-    const char *target_name = select_register_name(target_reg, expr, expr->resolved_type);
+    const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? left_expr->resolved_type : expr->resolved_type);
     inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
 
     return inst_list;
@@ -2009,6 +2021,11 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(target_reg != NULL);
 
     Register_t *temp_reg;
+    struct Expression *right_expr = node->right_expr->expr;
+    struct Expression *left_expr = node->left_expr->expr;
+
+    assert(left_expr != NULL);
+    assert(right_expr != NULL);
 
     temp_reg = get_free_reg(get_reg_stack(), &inst_list);
     if(temp_reg == NULL)
@@ -2016,25 +2033,27 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
 
         StackNode_t *spill_loc = add_l_t("spill");
+        /* Use right operand's type for spilling, not the binary expr's result type */
         inst_list = emit_store_to_stack(inst_list, target_reg,
-            node->expr, node->expr->resolved_type, spill_loc->offset);
+            right_expr, right_expr->resolved_type, spill_loc->offset);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        const char *target_name = select_register_name(target_reg, node->expr, node->expr->resolved_type);
+        const char *target_name = select_register_name(target_reg, left_expr, left_expr->resolved_type);
         inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list, ctx);
     }
     else
     {
         StackNode_t *rhs_spill = add_l_t("case2_rhs");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-        inst_list = emit_store_to_stack(inst_list, temp_reg, node->expr, node->expr->resolved_type, rhs_spill->offset);
+        /* Use right operand's type for spilling, not the binary expr's result type */
+        inst_list = emit_store_to_stack(inst_list, temp_reg, right_expr, right_expr->resolved_type, rhs_spill->offset);
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = emit_load_from_stack(inst_list, temp_reg, node->expr, node->expr->resolved_type, rhs_spill->offset);
-        const char *target_name = select_register_name(target_reg, node->expr, node->expr->resolved_type);
-        const char *temp_name = select_register_name(temp_reg, node->expr, node->expr->resolved_type);
+        inst_list = emit_load_from_stack(inst_list, temp_reg, right_expr, right_expr->resolved_type, rhs_spill->offset);
+        const char *target_name = select_register_name(target_reg, left_expr, left_expr->resolved_type);
+        const char *temp_name = select_register_name(temp_reg, right_expr, right_expr->resolved_type);
         inst_list = gencode_op(node->expr, target_name, temp_name, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
@@ -2054,6 +2073,11 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     assert(target_reg != NULL);
 
     Register_t *temp_reg;
+    struct Expression *left_expr = node->left_expr->expr;
+    struct Expression *right_expr = node->right_expr->expr;
+
+    assert(left_expr != NULL);
+    assert(right_expr != NULL);
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
     temp_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -2061,24 +2085,26 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if(temp_reg == NULL)
     {
         StackNode_t *spill_loc = add_l_t("spill");
+        /* Use left operand's type for spilling, not the binary expr's result type */
         inst_list = emit_store_to_stack(inst_list, target_reg,
-            node->expr, node->expr->resolved_type, spill_loc->offset);
+            left_expr, left_expr->resolved_type, spill_loc->offset);
 
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
 
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
-        const char *target_name = select_register_name(target_reg, node->expr, node->expr->resolved_type);
+        const char *target_name = select_register_name(target_reg, right_expr, right_expr->resolved_type);
         inst_list = gencode_op(node->expr, target_name, spill_mem, inst_list, ctx);
     }
     else
     {
         StackNode_t *lhs_spill = add_l_t("case3_lhs");
-        inst_list = emit_store_to_stack(inst_list, target_reg, node->expr, node->expr->resolved_type, lhs_spill->offset);
+        /* Use left operand's type for spilling, not the binary expr's result type */
+        inst_list = emit_store_to_stack(inst_list, target_reg, left_expr, left_expr->resolved_type, lhs_spill->offset);
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, temp_reg);
-        inst_list = emit_load_from_stack(inst_list, target_reg, node->expr, node->expr->resolved_type, lhs_spill->offset);
-        const char *target_name = select_register_name(target_reg, node->expr, node->expr->resolved_type);
-        const char *temp_name = select_register_name(temp_reg, node->expr, node->expr->resolved_type);
+        inst_list = emit_load_from_stack(inst_list, target_reg, left_expr, left_expr->resolved_type, lhs_spill->offset);
+        const char *target_name = select_register_name(target_reg, left_expr, left_expr->resolved_type);
+        const char *temp_name = select_register_name(temp_reg, right_expr, right_expr->resolved_type);
         inst_list = gencode_op(node->expr, target_name, temp_name, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }

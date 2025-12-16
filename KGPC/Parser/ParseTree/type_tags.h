@@ -12,9 +12,10 @@
 #define UNKNOWN_TYPE        0
 #define INT_TYPE            1
 #define REAL_TYPE           2
-#define LONGINT_TYPE        3
+#define LONGINT_TYPE        3   /* 32-bit signed integer (FPC-compatible LongInt) */
 #define STRING_TYPE         4
 #define BUILTIN_ANY_TYPE    5
+#define INT64_TYPE          38  /* 64-bit signed integer (Int64, TDateTime) */
 #define RECORD_TYPE         34
 #define ARRAY_OF_CONST_TYPE 35
 #define TEXT_TYPE           36
@@ -78,8 +79,20 @@
  */
 static inline int is_ordinal_type(int type_tag)
 {
-    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE ||
+    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE ||
             type_tag == ENUM_TYPE || type_tag == CHAR_TYPE || type_tag == BOOL);
+}
+
+/**
+ * Check if a type tag represents an integer type.
+ * Integer types include:
+ * - INT_TYPE (32-bit Integer)
+ * - LONGINT_TYPE (32-bit LongInt for FPC compatibility)
+ * - INT64_TYPE (64-bit Int64)
+ */
+static inline int is_integer_type(int type_tag)
+{
+    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE);
 }
 
 #endif /* TYPE_TAGS_H */

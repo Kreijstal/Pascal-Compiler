@@ -338,6 +338,7 @@ void test_multi_prefers_furthest_error(void) {
 
 static ParseError* add_context_to_error(ParseError* err) {
     ParseError* new_err = (ParseError*)safe_malloc(sizeof(ParseError));
+    memset(new_err, 0, sizeof(ParseError));  /* Initialize all fields to zero */
     new_err->line = err->line;
     new_err->col = err->col;
     new_err->index = err->index;
@@ -347,6 +348,7 @@ static ParseError* add_context_to_error(ParseError* err) {
     new_err->context = err->context ? strdup(err->context) : NULL;
     new_err->cause = err;
     new_err->partial_ast = NULL;
+    new_err->committed = false;  /* Explicitly initialize committed field */
     return new_err;
 }
 
