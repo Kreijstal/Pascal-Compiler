@@ -284,6 +284,9 @@ static bool is_statement_boundary_token(input_t* in) {
 
 static ast_t* make_empty_statement_node(input_t* in) {
     ast_t* node = new_ast();
+    if (node == NULL) {
+        return ast_nil;
+    }
     node->typ = PASCAL_T_STATEMENT;
     node->child = NULL;
     node->next = NULL;
@@ -294,7 +297,7 @@ static ast_t* make_empty_statement_node(input_t* in) {
 static ParseResult empty_statement_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     if (in == NULL) {
-        return make_failure(NULL, strdup("Empty statement parser requires input"));
+        return make_failure_v2(NULL, parser_name, strdup("Empty statement parser requires input"), NULL);
     }
     if (!is_statement_boundary_token(in)) {
         return make_failure_v2(in, parser_name, strdup("Empty statement can only appear before boundary tokens (end, else, until, except, finally)"), NULL);
