@@ -1911,6 +1911,41 @@ void test_pascal_if_else_statement(void) {
     free_input(input);
 }
 
+void test_pascal_if_then_empty_before_end(void) {
+    combinator_t* p = get_program_parser();
+
+    input_t* input = new_input();
+    input->buffer = strdup("var state : integer;\nbegin begin begin if state = 1 then end end end.");
+    input->length = strlen(input->buffer);
+
+    ParseResult res = parse(input, p);
+
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) {
+        ast_t* if_stmt = find_first_node_of_type(res.value.ast, PASCAL_T_IF_STMT);
+        TEST_ASSERT(if_stmt != NULL);
+        if (if_stmt != NULL) {
+            ast_t* condition = if_stmt->child;
+            TEST_ASSERT(condition != NULL);
+            if (condition != NULL) {
+                TEST_ASSERT(condition->typ == PASCAL_T_EQ);
+            }
+            ast_t* then_stmt = (condition != NULL) ? condition->next : NULL;
+            TEST_ASSERT(then_stmt != NULL);
+            if (then_stmt != NULL) {
+                TEST_ASSERT(then_stmt->typ == PASCAL_T_STATEMENT);
+                TEST_ASSERT(then_stmt->child == NULL || then_stmt->child == ast_nil);
+            }
+        }
+        free_ast(res.value.ast);
+    } else {
+        free_error(res.value.error);
+    }
+
+    free(input->buffer);
+    free_input(input);
+}
+
 void test_pascal_begin_end_block(void) {
     combinator_t* p = create_statement_parser();
     input_t* input = new_input();
@@ -5031,6 +5066,7 @@ TEST_LIST = {
     { "test_pascal_expression_statement", test_pascal_expression_statement },
     { "test_pascal_if_statement", test_pascal_if_statement },
     { "test_pascal_if_else_statement", test_pascal_if_else_statement },
+    { "test_pascal_if_then_empty_before_end", test_pascal_if_then_empty_before_end },
     { "test_pascal_begin_end_block", test_pascal_begin_end_block },
     { "test_pascal_for_statement", test_pascal_for_statement },
     { "test_pascal_for_statement_without_assignment", test_pascal_for_statement_without_assignment },
