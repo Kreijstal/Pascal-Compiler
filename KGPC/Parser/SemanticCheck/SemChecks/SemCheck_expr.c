@@ -8415,10 +8415,10 @@ skip_overload_resolution:
                 }
                 if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
                 {
-                    /* Allow integer/longint conversion */
+                    /* Allow integer type conversion (INT_TYPE, LONGINT_TYPE, INT64_TYPE all compatible) */
                     int type_compatible = 0;
-                    if ((arg_type == INT_TYPE && expected_type == LONGINT_TYPE) ||
-                        (arg_type == LONGINT_TYPE && expected_type == INT_TYPE))
+                    if ((arg_type == INT_TYPE || arg_type == LONGINT_TYPE || arg_type == INT64_TYPE) &&
+                        (expected_type == INT_TYPE || expected_type == LONGINT_TYPE || expected_type == INT64_TYPE))
                     {
                         type_compatible = 1;
                     }
@@ -8427,7 +8427,7 @@ skip_overload_resolution:
                         type_compatible = 1;
                     }
                     else if (expected_type == REAL_TYPE &&
-                        (arg_type == INT_TYPE || arg_type == LONGINT_TYPE))
+                        (arg_type == INT_TYPE || arg_type == LONGINT_TYPE || arg_type == INT64_TYPE))
                     {
                         type_compatible = 1;
                     }
