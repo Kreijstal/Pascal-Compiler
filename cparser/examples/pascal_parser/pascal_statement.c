@@ -245,6 +245,66 @@ static bool is_reserved_keyword_slice(const char* slice, size_t len) {
     return false;
 }
 
+static bool is_statement_boundary_token(input_t* in) {
+    if (in == NULL || in->buffer == NULL) {
+        return false;
+    }
+
+    const char* buffer = in->buffer;
+    int length = in->length > 0 ? in->length : (int)strlen(buffer);
+    int pos = skip_pascal_layout_preview(in, in->start);
+    if (pos >= length) {
+        return true; // EOF naturally terminates a statement
+    }
+
+    unsigned char ch = (unsigned char)buffer[pos];
+    if (ch == ';' || ch == '.') {
+        return true;
+    }
+    if (!isalpha(ch)) {
+        return false;
+    }
+
+    int cursor = pos;
+    while (cursor < length && (isalnum((unsigned char)buffer[cursor]) || buffer[cursor] == '_')) {
+        cursor++;
+    }
+
+    size_t word_len = (size_t)(cursor - pos);
+    if (word_len == 0) {
+        return false;
+    }
+
+    return (word_len == 3 && strncasecmp(buffer + pos, "end", 3) == 0) ||
+           (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
+           (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
+           (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
+           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
+}
+
+static ast_t* make_empty_statement_node(input_t* in) {
+    ast_t* node = new_ast();
+    if (node == NULL) {
+        return ast_nil;
+    }
+    node->typ = PASCAL_T_STATEMENT;
+    node->child = NULL;
+    node->next = NULL;
+    set_ast_position(node, in);
+    return node;
+}
+
+static ParseResult empty_statement_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    if (in == NULL) {
+        return make_failure_v2(NULL, parser_name, strdup("Empty statement parser requires input"), NULL);
+    }
+    if (!is_statement_boundary_token(in)) {
+        return make_failure_v2(in, parser_name, strdup("Empty statement can only appear before boundary tokens (end, else, until, except, finally)"), NULL);
+    }
+    return make_success(make_empty_statement_node(in));
+}
+
 static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_name) {
     (void)parser_name;
     statement_dispatch_args_t* dispatch = (statement_dispatch_args_t*)args;
@@ -629,6 +689,16 @@ void init_pascal_statement_parser(combinator_t** p) {
     *expr_parser = new_combinator();
     init_pascal_expression_parser(expr_parser, stmt_parser);
 
+    combinator_t* empty_statement = new_combinator();
+    empty_statement->fn = empty_statement_fn;
+    empty_statement->name = strdup("empty_statement");
+
+    combinator_t* stmt_or_empty = multi(new_combinator(), PASCAL_T_NONE,
+        lazy(stmt_parser),
+        empty_statement,
+        NULL
+    );
+
     // Left-value parser: base identifier with optional pointer, array, or member suffixes.
     combinator_t* simple_identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
 
@@ -689,7 +759,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* labeled_stmt = map(seq(new_combinator(), PASCAL_T_NONE,
         pascal_label_identifier(),
         token(match(":")),
-        lazy(stmt_parser),
+        stmt_or_empty,
         NULL
     ), build_label_statement_ast);
 
@@ -734,10 +804,10 @@ void init_pascal_statement_parser(combinator_t** p) {
         commit(seq(new_combinator(), PASCAL_T_NONE,
             lazy(expr_parser),                         // condition
             token(keyword_ci("then")),                   // then keyword (case-insensitive)
-            lazy(stmt_parser),                         // then statement
+            stmt_or_empty,                         // then statement
             optional(seq(new_combinator(), PASCAL_T_ELSE,    // optional else part
                 token(keyword_ci("else")),               // else keyword (case-insensitive)
-                lazy(stmt_parser),
+                stmt_or_empty,
                 NULL
             )),
             NULL
@@ -754,7 +824,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             token(keyword_ci("in")),                 // in keyword (case-insensitive)
             lazy(expr_parser),                       // collection expression
             token(keyword_ci("do")),                 // do keyword (case-insensitive)
-            lazy(stmt_parser),                       // loop body statement
+            stmt_or_empty,                       // loop body statement
             NULL
         ),
         NULL
@@ -780,7 +850,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             for_direction,                          // to or downto
             lazy(expr_parser),                      // end expression
             token(keyword_ci("do")),                 // do keyword (case-insensitive)
-            lazy(stmt_parser),                      // loop body statement
+            stmt_or_empty,                      // loop body statement
             NULL
         )),
         NULL
@@ -799,7 +869,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         commit(seq(new_combinator(), PASCAL_T_NONE,
             lazy(expr_parser),                     // condition
             token(keyword_ci("do")),                 // do keyword (case-insensitive)
-            lazy(stmt_parser),                     // body statement
+            stmt_or_empty,                     // body statement
             NULL
         )),
         NULL
@@ -843,7 +913,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             with_contexts,                        // one or more context expressions
             commit(with_context_comma_guard()),
             token(keyword_ci("do")),                 // do keyword (case-insensitive)
-            lazy(stmt_parser),                     // body statement
+            stmt_or_empty,                     // body statement
             NULL
         )),
         NULL
@@ -875,7 +945,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         seq(new_combinator(), PASCAL_T_FINALLY_BLOCK,
             token(keyword_ci("finally")),
             many(seq(new_combinator(), PASCAL_T_NONE,
-                lazy(stmt_parser),
+                stmt_or_empty,
                 optional(token(match(";"))),
                 NULL
             )),
@@ -900,7 +970,7 @@ void init_pascal_statement_parser(combinator_t** p) {
         exception_var,
         exception_type_spec,
         token(keyword_ci("do")),
-        lazy(stmt_parser),
+        stmt_or_empty,
         optional_handler_semicolon,
         NULL
     );
@@ -914,7 +984,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             many(multi(new_combinator(), PASCAL_T_NONE,
                 on_exception_handler,
                 seq(new_combinator(), PASCAL_T_NONE,
-                    lazy(stmt_parser),
+                    stmt_or_empty,
                     optional(token(match(";"))),
                     NULL
                 ),
@@ -1005,7 +1075,7 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* case_branch = seq(new_combinator(), PASCAL_T_CASE_BRANCH,
         case_label_list,                       // case labels
         token(match(":")),                     // colon
-        lazy(stmt_parser),                     // statement
+        stmt_or_empty,                     // statement
         NULL
     );
     
@@ -1017,7 +1087,7 @@ void init_pascal_statement_parser(combinator_t** p) {
             sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
             optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
                 token(keyword_ci("else")),         // else keyword
-                lazy(stmt_parser),                 // else statement
+                stmt_or_empty,                 // else statement
                 optional(token(match(";"))),      // optional semicolon after else block
                 NULL
             )),
