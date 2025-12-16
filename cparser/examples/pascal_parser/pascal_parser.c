@@ -225,6 +225,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_FUNCTION_BODY: return "FUNCTION_BODY";
         case PASCAL_T_PARAM_LIST: return "PARAM_LIST";
         case PASCAL_T_PARAM: return "PARAM";
+        case PASCAL_T_DEFAULT_VALUE: return "DEFAULT_VALUE";
         case PASCAL_T_RETURN_TYPE: return "RETURN_TYPE";
         case PASCAL_T_ASSIGNMENT: return "ASSIGNMENT";
         case PASCAL_T_STATEMENT: return "STATEMENT";
@@ -280,6 +281,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_ARRAY_TYPE: return "ARRAY_TYPE";
         case PASCAL_T_FILE_TYPE: return "FILE_TYPE";
         case PASCAL_T_RECORD_TYPE: return "RECORD_TYPE";
+        case PASCAL_T_OBJECT_TYPE: return "OBJECT_TYPE";
         case PASCAL_T_PROCEDURE_TYPE: return "PROCEDURE_TYPE";
         case PASCAL_T_FUNCTION_TYPE: return "FUNCTION_TYPE";
         case PASCAL_T_REFERENCE_TO_TYPE: return "REFERENCE_TO_TYPE";
@@ -287,6 +289,7 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_ANONYMOUS_PROCEDURE: return "ANONYMOUS_PROCEDURE";
         case PASCAL_T_ENUMERATED_TYPE: return "ENUMERATED_TYPE";
         case PASCAL_T_CLASS_TYPE: return "CLASS_TYPE";
+        case PASCAL_T_CLASS_OF_TYPE: return "CLASS_OF_TYPE";
         case PASCAL_T_INTERFACE_TYPE: return "INTERFACE_TYPE";
         case PASCAL_T_DISTINCT_TYPE: return "DISTINCT_TYPE";
         // Generic type tags

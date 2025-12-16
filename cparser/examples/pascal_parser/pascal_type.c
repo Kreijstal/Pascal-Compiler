@@ -1431,6 +1431,176 @@ combinator_t* record_type(tag_t tag) {
     return comb;
 }
 
+// Object type parser: OBJECT field1: type1; [procedure/function declarations] ... END
+// Legacy Pascal object type - similar to record but with methods
+static ParseResult object_type_fn(input_t* in, void* args, char* parser_name) {
+    prim_args* pargs = (prim_args*)args;
+    InputState state; save_input_state(in, &state);
+
+    bool is_packed = false;
+    combinator_t* packed_keyword = token(keyword_ci("packed"));
+    ParseResult packed_res = parse(in, packed_keyword);
+    if (packed_res.is_success) {
+        is_packed = true;
+        free_ast(packed_res.value.ast);
+    } else {
+        discard_failure(packed_res);
+    }
+    free_combinator(packed_keyword);
+
+    combinator_t* object_keyword = token(keyword_ci("object"));
+    ParseResult object_res = parse(in, object_keyword);
+    if (!object_res.is_success) {
+        discard_failure(object_res);
+        free_combinator(object_keyword);
+        return fail_with_message("Expected 'object'", in, &state, parser_name);
+    }
+    free_ast(object_res.value.ast);
+    free_combinator(object_keyword);
+
+    // Field declaration: identifier_list : type
+    combinator_t* field_name_list = sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(",")));
+    combinator_t* field_type = create_record_field_type_spec();
+    combinator_t* field_decl = seq(new_combinator(), PASCAL_T_FIELD_DECL,
+        field_name_list,
+        token(match(":")),
+        field_type,
+        token(match(";")),
+        NULL
+    );
+    set_combinator_name(field_decl, "object_field_decl");
+
+    // Method declarations (procedure/function headers in object definition)
+    combinator_t* method_procedure_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        token(keyword_ci("procedure")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("virtual")),
+                token(keyword_ci("override")),
+                token(keyword_ci("static")),
+                NULL
+            ),
+            optional(token(match(";"))),
+            NULL
+        )),
+        NULL
+    );
+
+    combinator_t* method_function_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
+        token(keyword_ci("function")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(":")),
+        create_type_ref_parser(),
+        token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("virtual")),
+                token(keyword_ci("override")),
+                token(keyword_ci("static")),
+                NULL
+            ),
+            optional(token(match(";"))),
+            NULL
+        )),
+        NULL
+    );
+
+    combinator_t* constructor_decl = seq(new_combinator(), PASCAL_T_CONSTRUCTOR_DECL,
+        token(keyword_ci("constructor")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("virtual")),
+                NULL
+            ),
+            optional(token(match(";"))),
+            NULL
+        )),
+        NULL
+    );
+
+    combinator_t* destructor_decl = seq(new_combinator(), PASCAL_T_DESTRUCTOR_DECL,
+        token(keyword_ci("destructor")),
+        token(cident(PASCAL_T_IDENTIFIER)),
+        create_pascal_param_parser(),
+        token(match(";")),
+        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+            multi(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("virtual")),
+                NULL
+            ),
+            optional(token(match(";"))),
+            NULL
+        )),
+        NULL
+    );
+
+    // Visibility sections (public/private/protected)
+    combinator_t* visibility_keyword = multi(new_combinator(), PASCAL_T_ACCESS_MODIFIER,
+        token(keyword_ci("private")),
+        token(keyword_ci("public")),
+        token(keyword_ci("protected")),
+        NULL
+    );
+
+    // Object member can be field, method, or visibility section
+    combinator_t* object_member = multi(new_combinator(), PASCAL_T_NONE,
+        visibility_keyword,
+        constructor_decl,
+        destructor_decl,
+        method_procedure_decl,
+        method_function_decl,
+        field_decl,
+        NULL
+    );
+
+    combinator_t* object_members = many(object_member);
+    ParseResult members_res = parse(in, object_members);
+    ast_t* fields_ast = NULL;
+    if (members_res.is_success) {
+        fields_ast = (members_res.value.ast == ast_nil) ? NULL : members_res.value.ast;
+    } else {
+        discard_failure(members_res);
+    }
+    free_combinator(object_members);
+
+    combinator_t* end_keyword = token(keyword_ci("end"));
+    ParseResult end_res = parse(in, end_keyword);
+    if (!end_res.is_success) {
+        discard_failure(end_res);
+        if (fields_ast != NULL)
+            free_ast(fields_ast);
+        free_combinator(end_keyword);
+        return fail_with_message("Expected 'end' after object members", in, &state, parser_name);
+    }
+    free_ast(end_res.value.ast);
+    free_combinator(end_keyword);
+
+    ast_t* object_ast = new_ast();
+    object_ast->typ = pargs->tag;
+    object_ast->sym = is_packed ? sym_lookup("packed") : NULL;
+    object_ast->child = fields_ast;
+    object_ast->next = NULL;
+
+    set_ast_position(object_ast, in);
+    return make_success(object_ast);
+}
+
+combinator_t* object_type(tag_t tag) {
+    combinator_t* comb = new_combinator();
+    prim_args* args = safe_malloc(sizeof(prim_args));
+    args->tag = tag;
+    comb->args = args;
+    comb->fn = object_type_fn;
+    return comb;
+}
+
 // Pointer type parser: ^TypeName
 combinator_t* pointer_type(tag_t tag) {
     combinator_t* pointed_type = multi(new_combinator(), PASCAL_T_NONE,
