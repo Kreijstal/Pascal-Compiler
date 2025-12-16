@@ -338,7 +338,16 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
             return add_inst(inst_list, buffer);
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", operand, xmm_reg);
+        const char *source_operand = operand;
+        char source_buf[16];
+        if (operand[0] == '%')
+        {
+            const char *converted = reg32_to_reg64(operand, source_buf, sizeof(source_buf));
+            if (converted != NULL)
+                source_operand = converted;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", source_operand, xmm_reg);
         return add_inst(inst_list, buffer);
     }
 
@@ -1947,6 +1956,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     expr = node->expr;
     right_expr = node->right_expr->expr;
+    struct Expression *left_expr = node->left_expr != NULL ? node->left_expr->expr : NULL;
     assert(right_expr != NULL);
     int rhs_requires_reference = leaf_expr_requires_reference_value(right_expr, ctx);
 
@@ -1968,13 +1978,12 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 inst_list = add_inst(inst_list, buffer);
             }
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-            const char *target_name = select_register_name(target_reg, expr, expr->resolved_type);
+            const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? left_expr->resolved_type : expr->resolved_type);
             inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
         }
         else
         {
             StackNode_t *lhs_spill = add_l_t("case1_lhs");
-            struct Expression *left_expr = node->left_expr->expr;
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
             /* Use the left operand's type for spilling, not the binary expr's result type */
             inst_list = emit_store_to_stack(inst_list, target_reg, left_expr, left_expr->resolved_type, lhs_spill->offset);
@@ -1992,7 +2001,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, sizeof(name_buf));
 
-    const char *target_name = select_register_name(target_reg, expr, expr->resolved_type);
+    const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? left_expr->resolved_type : expr->resolved_type);
     inst_list = gencode_op(expr, target_name, name_buf, inst_list, ctx);
 
     return inst_list;
