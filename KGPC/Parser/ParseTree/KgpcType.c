@@ -325,16 +325,17 @@ static int types_numeric_compatible(int lhs, int rhs) {
     if (lhs == rhs)
         return 1;
 
-    /* Integer and longint are compatible */
-    if ((lhs == INT_TYPE && rhs == LONGINT_TYPE) || (lhs == LONGINT_TYPE && rhs == INT_TYPE))
+    /* All integer types are compatible with each other */
+    if ((lhs == INT_TYPE || lhs == LONGINT_TYPE || lhs == INT64_TYPE) &&
+        (rhs == INT_TYPE || rhs == LONGINT_TYPE || rhs == INT64_TYPE))
         return 1;
 
-    /* Real can accept integer or longint */
-    if (lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE))
+    /* Real can accept any integer type */
+    if (lhs == REAL_TYPE && (rhs == INT_TYPE || rhs == LONGINT_TYPE || rhs == INT64_TYPE))
         return 1;
 
     /* Integer can accept char (for compatibility) */
-    if (lhs == INT_TYPE && rhs == CHAR_TYPE)
+    if ((lhs == INT_TYPE || lhs == LONGINT_TYPE || lhs == INT64_TYPE) && rhs == CHAR_TYPE)
         return 1;
 
     return 0;
@@ -602,6 +603,22 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 return 1;
             }
         }
+        
+        /* Allow typed pointer (^T) to be assigned to untyped Pointer (primitive POINTER_TYPE) */
+        /* This is needed for procedures like: procedure foo(p: Pointer); ... foo(@myInt64); */
+        if (lhs_type->kind == TYPE_KIND_PRIMITIVE && 
+            lhs_type->info.primitive_type_tag == POINTER_TYPE &&
+            rhs_type->kind == TYPE_KIND_POINTER)
+        {
+            return 1;  /* Any typed pointer can be passed to an untyped Pointer parameter */
+        }
+        if (rhs_type->kind == TYPE_KIND_PRIMITIVE && 
+            rhs_type->info.primitive_type_tag == POINTER_TYPE &&
+            lhs_type->kind == TYPE_KIND_POINTER)
+        {
+            return 1;  /* Untyped Pointer can be assigned to any typed pointer */
+        }
+        
         return 0;
     }
 

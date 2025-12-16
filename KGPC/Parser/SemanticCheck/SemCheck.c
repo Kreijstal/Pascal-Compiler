@@ -798,7 +798,8 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                         switch (alias->base_type)
                         {
                             case INT_TYPE: return "Integer";
-                            case LONGINT_TYPE: return "Int64";
+                            case LONGINT_TYPE: return "LongInt";
+                            case INT64_TYPE: return "Int64";
                             case BOOL: return "Boolean";
                             case CHAR_TYPE: return "Char";
                             case REAL_TYPE: return "Real";
@@ -814,7 +815,8 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_
                     switch (kgpc_type->info.primitive_type_tag)
                     {
                         case INT_TYPE: return "Integer";
-                        case LONGINT_TYPE: return "Int64";
+                        case LONGINT_TYPE: return "LongInt";
+                        case INT64_TYPE: return "Int64";
                         case BOOL: return "Boolean";
                         case CHAR_TYPE: return "Char";
                         case REAL_TYPE: return "Real";
@@ -1729,21 +1731,31 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Check if target is a known builtin primitive type */
                         const char *target = alias->target_type_id;
                         if (pascal_identifier_equals(target, "Int64") ||
-                            pascal_identifier_equals(target, "Integer") ||
-                            pascal_identifier_equals(target, "LongInt") ||
-                            pascal_identifier_equals(target, "SmallInt") ||
-                            pascal_identifier_equals(target, "ShortInt") ||
-                            pascal_identifier_equals(target, "Byte") ||
-                            pascal_identifier_equals(target, "Word") ||
-                            pascal_identifier_equals(target, "Cardinal") ||
-                            pascal_identifier_equals(target, "LongWord") ||
-                            pascal_identifier_equals(target, "DWord") ||
                             pascal_identifier_equals(target, "QWord") ||
                             pascal_identifier_equals(target, "UInt64") ||
                             pascal_identifier_equals(target, "SizeUInt") ||
-                            pascal_identifier_equals(target, "NativeUInt"))
+                            pascal_identifier_equals(target, "SizeInt") ||
+                            pascal_identifier_equals(target, "PtrUInt") ||
+                            pascal_identifier_equals(target, "PtrInt") ||
+                            pascal_identifier_equals(target, "NativeUInt") ||
+                            pascal_identifier_equals(target, "NativeInt"))
+                        {
+                            kgpc_type = create_primitive_type(INT64_TYPE);
+                        }
+                        else if (pascal_identifier_equals(target, "LongInt") ||
+                            pascal_identifier_equals(target, "Cardinal") ||
+                            pascal_identifier_equals(target, "LongWord") ||
+                            pascal_identifier_equals(target, "DWord"))
                         {
                             kgpc_type = create_primitive_type(LONGINT_TYPE);
+                        }
+                        else if (pascal_identifier_equals(target, "Integer") ||
+                            pascal_identifier_equals(target, "SmallInt") ||
+                            pascal_identifier_equals(target, "ShortInt") ||
+                            pascal_identifier_equals(target, "Byte") ||
+                            pascal_identifier_equals(target, "Word"))
+                        {
+                            kgpc_type = create_primitive_type(INT_TYPE);
                         }
                         else if (pascal_identifier_equals(target, "Real") ||
                                  pascal_identifier_equals(target, "Double") ||
@@ -3326,7 +3338,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     char *int64_name = strdup("int64");
     if (int64_name != NULL) {
         /* Int64 is 8 bytes (64-bit signed integer) - different from LongInt which is 4 bytes */
-        KgpcType *int64_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *int64_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(int64_type != NULL && "Failed to create int64 type");
         AddBuiltinType_Typed(symtab, int64_name, int64_type);
         destroy_kgpc_type(int64_type);
@@ -3511,7 +3523,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* QWord and UInt64 are 64-bit unsigned integers (8 bytes) */
     char *qword_name = strdup("QWord");
     if (qword_name != NULL) {
-        KgpcType *qword_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *qword_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(qword_type != NULL && "Failed to create QWord type");
         AddBuiltinType_Typed(symtab, qword_name, qword_type);
         destroy_kgpc_type(qword_type);
@@ -3519,7 +3531,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *uint64_name = strdup("UInt64");
     if (uint64_name != NULL) {
-        KgpcType *uint64_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *uint64_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(uint64_type != NULL && "Failed to create UInt64 type");
         AddBuiltinType_Typed(symtab, uint64_name, uint64_type);
         destroy_kgpc_type(uint64_type);
@@ -3528,7 +3540,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* SizeUInt and SizeInt for FPC compatibility */
     char *sizeuint_name = strdup("SizeUInt");
     if (sizeuint_name != NULL) {
-        KgpcType *sizeuint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *sizeuint_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(sizeuint_type != NULL && "Failed to create SizeUInt type");
         AddBuiltinType_Typed(symtab, sizeuint_name, sizeuint_type);
         destroy_kgpc_type(sizeuint_type);
@@ -3536,7 +3548,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *sizeint_name = strdup("SizeInt");
     if (sizeint_name != NULL) {
-        KgpcType *sizeint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *sizeint_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(sizeint_type != NULL && "Failed to create SizeInt type");
         AddBuiltinType_Typed(symtab, sizeint_name, sizeint_type);
         destroy_kgpc_type(sizeint_type);
@@ -3545,7 +3557,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* PtrUInt and PtrInt for FPC compatibility (pointer-sized integers) */
     char *ptruint_name = strdup("PtrUInt");
     if (ptruint_name != NULL) {
-        KgpcType *ptruint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *ptruint_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(ptruint_type != NULL && "Failed to create PtrUInt type");
         AddBuiltinType_Typed(symtab, ptruint_name, ptruint_type);
         destroy_kgpc_type(ptruint_type);
@@ -3553,7 +3565,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *ptrint_name = strdup("PtrInt");
     if (ptrint_name != NULL) {
-        KgpcType *ptrint_type = create_primitive_type_with_size(LONGINT_TYPE, 8);
+        KgpcType *ptrint_type = create_primitive_type_with_size(INT64_TYPE, 8);
         assert(ptrint_type != NULL && "Failed to create PtrInt type");
         AddBuiltinType_Typed(symtab, ptrint_name, ptrint_type);
         destroy_kgpc_type(ptrint_type);

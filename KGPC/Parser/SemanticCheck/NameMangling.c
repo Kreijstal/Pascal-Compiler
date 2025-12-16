@@ -103,10 +103,13 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
         strcasecmp(type_name, "Word") == 0 || strcasecmp(type_name, "TSystemCodePage") == 0)
         return HASHVAR_INTEGER;
     
-    if (strcasecmp(type_name, "LongInt") == 0 || strcasecmp(type_name, "Int64") == 0 ||
+    if (strcasecmp(type_name, "LongInt") == 0)
+        return HASHVAR_LONGINT;
+    
+    if (strcasecmp(type_name, "Int64") == 0 ||
         strcasecmp(type_name, "QWord") == 0 || strcasecmp(type_name, "SizeInt") == 0 ||
         strcasecmp(type_name, "SizeUInt") == 0)
-        return HASHVAR_LONGINT;
+        return HASHVAR_INT64;
     
     // Real types
     if (strcasecmp(type_name, "Real") == 0 || strcasecmp(type_name, "Double") == 0)
