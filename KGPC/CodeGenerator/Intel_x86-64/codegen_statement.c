@@ -3800,22 +3800,22 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
 
         /* For char arrays being treated as strings, we need to load the address */
-        Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *value_reg = NULL;
         if (expr != NULL && expr_type == CHAR_TYPE && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
         {
-            /* Load address of char array */
+            /* Load address of char array. codegen_address_for_expr allocates its own register. */
             inst_list = codegen_address_for_expr(expr, inst_list, ctx, &value_reg);
-            if (codegen_had_error(ctx))
+            if (codegen_had_error(ctx) || value_reg == NULL)
             {
-                free_reg(get_reg_stack(), value_reg);
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
                 return inst_list;
             }
         }
         else if (expr != NULL && expr->type == EXPR_RELOP)
         {
-            /* Use special relop handling for char set IN operations and other relops */
-            free_reg(get_reg_stack(), value_reg); /* Will get a new register from codegen_relop_to_value */
-            value_reg = NULL;
+            /* Use special relop handling for char set IN operations and other relops.
+             * codegen_relop_to_value allocates its own register. */
             inst_list = codegen_relop_to_value(expr, inst_list, ctx, &value_reg);
             if (codegen_had_error(ctx) || value_reg == NULL)
             {
@@ -3826,7 +3826,13 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
         else
         {
-            /* Load value normally */
+            /* Load value normally - need to allocate register for expr tree evaluation */
+            value_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (value_reg == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: Unable to allocate register for write value.");
+                return inst_list;
+            }
             expr_node_t *expr_tree = build_expr_tree(expr);
             inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, value_reg);
             free_expr_tree(expr_tree);
@@ -4106,16 +4112,17 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
         struct Expression *expr = (struct Expression *)args->cur;
         int expr_type = (expr != NULL) ? expr_get_type_tag(expr) : UNKNOWN_TYPE;
         
-        /* Get address of the variable to read into and save to stack */
-        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        /* Get address of the variable to read into and save to stack.
+         * codegen_address_for_expr allocates its own register, so we pass NULL
+         * and let it handle register allocation. */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
         if (addr_reg == NULL)
         {
             codegen_report_error(ctx, "ERROR: Unable to allocate register for read address.");
             args = args->next;
             continue;
         }
-        
-        inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx))
         {
             free_reg(get_reg_stack(), addr_reg);
