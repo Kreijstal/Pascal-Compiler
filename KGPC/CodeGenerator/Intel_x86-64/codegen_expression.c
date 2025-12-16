@@ -4273,11 +4273,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
     }
 
-    if (stack_slot_count > 0)
+    if (stack_slot_count > 0 || codegen_target_is_windows())
     {
+        /* Windows x64 requires the caller to reserve 32 bytes of shadow space for
+         * *every* call, even when all args fit in registers. Stack-passed args are
+         * placed after that shadow space. */
+        int shadow_space = codegen_target_is_windows() ? 32 : 0;
         int stack_bytes = stack_slot_count * CODEGEN_POINTER_SIZE_BYTES;
         int padding = codegen_expr_align_to(stack_bytes, REQUIRED_OFFSET) - stack_bytes;
-        int total_stack_area = stack_bytes + padding;
+        int total_stack_area = shadow_space + stack_bytes + padding;
         if (total_stack_area > 0)
         {
             snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", total_stack_area);
@@ -4287,7 +4291,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             for (int i = 0; i < arg_num; ++i)
             {
                 if (arg_infos[i].pass_via_stack)
-                    arg_infos[i].stack_offset = padding + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
+                    arg_infos[i].stack_offset =
+                        shadow_space + padding + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
             }
         }
     }
