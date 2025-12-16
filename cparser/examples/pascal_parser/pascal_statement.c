@@ -4,10 +4,10 @@
 #include "pascal_keywords.h"
 #include "pascal_peek.h"
 #include "pascal_statement_keywords.h"
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
