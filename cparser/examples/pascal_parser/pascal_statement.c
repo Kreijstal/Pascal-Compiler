@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <assert.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -284,7 +283,6 @@ static bool is_statement_boundary_token(input_t* in) {
 }
 
 static ast_t* make_empty_statement_node(input_t* in) {
-    assert(in != NULL);
     ast_t* node = new_ast();
     node->typ = PASCAL_T_STATEMENT;
     node->child = NULL;
@@ -295,8 +293,11 @@ static ast_t* make_empty_statement_node(input_t* in) {
 
 static ParseResult empty_statement_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
+    if (in == NULL) {
+        return make_failure(NULL, strdup("Empty statement parser requires input"));
+    }
     if (!is_statement_boundary_token(in)) {
-        return make_failure_v2(in, parser_name, strdup("Empty statement only valid at boundary"), NULL);
+        return make_failure_v2(in, parser_name, strdup("Empty statement can only appear before boundary tokens (end, else, until, except, finally)"), NULL);
     }
     return make_success(make_empty_statement_node(in));
 }
