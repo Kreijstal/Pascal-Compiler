@@ -277,7 +277,7 @@ static bool is_statement_boundary_token(input_t* in) {
     }
 
     return (word_len == 3 && strncasecmp(buffer + pos, "end", 3) == 0) ||
-           (word_len == 4 && (strncasecmp(buffer + pos, "else", 4) == 0)) ||
+           (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
            (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
            (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
            (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);

@@ -1915,7 +1915,7 @@ void test_pascal_if_then_empty_before_end(void) {
     combinator_t* p = get_program_parser();
 
     input_t* input = new_input();
-    input->buffer = strdup("var state : integer;\nbegin begin begin if state = 1 then end end end.");
+    input->buffer = strdup("var test_value : integer;\nbegin begin begin if test_value = 1 then end end end.");
     input->length = strlen(input->buffer);
 
     ParseResult res = parse(input, p);
