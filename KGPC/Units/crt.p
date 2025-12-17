@@ -91,11 +91,11 @@ begin
             for i := 1 to col_count do
                 write(' ');
         end;
+        crt_gotoxy_abs(crt_win_x1, crt_win_y1);
     end;
 
     crt_cur_x := 1;
     crt_cur_y := 1;
-    gotoxy(1, 1);
 end;
 
 procedure clreol;
