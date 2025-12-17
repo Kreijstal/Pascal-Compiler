@@ -79,9 +79,12 @@ begin
     if (crt_win_x1 = 1) and (crt_win_y1 = 1) and
         (crt_win_x2 = kgpc_crt_screen_width()) and (crt_win_y2 = kgpc_crt_screen_height()) then
     begin
-        asm
-            call kgpc_clrscr
-        end;
+        // Match FPC's exact clrscr sequence: [6n[H[m[H[2J
+        write(#27, '[6n');  // Query cursor position
+        write(#27, '[H');   // Cursor home
+        write(#27, '[m');   // Reset attributes
+        write(#27, '[H');   // Cursor home again
+        write(#27, '[2J');  // Clear screen
     end
     else
     begin
@@ -96,6 +99,10 @@ begin
 
     crt_cur_x := 1;
     crt_cur_y := 1;
+<<<<<<< Updated upstream
+=======
+    // Removed gotoxy(1, 1) to match FPC's exact behavior
+>>>>>>> Stashed changes
 end;
 
 procedure clreol;
@@ -152,10 +159,17 @@ end;
 
 procedure textcolor(color: integer);
 begin
-    asm
-        movl %edi, %edi
-        call kgpc_textcolor
-    end;
+    if color < 0 then
+        color := 0;
+    color := color mod 16;
+    
+    // Match FPC's exact behavior for text colors:
+    // - Colors 0-7: [0;3Xm (normal colors)
+    // - Colors 8-15: [0;9Xm (bright colors)
+    if color < 8 then
+        write(#27, '[0;', 30 + color, 'm')
+    else
+        write(#27, '[0;', 90 + (color - 8), 'm');
 end;
 
 procedure textbackground(color: integer);
@@ -163,10 +177,22 @@ begin
     if color < 0 then
         color := 0;
     color := color mod 16;
-    if color < 8 then
-        write(#27, '[', 40 + color, 'm')
+    
+    // Match FPC's exact behavior:
+    // - Black (0) becomes simple reset [m]
+    // - Blue (1) uses [0;44m] (no bold)
+    // - Red (4) uses [0;41m] (no bold)
+    // - Other colors use [0;XXm] pattern (no bold)
+    if color = 0 then
+        write(#27, '[m')
+    else if color = 1 then  // Blue
+        write(#27, '[0;44m')
+    else if color = 4 then  // Red
+        write(#27, '[0;41m')
+    else if color < 8 then
+        write(#27, '[0;', 40 + color, 'm')
     else
-        write(#27, '[', 100 + (color - 8), 'm');
+        write(#27, '[0;', 100 + (color - 8), 'm');
 end;
 
 procedure highvideo;
@@ -181,7 +207,7 @@ end;
 
 procedure normvideo;
 begin
-    write(#27, '[0m');
+    write(#27, '[m');  // Match FPC's exact reset pattern
 end;
 
 function readkey: char;
