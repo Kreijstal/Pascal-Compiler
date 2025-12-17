@@ -1848,6 +1848,8 @@ static Register_t *codegen_try_get_reg(ListNode_t **inst_list, CodeGenContext *c
 {
     Register_t *reg = get_free_reg(get_reg_stack(), inst_list);
     if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), inst_list);
+    if (reg == NULL)
         codegen_report_error(ctx, "ERROR: Unable to allocate register for %s.", usage);
     return reg;
 }

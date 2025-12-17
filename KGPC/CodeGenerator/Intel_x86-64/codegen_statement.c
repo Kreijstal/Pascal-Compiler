@@ -6052,19 +6052,9 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", index_slot->offset);
         inst_list = add_inst(inst_list, buffer);
         
-        // Load FCount from stack slot (to avoid register clobbering by loop body)
-        Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
-        if (count_reg != NULL) {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", count_slot->offset, count_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, %%rax\n", count_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), count_reg);
-        } else {
-            // Fallback: compare directly with memory operand
-            snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %%rax\n", count_slot->offset);
-            inst_list = add_inst(inst_list, buffer);
-        }
+        // Compare directly against cached FCount from stack slot
+        snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %%rax\n", count_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
         
         // Jump to body if index < count
         snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", body_label);

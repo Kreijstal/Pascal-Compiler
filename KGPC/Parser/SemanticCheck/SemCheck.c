@@ -1434,6 +1434,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 0;
             }
             
+            if (id != NULL)
+                fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
             fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), and Chr() function calls are supported in const expressions.\n");
             return 1;
         }
