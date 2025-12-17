@@ -24,6 +24,7 @@ static int kgpc_env_flag(const char *name);
 #include <windows.h>
 #include <time.h>
 #include <errno.h>
+#include <conio.h>
 #include <io.h>
 #include <fcntl.h>
 #include <direct.h>
@@ -31,6 +32,10 @@ static int kgpc_env_flag(const char *name);
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <sys/select.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -148,6 +153,19 @@ static FILE *kgpc_text_output_stream(KGPCTextFile *file)
     }
 #endif
     return stdout;
+}
+
+static void kgpc_flush_text_output_stream(FILE *dest)
+{
+    if (dest == NULL)
+        return;
+#ifdef _WIN32
+    if (_isatty(_fileno(dest)))
+        fflush(dest);
+#else
+    if (isatty(fileno(dest)))
+        fflush(dest);
+#endif
 }
 
 static FILE *kgpc_text_input_stream(KGPCTextFile *file)
@@ -1084,6 +1102,212 @@ void kgpc_textcolor(int color)
     fflush(stdout);
 }
 
+int kgpc_crt_screen_width(void)
+{
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (GetConsoleScreenBufferInfo(handle, &csbi))
+            return (int)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+    }
+    return 80;
+#else
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+        return (int)ws.ws_col;
+    return 80;
+#endif
+}
+
+int kgpc_crt_screen_height(void)
+{
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle != INVALID_HANDLE_VALUE)
+    {
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (GetConsoleScreenBufferInfo(handle, &csbi))
+            return (int)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+    }
+    return 25;
+#else
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)
+        return (int)ws.ws_row;
+    return 25;
+#endif
+}
+
+#ifndef _WIN32
+static int kgpc_keyboard_initialized = 0;
+static struct termios kgpc_keyboard_saved_termios;
+
+static void kgpc_keyboard_restore_terminal(void)
+{
+    if (!kgpc_keyboard_initialized)
+        return;
+    tcsetattr(STDIN_FILENO, TCSANOW, &kgpc_keyboard_saved_termios);
+}
+
+static void kgpc_keyboard_init_once(void)
+{
+    if (kgpc_keyboard_initialized)
+        return;
+    if (tcgetattr(STDIN_FILENO, &kgpc_keyboard_saved_termios) != 0)
+        return;
+
+    struct termios raw = kgpc_keyboard_saved_termios;
+    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
+    raw.c_iflag &= (tcflag_t) ~(IXON | ICRNL);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0)
+        return;
+
+    kgpc_keyboard_initialized = 1;
+    atexit(kgpc_keyboard_restore_terminal);
+}
+#endif
+
+static unsigned char kgpc_keybuf[64];
+static int kgpc_keybuf_head = 0;
+static int kgpc_keybuf_tail = 0;
+
+static int kgpc_keybuf_is_empty(void)
+{
+    return kgpc_keybuf_head == kgpc_keybuf_tail;
+}
+
+static int kgpc_keybuf_is_full(void)
+{
+    return ((kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf)) == kgpc_keybuf_head;
+}
+
+static void kgpc_keybuf_push(unsigned char value)
+{
+    if (kgpc_keybuf_is_full())
+        return;
+    kgpc_keybuf[kgpc_keybuf_tail] = value;
+    kgpc_keybuf_tail = (kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf);
+}
+
+static int kgpc_keybuf_peek(void)
+{
+    if (kgpc_keybuf_is_empty())
+        return 0;
+    return (int)kgpc_keybuf[kgpc_keybuf_head];
+}
+
+static int kgpc_keybuf_pop(void)
+{
+    if (kgpc_keybuf_is_empty())
+        return 0;
+    int value = (int)kgpc_keybuf[kgpc_keybuf_head];
+    kgpc_keybuf_head = (kgpc_keybuf_head + 1) % (int)sizeof(kgpc_keybuf);
+    return value;
+}
+
+static void kgpc_keyboard_fill_nonblocking(void)
+{
+#ifdef _WIN32
+    while (!_kbhit())
+        break;
+    while (_kbhit())
+    {
+        int ch = _getch();
+        if (ch >= 0 && ch <= 255)
+            kgpc_keybuf_push((unsigned char)ch);
+        else
+            break;
+    }
+#else
+    kgpc_keyboard_init_once();
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(STDIN_FILENO, &rfds);
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+    int ready = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+    if (ready <= 0 || !FD_ISSET(STDIN_FILENO, &rfds))
+        return;
+
+    int available = 0;
+    if (ioctl(STDIN_FILENO, FIONREAD, &available) == 0 && available > 0)
+    {
+        while (available > 0 && !kgpc_keybuf_is_full())
+        {
+            unsigned char c = 0;
+            ssize_t got = read(STDIN_FILENO, &c, 1);
+            if (got == 1)
+                kgpc_keybuf_push(c);
+            else
+                break;
+            --available;
+        }
+        return;
+    }
+
+    int saved_flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    if (saved_flags != -1)
+        (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags | O_NONBLOCK);
+
+    while (!kgpc_keybuf_is_full())
+    {
+        unsigned char c = 0;
+        ssize_t got = read(STDIN_FILENO, &c, 1);
+        if (got == 1)
+        {
+            kgpc_keybuf_push(c);
+            continue;
+        }
+        if (got == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            break;
+        break;
+    }
+
+    if (saved_flags != -1)
+        (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags);
+#endif
+}
+
+int kgpc_keyboard_poll(void)
+{
+    kgpc_keyboard_fill_nonblocking();
+    return kgpc_keybuf_peek();
+}
+
+int kgpc_keyboard_get(void)
+{
+    kgpc_keyboard_fill_nonblocking();
+    return kgpc_keybuf_pop();
+}
+
+int kgpc_keyboard_read_char(void)
+{
+    int ch = kgpc_keyboard_get();
+    if (ch != 0)
+        return ch;
+
+#ifdef _WIN32
+    return _getch();
+#else
+    kgpc_keyboard_init_once();
+    unsigned char c = 0;
+    ssize_t got = 0;
+    do
+    {
+        got = read(STDIN_FILENO, &c, 1);
+    } while (got == -1 && errno == EINTR);
+    if (got == 1)
+        return (int)c;
+    return -1;
+#endif
+}
+
 /* 
  * Dynamic Array ABI Design (Model A - Embedded Descriptor)
  * =========================================================
@@ -1192,6 +1416,7 @@ void kgpc_write_integer(KGPCTextFile *file, int width, int64_t value)
         fprintf(dest, "%-*lld", -width, (long long)value);
     else
         fprintf(dest, "%lld", (long long)value);
+    kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_write_unsigned(KGPCTextFile *file, int width, uint64_t value)
@@ -1211,6 +1436,7 @@ void kgpc_write_unsigned(KGPCTextFile *file, int width, uint64_t value)
         fprintf(dest, "%-*llu", -width, (unsigned long long)value);
     else
         fprintf(dest, "%llu", (unsigned long long)value);
+    kgpc_flush_text_output_stream(dest);
 }
 
 static size_t kgpc_string_known_length(const char *value);
@@ -1258,6 +1484,7 @@ void kgpc_write_string(KGPCTextFile *file, int width, const char *value)
     {
         fwrite(value, 1, len, dest);
     }
+    kgpc_flush_text_output_stream(dest);
 }
 
 /* Write a char array with specified maximum length (for Pascal char arrays) */
@@ -1286,6 +1513,7 @@ void kgpc_write_char_array(KGPCTextFile *file, int width, const char *value, siz
         fprintf(dest, "%-*.*s", -width, (int)actual_len, value);
     else
         fprintf(dest, "%.*s", (int)actual_len, value);
+    kgpc_flush_text_output_stream(dest);
 }
 
 /* Write ShortString (Pascal string with length byte at index 0) */
@@ -1312,6 +1540,7 @@ void kgpc_write_shortstring(KGPCTextFile *file, int width, const char *value)
         fprintf(dest, "%-*.*s", -width, (int)len, str_data);
     else
         fprintf(dest, "%.*s", (int)len, str_data);
+    kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_write_newline(KGPCTextFile *file)
@@ -1348,6 +1577,7 @@ void kgpc_write_boolean(KGPCTextFile *file, int width, int value)
         fprintf(dest, "%-*s", -width, text);
     else
         fprintf(dest, "%s", text);
+    kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_write_real(KGPCTextFile *file, int width, int precision, int64_t value_bits)
@@ -1386,6 +1616,7 @@ void kgpc_write_real(KGPCTextFile *file, int width, int precision, int64_t value
         else
             fprintf(dest, "%.*f", precision, value);
     }
+    kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_raise(int64_t value)

@@ -3204,11 +3204,48 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     }
     else
     {
-        /* Original path for non-floating-point comparisons */
-        inst_list = codegen_expr(expr->expr_data.relop_data.left, inst_list, ctx);
-        left_reg = get_free_reg(get_reg_stack(), &inst_list);
-        inst_list = codegen_expr(expr->expr_data.relop_data.right, inst_list, ctx);
-        right_reg = front_reg_stack(get_reg_stack());
+        /* Non-floating-point comparisons: evaluate both operands into registers.
+         * The right operand may contain function calls (e.g. Length(s)) that clobber
+         * caller-saved registers, so preserve the left operand via a spill slot. */
+        inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &left_reg);
+        if (codegen_had_error(ctx) || left_reg == NULL)
+            return inst_list;
+
+        const int use_qword_spill = expression_uses_qword(left_expr) || expression_uses_qword(right_expr);
+        StackNode_t *left_int_spill = add_l_t("relop_left_spill");
+        if (left_int_spill != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmov%c\t%s, -%d(%%rbp)\n",
+                use_qword_spill ? 'q' : 'l',
+                use_qword_spill ? left_reg->bit_64 : left_reg->bit_32,
+                left_int_spill->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), left_reg);
+            left_reg = NULL;
+        }
+
+        inst_list = codegen_expr_with_result(right_expr, inst_list, ctx, &right_reg);
+        if (codegen_had_error(ctx) || right_reg == NULL)
+        {
+            if (left_reg != NULL)
+                free_reg(get_reg_stack(), left_reg);
+            return inst_list;
+        }
+
+        if (left_int_spill != NULL)
+        {
+            left_reg = codegen_try_get_reg(&inst_list, ctx, "relop_left_reload");
+            if (left_reg == NULL)
+            {
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmov%c\t-%d(%%rbp), %s\n",
+                use_qword_spill ? 'q' : 'l',
+                left_int_spill->offset,
+                use_qword_spill ? left_reg->bit_64 : left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     if (left_reg == NULL || right_reg == NULL)
@@ -3499,6 +3536,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         : register_name_for_expr(right_reg, right_expr);
     snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", use_qword ? 'q' : 'l', right_name, left_name);
     inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), right_reg);
     free_reg(get_reg_stack(), left_reg);
 
     CODEGEN_DEBUG("DEBUG: Simple relop generated\n");

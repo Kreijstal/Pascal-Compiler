@@ -42,4 +42,13 @@ int kgpc_directory_remove(const char *path);
 int kgpc_file_rename(const char *old_path, const char *new_path);
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr);
 
+/* Console / keyboard helpers used by KGPC RTL units (Crt/Keyboard). */
+void kgpc_clrscr(void);
+void kgpc_textcolor(int color);
+int kgpc_crt_screen_width(void);
+int kgpc_crt_screen_height(void);
+int kgpc_keyboard_poll(void);
+int kgpc_keyboard_get(void);
+int kgpc_keyboard_read_char(void);
+
 #endif /* KGPC_RUNTIME_INTERNAL_H */

@@ -5422,11 +5422,18 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     {
         /* DIRECT CALL LOGIC */
 
-        int callee_needs_static_link = codegen_proc_requires_static_link(ctx, proc_name);
+        int requires_static_link = 0;
+        if (call_kgpc_type != NULL && call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+            call_kgpc_type->info.proc_info.definition != NULL)
+        {
+            requires_static_link = call_kgpc_type->info.proc_info.definition
+                ->tree_data.subprogram_data.requires_static_link;
+        }
+
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, proc_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
-        int should_pass_static_link = (callee_needs_static_link && have_depth);
+        int should_pass_static_link = requires_static_link;
 
         enum {
             STATIC_LINK_NONE = 0,
@@ -5442,7 +5449,11 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
         if (should_pass_static_link)
         {
-            if (callee_depth > current_depth)
+            if (!have_depth)
+            {
+                static_link_source = STATIC_LINK_FROM_RBP;
+            }
+            else if (callee_depth > current_depth)
             {
                 static_link_source = STATIC_LINK_FROM_RBP;
             }
