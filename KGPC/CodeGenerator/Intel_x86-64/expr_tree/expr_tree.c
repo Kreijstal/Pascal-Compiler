@@ -611,6 +611,22 @@ static const char *reg32_to_reg64(const char *reg_name, char *buffer, size_t buf
     return reg_name;
 }
 
+static int operand_is_32bit_register(const char *operand)
+{
+    if (operand == NULL)
+        return 0;
+    if (strcmp(operand, "%eax") == 0 ||
+        strcmp(operand, "%ebx") == 0 ||
+        strcmp(operand, "%ecx") == 0 ||
+        strcmp(operand, "%edx") == 0 ||
+        strcmp(operand, "%esi") == 0 ||
+        strcmp(operand, "%edi") == 0)
+        return 1;
+
+    size_t len = strlen(operand);
+    return (len > 0 && operand[0] == '%' && operand[len - 1] == 'd');
+}
+
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
@@ -1135,6 +1151,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* For function calls, get the KgpcType from cached call info populated during semcheck.
          * Fall back to a fresh symbol lookup when metadata is unavailable. */
         struct KgpcType *func_type = NULL;
+        HashNode_t *func_node = NULL;
         if (expr->expr_data.function_call_data.is_call_info_valid)
         {
             func_type = expr->expr_data.function_call_data.call_kgpc_type;
@@ -1142,7 +1159,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
             expr->expr_data.function_call_data.id != NULL)
         {
-            HashNode_t *func_node = NULL;
             if (FindIdent(&func_node, ctx->symtab,
                     expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
             {
@@ -1150,12 +1166,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
         }
         
-        /* Check if the function being called requires a static link */
-        int callee_needs_static_link = codegen_proc_requires_static_link(ctx, func_mangled_name);
+        /* Check if the function being called requires a static link.
+         * Note: KGPC's calling convention uses an implicit first argument (static link)
+         * for normal Pascal functions/procedures, so we key off semantic metadata when available. */
         int callee_depth = 0;
         int have_depth = codegen_proc_static_link_depth(ctx, func_mangled_name, &callee_depth);
         int current_depth = codegen_get_lexical_depth(ctx);
-        int should_pass_static_link = (callee_needs_static_link && have_depth);
+        int should_pass_static_link = (func_node != NULL && func_node->requires_static_link) ||
+            codegen_proc_requires_static_link(ctx, func_mangled_name);
 
         enum {
             STATIC_LINK_NONE = 0,
@@ -1169,7 +1187,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         if (should_pass_static_link)
         {
-            if (callee_depth > current_depth)
+            if (!have_depth)
+            {
+                static_link_source = STATIC_LINK_FROM_RBP;
+            }
+            else if (callee_depth > current_depth)
             {
                 static_link_source = STATIC_LINK_FROM_RBP;
             }
@@ -2624,29 +2646,54 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             {
                 const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
+                const char *op_left = left;
+                const char *op_right = right;
+                char left64_buf[16], right64_buf[16];
+
+                if (use_qword_op)
+                {
+                    const char *left64 = reg32_to_reg64(left, left64_buf, sizeof(left64_buf));
+                    const char *right64 = reg32_to_reg64(right, right64_buf, sizeof(right64_buf));
+
+                    if (operand_is_32bit_register(left) && left64 != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    if (operand_is_32bit_register(right) && right64 != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    if (left64 != NULL)
+                        op_left = left64;
+                    if (right64 != NULL)
+                        op_right = right64;
+                }
             if(type == STAR)
             {
-                snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, right, left);
+                snprintf(buffer, sizeof(buffer), "\timul%c\t%s, %s\n", arith_suffix, op_right, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == AND)
             {
-                snprintf(buffer, sizeof(buffer), "\tand%c\t%s, %s\n", arith_suffix, right, left);
+                snprintf(buffer, sizeof(buffer), "\tand%c\t%s, %s\n", arith_suffix, op_right, op_left);
                 inst_list = add_inst(inst_list, buffer);
             }
             else if(type == MOD)
             {
                 if (use_qword_op)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", right);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", op_right);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdx, %s\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rdx, %s\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 else
@@ -2680,15 +2727,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 if (use_qword_op)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tcqo\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", right);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r10\n", op_right);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = add_inst(inst_list, "\tidivq\t%r10\n");
 
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", left);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", op_left);
                     inst_list = add_inst(inst_list, buffer);
                 }
                 else
