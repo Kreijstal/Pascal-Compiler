@@ -1446,9 +1446,122 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 0;
             }
             
+            /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64 and other integer typecasts 
+             * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0))) */
+            if (id != NULL && (pascal_identifier_equals(id, "Cardinal") ||
+                               pascal_identifier_equals(id, "LongWord") ||
+                               pascal_identifier_equals(id, "DWord") ||
+                               pascal_identifier_equals(id, "QWord") ||
+                               pascal_identifier_equals(id, "Int64") ||
+                               pascal_identifier_equals(id, "UInt64") ||
+                               pascal_identifier_equals(id, "NativeInt") ||
+                               pascal_identifier_equals(id, "NativeUInt") ||
+                               pascal_identifier_equals(id, "SizeInt") ||
+                               pascal_identifier_equals(id, "SizeUInt") ||
+                               pascal_identifier_equals(id, "ShortInt") ||
+                               pascal_identifier_equals(id, "SmallInt") ||
+                               pascal_identifier_equals(id, "LongInt")))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
+                    return 1;
+                }
+                
+                /* Evaluate the argument as a const expression */
+                long long int_value;
+                if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                {
+                    fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
+                    return 1;
+                }
+                
+                /* Apply appropriate mask for the target type */
+                if (pascal_identifier_equals(id, "Cardinal") ||
+                    pascal_identifier_equals(id, "LongWord") ||
+                    pascal_identifier_equals(id, "DWord"))
+                {
+                    *out_value = (unsigned int)(int_value & 0xFFFFFFFFULL);
+                }
+                else if (pascal_identifier_equals(id, "ShortInt"))
+                {
+                    *out_value = (signed char)(int_value & 0xFF);
+                }
+                else if (pascal_identifier_equals(id, "SmallInt"))
+                {
+                    *out_value = (short)(int_value & 0xFFFF);
+                }
+                else if (pascal_identifier_equals(id, "LongInt"))
+                {
+                    *out_value = (int)(int_value & 0xFFFFFFFFULL);
+                }
+                else
+                {
+                    /* QWord, Int64, UInt64, NativeInt, NativeUInt, SizeInt, SizeUInt - 64-bit */
+                    *out_value = int_value;
+                }
+                return 0;
+            }
+            
             if (id != NULL)
                 fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
             fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), and Chr() function calls are supported in const expressions.\n");
+            return 1;
+        }
+        case EXPR_RELOP:
+        {
+            /* Handle NOT operator for constant expressions (bitwise NOT) */
+            /* FPC bootstrap uses: Cardinal(not Cardinal(0)) */
+            if (expr->expr_data.relop_data.type == NOT)
+            {
+                /* NOT is a unary operator - right operand is NULL */
+                struct Expression *operand = expr->expr_data.relop_data.left;
+                if (operand == NULL)
+                {
+                    fprintf(stderr, "Error: NOT operator requires an operand.\n");
+                    return 1;
+                }
+                
+                long long operand_value;
+                if (evaluate_const_expr(symtab, operand, &operand_value) != 0)
+                {
+                    fprintf(stderr, "Error: NOT operand must be a const expression.\n");
+                    return 1;
+                }
+                
+                /* Bitwise NOT */
+                *out_value = ~operand_value;
+                return 0;
+            }
+            /* Relational operators (comparisons) for const expressions */
+            if (expr->expr_data.relop_data.left != NULL && expr->expr_data.relop_data.right != NULL)
+            {
+                long long left_val, right_val;
+                if (evaluate_const_expr(symtab, expr->expr_data.relop_data.left, &left_val) != 0)
+                    return 1;
+                if (evaluate_const_expr(symtab, expr->expr_data.relop_data.right, &right_val) != 0)
+                    return 1;
+                
+                switch (expr->expr_data.relop_data.type)
+                {
+                    case EQ: *out_value = (left_val == right_val) ? 1 : 0; return 0;
+                    case NE: *out_value = (left_val != right_val) ? 1 : 0; return 0;
+                    case LT: *out_value = (left_val < right_val) ? 1 : 0; return 0;
+                    case LE: *out_value = (left_val <= right_val) ? 1 : 0; return 0;
+                    case GT: *out_value = (left_val > right_val) ? 1 : 0; return 0;
+                    case GE: *out_value = (left_val >= right_val) ? 1 : 0; return 0;
+                    default:
+                        break;
+                }
+            }
+            fprintf(stderr, "Error: unsupported relational operator in const expression.\n");
             return 1;
         }
         default:
