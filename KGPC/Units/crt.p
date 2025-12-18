@@ -40,12 +40,10 @@ function kgpc_crt_screen_width: integer; external;
 function kgpc_crt_screen_height: integer; external;
 
 const
-    // Turbo Pascal colour indices do not match ANSI SGR colour order.
-    // These lookup tables map the Crt constants (0..15) to ANSI codes.
+    // FPC's Crt maps Turbo Pascal colour indices onto ANSI SGR codes but uses
+    // bold ("1") for bright colours instead of the 90-97 range.
     tp_to_ansi_fg: array[0..7] of integer = (30, 34, 32, 36, 31, 35, 33, 37);
-    tp_to_ansi_fg_bright: array[0..7] of integer = (90, 94, 92, 96, 91, 95, 93, 97);
     tp_to_ansi_bg: array[0..7] of integer = (40, 44, 42, 46, 41, 45, 43, 47);
-    tp_to_ansi_bg_bright: array[0..7] of integer = (100, 104, 102, 106, 101, 105, 103, 107);
 
 var
     crt_win_x1: integer = 1;
@@ -87,10 +85,12 @@ begin
     if (crt_win_x1 = 1) and (crt_win_y1 = 1) and
         (crt_win_x2 = kgpc_crt_screen_width()) and (crt_win_y2 = kgpc_crt_screen_height()) then
     begin
-        // Emit a deterministic clear-screen sequence suitable for captured output.
-        // (Some terminals respond to DSR queries; emitting them breaks test output.)
-        write(#27, '[2J');  // Clear screen
+        // Match FPC's clrscr sequence when stdout is a terminal and stdin is not:
+        // [H[m[H[2J
         write(#27, '[H');   // Cursor home
+        write(#27, '[m');   // Reset attributes
+        write(#27, '[H');   // Cursor home again
+        write(#27, '[2J');  // Clear screen
     end
     else
     begin
@@ -171,8 +171,26 @@ begin
     if color < 8 then
         ansi_code := tp_to_ansi_fg[color]
     else
-        ansi_code := tp_to_ansi_fg_bright[color - 8];
-    write(#27, '[0;', ansi_code, 'm');
+        ansi_code := tp_to_ansi_fg[color - 8];
+
+    // FPC special-cases some colours:
+    // - 0: uses "[30m" (no leading "0;")
+    // - 7: uses "[m" (reset)
+    // - 8: uses "[1;30m"
+    // - 9..14: uses "[0;1;<code>m"
+    // - 15: uses "[0;1m"
+    if color = 0 then
+        write(#27, '[', ansi_code, 'm')
+    else if color = 7 then
+        write(#27, '[m')
+    else if color = 8 then
+        write(#27, '[1;', ansi_code, 'm')
+    else if (color >= 9) and (color <= 14) then
+        write(#27, '[0;1;', ansi_code, 'm')
+    else if color = 15 then
+        write(#27, '[0;1m')
+    else
+        write(#27, '[0;', ansi_code, 'm');
 end;
 
 procedure textbackground(color: integer);
@@ -187,10 +205,7 @@ begin
         write(#27, '[m')
     else
     begin
-        if color < 8 then
-            ansi_code := tp_to_ansi_bg[color]
-        else
-            ansi_code := tp_to_ansi_bg_bright[color - 8];
+        ansi_code := tp_to_ansi_bg[color mod 8];
         write(#27, '[0;', ansi_code, 'm');
     end;
 end;
