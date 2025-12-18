@@ -153,10 +153,14 @@ static inline int get_var_storage_size(HashNode_t *node)
             {
                 case LONGINT_TYPE:
                     return 4;  // Match FPC's 32-bit LongInt
+                case INT64_TYPE:
+                    return 8;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
                 case FILE_TYPE:
                 case TEXT_TYPE:
+                case POINTER_TYPE:
+                case PROCEDURE:
                     return 8;
                 case SET_TYPE:
                 {
@@ -166,6 +170,8 @@ static inline int get_var_storage_size(HashNode_t *node)
                         return (int)size;
                     return DOUBLEWORD;  /* Default for non-char sets */
                 }
+                case CHAR_TYPE:
+                    return 1;
                 default:
                     return DOUBLEWORD;  /* 4 bytes for most primitives */
             }

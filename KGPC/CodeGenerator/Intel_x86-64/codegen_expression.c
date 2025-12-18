@@ -348,11 +348,10 @@ static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size)
 {
     if (size <= 0)
         size = DOUBLEWORD;
-    int aligned = codegen_expr_align_to(size, DOUBLEWORD);
     char label[32];
     snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp",
         codegen_expr_next_temp_suffix());
-    return add_l_t_bytes(label, aligned);
+    return add_l_t_bytes(label, size);
 }
 
 static int formal_decl_is_open_array(Tree_t *decl)
@@ -1069,6 +1068,9 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     (void)ctx; /* Reserved for future use */
     if (expr == NULL)
         return -1;
+
+    if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
+        return (long long)sizeof(kgpc_tvarrec);
     
     /* Prefer KgpcType if available */
     if (expr->resolved_kgpc_type != NULL && kgpc_type_is_array(expr->resolved_kgpc_type))
@@ -1489,6 +1491,12 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
     if (record == NULL)
     {
         *size_out = 0;
+        return 0;
+    }
+
+    if (record->has_cached_size && record->cached_size > 0)
+    {
+        *size_out = record->cached_size;
         return 0;
     }
 
@@ -2817,7 +2825,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
     assert(out_size != NULL);
 
     int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
-    int base_is_pointer = expr_has_type_tag(array_expr, POINTER_TYPE);
+    int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !array_expr->is_array_expr);
     long long element_size_ll = 1;
 
     if (base_is_string)

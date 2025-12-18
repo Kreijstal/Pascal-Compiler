@@ -896,6 +896,35 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         
         if (var_node == NULL)
         {
+            /* Procedures/functions used as values (e.g. @Proc, typed proc constants) */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *proc_node = NULL;
+                if (FindIdent(&proc_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    proc_node != NULL &&
+                    (proc_node->hash_type == HASHTYPE_PROCEDURE ||
+                     proc_node->hash_type == HASHTYPE_FUNCTION) &&
+                    proc_node->mangled_id != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for procedure address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        proc_node->mangled_id, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
             /* Constant set literals (set of char) are materialized in rodata */
             if (ctx->symtab != NULL)
             {
@@ -1770,6 +1799,31 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     }
 
     int dest_is_char_set = expr_is_char_set_ctx(dest_expr, ctx);
+
+    /* Default(TRecord) intrinsic: zero-initialize destination without evaluating source */
+    if (src_expr->is_default_initializer)
+    {
+        const char *dest_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+        const char *val_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+        const char *size_arg_reg = codegen_target_is_windows() ? "%r8"  : "%rdx";
+
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, dest_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorq\t%%rax, %%rax\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", val_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = add_inst(inst_list, "\tcall\tmemset\n");
+        free_arg_regs();
+
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
 
     if (!codegen_expr_is_addressable(src_expr))
     {
@@ -5372,7 +5426,40 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         
         /* 2. Generate code to load the procedure's address into a register */
         Register_t *addr_reg = NULL;
-        inst_list = codegen_evaluate_expr(callee_expr, inst_list, ctx, &addr_reg);
+        int load_from_memory = 0;
+
+        if (callee_expr->type == EXPR_RECORD_ACCESS ||
+            callee_expr->type == EXPR_ARRAY_ACCESS ||
+            callee_expr->type == EXPR_POINTER_DEREF)
+        {
+            load_from_memory = 1;
+        }
+        else if (callee_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+        {
+            HashNode_t *callee_node = NULL;
+            if (FindIdent(&callee_node, ctx->symtab, callee_expr->expr_data.id) >= 0 &&
+                callee_node != NULL &&
+                (callee_node->hash_type == HASHTYPE_VAR ||
+                 callee_node->hash_type == HASHTYPE_FUNCTION_RETURN))
+            {
+                load_from_memory = 1;
+            }
+        }
+
+        if (load_from_memory)
+        {
+            inst_list = codegen_address_for_expr(callee_expr, inst_list, ctx, &addr_reg);
+            if (!codegen_had_error(ctx) && addr_reg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                    addr_reg->bit_64, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else
+        {
+            inst_list = codegen_evaluate_expr(callee_expr, inst_list, ctx, &addr_reg);
+        }
         if (callee_owned)
             destroy_expr(callee_expr);
         
@@ -5380,23 +5467,19 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         {
             return inst_list;
         }
-        
-        /* 3. Prevent clobbering %rax. Move the address to a safe register if needed */
-        const char *call_reg_name = addr_reg->bit_64;
-        if (call_reg_name == NULL)
+
+        /* 3. Spill call target to stack so argument evaluation can't clobber it */
+        StackNode_t *call_target_spill = add_l_t_bytes("indirect_call_target", 8);
+        if (call_target_spill == NULL)
         {
-            codegen_report_error(ctx,
-                "FATAL: Internal compiler error - NULL register name in indirect call. "
-                "Please report this bug with your source code.");
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
         }
-        if (strcmp(call_reg_name, "%rax") == 0)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %%r11\n");
-            inst_list = add_inst(inst_list, buffer);
-            call_reg_name = "%r11";
-        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            addr_reg->bit_64, call_target_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        addr_reg = NULL;
         
         /* 4. Pass arguments as usual */
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type, 
@@ -5405,12 +5488,14 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
         
-        /* 6. Perform the indirect call */
-        snprintf(buffer, sizeof(buffer), "\tcall\t*%s\n", call_reg_name);
+        /* 6. Reload call target and perform the indirect call */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n",
+            call_target_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
         inst_list = add_inst(inst_list, buffer);
         
         /* 7. Cleanup */
-        free_reg(get_reg_stack(), addr_reg);
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         
         #ifdef DEBUG_CODEGEN

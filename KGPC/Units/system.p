@@ -8,24 +8,9 @@ unit system;
 interface
 
 type
-  { Size types - platform dependent }
-  SizeInt = Int64;          { Signed size type - matches pointer size on 64-bit }
-  { SizeUInt is now a built-in type with size 8 }
-  
-  { Pointer types }
-  PAnsiChar = ^Char;        { Pointer to ANSI character }
-  PChar = ^Char;            { Alias for PAnsiChar }
-  PPointer = ^Pointer;      { Pointer to pointer }
-  
-  { Additional common types }
-  PByte = ^Byte;
-  PWord = ^Word;
-  PLongInt = ^LongInt;
-  PLongWord = ^LongWord;
-  PInteger = ^Integer;
-  PCardinal = ^Cardinal;
-  PShortInt = ^ShortInt;
-  PSmallInt = ^SmallInt;
+  { ShortString: length-prefixed string[255] compatible layout.
+    Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
+  ShortString = array[0..255] of Char;
 
 implementation
 
