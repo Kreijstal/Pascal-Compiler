@@ -5,12 +5,20 @@ import os
 import shutil
 import shlex
 import socket
+import select
 import subprocess
 import sys
 import time
 import traceback
 import unittest
 from pathlib import Path
+try:
+    import pty  # type: ignore
+    import termios  # type: ignore
+
+    HAS_PTY = True
+except ImportError:  # Windows/POSIX-less runtimes
+    HAS_PTY = False
 
 WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
@@ -195,7 +203,101 @@ def run_executable_with_valgrind(executable_args, **kwargs):
         ]
         command = valgrind_cmd + command
         print(f"--- Running executable with valgrind: {' '.join(command)} ---", file=sys.stderr)
-    
+
+        return subprocess.run(command, **kwargs)
+
+    # Prefer running with stdout/stderr attached to a pseudo-terminal so Crt / ANSI
+    # output matches behaviour under a real TTY.
+    #
+    # Important: keep stdin as a pipe when input=... is provided, so test input is
+    # not echoed by terminal line discipline.
+    if HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
+        text_mode = bool(kwargs.get("text"))
+        timeout = kwargs.get("timeout", EXEC_TIMEOUT)
+        input_data = kwargs.get("input")
+        check = bool(kwargs.get("check"))
+
+        master_fd, slave_fd = pty.openpty()
+        try:
+            attrs = termios.tcgetattr(slave_fd)
+            attrs[3] &= ~termios.ECHO
+            termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
+
+            proc = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE if input_data is not None else None,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                text=text_mode,
+                close_fds=True,
+            )
+
+            os.close(slave_fd)
+            slave_fd = None
+
+            if input_data is not None:
+                proc.stdin.write(input_data)
+                proc.stdin.close()
+
+            output_bytes = bytearray()
+            start = time.monotonic()
+            while True:
+                if timeout is not None and (time.monotonic() - start) > timeout:
+                    proc.kill()
+                    break
+
+                r, _, _ = select.select([master_fd], [], [], 0.1)
+                if r:
+                    try:
+                        chunk = os.read(master_fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output_bytes.extend(chunk)
+
+                if proc.poll() is not None and not r:
+                    break
+
+            # Drain remaining bytes
+            while True:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output_bytes.extend(chunk)
+
+            returncode = proc.wait()
+
+            if text_mode:
+                stdout_text = output_bytes.decode("utf-8", errors="replace")
+                while "\r\r\n" in stdout_text:
+                    stdout_text = stdout_text.replace("\r\r\n", "\r\n")
+                stdout_text = stdout_text.replace("\r\n", "\n").replace("\r", "")
+                stdout_val = stdout_text
+                stderr_val = ""
+            else:
+                stdout_val = bytes(output_bytes)
+                stderr_val = b""
+
+            completed = subprocess.CompletedProcess(
+                args=command,
+                returncode=returncode,
+                stdout=stdout_val,
+                stderr=stderr_val,
+            )
+            if check and returncode != 0:
+                raise subprocess.CalledProcessError(
+                    returncode, command, output=completed.stdout, stderr=completed.stderr
+                )
+            return completed
+        finally:
+            if slave_fd is not None:
+                os.close(slave_fd)
+            os.close(master_fd)
+
     return subprocess.run(command, **kwargs)
 
 
@@ -812,12 +914,12 @@ class TestCompiler(unittest.TestCase):
         self.compile_executable(output_file, executable_file)
         
         # Run
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
             text=True,
-            timeout=EXEC_TIMEOUT
+            timeout=EXEC_TIMEOUT,
         )
         
         # Verify output matches date format (e.g. 24-11-25 16:27:34)
@@ -1416,7 +1518,7 @@ class TestCompiler(unittest.TestCase):
             "carol@example.com\n"
         )
 
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [book_exe],
             input=address_input,
             capture_output=True,
@@ -1426,7 +1528,7 @@ class TestCompiler(unittest.TestCase):
         )
 
         expected_prompt = (
-            "\033[2J\033[H"
+            "\033[H\033[m\033[H\033[2J"
             "Enter name 1 out of 3\n"
             "Enter that person's email.\n"
             "Enter name 2 out of 3\n"
@@ -1449,7 +1551,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(read_input, read_asm)
         self.compile_executable(read_asm, read_exe)
 
-        result_read = subprocess.run(
+        result_read = run_executable_with_valgrind(
             [read_exe],
             capture_output=True,
             text=True,
@@ -1474,7 +1576,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(eof_input, eof_asm)
         self.compile_executable(eof_asm, eof_exe)
 
-        result_eof = subprocess.run(
+        result_eof = run_executable_with_valgrind(
             [eof_exe],
             capture_output=True,
             text=True,
@@ -1484,6 +1586,51 @@ class TestCompiler(unittest.TestCase):
 
         expected_eof = expected_read
         self.assertEqual(result_eof.stdout, expected_eof)
+
+    def test_keyboard_arrow_sequences_match_fpc(self):
+        """Crt ReadKey should map arrow keys the same way FPC does on a TTY."""
+        if not HAS_PTY:
+            self.skipTest("PTY not available on this platform")
+
+        fpc_path = shutil.which("fpc")
+        if not fpc_path:
+            self.skipTest("fpc compiler not available for comparison")
+
+        source = os.path.join(TEST_CASES_DIR, "keyboard_arrow.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow.s")
+        exe_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow")
+
+        run_compiler(source, asm_file)
+        self.compile_executable(asm_file, exe_file)
+
+        fpc_exe = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow_fpc")
+        subprocess.run(
+            [fpc_path, "-O2", f"-o{fpc_exe}", source],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # Up arrow, newline, Ctrl+C to complete all four reads.
+        input_data = "\x1b[A\n\x03"
+        kgpc_run = run_executable_with_valgrind(
+            [exe_file],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+        fpc_run = run_executable_with_valgrind(
+            [fpc_exe],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+
+        self.assertEqual(kgpc_run.stdout, fpc_run.stdout)
 
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""

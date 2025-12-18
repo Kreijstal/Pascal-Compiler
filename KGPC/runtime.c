@@ -1050,13 +1050,7 @@ static int kgpc_normalize_crt_color(int color)
     return normalized;
 }
 
-static const char *const kgpc_crt_ansi_codes[16] = {
-    "\033[0;30m", "\033[0;34m", "\033[0;32m", "\033[0;36m",
-    "\033[0;31m", "\033[0;35m", "\033[0;33m", "\033[0;37m",
-    "\033[0;90m", "\033[0;94m", "\033[0;92m", "\033[0;96m",
-    "\033[0;91m", "\033[0;95m", "\033[0;93m", "\033[0;97m"
-};
-
+static const int kgpc_crt_ansi_fg[8] = {30, 34, 32, 36, 31, 35, 33, 37};
 void kgpc_clrscr(void)
 {
 #ifdef _WIN32
@@ -1077,13 +1071,15 @@ void kgpc_clrscr(void)
         }
     }
 #endif
-    fputs("\033[2J\033[H", stdout);
+    fputs("\033[H\033[m\033[H\033[2J", stdout);
     fflush(stdout);
 }
 
 void kgpc_textcolor(int color)
 {
     int normalized = kgpc_normalize_crt_color(color);
+    const int base_code = kgpc_crt_ansi_fg[normalized % 8];
+    char buf[32];
 
 #ifdef _WIN32
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -1098,7 +1094,21 @@ void kgpc_textcolor(int color)
             return;
     }
 #endif
-    fputs(kgpc_crt_ansi_codes[normalized], stdout);
+
+    if (normalized == 0)
+        snprintf(buf, sizeof(buf), "\033[%dm", base_code);
+    else if (normalized == 7)
+        snprintf(buf, sizeof(buf), "\033[m");
+    else if (normalized == 8)
+        snprintf(buf, sizeof(buf), "\033[1;%dm", base_code);
+    else if (normalized == 15)
+        snprintf(buf, sizeof(buf), "\033[0;1m");
+    else if (normalized >= 9 && normalized <= 14)
+        snprintf(buf, sizeof(buf), "\033[0;1;%dm", base_code);
+    else
+        snprintf(buf, sizeof(buf), "\033[0;%dm", base_code);
+
+    fputs(buf, stdout);
     fflush(stdout);
 }
 
@@ -1186,6 +1196,24 @@ static int kgpc_keybuf_is_full(void)
     return ((kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf)) == kgpc_keybuf_head;
 }
 
+static int kgpc_keybuf_count(void)
+{
+    if (kgpc_keybuf_tail >= kgpc_keybuf_head)
+        return kgpc_keybuf_tail - kgpc_keybuf_head;
+    return (int)sizeof(kgpc_keybuf) - kgpc_keybuf_head + kgpc_keybuf_tail;
+}
+
+static int kgpc_keybuf_peek_at(int offset)
+{
+    if (kgpc_keybuf_is_empty())
+        return 0;
+    int count = kgpc_keybuf_count();
+    if (offset < 0 || offset >= count)
+        return 0;
+    int idx = (kgpc_keybuf_head + offset) % (int)sizeof(kgpc_keybuf);
+    return (int)kgpc_keybuf[idx];
+}
+
 static void kgpc_keybuf_push(unsigned char value)
 {
     if (kgpc_keybuf_is_full())
@@ -1208,6 +1236,56 @@ static int kgpc_keybuf_pop(void)
     int value = (int)kgpc_keybuf[kgpc_keybuf_head];
     kgpc_keybuf_head = (kgpc_keybuf_head + 1) % (int)sizeof(kgpc_keybuf);
     return value;
+}
+
+static void kgpc_keyboard_decode_escape_sequences(void)
+{
+    for (;;)
+    {
+        if (kgpc_keybuf_count() < 3)
+            return;
+        int a = kgpc_keybuf_peek_at(0);
+        int b = kgpc_keybuf_peek_at(1);
+        int c = kgpc_keybuf_peek_at(2);
+        if (a != 27 || b != '[')
+            return;
+
+        int mapped = -1;
+        switch (c)
+        {
+            case 'A': mapped = 72; break; /* Up */
+            case 'B': mapped = 80; break; /* Down */
+            case 'C': mapped = 77; break; /* Right */
+            case 'D': mapped = 75; break; /* Left */
+            default: break;
+        }
+
+        /* Consume the escape sequence */
+        (void)kgpc_keybuf_pop();
+        (void)kgpc_keybuf_pop();
+        (void)kgpc_keybuf_pop();
+
+        if (mapped == -1)
+        {
+            /* Not a recognised navigation sequence; push back the trailing bytes */
+            kgpc_keybuf_push((unsigned char)b);
+            kgpc_keybuf_push((unsigned char)c);
+            return;
+        }
+
+        /* Preserve original ordering: inject 0,<mapped> ahead of remaining bytes. */
+        unsigned char remainder[sizeof(kgpc_keybuf)];
+        int remainder_len = 0;
+        while (!kgpc_keybuf_is_empty() && remainder_len < (int)sizeof(remainder))
+        {
+            remainder[remainder_len++] = (unsigned char)kgpc_keybuf_pop();
+        }
+
+        kgpc_keybuf_push(0);
+        kgpc_keybuf_push((unsigned char)mapped);
+        for (int i = 0; i < remainder_len; ++i)
+            kgpc_keybuf_push(remainder[i]);
+    }
 }
 
 static void kgpc_keyboard_fill_nonblocking(void)
@@ -1272,39 +1350,73 @@ static void kgpc_keyboard_fill_nonblocking(void)
     if (saved_flags != -1)
         (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags);
 #endif
+    kgpc_keyboard_decode_escape_sequences();
+}
+
+static void kgpc_keyboard_try_extend_escape(void)
+{
+#ifndef _WIN32
+    if (kgpc_keybuf_count() == 1 && kgpc_keybuf_peek_at(0) == 27)
+    {
+        unsigned char extra[2];
+        ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
+        if (got > 0)
+        {
+            for (ssize_t i = 0; i < got; ++i)
+                kgpc_keybuf_push(extra[i]);
+        }
+    }
+#endif
 }
 
 int kgpc_keyboard_poll(void)
 {
     kgpc_keyboard_fill_nonblocking();
+    kgpc_keyboard_try_extend_escape();
+    kgpc_keyboard_decode_escape_sequences();
     return kgpc_keybuf_peek();
 }
 
 int kgpc_keyboard_get(void)
 {
     kgpc_keyboard_fill_nonblocking();
+    kgpc_keyboard_try_extend_escape();
+    kgpc_keyboard_decode_escape_sequences();
     return kgpc_keybuf_pop();
 }
 
 int kgpc_keyboard_read_char(void)
 {
+#ifdef _WIN32
     int ch = kgpc_keyboard_get();
     if (ch != 0)
         return ch;
-
-#ifdef _WIN32
     return _getch();
 #else
     kgpc_keyboard_init_once();
-    unsigned char c = 0;
-    ssize_t got = 0;
-    do
+
+    for (;;)
     {
-        got = read(STDIN_FILENO, &c, 1);
-    } while (got == -1 && errno == EINTR);
-    if (got == 1)
-        return (int)c;
-    return -1;
+        kgpc_keyboard_fill_nonblocking();
+        kgpc_keyboard_try_extend_escape();
+        kgpc_keyboard_decode_escape_sequences();
+
+        int buffered = kgpc_keybuf_count();
+        if (buffered == 0 || (kgpc_keybuf_peek_at(0) == 27 && buffered < 3))
+        {
+            unsigned char c = 0;
+            ssize_t got = read(STDIN_FILENO, &c, 1);
+            if (got == 1)
+            {
+                kgpc_keybuf_push(c);
+                continue;
+            }
+            return -1;
+        }
+
+        int ch = kgpc_keybuf_pop();
+        return ch;
+    }
 #endif
 }
 
