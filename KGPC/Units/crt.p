@@ -99,10 +99,7 @@ begin
 
     crt_cur_x := 1;
     crt_cur_y := 1;
-<<<<<<< Updated upstream
-=======
     // Removed gotoxy(1, 1) to match FPC's exact behavior
->>>>>>> Stashed changes
 end;
 
 procedure clreol;

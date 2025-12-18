@@ -328,10 +328,16 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
         type_node = semcheck_find_type_node_with_kgpc_type(symtab, subprogram->tree_data.subprogram_data.return_type_id);
         if (type_node == NULL)
         {
-            semantic_error(subprogram->line_num, 0, "undefined type %s",
-                subprogram->tree_data.subprogram_data.return_type_id);
-            if (error_count != NULL)
-                ++(*error_count);
+            /* Before reporting error, check for builtin types not in symbol table */
+            const char *type_id = subprogram->tree_data.subprogram_data.return_type_id;
+            int builtin_type = semcheck_map_builtin_type_name_local(type_id);
+            if (builtin_type == UNKNOWN_TYPE)
+            {
+                semantic_error(subprogram->line_num, 0, "undefined type %s",
+                    subprogram->tree_data.subprogram_data.return_type_id);
+                if (error_count != NULL)
+                    ++(*error_count);
+            }
         }
     }
 
@@ -4269,18 +4275,23 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
-    /* Predeclare interface subprograms before const evaluation */
+    
+    /* Check implementation section - predeclare types BEFORE subprograms */
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    /* Pre-declare types so they're available for const expressions like High(MyType) */
+    return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    
+    /* Now predeclare subprograms AFTER all types (interface + implementation) are predeclared.
+     * This ensures function return types referencing implementation types can be resolved.
+     * The same subprograms list is shared by interface and implementation. */
     return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+    
+    /* Continue interface section processing */
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
 
-    /* Check implementation section */
-    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
-    /* Pre-declare types so they're available for const expressions like High(MyType) */
-    return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
-    /* Ensure implementation procedures are visible to const initializers */
-    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+    /* Continue implementation section processing */
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
@@ -4493,6 +4504,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_POINTER;
                         else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "Word"))
                             var_type = HASHVAR_INTEGER;
+                        /* Handle FPC system pointer types (PInt64, PByte, etc.) */
+                        else if (pascal_identifier_equals(type_id, "PInt64") ||
+                                 pascal_identifier_equals(type_id, "PByte") ||
+                                 pascal_identifier_equals(type_id, "PWord") ||
+                                 pascal_identifier_equals(type_id, "PLongInt") ||
+                                 pascal_identifier_equals(type_id, "PLongWord") ||
+                                 pascal_identifier_equals(type_id, "PInteger") ||
+                                 pascal_identifier_equals(type_id, "PCardinal") ||
+                                 pascal_identifier_equals(type_id, "PQWord") ||
+                                 pascal_identifier_equals(type_id, "PPointer") ||
+                                 pascal_identifier_equals(type_id, "PBoolean"))
+                            var_type = HASHVAR_POINTER;
                         else
                         {
                             semantic_error(tree->line_num, 0, "undefined type %s", type_id);
