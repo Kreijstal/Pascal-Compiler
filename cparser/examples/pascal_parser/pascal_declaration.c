@@ -1513,9 +1513,21 @@ void init_pascal_unit_parser(combinator_t** p) {
     local_decl_dispatch->fn = keyword_dispatch_fn;
     local_decl_dispatch->args = local_decl_args;
 
-    // Function/procedure body that can contain local declarations
+    // Lazy reference for nested procedures/functions to allow var sections after them
+    combinator_t** nested_proc_ref = (combinator_t**)safe_malloc(sizeof(combinator_t*));
+    *nested_proc_ref = new_combinator();
+    combinator_t* lazy_nested_proc = lazy_owned(nested_proc_ref);
+
+    // Local declarations OR nested functions - allows var sections after nested functions
+    combinator_t* local_decl_or_nested = multi(new_combinator(), PASCAL_T_NONE,
+        local_decl_dispatch,
+        lazy_nested_proc,
+        NULL
+    );
+
+    // Function/procedure body that can contain local declarations interspersed with nested functions
     combinator_t* function_body = seq(new_combinator(), PASCAL_T_FUNCTION_BODY,
-        many(local_decl_dispatch),
+        many(local_decl_or_nested),
         lazy(stmt_parser),                         // main statement block
         NULL
     );
@@ -1579,6 +1591,30 @@ void init_pascal_unit_parser(combinator_t** p) {
         extended_external_argument,                  // extended external arguments
         token(pascal_string(PASCAL_T_STRING)),            // simple string argument
         token(cident(PASCAL_T_IDENTIFIER)),        // simple identifier argument
+        NULL
+    ));
+
+    // FPC bracket directive syntax: [public, alias : 'name', nostackframe]
+    // Each directive can be: identifier or identifier : value
+    combinator_t* bracket_directive_value = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match(":")),
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(pascal_string(PASCAL_T_STRING)),
+            token(cident(PASCAL_T_IDENTIFIER)),
+            NULL
+        ),
+        NULL
+    ));
+    combinator_t* bracket_directive_item = seq(new_combinator(), PASCAL_T_NONE,
+        token(cident(PASCAL_T_IDENTIFIER)),  // directive name like 'public', 'alias', 'nostackframe'
+        bracket_directive_value,              // optional : value
+        NULL
+    );
+    combinator_t* bracket_directives = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(match("[")),
+        sep_by(bracket_directive_item, token(match(","))),
+        token(match("]")),
+        token(match(";")),
         NULL
     ));
 
@@ -1649,6 +1685,7 @@ void init_pascal_unit_parser(combinator_t** p) {
     combinator_t* procedure_impl = seq(new_combinator(), PASCAL_T_PROCEDURE_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list), token(match(";")),
+        bracket_directives,  // FPC [public, alias: 'name'] syntax
         routine_directives,
         function_body, optional(token(match(";"))), NULL);
     set_combinator_name(procedure_impl, "procedure_impl");
@@ -1777,9 +1814,19 @@ void init_pascal_unit_parser(combinator_t** p) {
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")), token(cident(PASCAL_T_IDENTIFIER)), optional(param_list),
         return_type, token(match(";")),
+        bracket_directives,  // FPC [public, alias: 'name'] syntax
         routine_directives,
         function_body, optional(token(match(";"))), NULL);
     set_combinator_name(function_impl, "function_impl");
+
+    // Initialize the lazy nested procedure/function reference now that impls are defined
+    // This allows var sections to appear after nested functions in outer function bodies
+    combinator_t* nested_proc_or_func = multi(new_combinator(), PASCAL_T_NONE,
+        procedure_impl,
+        function_impl,
+        NULL
+    );
+    *nested_proc_ref = nested_proc_or_func;
 
     // Class operator implementation (with required body)
     combinator_t* class_operator_impl = seq(new_combinator(), PASCAL_T_METHOD_IMPL,
@@ -1796,17 +1843,40 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(class_operator_impl, "class_operator_impl");
 
+    // Module-level property declaration for interface section (FPC extension)
+    // Syntax: property Name: Type read ReadFunc [write WriteFunc];
+    // Example from baseunix.pp: property errno: cint read fpgeterrno write fpseterrno;
+    combinator_t* interface_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        token(keyword_ci("property")),
+        token(cident(PASCAL_T_IDENTIFIER)), // property name
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)), // type name (simple identifier)
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("read")),
+            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("write")),
+            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+            NULL
+        )),
+        token(match(";")),
+        NULL
+    );
+
     // Interface section declarations: uses, const, type, procedure/function headers
-    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(8);
+    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(9);
     size_t interface_entry_index = 0;
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "uses", uses_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "const", const_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "resourcestring", resourcestring_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "type", type_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "threadvar", threadvar_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "var", var_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "procedure", procedure_header);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "function", function_header);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "uses", uses_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "const", const_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "resourcestring", resourcestring_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "type", type_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "threadvar", threadvar_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "var", var_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "procedure", procedure_header);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "function", function_header);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "property", interface_property_decl);
     interface_dispatch_args->entry_count = interface_entry_index;
 
     combinator_t* interface_declaration = new_combinator();

@@ -39,6 +39,12 @@ function kgpc_keyboard_read_char: integer; external;
 function kgpc_crt_screen_width: integer; external;
 function kgpc_crt_screen_height: integer; external;
 
+const
+    // FPC's Crt maps Turbo Pascal colour indices onto ANSI SGR codes but uses
+    // bold ("1") for bright colours instead of the 90-97 range.
+    tp_to_ansi_fg: array[0..7] of integer = (30, 34, 32, 36, 31, 35, 33, 37);
+    tp_to_ansi_bg: array[0..7] of integer = (40, 44, 42, 46, 41, 45, 43, 47);
+
 var
     crt_win_x1: integer = 1;
     crt_win_y1: integer = 1;
@@ -79,8 +85,8 @@ begin
     if (crt_win_x1 = 1) and (crt_win_y1 = 1) and
         (crt_win_x2 = kgpc_crt_screen_width()) and (crt_win_y2 = kgpc_crt_screen_height()) then
     begin
-        // Match FPC's exact clrscr sequence: [6n[H[m[H[2J
-        write(#27, '[6n');  // Query cursor position
+        // Match FPC's clrscr sequence when stdout is a terminal and stdin is not:
+        // [H[m[H[2J
         write(#27, '[H');   // Cursor home
         write(#27, '[m');   // Reset attributes
         write(#27, '[H');   // Cursor home again
@@ -99,10 +105,7 @@ begin
 
     crt_cur_x := 1;
     crt_cur_y := 1;
-<<<<<<< Updated upstream
-=======
     // Removed gotoxy(1, 1) to match FPC's exact behavior
->>>>>>> Stashed changes
 end;
 
 procedure clreol;
@@ -158,41 +161,53 @@ begin
 end;
 
 procedure textcolor(color: integer);
+var
+    ansi_code: integer;
 begin
     if color < 0 then
         color := 0;
     color := color mod 16;
     
-    // Match FPC's exact behavior for text colors:
-    // - Colors 0-7: [0;3Xm (normal colors)
-    // - Colors 8-15: [0;9Xm (bright colors)
     if color < 8 then
-        write(#27, '[0;', 30 + color, 'm')
+        ansi_code := tp_to_ansi_fg[color]
     else
-        write(#27, '[0;', 90 + (color - 8), 'm');
+        ansi_code := tp_to_ansi_fg[color - 8];
+
+    // FPC special-cases some colours:
+    // - 0: uses "[30m" (no leading "0;")
+    // - 7: uses "[m" (reset)
+    // - 8: uses "[1;30m"
+    // - 9..14: uses "[0;1;<code>m"
+    // - 15: uses "[0;1m"
+    if color = 0 then
+        write(#27, '[', ansi_code, 'm')
+    else if color = 7 then
+        write(#27, '[m')
+    else if color = 8 then
+        write(#27, '[1;', ansi_code, 'm')
+    else if (color >= 9) and (color <= 14) then
+        write(#27, '[0;1;', ansi_code, 'm')
+    else if color = 15 then
+        write(#27, '[0;1m')
+    else
+        write(#27, '[0;', ansi_code, 'm');
 end;
 
 procedure textbackground(color: integer);
+var
+    ansi_code: integer;
 begin
     if color < 0 then
         color := 0;
     color := color mod 16;
     
-    // Match FPC's exact behavior:
-    // - Black (0) becomes simple reset [m]
-    // - Blue (1) uses [0;44m] (no bold)
-    // - Red (4) uses [0;41m] (no bold)
-    // - Other colors use [0;XXm] pattern (no bold)
     if color = 0 then
         write(#27, '[m')
-    else if color = 1 then  // Blue
-        write(#27, '[0;44m')
-    else if color = 4 then  // Red
-        write(#27, '[0;41m')
-    else if color < 8 then
-        write(#27, '[0;', 40 + color, 'm')
     else
-        write(#27, '[0;', 100 + (color - 8), 'm');
+    begin
+        ansi_code := tp_to_ansi_bg[color mod 8];
+        write(#27, '[0;', ansi_code, 'm');
+    end;
 end;
 
 procedure highvideo;
