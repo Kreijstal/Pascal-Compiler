@@ -4860,9 +4860,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                     else
                     {
-                        fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                            tree->line_num, tree->tree_data.arr_decl_data.type_id);
-                        return_val++;
+                        /* Fallback: check for builtin types not in symbol table */
+                        const char *type_id = tree->tree_data.arr_decl_data.type_id;
+                        int builtin_type = semcheck_map_builtin_type_name_local(type_id);
+                        if (builtin_type != UNKNOWN_TYPE)
+                        {
+                            element_type = create_primitive_type(builtin_type);
+                        }
+                        else
+                        {
+                            fprintf(stderr, "Error on line %d: undefined type %s\n",
+                                tree->line_num, tree->tree_data.arr_decl_data.type_id);
+                            return_val++;
+                        }
                     }
                 }
                 
