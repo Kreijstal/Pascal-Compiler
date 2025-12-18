@@ -328,10 +328,16 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
         type_node = semcheck_find_type_node_with_kgpc_type(symtab, subprogram->tree_data.subprogram_data.return_type_id);
         if (type_node == NULL)
         {
-            semantic_error(subprogram->line_num, 0, "undefined type %s",
-                subprogram->tree_data.subprogram_data.return_type_id);
-            if (error_count != NULL)
-                ++(*error_count);
+            /* Before reporting error, check for builtin types not in symbol table */
+            const char *type_id = subprogram->tree_data.subprogram_data.return_type_id;
+            int builtin_type = semcheck_map_builtin_type_name_local(type_id);
+            if (builtin_type == UNKNOWN_TYPE)
+            {
+                semantic_error(subprogram->line_num, 0, "undefined type %s",
+                    subprogram->tree_data.subprogram_data.return_type_id);
+                if (error_count != NULL)
+                    ++(*error_count);
+            }
         }
     }
 
@@ -1446,9 +1452,122 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 0;
             }
             
+            /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64 and other integer typecasts 
+             * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0))) */
+            if (id != NULL && (pascal_identifier_equals(id, "Cardinal") ||
+                               pascal_identifier_equals(id, "LongWord") ||
+                               pascal_identifier_equals(id, "DWord") ||
+                               pascal_identifier_equals(id, "QWord") ||
+                               pascal_identifier_equals(id, "Int64") ||
+                               pascal_identifier_equals(id, "UInt64") ||
+                               pascal_identifier_equals(id, "NativeInt") ||
+                               pascal_identifier_equals(id, "NativeUInt") ||
+                               pascal_identifier_equals(id, "SizeInt") ||
+                               pascal_identifier_equals(id, "SizeUInt") ||
+                               pascal_identifier_equals(id, "ShortInt") ||
+                               pascal_identifier_equals(id, "SmallInt") ||
+                               pascal_identifier_equals(id, "LongInt")))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
+                    return 1;
+                }
+                
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
+                    return 1;
+                }
+                
+                /* Evaluate the argument as a const expression */
+                long long int_value;
+                if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                {
+                    fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
+                    return 1;
+                }
+                
+                /* Apply appropriate mask for the target type */
+                if (pascal_identifier_equals(id, "Cardinal") ||
+                    pascal_identifier_equals(id, "LongWord") ||
+                    pascal_identifier_equals(id, "DWord"))
+                {
+                    *out_value = (unsigned int)(int_value & 0xFFFFFFFFULL);
+                }
+                else if (pascal_identifier_equals(id, "ShortInt"))
+                {
+                    *out_value = (signed char)(int_value & 0xFF);
+                }
+                else if (pascal_identifier_equals(id, "SmallInt"))
+                {
+                    *out_value = (short)(int_value & 0xFFFF);
+                }
+                else if (pascal_identifier_equals(id, "LongInt"))
+                {
+                    *out_value = (int)(int_value & 0xFFFFFFFFULL);
+                }
+                else
+                {
+                    /* QWord, Int64, UInt64, NativeInt, NativeUInt, SizeInt, SizeUInt - 64-bit */
+                    *out_value = int_value;
+                }
+                return 0;
+            }
+            
             if (id != NULL)
                 fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
             fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), and Chr() function calls are supported in const expressions.\n");
+            return 1;
+        }
+        case EXPR_RELOP:
+        {
+            /* Handle NOT operator for constant expressions (bitwise NOT) */
+            /* FPC bootstrap uses: Cardinal(not Cardinal(0)) */
+            if (expr->expr_data.relop_data.type == NOT)
+            {
+                /* NOT is a unary operator - right operand is NULL */
+                struct Expression *operand = expr->expr_data.relop_data.left;
+                if (operand == NULL)
+                {
+                    fprintf(stderr, "Error: NOT operator requires an operand.\n");
+                    return 1;
+                }
+                
+                long long operand_value;
+                if (evaluate_const_expr(symtab, operand, &operand_value) != 0)
+                {
+                    fprintf(stderr, "Error: NOT operand must be a const expression.\n");
+                    return 1;
+                }
+                
+                /* Bitwise NOT */
+                *out_value = ~operand_value;
+                return 0;
+            }
+            /* Relational operators (comparisons) for const expressions */
+            if (expr->expr_data.relop_data.left != NULL && expr->expr_data.relop_data.right != NULL)
+            {
+                long long left_val, right_val;
+                if (evaluate_const_expr(symtab, expr->expr_data.relop_data.left, &left_val) != 0)
+                    return 1;
+                if (evaluate_const_expr(symtab, expr->expr_data.relop_data.right, &right_val) != 0)
+                    return 1;
+                
+                switch (expr->expr_data.relop_data.type)
+                {
+                    case EQ: *out_value = (left_val == right_val) ? 1 : 0; return 0;
+                    case NE: *out_value = (left_val != right_val) ? 1 : 0; return 0;
+                    case LT: *out_value = (left_val < right_val) ? 1 : 0; return 0;
+                    case LE: *out_value = (left_val <= right_val) ? 1 : 0; return 0;
+                    case GT: *out_value = (left_val > right_val) ? 1 : 0; return 0;
+                    case GE: *out_value = (left_val >= right_val) ? 1 : 0; return 0;
+                    default:
+                        break;
+                }
+            }
+            fprintf(stderr, "Error: unsupported relational operator in const expression.\n");
             return 1;
         }
         default:
@@ -4156,18 +4275,23 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
-    /* Predeclare interface subprograms before const evaluation */
+    
+    /* Check implementation section - predeclare types BEFORE subprograms */
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    /* Pre-declare types so they're available for const expressions like High(MyType) */
+    return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    
+    /* Now predeclare subprograms AFTER all types (interface + implementation) are predeclared.
+     * This ensures function return types referencing implementation types can be resolved.
+     * The same subprograms list is shared by interface and implementation. */
     return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+    
+    /* Continue interface section processing */
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.interface_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.interface_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.interface_var_decls);
 
-    /* Check implementation section */
-    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
-    /* Pre-declare types so they're available for const expressions like High(MyType) */
-    return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
-    /* Ensure implementation procedures are visible to const initializers */
-    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+    /* Continue implementation section processing */
     return_val += semcheck_const_decls(symtab, tree->tree_data.unit_data.implementation_const_decls);
     return_val += semcheck_type_decls(symtab, tree->tree_data.unit_data.implementation_type_decls);
     return_val += semcheck_decls(symtab, tree->tree_data.unit_data.implementation_var_decls);
@@ -4380,6 +4504,18 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_POINTER;
                         else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "Word"))
                             var_type = HASHVAR_INTEGER;
+                        /* Handle FPC system pointer types (PInt64, PByte, etc.) */
+                        else if (pascal_identifier_equals(type_id, "PInt64") ||
+                                 pascal_identifier_equals(type_id, "PByte") ||
+                                 pascal_identifier_equals(type_id, "PWord") ||
+                                 pascal_identifier_equals(type_id, "PLongInt") ||
+                                 pascal_identifier_equals(type_id, "PLongWord") ||
+                                 pascal_identifier_equals(type_id, "PInteger") ||
+                                 pascal_identifier_equals(type_id, "PCardinal") ||
+                                 pascal_identifier_equals(type_id, "PQWord") ||
+                                 pascal_identifier_equals(type_id, "PPointer") ||
+                                 pascal_identifier_equals(type_id, "PBoolean"))
+                            var_type = HASHVAR_POINTER;
                         else
                         {
                             semantic_error(tree->line_num, 0, "undefined type %s", type_id);
@@ -4747,9 +4883,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                     else
                     {
-                        fprintf(stderr, "Error on line %d, undefined type %s!\n",
-                            tree->line_num, tree->tree_data.arr_decl_data.type_id);
-                        return_val++;
+                        /* Fallback: check for builtin types not in symbol table */
+                        const char *type_id = tree->tree_data.arr_decl_data.type_id;
+                        int builtin_type = semcheck_map_builtin_type_name_local(type_id);
+                        if (builtin_type != UNKNOWN_TYPE)
+                        {
+                            element_type = create_primitive_type(builtin_type);
+                        }
+                        else
+                        {
+                            fprintf(stderr, "Error on line %d: undefined type %s\n",
+                                tree->line_num, tree->tree_data.arr_decl_data.type_id);
+                            return_val++;
+                        }
                     }
                 }
                 
