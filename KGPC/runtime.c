@@ -1196,6 +1196,24 @@ static int kgpc_keybuf_is_full(void)
     return ((kgpc_keybuf_tail + 1) % (int)sizeof(kgpc_keybuf)) == kgpc_keybuf_head;
 }
 
+static int kgpc_keybuf_count(void)
+{
+    if (kgpc_keybuf_tail >= kgpc_keybuf_head)
+        return kgpc_keybuf_tail - kgpc_keybuf_head;
+    return (int)sizeof(kgpc_keybuf) - kgpc_keybuf_head + kgpc_keybuf_tail;
+}
+
+static int kgpc_keybuf_peek_at(int offset)
+{
+    if (kgpc_keybuf_is_empty())
+        return 0;
+    int count = kgpc_keybuf_count();
+    if (offset < 0 || offset >= count)
+        return 0;
+    int idx = (kgpc_keybuf_head + offset) % (int)sizeof(kgpc_keybuf);
+    return (int)kgpc_keybuf[idx];
+}
+
 static void kgpc_keybuf_push(unsigned char value)
 {
     if (kgpc_keybuf_is_full())
@@ -1218,6 +1236,56 @@ static int kgpc_keybuf_pop(void)
     int value = (int)kgpc_keybuf[kgpc_keybuf_head];
     kgpc_keybuf_head = (kgpc_keybuf_head + 1) % (int)sizeof(kgpc_keybuf);
     return value;
+}
+
+static void kgpc_keyboard_decode_escape_sequences(void)
+{
+    for (;;)
+    {
+        if (kgpc_keybuf_count() < 3)
+            return;
+        int a = kgpc_keybuf_peek_at(0);
+        int b = kgpc_keybuf_peek_at(1);
+        int c = kgpc_keybuf_peek_at(2);
+        if (a != 27 || b != '[')
+            return;
+
+        int mapped = -1;
+        switch (c)
+        {
+            case 'A': mapped = 72; break; /* Up */
+            case 'B': mapped = 80; break; /* Down */
+            case 'C': mapped = 77; break; /* Right */
+            case 'D': mapped = 75; break; /* Left */
+            default: break;
+        }
+
+        /* Consume the escape sequence */
+        (void)kgpc_keybuf_pop();
+        (void)kgpc_keybuf_pop();
+        (void)kgpc_keybuf_pop();
+
+        if (mapped == -1)
+        {
+            /* Not a recognised navigation sequence; push back the trailing bytes */
+            kgpc_keybuf_push((unsigned char)b);
+            kgpc_keybuf_push((unsigned char)c);
+            return;
+        }
+
+        /* Preserve original ordering: inject 0,<mapped> ahead of remaining bytes. */
+        unsigned char remainder[sizeof(kgpc_keybuf)];
+        int remainder_len = 0;
+        while (!kgpc_keybuf_is_empty() && remainder_len < (int)sizeof(remainder))
+        {
+            remainder[remainder_len++] = (unsigned char)kgpc_keybuf_pop();
+        }
+
+        kgpc_keybuf_push(0);
+        kgpc_keybuf_push((unsigned char)mapped);
+        for (int i = 0; i < remainder_len; ++i)
+            kgpc_keybuf_push(remainder[i]);
+    }
 }
 
 static void kgpc_keyboard_fill_nonblocking(void)
@@ -1282,39 +1350,73 @@ static void kgpc_keyboard_fill_nonblocking(void)
     if (saved_flags != -1)
         (void)fcntl(STDIN_FILENO, F_SETFL, saved_flags);
 #endif
+    kgpc_keyboard_decode_escape_sequences();
+}
+
+static void kgpc_keyboard_try_extend_escape(void)
+{
+#ifndef _WIN32
+    if (kgpc_keybuf_count() == 1 && kgpc_keybuf_peek_at(0) == 27)
+    {
+        unsigned char extra[2];
+        ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
+        if (got > 0)
+        {
+            for (ssize_t i = 0; i < got; ++i)
+                kgpc_keybuf_push(extra[i]);
+        }
+    }
+#endif
 }
 
 int kgpc_keyboard_poll(void)
 {
     kgpc_keyboard_fill_nonblocking();
+    kgpc_keyboard_try_extend_escape();
+    kgpc_keyboard_decode_escape_sequences();
     return kgpc_keybuf_peek();
 }
 
 int kgpc_keyboard_get(void)
 {
     kgpc_keyboard_fill_nonblocking();
+    kgpc_keyboard_try_extend_escape();
+    kgpc_keyboard_decode_escape_sequences();
     return kgpc_keybuf_pop();
 }
 
 int kgpc_keyboard_read_char(void)
 {
+#ifdef _WIN32
     int ch = kgpc_keyboard_get();
     if (ch != 0)
         return ch;
-
-#ifdef _WIN32
     return _getch();
 #else
     kgpc_keyboard_init_once();
-    unsigned char c = 0;
-    ssize_t got = 0;
-    do
+
+    for (;;)
     {
-        got = read(STDIN_FILENO, &c, 1);
-    } while (got == -1 && errno == EINTR);
-    if (got == 1)
-        return (int)c;
-    return -1;
+        kgpc_keyboard_fill_nonblocking();
+        kgpc_keyboard_try_extend_escape();
+        kgpc_keyboard_decode_escape_sequences();
+
+        int buffered = kgpc_keybuf_count();
+        if (buffered == 0 || (kgpc_keybuf_peek_at(0) == 27 && buffered < 3))
+        {
+            unsigned char c = 0;
+            ssize_t got = read(STDIN_FILENO, &c, 1);
+            if (got == 1)
+            {
+                kgpc_keybuf_push(c);
+                continue;
+            }
+            return -1;
+        }
+
+        int ch = kgpc_keybuf_pop();
+        return ch;
+    }
 #endif
 }
 
