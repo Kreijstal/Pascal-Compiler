@@ -7676,11 +7676,21 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node);
+                            if (getenv("KGPC_DEBUG_SUBPROG") != NULL) {
+                                char *proc_id = (node->child != NULL) ? dup_symbol(node->child) : strdup("?");
+                                fprintf(stderr, "[KGPC] convert_procedure(%s) => %p\n", proc_id, (void*)proc);
+                                free(proc_id);
+                            }
                             append_subprogram_node(&subprograms, proc);
                             break;
                         }
                         case PASCAL_T_FUNCTION_DECL: {
                             Tree_t *func = convert_function(node);
+                            if (getenv("KGPC_DEBUG_SUBPROG") != NULL) {
+                                char *func_id = (node->child != NULL) ? dup_symbol(node->child) : strdup("?");
+                                fprintf(stderr, "[KGPC] convert_function(%s) => %p\n", func_id, (void*)func);
+                                free(func_id);
+                            }
                             append_subprogram_node(&subprograms, func);
                             break;
                         }
