@@ -951,6 +951,10 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 case MINUS:
                     *out_value = left - right;
                     return 0;
+                case OR:
+                    /* Bitwise OR for const expressions (FPC bootstrap: S_IRWXU = S_IRUSR or S_IWUSR) */
+                    *out_value = left | right;
+                    return 0;
                 default:
                     break;
             }
@@ -991,6 +995,14 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 case SHR:
                     /* Shift right: left shr right */
                     *out_value = (unsigned long long)left >> right;
+                    return 0;
+                case AND:
+                    /* Bitwise AND for const expressions (FPC bootstrap) */
+                    *out_value = left & right;
+                    return 0;
+                case XOR:
+                    /* Bitwise XOR for const expressions (FPC bootstrap) */
+                    *out_value = left ^ right;
                     return 0;
                 default:
                     break;

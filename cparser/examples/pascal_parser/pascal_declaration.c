@@ -1796,17 +1796,40 @@ void init_pascal_unit_parser(combinator_t** p) {
     );
     set_combinator_name(class_operator_impl, "class_operator_impl");
 
+    // Module-level property declaration for interface section (FPC extension)
+    // Syntax: property Name: Type read ReadFunc [write WriteFunc];
+    // Example from baseunix.pp: property errno: cint read fpgeterrno write fpseterrno;
+    combinator_t* interface_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
+        token(keyword_ci("property")),
+        token(cident(PASCAL_T_IDENTIFIER)), // property name
+        token(match(":")),
+        token(cident(PASCAL_T_IDENTIFIER)), // type name (simple identifier)
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("read")),
+            token(cident(PASCAL_T_IDENTIFIER)), // read accessor
+            NULL
+        )),
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("write")),
+            token(cident(PASCAL_T_IDENTIFIER)), // write accessor
+            NULL
+        )),
+        token(match(";")),
+        NULL
+    );
+
     // Interface section declarations: uses, const, type, procedure/function headers
-    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(8);
+    keyword_dispatch_args_t* interface_dispatch_args = create_keyword_dispatch(9);
     size_t interface_entry_index = 0;
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "uses", uses_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "const", const_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "resourcestring", resourcestring_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "type", type_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "threadvar", threadvar_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "var", var_section);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "procedure", procedure_header);
-    register_keyword_entry(interface_dispatch_args, 8, &interface_entry_index, "function", function_header);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "uses", uses_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "const", const_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "resourcestring", resourcestring_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "type", type_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "threadvar", threadvar_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "var", var_section);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "procedure", procedure_header);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "function", function_header);
+    register_keyword_entry(interface_dispatch_args, 9, &interface_entry_index, "property", interface_property_decl);
     interface_dispatch_args->entry_count = interface_entry_index;
 
     combinator_t* interface_declaration = new_combinator();

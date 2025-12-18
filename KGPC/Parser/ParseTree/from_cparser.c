@@ -7626,6 +7626,10 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         case PASCAL_T_VAR_SECTION:
                             list_builder_extend(&interface_var_builder, convert_var_section(node));
                             break;
+                        case PASCAL_T_PROPERTY_DECL:
+                            /* Module-level property declaration in interface - skip for now
+                             * but don't break iteration. This is an FPC extension. */
+                            break;
                         default:
                             break;
                         }
