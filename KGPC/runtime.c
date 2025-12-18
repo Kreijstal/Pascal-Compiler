@@ -1050,13 +1050,7 @@ static int kgpc_normalize_crt_color(int color)
     return normalized;
 }
 
-static const char *const kgpc_crt_ansi_codes[16] = {
-    "\033[0;30m", "\033[0;34m", "\033[0;32m", "\033[0;36m",
-    "\033[0;31m", "\033[0;35m", "\033[0;33m", "\033[0;37m",
-    "\033[0;90m", "\033[0;94m", "\033[0;92m", "\033[0;96m",
-    "\033[0;91m", "\033[0;95m", "\033[0;93m", "\033[0;97m"
-};
-
+static const int kgpc_crt_ansi_fg[8] = {30, 34, 32, 36, 31, 35, 33, 37};
 void kgpc_clrscr(void)
 {
 #ifdef _WIN32
@@ -1077,13 +1071,15 @@ void kgpc_clrscr(void)
         }
     }
 #endif
-    fputs("\033[2J\033[H", stdout);
+    fputs("\033[H\033[m\033[H\033[2J", stdout);
     fflush(stdout);
 }
 
 void kgpc_textcolor(int color)
 {
     int normalized = kgpc_normalize_crt_color(color);
+    const int base_code = kgpc_crt_ansi_fg[normalized % 8];
+    char buf[32];
 
 #ifdef _WIN32
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -1098,7 +1094,21 @@ void kgpc_textcolor(int color)
             return;
     }
 #endif
-    fputs(kgpc_crt_ansi_codes[normalized], stdout);
+
+    if (normalized == 0)
+        snprintf(buf, sizeof(buf), "\033[%dm", base_code);
+    else if (normalized == 7)
+        snprintf(buf, sizeof(buf), "\033[m");
+    else if (normalized == 8)
+        snprintf(buf, sizeof(buf), "\033[1;%dm", base_code);
+    else if (normalized == 15)
+        snprintf(buf, sizeof(buf), "\033[0;1m");
+    else if (normalized >= 9 && normalized <= 14)
+        snprintf(buf, sizeof(buf), "\033[0;1;%dm", base_code);
+    else
+        snprintf(buf, sizeof(buf), "\033[0;%dm", base_code);
+
+    fputs(buf, stdout);
     fflush(stdout);
 }
 
