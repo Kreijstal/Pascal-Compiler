@@ -1582,6 +1582,49 @@ class TestCompiler(unittest.TestCase):
         expected_eof = expected_read
         self.assertEqual(result_eof.stdout, expected_eof)
 
+    def test_keyboard_arrow_sequences_match_fpc(self):
+        """Crt ReadKey should map arrow keys the same way FPC does on a TTY."""
+
+        fpc_path = shutil.which("fpc")
+        if not fpc_path:
+            self.skipTest("fpc compiler not available for comparison")
+
+        source = os.path.join(TEST_CASES_DIR, "keyboard_arrow.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow.s")
+        exe_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow")
+
+        run_compiler(source, asm_file)
+        self.compile_executable(asm_file, exe_file)
+
+        fpc_exe = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow_fpc")
+        subprocess.run(
+            [fpc_path, "-O2", f"-o{fpc_exe}", source],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # Up arrow, newline, Ctrl+C to complete all four reads.
+        input_data = "\x1b[A\n\x03"
+        kgpc_run = run_executable_with_valgrind(
+            [exe_file],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+        fpc_run = run_executable_with_valgrind(
+            [fpc_exe],
+            input=input_data,
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+            check=True,
+        )
+
+        self.assertEqual(kgpc_run.stdout, fpc_run.stdout)
+
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
