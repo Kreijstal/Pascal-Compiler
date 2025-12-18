@@ -12,8 +12,13 @@ import time
 import traceback
 import unittest
 from pathlib import Path
-import pty
-import termios
+try:
+    import pty  # type: ignore
+    import termios  # type: ignore
+
+    HAS_PTY = True
+except ImportError:  # Windows/POSIX-less runtimes
+    HAS_PTY = False
 
 WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
@@ -206,7 +211,7 @@ def run_executable_with_valgrind(executable_args, **kwargs):
     #
     # Important: keep stdin as a pipe when input=... is provided, so test input is
     # not echoed by terminal line discipline.
-    if kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
+    if HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
         text_mode = bool(kwargs.get("text"))
         timeout = kwargs.get("timeout", EXEC_TIMEOUT)
         input_data = kwargs.get("input")
@@ -1584,6 +1589,8 @@ class TestCompiler(unittest.TestCase):
 
     def test_keyboard_arrow_sequences_match_fpc(self):
         """Crt ReadKey should map arrow keys the same way FPC does on a TTY."""
+        if not HAS_PTY:
+            self.skipTest("PTY not available on this platform")
 
         fpc_path = shutil.which("fpc")
         if not fpc_path:
