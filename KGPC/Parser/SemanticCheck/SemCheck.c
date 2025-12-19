@@ -51,30 +51,20 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return INT_TYPE;
     if (pascal_identifier_equals(id, "LongInt"))
         return LONGINT_TYPE;
-    if (pascal_identifier_equals(id, "Int64") || pascal_identifier_equals(id, "QWord") ||
-        pascal_identifier_equals(id, "NativeInt") || pascal_identifier_equals(id, "NativeUInt") ||
-        pascal_identifier_equals(id, "SizeUInt") || pascal_identifier_equals(id, "PtrInt") ||
-        pascal_identifier_equals(id, "PtrUInt"))
+    if (pascal_identifier_equals(id, "Int64"))
         return INT64_TYPE;
-    if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
+    if (pascal_identifier_equals(id, "Real"))
         return REAL_TYPE;
-    if (pascal_identifier_equals(id, "String") || pascal_identifier_equals(id, "AnsiString") ||
-        pascal_identifier_equals(id, "RawByteString"))
+    if (pascal_identifier_equals(id, "String"))
         return STRING_TYPE;
-    if (pascal_identifier_equals(id, "ShortString"))
-        return SHORTSTRING_TYPE;
-    if (pascal_identifier_equals(id, "Char") || pascal_identifier_equals(id, "AnsiChar"))
+    if (pascal_identifier_equals(id, "Char"))
         return CHAR_TYPE;
     if (pascal_identifier_equals(id, "Boolean"))
         return BOOL;
     if (pascal_identifier_equals(id, "Pointer"))
         return POINTER_TYPE;
-    if (pascal_identifier_equals(id, "Byte"))
-        return INT_TYPE;
-    if (pascal_identifier_equals(id, "Word"))
-        return INT_TYPE;
-    if (pascal_identifier_equals(id, "TSystemCodePage"))
-        return INT_TYPE;
+    if (pascal_identifier_equals(id, "file"))
+        return FILE_TYPE;
     return UNKNOWN_TYPE;
 }
 
@@ -3450,8 +3440,24 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
 
 /* Adds built-in functions */
 /*TODO: these should be defined in pascal not in semantic analyzer */
+static void add_builtin_type_owned(SymTab_t *symtab, const char *name, KgpcType *type)
+{
+    if (symtab == NULL || name == NULL || type == NULL)
+        return;
+    AddBuiltinType_Typed(symtab, (char *)name, type);
+    destroy_kgpc_type(type);
+}
+
+static void add_builtin_from_vartype(SymTab_t *symtab, const char *name, enum VarType vt)
+{
+    KgpcType *t = kgpc_type_from_var_type(vt);
+    assert(t != NULL && "Failed to create builtin type");
+    add_builtin_type_owned(symtab, name, t);
+}
+
 void semcheck_add_builtins(SymTab_t *symtab)
 {
+
     /* Platform newline constants to support System/ObjPas resourcestring concatenations */
     AddBuiltinStringConst(symtab, "LineEnding", "\n");
     AddBuiltinStringConst(symtab, "sLineBreak", "\n");
@@ -3492,121 +3498,21 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
     
-    char *pchar_name = strdup("PChar");
-    if (pchar_name != NULL) {
-        KgpcType *pchar_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(pchar_type != NULL && "Failed to create PChar type");
-        AddBuiltinType_Typed(symtab, pchar_name, pchar_type);
-        destroy_kgpc_type(pchar_type);
-        free(pchar_name);
-    }
-    char *integer_name = strdup("integer");
-    if (integer_name != NULL) {
-        KgpcType *integer_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
-        assert(integer_type != NULL && "Failed to create integer type");
-        AddBuiltinType_Typed(symtab, integer_name, integer_type);
-        destroy_kgpc_type(integer_type);
-        free(integer_name);
-    }
-    char *longint_name = strdup("longint");
-    if (longint_name != NULL) {
-        KgpcType *longint_type = kgpc_type_from_var_type(HASHVAR_LONGINT);
-        assert(longint_type != NULL && "Failed to create longint type");
-        AddBuiltinType_Typed(symtab, longint_name, longint_type);
-        destroy_kgpc_type(longint_type);
-        free(longint_name);
-    }
-    char *int64_name = strdup("int64");
-    if (int64_name != NULL) {
-        /* Int64 is 8 bytes (64-bit signed integer) - different from LongInt which is 4 bytes */
-        KgpcType *int64_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(int64_type != NULL && "Failed to create int64 type");
-        AddBuiltinType_Typed(symtab, int64_name, int64_type);
-        destroy_kgpc_type(int64_type);
-        free(int64_name);
-    }
-    char *real_name = strdup("real");
-    if (real_name != NULL) {
-        KgpcType *real_type = kgpc_type_from_var_type(HASHVAR_REAL);
-        assert(real_type != NULL && "Failed to create real type");
-        AddBuiltinType_Typed(symtab, real_name, real_type);
-        destroy_kgpc_type(real_type);
-        free(real_name);
-    }
-    char *single_name = strdup("single");
-    if (single_name != NULL) {
-        KgpcType *single_type = kgpc_type_from_var_type(HASHVAR_REAL);
-        assert(single_type != NULL && "Failed to create single type");
-        AddBuiltinType_Typed(symtab, single_name, single_type);
-        destroy_kgpc_type(single_type);
-        free(single_name);
-    }
-    char *double_name = strdup("double");
-    if (double_name != NULL) {
-        KgpcType *double_type = kgpc_type_from_var_type(HASHVAR_REAL);
-        assert(double_type != NULL && "Failed to create double type");
-        AddBuiltinType_Typed(symtab, double_name, double_type);
-        destroy_kgpc_type(double_type);
-        free(double_name);
-    }
-    char *string_name = strdup("string");
-    if (string_name != NULL) {
-        KgpcType *string_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(string_type != NULL && "Failed to create string type");
-        AddBuiltinType_Typed(symtab, string_name, string_type);
-        destroy_kgpc_type(string_type);
-        free(string_name);
-    char *ansistring_name = strdup("AnsiString");
-    if (ansistring_name != NULL) {
-        KgpcType *ansistring_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(ansistring_type != NULL && "Failed to create AnsiString type");
-        AddBuiltinType_Typed(symtab, ansistring_name, ansistring_type);
-        destroy_kgpc_type(ansistring_type);
-        free(ansistring_name);
-    }
-    /* RawByteString - byte string with no encoding */
-    char *rawbytestring_name = strdup("RawByteString");
-    if (rawbytestring_name != NULL) {
-        KgpcType *rawbytestring_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(rawbytestring_type != NULL && "Failed to create RawByteString type");
-        AddBuiltinType_Typed(symtab, rawbytestring_name, rawbytestring_type);
-        destroy_kgpc_type(rawbytestring_type);
-        free(rawbytestring_name);
-    }
-    }
-    char *unicode_name = strdup("UnicodeString");
-    if (unicode_name != NULL) {
-        KgpcType *unicode_type = kgpc_type_from_var_type(HASHVAR_PCHAR);
-        assert(unicode_type != NULL && "Failed to create UnicodeString type");
-        AddBuiltinType_Typed(symtab, unicode_name, unicode_type);
-        destroy_kgpc_type(unicode_type);
-        free(unicode_name);
-    }
-    char *boolean_name = strdup("boolean");
-    if (boolean_name != NULL) {
-        KgpcType *boolean_type = kgpc_type_from_var_type(HASHVAR_BOOLEAN);
-        assert(boolean_type != NULL && "Failed to create boolean type");
-        AddBuiltinType_Typed(symtab, boolean_name, boolean_type);
-        destroy_kgpc_type(boolean_type);
-        free(boolean_name);
-    }
-    char *char_name = strdup("char");
-    if (char_name != NULL) {
-        KgpcType *char_type = kgpc_type_from_var_type(HASHVAR_CHAR);
-        assert(char_type != NULL && "Failed to create char type");
-        AddBuiltinType_Typed(symtab, char_name, char_type);
-        destroy_kgpc_type(char_type);
-        free(char_name);
-    }
-    /* WideChar is a 2-byte character type (UTF-16 code unit) */
-    char *widechar_name = strdup("WideChar");
-    if (widechar_name != NULL) {
-        KgpcType *widechar_type = create_primitive_type_with_size(CHAR_TYPE, 2);
-        assert(widechar_type != NULL && "Failed to create WideChar type");
-        AddBuiltinType_Typed(symtab, widechar_name, widechar_type);
-        destroy_kgpc_type(widechar_type);
-        free(widechar_name);
-    }
+    /* Primitive core types required to semcheck stdlib.p and user code.
+     * Everything else should live in KGPC/stdlib.p (aliases, pointer helpers, etc.). */
+    add_builtin_from_vartype(symtab, "Integer", HASHVAR_INTEGER);
+    add_builtin_from_vartype(symtab, "LongInt", HASHVAR_LONGINT);
+    add_builtin_type_owned(symtab, "Int64", create_primitive_type_with_size(INT64_TYPE, 8));
+    add_builtin_from_vartype(symtab, "Real", HASHVAR_REAL);
+    add_builtin_from_vartype(symtab, "Boolean", HASHVAR_BOOLEAN);
+    add_builtin_from_vartype(symtab, "Char", HASHVAR_CHAR);
+    add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
+    add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
+
+    /* Primitive pointer type */
+    add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
+
+    /* File/Text primitives */
     char *file_name = strdup("file");
     if (file_name != NULL) {
         KgpcType *file_type = kgpc_type_from_var_type(HASHVAR_FILE);
@@ -3622,173 +3528,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
         AddBuiltinType_Typed(symtab, text_name, text_type);
         destroy_kgpc_type(text_type);
         free(text_name);
-    }
-    char *pointer_name = strdup("Pointer");
-    if (pointer_name != NULL) {
-        KgpcType *pointer_type = create_pointer_type(NULL); // Untyped pointer
-        assert(pointer_type != NULL && "Failed to create Pointer type");
-        AddBuiltinType_Typed(symtab, pointer_name, pointer_type);
-        destroy_kgpc_type(pointer_type);
-        free(pointer_name);
-    }
-    /* Additional type aliases for FPC compatibility */
-    /* Note: Cardinal, LongWord, DWord are 32-bit unsigned integers in Pascal.
-     * Since we don't have distinct unsigned types, we map them to HASHVAR_INTEGER (32-bit).
-     * Byte, Word, ShortInt, SmallInt are smaller types but we also use HASHVAR_INTEGER
-     * since there's no HASHVAR for 8-bit or 16-bit integers. */
-    char *cardinal_name = strdup("Cardinal");
-    if (cardinal_name != NULL) {
-        KgpcType *cardinal_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
-        assert(cardinal_type != NULL && "Failed to create Cardinal type");
-        AddBuiltinType_Typed(symtab, cardinal_name, cardinal_type);
-        destroy_kgpc_type(cardinal_type);
-        free(cardinal_name);
-    }
-    char *longword_name = strdup("LongWord");
-    if (longword_name != NULL) {
-        KgpcType *longword_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
-        assert(longword_type != NULL && "Failed to create LongWord type");
-        AddBuiltinType_Typed(symtab, longword_name, longword_type);
-        destroy_kgpc_type(longword_type);
-        free(longword_name);
-    }
-    char *dword_name = strdup("DWord");
-    if (dword_name != NULL) {
-        KgpcType *dword_type = kgpc_type_from_var_type(HASHVAR_INTEGER);
-        assert(dword_type != NULL && "Failed to create DWord type");
-        AddBuiltinType_Typed(symtab, dword_name, dword_type);
-        destroy_kgpc_type(dword_type);
-        free(dword_name);
-    }
-    char *byte_name = strdup("Byte");
-    if (byte_name != NULL) {
-        KgpcType *byte_type = create_primitive_type_with_size(INT_TYPE, 1);
-        assert(byte_type != NULL && "Failed to create Byte type");
-        AddBuiltinType_Typed(symtab, byte_name, byte_type);
-        destroy_kgpc_type(byte_type);
-        free(byte_name);
-    }
-    char *word_name = strdup("Word");
-    if (word_name != NULL) {
-        KgpcType *word_type = create_primitive_type_with_size(INT_TYPE, 2);
-        assert(word_type != NULL && "Failed to create Word type");
-        AddBuiltinType_Typed(symtab, word_name, word_type);
-        destroy_kgpc_type(word_type);
-        free(word_name);
-    }
-    /* TSystemCodePage is a type alias for Word used to indicate code pages in FPC RTL */
-    char *tsystemcodepage_name = strdup("TSystemCodePage");
-    if (tsystemcodepage_name != NULL) {
-        KgpcType *tsystemcodepage_type = create_primitive_type_with_size(INT_TYPE, 2);
-        assert(tsystemcodepage_type != NULL && "Failed to create TSystemCodePage type");
-        AddBuiltinType_Typed(symtab, tsystemcodepage_name, tsystemcodepage_type);
-        destroy_kgpc_type(tsystemcodepage_type);
-        free(tsystemcodepage_name);
-    }
-    char *shortint_name = strdup("ShortInt");
-    if (shortint_name != NULL) {
-        KgpcType *shortint_type = create_primitive_type_with_size(INT_TYPE, 1);
-        assert(shortint_type != NULL && "Failed to create ShortInt type");
-        AddBuiltinType_Typed(symtab, shortint_name, shortint_type);
-        destroy_kgpc_type(shortint_type);
-        free(shortint_name);
-    }
-    char *smallint_name = strdup("SmallInt");
-    if (smallint_name != NULL) {
-        KgpcType *smallint_type = create_primitive_type_with_size(INT_TYPE, 2);
-        assert(smallint_type != NULL && "Failed to create SmallInt type");
-        AddBuiltinType_Typed(symtab, smallint_name, smallint_type);
-        destroy_kgpc_type(smallint_type);
-        free(smallint_name);
-    }
-    /* QWord and UInt64 are 64-bit unsigned integers (8 bytes) */
-    char *qword_name = strdup("QWord");
-    if (qword_name != NULL) {
-        KgpcType *qword_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(qword_type != NULL && "Failed to create QWord type");
-        AddBuiltinType_Typed(symtab, qword_name, qword_type);
-        destroy_kgpc_type(qword_type);
-        free(qword_name);
-    }
-    char *uint64_name = strdup("UInt64");
-    if (uint64_name != NULL) {
-        KgpcType *uint64_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(uint64_type != NULL && "Failed to create UInt64 type");
-        AddBuiltinType_Typed(symtab, uint64_name, uint64_type);
-        destroy_kgpc_type(uint64_type);
-        free(uint64_name);
-    }
-    /* SizeUInt and SizeInt for FPC compatibility */
-    char *sizeuint_name = strdup("SizeUInt");
-    if (sizeuint_name != NULL) {
-        KgpcType *sizeuint_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(sizeuint_type != NULL && "Failed to create SizeUInt type");
-        AddBuiltinType_Typed(symtab, sizeuint_name, sizeuint_type);
-        destroy_kgpc_type(sizeuint_type);
-        free(sizeuint_name);
-    }
-    char *sizeint_name = strdup("SizeInt");
-    if (sizeint_name != NULL) {
-        KgpcType *sizeint_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(sizeint_type != NULL && "Failed to create SizeInt type");
-        AddBuiltinType_Typed(symtab, sizeint_name, sizeint_type);
-        destroy_kgpc_type(sizeint_type);
-        free(sizeint_name);
-    }
-    /* PtrUInt and PtrInt for FPC compatibility (pointer-sized integers) */
-    char *ptruint_name = strdup("PtrUInt");
-    if (ptruint_name != NULL) {
-        KgpcType *ptruint_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(ptruint_type != NULL && "Failed to create PtrUInt type");
-        AddBuiltinType_Typed(symtab, ptruint_name, ptruint_type);
-        destroy_kgpc_type(ptruint_type);
-        free(ptruint_name);
-    }
-    char *ptrint_name = strdup("PtrInt");
-    if (ptrint_name != NULL) {
-        KgpcType *ptrint_type = create_primitive_type_with_size(INT64_TYPE, 8);
-        assert(ptrint_type != NULL && "Failed to create PtrInt type");
-        AddBuiltinType_Typed(symtab, ptrint_name, ptrint_type);
-        destroy_kgpc_type(ptrint_type);
-        free(ptrint_name);
-    }
-    /* PText - pointer to Text file (for FPC bootstrap heaptrc.pp) */
-    char *ptext_name = strdup("PText");
-    if (ptext_name != NULL) {
-        KgpcType *file_type = create_primitive_type(FILE_TYPE);
-        KgpcType *ptext_type = create_pointer_type(file_type);
-        assert(ptext_type != NULL && "Failed to create PText type");
-        AddBuiltinType_Typed(symtab, ptext_name, ptext_type);
-        destroy_kgpc_type(ptext_type);
-        free(ptext_name);
-    }
-    /* TClass - class reference type (for FPC bootstrap objpas.pp) */
-    char *tclass_name = strdup("TClass");
-    if (tclass_name != NULL) {
-        KgpcType *tclass_type = create_pointer_type(NULL);  /* Class reference is essentially a pointer */
-        assert(tclass_type != NULL && "Failed to create TClass type");
-        AddBuiltinType_Typed(symtab, tclass_name, tclass_type);
-        destroy_kgpc_type(tclass_type);
-        free(tclass_name);
-    }
-    /* TypedFile - generic typed file (for FPC bootstrap objpas.pp) */
-    char *typedfile_name = strdup("TypedFile");
-    if (typedfile_name != NULL) {
-        KgpcType *typedfile_type = create_primitive_type(FILE_TYPE);  /* Untyped file type */
-        assert(typedfile_type != NULL && "Failed to create TypedFile type");
-        AddBuiltinType_Typed(symtab, typedfile_name, typedfile_type);
-        destroy_kgpc_type(typedfile_type);
-        free(typedfile_name);
-    }
-    /* TRTLCriticalSection - critical section record (for FPC bootstrap heaptrc.pp) */
-    char *trtlcs_name = strdup("TRTLCriticalSection");
-    if (trtlcs_name != NULL) {
-        /* TRTLCriticalSection is a record type - we create it as a simple record placeholder */
-        KgpcType *trtlcs_type = create_primitive_type_with_size(LONGINT_TYPE, 40);  /* Placeholder size */
-        assert(trtlcs_type != NULL && "Failed to create TRTLCriticalSection type");
-        AddBuiltinType_Typed(symtab, trtlcs_name, trtlcs_type);
-        destroy_kgpc_type(trtlcs_type);
-        free(trtlcs_name);
     }
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
@@ -5185,10 +4924,20 @@ next_identifier:
                             /* Allow pointer type initializers (including nil) for pointer variables.
                              * Both the initializer expression type and the declared variable type must
                              * be pointer types. This enables patterns like: var my_ptr: PChar = nil; */
-                            if (!compatible && inferred_var_type == HASHVAR_POINTER &&
-                                current_var_type == HASHVAR_POINTER)
+                            if (!compatible)
                             {
-                                compatible = 1;
+                                int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_type == POINTER_TYPE);
+                                int current_is_pointer = (current_var_type == HASHVAR_POINTER);
+                                if (var_node->type != NULL)
+                                {
+                                    current_is_pointer |= kgpc_type_is_pointer(var_node->type);
+                                    if (kgpc_type_get_legacy_tag(var_node->type) == POINTER_TYPE)
+                                        current_is_pointer = 1;
+                                }
+                                if (tree->tree_data.var_decl_data.type == POINTER_TYPE)
+                                    current_is_pointer = 1;
+                                if (inferred_is_pointer && current_is_pointer)
+                                    compatible = 1;
                             }
 
                             if (!compatible)
@@ -5488,7 +5237,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         // **THIS IS THE FIX FOR THE RETURN VALUE**:
         // Use the ORIGINAL name for the internal return variable with KgpcType
         // Always use _Typed variant, even if KgpcType is NULL
-        PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.id, return_kgpc_type);
+        PushFuncRetOntoScope_Typed(symtab, id_to_use_for_lookup, return_kgpc_type);
         
 /* Also add "Result" as an alias for the return variable for Pascal compatibility */
         /* Check if "Result" (or "result") is already used as a parameter or local variable */

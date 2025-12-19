@@ -153,10 +153,14 @@ static inline int get_var_storage_size(HashNode_t *node)
             {
                 case LONGINT_TYPE:
                     return 4;  // Match FPC's 32-bit LongInt
+                case INT64_TYPE:
+                    return 8;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
                 case FILE_TYPE:
                 case TEXT_TYPE:
+                case POINTER_TYPE:
+                case PROCEDURE:
                     return 8;
                 case SET_TYPE:
                 {
@@ -166,6 +170,8 @@ static inline int get_var_storage_size(HashNode_t *node)
                         return (int)size;
                     return DOUBLEWORD;  /* Default for non-char sets */
                 }
+                case CHAR_TYPE:
+                    return 1;
                 default:
                     return DOUBLEWORD;  /* 4 bytes for most primitives */
             }
@@ -1312,12 +1318,15 @@ void codegen_stack_space(CodeGenContext *ctx)
         if (codegen_target_is_windows())
         {
             /* Windows x64 calling convention: rcx, rdx, r8, r9
-             * rep stosq will clobber rcx, rdi (rdi not used for params on Windows) */
+             * rep stosq will clobber rcx and rdi.
+             * Note: rdi is non-volatile (callee-saved) on Windows x64 ABI, so we must preserve it. */
             fprintf(ctx->output_file, "\tmovq\t%%rcx, %%r11\n");  /* Save rcx (1st param) to r11 */
+            fprintf(ctx->output_file, "\tmovq\t%%rdi, %%r10\n");  /* Save rdi (callee-saved) to r10 */
             fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rdi\n");   /* rdi = stack pointer */
             fprintf(ctx->output_file, "\txorq\t%%rax, %%rax\n");   /* rax = 0 */
             fprintf(ctx->output_file, "\tmovl\t$%d, %%ecx\n", quadwords);  /* ecx = count */
             fprintf(ctx->output_file, "\trep stosq\n");            /* Zero-fill */
+            fprintf(ctx->output_file, "\tmovq\t%%r10, %%rdi\n");  /* Restore rdi */
             fprintf(ctx->output_file, "\tmovq\t%%r11, %%rcx\n");  /* Restore rcx */
         }
         else

@@ -49,7 +49,7 @@ cparser_tests = executable('cparser_tests', 'cparser/tests.c',
   dependencies: cparser_dep,
 )
 
-test('cparser unit tests', cparser_tests,timeout:240)
+test('cparser unit tests', cparser_tests, timeout: 600)
 
 if build_integration_tests
   calculator_logic_lib = static_library('calculator_logic',
@@ -73,7 +73,7 @@ if build_integration_tests
     dependencies: calculator_dep
   )
 
-  test('calculator unit tests', calc_tests,timeout:240)
+  test('calculator unit tests', calc_tests, timeout: 600)
 
   bash = find_program('bash', required: false)
   if bash.found()

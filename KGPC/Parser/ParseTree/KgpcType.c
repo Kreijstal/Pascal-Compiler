@@ -1323,6 +1323,8 @@ int kgpc_type_uses_qword(KgpcType *type)
                 case STRING_TYPE:
                 case FILE_TYPE:
                 case TEXT_TYPE:
+                case POINTER_TYPE:
+                case PROCEDURE:
                 case INT64_TYPE:
                     return 1;
                 default:
