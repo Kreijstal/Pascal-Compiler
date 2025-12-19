@@ -5,15 +5,41 @@ program stdlib;
   ============================================================================ }
 
 type
+  { Small integer types (FPC-compatible sizes) }
+  Byte = 0..255;                 { 8-bit unsigned }
+  ShortInt = -128..127;          { 8-bit signed }
+  Word = 0..65535;               { 16-bit unsigned }
+  SmallInt = -32768..32767;      { 16-bit signed }
+  Cardinal = 0..4294967295;      { 32-bit unsigned }
+  LongWord = Cardinal;           { 32-bit unsigned }
+  DWord = Cardinal;              { 32-bit unsigned }
+
+  { 64-bit helpers
+    Note: KGPC currently models these as signed 64-bit under the hood; code uses
+    the identifier name to infer "unsigned" behavior where needed. }
+  QWord = Int64;
+  UInt64 = QWord;
+
+  { Real aliases }
+  Single = Real;
+  Double = Real;
+  Extended = Real;
+
   { Size types - platform dependent }
-  SizeInt = Int64;          { Signed size type - matches pointer size on 64-bit }
-  { SizeUInt is now a built-in type with size 8 }
+  NativeInt = Int64;
+  NativeUInt = QWord;
+  SizeInt = NativeInt;
+  SizeUInt = NativeUInt;
+  PtrInt = NativeInt;
+  PtrUInt = NativeUInt;
   
   { Pointer types }
-  PAnsiChar = ^Char;        { Pointer to ANSI character }
+  AnsiChar = Char;
+  PAnsiChar = ^AnsiChar;    { Pointer to ANSI character }
   PPAnsiChar = ^PAnsiChar;  { Pointer to pointer to ANSI character }
   PChar = ^Char;            { Alias for PAnsiChar }
   PPointer = ^Pointer;      { Pointer to pointer }
+  PWideChar = ^WideChar;
   
   { Additional common pointer types }
   PByte = ^Byte;
@@ -24,6 +50,12 @@ type
   PCardinal = ^Cardinal;
   PShortInt = ^ShortInt;
   PSmallInt = ^SmallInt;
+
+  { FPC bootstrap compatibility aliases }
+  PText = ^text;
+  TClass = Pointer;
+  TypedFile = file;
+  TRTLCriticalSection = array[0..39] of Byte;
   
   { Code page types - for FPC bootstrap compatibility }
   TSystemCodePage = Word;

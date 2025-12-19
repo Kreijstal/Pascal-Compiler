@@ -137,14 +137,22 @@ StackNode_t *add_l_t(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    cur_scope->t_offset = align_up(cur_scope->t_offset, temp_size);
-    cur_scope->t_offset += temp_size;
+    /*
+     * IMPORTANT: Avoid overlapping locals (x) and temporaries (t).
+     *
+     * Historically, temporaries were allocated in a separate t_offset region with
+     * offsets computed as (x_offset + t_offset). If codegen later adds more locals
+     * (x) after some temporaries have already been allocated, those new locals can
+     * overlap the earlier temporaries and corrupt values.
+     *
+     * To guarantee uniqueness regardless of allocation order, we allocate temporary
+     * storage from the same monotonically-growing x_offset pool, while still
+     * tracking the node in the t list for lookups like find_in_temp().
+     */
+    cur_scope->x_offset = align_up(cur_scope->x_offset, temp_size);
+    cur_scope->x_offset += temp_size;
 
-    /* Locals are placed below the shadow space */
-    /* After prologue: RSP = RBP - 8, then we subtract frame_size */
-    /* Shadow space is at [RSP .. RSP+31] = [RBP-8-frame_size .. RBP-8-frame_size+31] */
-    /* Locals should be at offsets more negative than RBP-32 */
-    offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    offset = cur_scope->z_offset + cur_scope->x_offset;
 
     new_node = init_stack_node(offset, label, temp_size);
 
@@ -178,10 +186,11 @@ StackNode_t *add_l_t_bytes(char *label, int size)
         size = DOUBLEWORD;
     int aligned_size = align_up(size, DOUBLEWORD);
 
-    cur_scope->t_offset = align_up(cur_scope->t_offset, DOUBLEWORD);
-    cur_scope->t_offset += aligned_size;
+    /* Allocate from x_offset to avoid overlap with later locals. */
+    cur_scope->x_offset = align_up(cur_scope->x_offset, DOUBLEWORD);
+    cur_scope->x_offset += aligned_size;
 
-    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    int offset = cur_scope->z_offset + cur_scope->x_offset;
 
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;

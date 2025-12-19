@@ -1780,6 +1780,20 @@ cleanup_constructor:
         if (ctx != NULL && ctx->symtab != NULL)
             FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
 
+        /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
+         * Only apply when the identifier is not a local/stack variable in this scope,
+         * otherwise this breaks function result variables that share the function name. */
+        if (stack_node == NULL &&
+            symbol_node != NULL &&
+            (symbol_node->hash_type == HASHTYPE_PROCEDURE ||
+             symbol_node->hash_type == HASHTYPE_FUNCTION) &&
+            symbol_node->mangled_id != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                symbol_node->mangled_id, target_reg->bit_64);
+            return add_inst(inst_list, buffer);
+        }
+
         /* Check if this is a procedure address constant - need leaq to get the label address */
         if (symbol_node != NULL && symbol_node->hash_type == HASHTYPE_CONST &&
             symbol_node->type != NULL && symbol_node->type->kind == TYPE_KIND_PROCEDURE)
