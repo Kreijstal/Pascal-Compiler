@@ -1527,9 +1527,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             case REAL_TYPE:
                             case STRING_TYPE:
                             case POINTER_TYPE:
-                            case FILE_TYPE:
-                            case TEXT_TYPE:
                                 element_size = 8;
+                                break;
+                            case FILE_TYPE:
+                                element_size = 368;
+                                break;
+                            case TEXT_TYPE:
+                                element_size = 632;
                                 break;
                             case CHAR_TYPE:
                                 element_size = 1;

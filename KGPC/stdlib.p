@@ -59,12 +59,56 @@ type
   
   { Code page types - for FPC bootstrap compatibility }
   TSystemCodePage = Word;
+
+  { Low-level I/O compatibility types }
+  THandle = LongInt;
+  CodePointer = Pointer;
   
   { String types - for FPC bootstrap compatibility }
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
+
+  TLineEndStr = string[3];
+  TextBuf = array[0..255] of AnsiChar;
+  TTextBuf = TextBuf;
+
+  TextRec = record
+    Handle: THandle;
+    Mode: LongInt;
+    BufSize: SizeInt;
+    PrivateData: SizeInt;
+    BufPos: SizeInt;
+    BufEnd: SizeInt;
+    BufPtr: ^TextBuf;
+    OpenFunc: CodePointer;
+    InOutFunc: CodePointer;
+    FlushFunc: CodePointer;
+    CloseFunc: CodePointer;
+    UserData: array[1..32] of Byte;
+    Name: array[0..255] of AnsiChar;
+    LineEnd: TLineEndStr;
+    Buffer: TextBuf;
+    CodePage: TSystemCodePage;
+  end;
+
+  FileRec = record
+    Handle: THandle;
+    Mode: LongInt;
+    RecSize: SizeInt;
+    PrivateData: array[1..64] of Byte;
+    UserData: array[1..32] of Byte;
+    Name: array[0..255] of AnsiChar;
+  end;
+
+const
+  TextRecNameLength = 256;
+  TextRecBufSize = 256;
+
+  fmClosed = $D7B0;
+  fmInput = $D7B1;
+  fmOutput = $D7B2;
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -271,6 +315,14 @@ begin
     end
 end;
 
+procedure tfile_configure_internal(var f: file; recsize: longint; tag: longint);
+begin
+    assembler;
+    asm
+        call kgpc_tfile_configure
+    end
+end;
+
 procedure close(var f: text); overload;
 begin
     assembler;
@@ -351,12 +403,24 @@ begin
     end
 end;
 
+procedure rewrite(var f: file; recsize: longint); overload;
+begin
+    tfile_configure_internal(f, recsize, 0);
+    rewrite(f);
+end;
+
 procedure reset(var f: file); overload;
 begin
     assembler;
     asm
         call kgpc_tfile_reset
     end
+end;
+
+procedure reset(var f: file; recsize: longint); overload;
+begin
+    tfile_configure_internal(f, recsize, 0);
+    reset(f);
 end;
 
 procedure close(var f: file); overload;

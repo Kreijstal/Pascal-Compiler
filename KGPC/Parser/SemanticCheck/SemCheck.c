@@ -307,6 +307,7 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
     int *error_count)
 {
     const char *debug_env = getenv("KGPC_DEBUG_RETURN_TYPE");
+    KgpcType *builtin_return = NULL;
     if (subprogram == NULL || symtab == NULL)
         return NULL;
 
@@ -331,6 +332,7 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             else
             {
                 subprogram->tree_data.subprogram_data.return_type = builtin_type;
+                builtin_return = create_primitive_type(builtin_type);
             }
         }
     }
@@ -347,6 +349,9 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             (void *)type_node,
             (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1);
     }
+
+    if (builtin_return != NULL)
+        return builtin_return;
 
     return kgpc_type_build_function_return(
         subprogram->tree_data.subprogram_data.inline_return_type,
@@ -1763,9 +1768,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
                     
                     /* Handle inline record aliases (e.g., generic specializations) */
-                    if (alias->inline_record_type != NULL &&
-                        alias->inline_record_type->type_id != NULL)
+                    if (alias->inline_record_type != NULL)
                     {
+                        if (alias->inline_record_type->type_id == NULL)
+                            alias->inline_record_type->type_id = strdup(type_id);
                         const char *record_name = alias->inline_record_type->type_id;
                         HashNode_t *existing_inline = NULL;
                         int inline_scope = FindIdent(&existing_inline, symtab, (char *)record_name);
@@ -2704,6 +2710,22 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             case TYPE_DECL_ALIAS:
             {
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
+                if (alias_info->inline_record_type != NULL &&
+                    tree->tree_data.type_decl_data.kgpc_type == NULL)
+                {
+                    if (alias_info->inline_record_type->type_id == NULL &&
+                        tree->tree_data.type_decl_data.id != NULL)
+                    {
+                        alias_info->inline_record_type->type_id =
+                            strdup(tree->tree_data.type_decl_data.id);
+                    }
+                    KgpcType *inline_kgpc = create_record_type(alias_info->inline_record_type);
+                    if (record_type_is_class(alias_info->inline_record_type))
+                        inline_kgpc = create_pointer_type(inline_kgpc);
+                    kgpc_type_set_type_alias(inline_kgpc, alias_info);
+                    tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
+                    kgpc_type_retain(inline_kgpc);
+                }
                 if (alias_info->is_array)
                 {
                     int element_type = alias_info->array_element_type;
@@ -3516,10 +3538,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
 
-    /* File/Text primitives */
+    /* File/Text primitives (sizes align with stdlib TextRec/FileRec layout) */
     char *file_name = strdup("file");
     if (file_name != NULL) {
-        KgpcType *file_type = kgpc_type_from_var_type(HASHVAR_FILE);
+        KgpcType *file_type = create_primitive_type_with_size(FILE_TYPE, 368);
         assert(file_type != NULL && "Failed to create file type");
         AddBuiltinType_Typed(symtab, file_name, file_type);
         destroy_kgpc_type(file_type);
@@ -3527,7 +3549,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     char *text_name = strdup("text");
     if (text_name != NULL) {
-        KgpcType *text_type = kgpc_type_from_var_type(HASHVAR_TEXT);
+        KgpcType *text_type = create_primitive_type_with_size(TEXT_TYPE, 632);
         assert(text_type != NULL && "Failed to create text type");
         AddBuiltinType_Typed(symtab, text_name, text_type);
         destroy_kgpc_type(text_type);

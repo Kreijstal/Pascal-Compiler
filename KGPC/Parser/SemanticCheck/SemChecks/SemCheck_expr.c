@@ -482,12 +482,30 @@ static int semcheck_try_reinterpret_as_typecast(int *type_return,
     int target_type = UNKNOWN_TYPE;
     if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         set_type_from_hashtype(&target_type, type_node);
+    if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
+        kgpc_type_is_record(type_node->type))
+    {
+        target_type = RECORD_TYPE;
+    }
+    if (type_node == NULL)
+        FindIdent(&type_node, symtab, (char *)id);
+    if (target_type == UNKNOWN_TYPE && type_node != NULL && type_node->type != NULL &&
+        kgpc_type_is_record(type_node->type))
+    {
+        target_type = RECORD_TYPE;
+    }
     if (target_type == UNKNOWN_TYPE)
         target_type = semcheck_map_builtin_type_name(symtab, id);
 
     int is_type_identifier =
         (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) ||
+        (type_node != NULL && type_node->type != NULL && kgpc_type_is_record(type_node->type)) ||
         (target_type != UNKNOWN_TYPE);
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] try_typecast id=%s type_node=%p hash_type=%d target_type=%d\n",
+            id, (void *)type_node, type_node != NULL ? type_node->hash_type : -1, target_type);
+    }
     if (!is_type_identifier)
     {
         free(id_copy);
@@ -496,6 +514,11 @@ static int semcheck_try_reinterpret_as_typecast(int *type_return,
 
     /* Require exactly one argument for a typecast */
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] try_typecast id=%s args=%d\n",
+            id, args != NULL ? ListLength(args) : 0);
+    }
     if (args == NULL || args->next != NULL)
     {
         fprintf(stderr, "Error on line %d, typecast to %s expects exactly one argument.\n",
@@ -4000,6 +4023,52 @@ static int semcheck_typecast(int *type_return,
 
         expr->resolved_kgpc_type = resolved_ptr;
     }
+    else if (target_type == RECORD_TYPE)
+    {
+        HashNode_t *target_node = NULL;
+        struct RecordType *record_info = NULL;
+        if (expr->expr_data.typecast_data.target_type_id != NULL)
+        {
+            target_node = semcheck_find_type_node_with_kgpc_type(
+                symtab, expr->expr_data.typecast_data.target_type_id);
+            if (target_node == NULL &&
+                FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0)
+            {
+                /* target_node assigned by FindIdent when present */
+            }
+            if (target_node != NULL)
+            {
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                {
+                    fprintf(stderr, "[SemCheck] typecast record target=%s node=%p kgpc_kind=%d\n",
+                        expr->expr_data.typecast_data.target_type_id,
+                        (void *)target_node,
+                        target_node->type != NULL ? target_node->type->kind : -1);
+                }
+                record_info = get_record_type_from_node(target_node);
+                if (record_info == NULL && target_node->type != NULL &&
+                    kgpc_type_is_record(target_node->type))
+                {
+                    record_info = kgpc_type_get_record(target_node->type);
+                }
+            }
+        }
+
+        expr->record_type = record_info;
+        if (target_node != NULL && target_node->type != NULL)
+        {
+            kgpc_type_retain(target_node->type);
+            expr->resolved_kgpc_type = target_node->type;
+        }
+        else if (record_info != NULL)
+        {
+            expr->resolved_kgpc_type = create_record_type(record_info);
+        }
+        else
+        {
+            expr->resolved_kgpc_type = create_primitive_type(RECORD_TYPE);
+        }
+    }
     else if (target_type != UNKNOWN_TYPE)
     {
         expr->resolved_kgpc_type = create_primitive_type(target_type);
@@ -4731,6 +4800,31 @@ static int semcheck_recordaccess(int *type_return,
         if (record_info == NULL && record_expr->resolved_kgpc_type != NULL &&
             kgpc_type_is_record(record_expr->resolved_kgpc_type)) {
             record_info = kgpc_type_get_record(record_expr->resolved_kgpc_type);
+        }
+        if (record_info == NULL && record_expr->type == EXPR_TYPECAST)
+        {
+            const char *target_id = record_expr->expr_data.typecast_data.target_type_id;
+            if (target_id != NULL)
+            {
+                HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, target_id);
+                if (type_node == NULL)
+                    FindIdent(&type_node, symtab, (char *)target_id);
+                if (type_node != NULL)
+                {
+                    record_info = get_record_type_from_node(type_node);
+                    if (record_info == NULL && type_node->type != NULL &&
+                        kgpc_type_is_record(type_node->type))
+                    {
+                        record_info = kgpc_type_get_record(type_node->type);
+                    }
+                    record_expr->record_type = record_info;
+                    if (record_expr->resolved_kgpc_type == NULL && type_node->type != NULL)
+                    {
+                        kgpc_type_retain(type_node->type);
+                        record_expr->resolved_kgpc_type = type_node->type;
+                    }
+                }
+            }
         }
     }
     else if (record_type == POINTER_TYPE)

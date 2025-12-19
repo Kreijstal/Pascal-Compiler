@@ -917,10 +917,12 @@ long long expr_effective_size_bytes(const struct Expression *expr)
         case SET_TYPE:
         case ENUM_TYPE:
             return 4;
+        case FILE_TYPE:
+            return 368;
+        case TEXT_TYPE:
+            return 632;
         case STRING_TYPE:
         case POINTER_TYPE:
-        case FILE_TYPE:
-        case TEXT_TYPE:
         case REAL_TYPE:
             return 8;
         case LONGINT_TYPE:
