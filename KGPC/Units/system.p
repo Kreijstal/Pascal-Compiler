@@ -7,10 +7,9 @@ unit system;
 
 interface
 
-type
-  { ShortString: length-prefixed string[255] compatible layout.
-    Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
-  ShortString = array[0..255] of Char;
+{ NOTE: KGPC merges `KGPC/stdlib.p` (the implicit prelude) into all compilations.
+  System-level compatibility types like `SizeInt`, pointer aliases, and `ShortString`
+  are defined there to avoid duplicate declarations when users also `uses system`. }
 
 implementation
 

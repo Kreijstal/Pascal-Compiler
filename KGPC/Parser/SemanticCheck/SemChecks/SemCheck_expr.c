@@ -558,8 +558,6 @@ static inline int node_is_record_type(HashNode_t *node)
     return hashnode_is_record(node);
 }
 
-static int semcheck_pointer_deref(int *type_return,
-    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_recordaccess(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating);
 static int semcheck_addressof(int *type_return,

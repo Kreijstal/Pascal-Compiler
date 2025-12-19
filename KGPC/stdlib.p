@@ -55,18 +55,10 @@ type
   TSystemCodePage = Word;
   
   { String types - for FPC bootstrap compatibility }
-  AnsiString = String;
-  RawByteString = String;   { KGPC doesn't distinguish encoding }
-  UnicodeString = String;
-
-  { ShortString: length-prefixed string[255] compatible layout }
+  RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
+  { ShortString: length-prefixed string[255] compatible layout.
+    Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
-
-  { Bootstrap helper types expected by some FPC RTL units }
-  PText = ^text;
-  TClass = Pointer;
-  TypedFile = file;
-  TRTLCriticalSection = array[0..39] of Byte;
 
 { ============================================================================
   Compiler Intrinsic Functions
