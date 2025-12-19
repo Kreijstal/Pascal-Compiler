@@ -4333,6 +4333,9 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
          * placed after that shadow space. */
         int shadow_space = codegen_target_is_windows() ? 32 : 0;
         int stack_bytes = stack_slot_count * CODEGEN_POINTER_SIZE_BYTES;
+        /* Alignment padding must be placed AFTER the stack arguments.
+         * Stack arguments start immediately after the Windows shadow space (if any),
+         * i.e. at offset 32(%rsp) for the 5th argument. */
         int padding = codegen_expr_align_to(stack_bytes, REQUIRED_OFFSET) - stack_bytes;
         int total_stack_area = shadow_space + stack_bytes + padding;
         if (total_stack_area > 0)
@@ -4345,7 +4348,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             {
                 if (arg_infos[i].pass_via_stack)
                     arg_infos[i].stack_offset =
-                        shadow_space + padding + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
+                        shadow_space + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
             }
         }
     }
