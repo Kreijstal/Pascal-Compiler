@@ -50,6 +50,12 @@ type
   PCardinal = ^Cardinal;
   PShortInt = ^ShortInt;
   PSmallInt = ^SmallInt;
+
+  { FPC bootstrap compatibility aliases }
+  PText = ^text;
+  TClass = Pointer;
+  TypedFile = file;
+  TRTLCriticalSection = array[0..39] of Byte;
   
   { Code page types - for FPC bootstrap compatibility }
   TSystemCodePage = Word;
