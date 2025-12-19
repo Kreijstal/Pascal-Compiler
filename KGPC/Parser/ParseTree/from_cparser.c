@@ -1304,6 +1304,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("string");
         return STRING_TYPE;
     }
+    if (strcasecmp(name, "text") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("text");
+        return TEXT_TYPE;
+    }
     /* C-style char aliases from ctypes/sysutils */
     if (strcasecmp(name, "cchar") == 0 || strcasecmp(name, "cschar") == 0 ||
         strcasecmp(name, "cuchar") == 0 || strcasecmp(name, "ansichar") == 0)
@@ -4247,7 +4252,10 @@ static Tree_t *convert_type_decl(ast_t *type_decl_node, ListNode_t **method_clon
     ast_t *spec_node = id_node->next;
     while (spec_node != NULL && spec_node->typ != PASCAL_T_TYPE_SPEC &&
            spec_node->typ != PASCAL_T_RECORD_TYPE && spec_node->typ != PASCAL_T_OBJECT_TYPE &&
-           spec_node->typ != PASCAL_T_CLASS_TYPE) {
+           spec_node->typ != PASCAL_T_CLASS_TYPE &&
+           spec_node->typ != PASCAL_T_PROCEDURE_TYPE &&
+           spec_node->typ != PASCAL_T_FUNCTION_TYPE &&
+           spec_node->typ != PASCAL_T_REFERENCE_TO_TYPE) {
         spec_node = spec_node->next;
     }
 
@@ -7728,6 +7736,26 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         case PASCAL_T_VAR_SECTION:
                             list_builder_extend(&interface_var_builder, convert_var_section(node_cursor));
                             break;
+                        case PASCAL_T_PROCEDURE_DECL: {
+                            Tree_t *proc = convert_procedure(node_cursor);
+                            if (kgpc_debug_subprog_enabled()) {
+                                char *proc_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
+                                fprintf(stderr, "[KGPC] convert_procedure(%s) => %p\n", proc_id, (void*)proc);
+                                free(proc_id);
+                            }
+                            append_subprogram_node(&subprograms, proc);
+                            break;
+                        }
+                        case PASCAL_T_FUNCTION_DECL: {
+                            Tree_t *func = convert_function(node_cursor);
+                            if (kgpc_debug_subprog_enabled()) {
+                                char *func_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
+                                fprintf(stderr, "[KGPC] convert_function(%s) => %p\n", func_id, (void*)func);
+                                free(func_id);
+                            }
+                            append_subprogram_node(&subprograms, func);
+                            break;
+                        }
                         case PASCAL_T_PROPERTY_DECL:
                             /* Module-level property declaration (FPC extension). */
                             append_module_property_wrappers(&subprograms, node_cursor);

@@ -1033,8 +1033,15 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case STRING_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
-                case FILE_TYPE:
                     return 8; /* Pointers are 8 bytes on x86-64 */
+                case FILE_TYPE:
+                    if (type->size_in_bytes > 0)
+                        return type->size_in_bytes;
+                    return 368;
+                case TEXT_TYPE:
+                    if (type->size_in_bytes > 0)
+                        return type->size_in_bytes;
+                    return 632;
                 case CHAR_TYPE:
                     return 1;
                 default:

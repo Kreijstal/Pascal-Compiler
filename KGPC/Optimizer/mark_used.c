@@ -6,6 +6,7 @@
 #include "mark_used.h"
 #include "Parser/ParseTree/tree_types.h"
 #include "Parser/SemanticCheck/HashTable/HashTable.h"
+#include "Parser/ParseTree/KgpcType.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -54,24 +55,35 @@ static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogr
 
 static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
     if (mangled_id == NULL) return NULL;
-    
+
+    Tree_t *fallback = NULL;
     for (int i = 0; i < map->count; i++) {
-        if (map->entries[i].mangled_id != NULL && 
+        if (map->entries[i].mangled_id != NULL &&
             strcmp(map->entries[i].mangled_id, mangled_id) == 0) {
-            return map->entries[i].subprogram;
+            Tree_t *sub = map->entries[i].subprogram;
+            if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL)
+                return sub;
+            if (fallback == NULL)
+                fallback = sub;
         }
     }
-    
-    /* Fallback: try searching by id if mangled_id not found */
+
+    /* Fallback: try searching by id if mangled_id not found or only forward decls exist */
+    Tree_t *id_fallback = NULL;
     for (int i = 0; i < map->count; i++) {
         Tree_t *sub = map->entries[i].subprogram;
         if (sub != NULL && sub->tree_data.subprogram_data.id != NULL &&
             strcmp(sub->tree_data.subprogram_data.id, mangled_id) == 0) {
-            return sub;
+            if (sub->tree_data.subprogram_data.statement_list != NULL)
+                return sub;
+            if (id_fallback == NULL)
+                id_fallback = sub;
         }
     }
-    
-    return NULL;
+
+    if (fallback != NULL)
+        return fallback;
+    return id_fallback;
 }
 
 /* Forward declarations */
@@ -144,12 +156,18 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
     
     switch (expr->type) {
         case EXPR_FUNCTION_CALL: {
-            char *mangled_id = expr->expr_data.function_call_data.mangled_id;
-            if (mangled_id != NULL) {
-                Tree_t *called_sub = map_find(map, mangled_id);
-                if (called_sub != NULL) {
+            const char *lookup_id = expr->expr_data.function_call_data.mangled_id;
+            if (lookup_id == NULL)
+                lookup_id = expr->expr_data.function_call_data.id;
+            if (lookup_id != NULL) {
+                Tree_t *called_sub = map_find(map, lookup_id);
+                if (called_sub != NULL)
                     mark_subprogram_recursive(called_sub, map);
-                }
+            } else if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                       expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
+                Tree_t *called_sub = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+                if (called_sub != NULL)
+                    mark_subprogram_recursive(called_sub, map);
             }
             /* Also check arguments */
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
@@ -284,9 +302,17 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
     
     switch (stmt->type) {
         case STMT_PROCEDURE_CALL: {
-            char *mangled_id = stmt->stmt_data.procedure_call_data.mangled_id;
-            if (mangled_id != NULL) {
-                Tree_t *called_sub = map_find(map, mangled_id);
+            const char *lookup_id = stmt->stmt_data.procedure_call_data.mangled_id;
+            if (lookup_id == NULL)
+                lookup_id = stmt->stmt_data.procedure_call_data.id;
+            if (lookup_id != NULL) {
+                Tree_t *called_sub = map_find(map, lookup_id);
+                if (called_sub != NULL) {
+                    mark_subprogram_recursive(called_sub, map);
+                }
+            } else if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL &&
+                       stmt->stmt_data.procedure_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
+                Tree_t *called_sub = stmt->stmt_data.procedure_call_data.call_kgpc_type->info.proc_info.definition;
                 if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
                 }
@@ -459,10 +485,11 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
                 /* Initialize is_used to 0 */
                 sub->tree_data.subprogram_data.is_used = 0;
                 
-                char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
-                if (mangled_id != NULL) {
+                const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+                const char *map_id = (mangled_id != NULL) ? mangled_id : sub->tree_data.subprogram_data.id;
+                if (map_id != NULL) {
                     /* Check if this mangled_id already exists (forward declaration case) */
-                    Tree_t *existing = map_find(map, mangled_id);
+                    Tree_t *existing = map_find(map, map_id);
                     if (existing != NULL) {
                         /* We have both forward declaration and implementation */
                         /* We need to ensure both get marked as used */
@@ -473,13 +500,13 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
                             /* This is the implementation, replace in map */
                             /* But first, mark the forward declaration to match this one's status */
                             existing->tree_data.subprogram_data.is_used = sub->tree_data.subprogram_data.is_used;
-                            map_add(map, mangled_id, sub);
+                            map_add(map, map_id, sub);
                         } else {
                             /* This is another forward declaration, keep the existing one */
                             sub->tree_data.subprogram_data.is_used = existing->tree_data.subprogram_data.is_used;
                         }
                     } else {
-                        map_add(map, mangled_id, sub);
+                        map_add(map, map_id, sub);
                     }
                 }
                 

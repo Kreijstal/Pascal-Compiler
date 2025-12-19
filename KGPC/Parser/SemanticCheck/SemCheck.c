@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
 #ifndef _WIN32
 #include <strings.h>
 #else
@@ -57,6 +58,8 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "String"))
         return STRING_TYPE;
+    if (pascal_identifier_equals(id, "ShortString"))
+        return SHORTSTRING_TYPE;
     if (pascal_identifier_equals(id, "Char"))
         return CHAR_TYPE;
     if (pascal_identifier_equals(id, "Boolean"))
@@ -304,7 +307,7 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 }
 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
-    int *error_count)
+    int *error_count, int allow_undefined)
 {
     const char *debug_env = getenv("KGPC_DEBUG_RETURN_TYPE");
     KgpcType *builtin_return = NULL;
@@ -324,10 +327,13 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             int builtin_type = semcheck_map_builtin_type_name_local(type_id);
             if (builtin_type == UNKNOWN_TYPE)
             {
-                semantic_error(subprogram->line_num, 0, "undefined type %s",
-                    subprogram->tree_data.subprogram_data.return_type_id);
-                if (error_count != NULL)
-                    ++(*error_count);
+                if (!allow_undefined)
+                {
+                    semantic_error(subprogram->line_num, 0, "undefined type %s",
+                        subprogram->tree_data.subprogram_data.return_type_id);
+                    if (error_count != NULL)
+                        ++(*error_count);
+                }
             }
             else
             {
@@ -931,6 +937,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     return 0;
                 case INT_TYPE:
                 case LONGINT_TYPE:
+                    *out_value = (int32_t)inner_value;
+                    return 0;
                 case POINTER_TYPE:
                 case UNKNOWN_TYPE:
                     /* Treat other (or unresolved) integer-like casts as passthrough */
@@ -5099,6 +5107,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (already_declared && existing_decl != NULL && existing_decl->type != NULL)
         {
             proc_type = existing_decl->type;
+            Tree_t *prev_def = proc_type->info.proc_info.definition;
+            if (subprogram->tree_data.subprogram_data.statement_list != NULL &&
+                (prev_def == NULL || prev_def->tree_data.subprogram_data.statement_list == NULL))
+            {
+                proc_type->info.proc_info.definition = subprogram;
+            }
         }
         else
         {
@@ -5197,13 +5211,21 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             existing_decl->type->kind == TYPE_KIND_PROCEDURE)
         {
             return_kgpc_type = kgpc_type_get_return_type(existing_decl->type);
+            if (subprogram->tree_data.subprogram_data.statement_list != NULL)
+            {
+                Tree_t *prev_def = existing_decl->type->info.proc_info.definition;
+                if (prev_def == NULL || prev_def->tree_data.subprogram_data.statement_list == NULL)
+                {
+                    existing_decl->type->info.proc_info.definition = subprogram;
+                }
+            }
         }
 
         /* If the predeclare step could not resolve the type (e.g., inline array),
          * build it now and update the existing declaration. */
         if (return_kgpc_type == NULL)
         {
-            return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val);
+            return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val, 0);
 #ifdef DEBUG
             if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
@@ -5574,7 +5596,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
     else // Function
     {
-        KgpcType *return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val);
+        KgpcType *return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val, 1);
 #ifdef DEBUG
         if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif

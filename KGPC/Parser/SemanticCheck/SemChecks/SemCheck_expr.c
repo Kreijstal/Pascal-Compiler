@@ -1914,8 +1914,14 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
     else if (args->next == NULL)
     {
         struct Expression *file_expr = (struct Expression *)args->cur;
+        struct Expression *check_expr = file_expr;
+        if (file_expr != NULL && file_expr->type == EXPR_ADDR &&
+            file_expr->expr_data.addr_data.expr != NULL)
+        {
+            check_expr = file_expr->expr_data.addr_data.expr;
+        }
         int file_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_main(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (file_type != TEXT_TYPE)
         {
             fprintf(stderr, "Error on line %d, EOF expects a text file argument.\n", expr->line_num);
@@ -1924,6 +1930,10 @@ static int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         else
         {
             mangled_name = "kgpc_text_eof";
+            if (file_expr != NULL && file_expr->type != EXPR_ADDR)
+            {
+                args->cur = mk_addressof(file_expr->line_num, file_expr);
+            }
         }
     }
     else
@@ -1975,8 +1985,14 @@ static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
     else if (args->next == NULL)
     {
         struct Expression *file_expr = (struct Expression *)args->cur;
+        struct Expression *check_expr = file_expr;
+        if (file_expr != NULL && file_expr->type == EXPR_ADDR &&
+            file_expr->expr_data.addr_data.expr != NULL)
+        {
+            check_expr = file_expr->expr_data.addr_data.expr;
+        }
         int file_type = UNKNOWN_TYPE;
-        error_count += semcheck_expr_main(&file_type, symtab, file_expr, max_scope_lev, NO_MUTATE);
+        error_count += semcheck_expr_main(&file_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (file_type != TEXT_TYPE)
         {
             fprintf(stderr, "Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
@@ -1985,6 +2001,10 @@ static int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
         else
         {
             mangled_name = "kgpc_text_eoln";
+            if (file_expr != NULL && file_expr->type != EXPR_ADDR)
+            {
+                args->cur = mk_addressof(file_expr->line_num, file_expr);
+            }
         }
     }
     else
@@ -2972,7 +2992,7 @@ static long long sizeof_from_type_tag(int type_tag)
         case INT_TYPE:
             return 4;
         case LONGINT_TYPE:
-            return 8;
+            return 4;
         case REAL_TYPE:
             return 8;
         case STRING_TYPE:
@@ -7847,6 +7867,48 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && pascal_identifier_equals(id, "Abs"))
         return semcheck_builtin_abs(type_return, symtab, expr, max_scope_lev);
 
+    if (id != NULL && pascal_identifier_equals(id, "UpperCase"))
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args != NULL && args->next == NULL)
+        {
+            struct Expression *arg_expr = (struct Expression *)args->cur;
+            int arg_type = UNKNOWN_TYPE;
+            int error_count = semcheck_expr_main(&arg_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            if (error_count == 0 && arg_type == CHAR_TYPE)
+            {
+                if (expr->expr_data.function_call_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                }
+                if (expr->expr_data.function_call_data.id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = NULL;
+                }
+                expr->expr_data.function_call_data.id = strdup("kgpc_upcase_char");
+                expr->expr_data.function_call_data.mangled_id = strdup("kgpc_upcase_char");
+                if (expr->expr_data.function_call_data.mangled_id == NULL)
+                {
+                    fprintf(stderr, "Error: failed to allocate mangled name for UpperCase.\n");
+                    *type_return = UNKNOWN_TYPE;
+                    return 1;
+                }
+                semcheck_reset_function_call_cache(expr);
+                if (expr->resolved_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = NULL;
+                }
+                expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+                expr->resolved_type = CHAR_TYPE;
+                *type_return = CHAR_TYPE;
+                return 0;
+            }
+        }
+    }
+
 
     if (id != NULL && pascal_identifier_equals(id, "Sqrt"))
         return semcheck_builtin_unary_real(type_return, symtab, expr, max_scope_lev,
@@ -8431,6 +8493,31 @@ method_call_resolved:
 
     if (num_best_matches == 1)
     {
+        if (best_match != NULL && best_match->type != NULL &&
+            best_match->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            Tree_t *proc_def = best_match->type->info.proc_info.definition;
+            int is_external = 0;
+            if (proc_def != NULL)
+            {
+                is_external = proc_def->tree_data.subprogram_data.cname_flag != 0 ||
+                    proc_def->tree_data.subprogram_data.cname_override != NULL;
+            }
+            if (!is_external &&
+                (best_match->mangled_id == NULL ||
+                 (best_match->id != NULL &&
+                  strcmp(best_match->mangled_id, best_match->id) == 0)))
+            {
+                char *computed = MangleFunctionName(best_match->id,
+                    best_match->type->info.proc_info.params, symtab);
+                if (computed != NULL)
+                {
+                    if (best_match->mangled_id != NULL)
+                        free(best_match->mangled_id);
+                    best_match->mangled_id = computed;
+                }
+            }
+        }
         const char *target_name = best_match->mangled_id;
         if (target_name == NULL || target_name[0] == '\0')
         {
@@ -8472,7 +8559,24 @@ method_call_resolved:
                 {
                     const char *target_name = proc_def->tree_data.subprogram_data.cname_override;
                     if (target_name == NULL)
-                        target_name = proc_def->tree_data.subprogram_data.id;
+                    {
+                        if (proc_def->tree_data.subprogram_data.cname_flag)
+                        {
+                            target_name = proc_def->tree_data.subprogram_data.id;
+                        }
+                        else if (proc_def->tree_data.subprogram_data.mangled_id != NULL)
+                        {
+                            target_name = proc_def->tree_data.subprogram_data.mangled_id;
+                        }
+                        else if (best_match->mangled_id != NULL)
+                        {
+                            target_name = best_match->mangled_id;
+                        }
+                        else
+                        {
+                            target_name = proc_def->tree_data.subprogram_data.id;
+                        }
+                    }
                     if (target_name != NULL)
                     {
                         free(expr->expr_data.function_call_data.mangled_id);

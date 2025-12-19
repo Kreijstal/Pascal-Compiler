@@ -157,11 +157,17 @@ static inline int get_var_storage_size(HashNode_t *node)
                     return 8;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
-                case FILE_TYPE:
-                case TEXT_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8;
+                case FILE_TYPE:
+                case TEXT_TYPE:
+                {
+                    long long size = kgpc_type_sizeof(node->type);
+                    if (size > 0)
+                        return (int)size;
+                    return 8;
+                }
                 case SET_TYPE:
                 {
                     /* Check if this is a character set */

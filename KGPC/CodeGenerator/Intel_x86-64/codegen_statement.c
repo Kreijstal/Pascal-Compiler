@@ -1127,6 +1127,17 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         *out_reg = addr_reg;
         goto cleanup;
     }
+    else if (expr->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = expr->expr_data.typecast_data.expr;
+        int target_type = expr->expr_data.typecast_data.target_type;
+        if (inner != NULL &&
+            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE))
+        {
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+    }
     else if (expr->type == EXPR_AS)
     {
         if (expr->expr_data.as_data.expr != NULL)

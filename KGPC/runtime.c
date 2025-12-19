@@ -146,9 +146,25 @@ typedef struct KGPCFilePrivate
     size_t element_size;
 } KGPCFilePrivate;
 
+#define KGPC_FILE_PRIVATE_MAGIC 0x4B475046u
+#define KGPC_FILE_PRIVATE_MAGIC_INV (~KGPC_FILE_PRIVATE_MAGIC)
+
+static int kgpc_file_private_magic_valid(const KGPCFileRec *file)
+{
+    if (file == NULL)
+        return 0;
+    uint32_t magic = 0;
+    uint32_t inv = 0;
+    size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
+    memcpy(&magic, file->private_data + base, sizeof(magic));
+    memcpy(&inv, file->private_data + base + sizeof(magic), sizeof(inv));
+    return (magic == KGPC_FILE_PRIVATE_MAGIC && inv == KGPC_FILE_PRIVATE_MAGIC_INV);
+}
+
 #define KGPC_FM_CLOSED 0xD7B0
 #define KGPC_FM_INPUT  0xD7B1
 #define KGPC_FM_OUTPUT 0xD7B2
+#define KGPC_FM_INOUT  0xD7B3
 
 /* Global standard I/O file variables for Pascal programs */
 /* These are initialized lazily in the output/input stream functions */
@@ -231,6 +247,8 @@ static KGPCFilePrivate kgpc_file_private_get(const KGPCFileRec *file)
     memset(&priv, 0, sizeof(priv));
     if (file == NULL)
         return priv;
+    if (!kgpc_file_private_magic_valid(file))
+        return priv;
     memcpy(&priv, file->private_data, sizeof(priv));
     return priv;
 }
@@ -241,6 +259,11 @@ static void kgpc_file_private_set(KGPCFileRec *file, const KGPCFilePrivate *priv
         return;
     memset(file->private_data, 0, sizeof(file->private_data));
     memcpy(file->private_data, priv, sizeof(*priv));
+    uint32_t magic = KGPC_FILE_PRIVATE_MAGIC;
+    uint32_t inv = KGPC_FILE_PRIVATE_MAGIC_INV;
+    size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
+    memcpy(file->private_data + base, &magic, sizeof(magic));
+    memcpy(file->private_data + base + sizeof(magic), &inv, sizeof(inv));
 }
 
 static void kgpc_copy_name(char *dest, size_t dest_size, const char *src);
@@ -317,11 +340,17 @@ void kgpc_tfile_assign(KGPCFileRec *file, const char *path)
     if (file == NULL)
         return;
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle != NULL)
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
     {
-        fclose(priv.handle);
-        priv.handle = NULL;
+        priv = kgpc_file_private_get(file);
+        if (priv.handle != NULL)
+        {
+            fclose(priv.handle);
+            priv.handle = NULL;
+        }
     }
     priv.element_type = KGPC_BINARY_UNSPECIFIED;
     priv.element_size = 0;
@@ -337,7 +366,11 @@ void kgpc_tfile_configure(KGPCFileRec *file, size_t element_size, int element_ta
     if (file == NULL)
         return;
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
+        priv = kgpc_file_private_get(file);
     if (element_size > 0)
     {
         priv.element_size = element_size;
@@ -367,18 +400,24 @@ void kgpc_tfile_rewrite(KGPCFileRec *file)
     if (file == NULL || file->name[0] == '\0')
         return;
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle != NULL)
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
     {
-        fclose(priv.handle);
-        priv.handle = NULL;
+        priv = kgpc_file_private_get(file);
+        if (priv.handle != NULL)
+        {
+            fclose(priv.handle);
+            priv.handle = NULL;
+        }
     }
 
     priv.handle = fopen(file->name, "wb");
     if (priv.handle != NULL)
     {
         file->handle = fileno(priv.handle);
-        file->mode = KGPC_FM_OUTPUT;
+        file->mode = KGPC_FM_INOUT;
         kgpc_ioresult_set(0);
     }
     else
@@ -396,18 +435,24 @@ void kgpc_tfile_reset(KGPCFileRec *file)
     if (file == NULL || file->name[0] == '\0')
         return;
 
-    KGPCFilePrivate priv = kgpc_file_private_get(file);
-    if (priv.handle != NULL)
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
     {
-        fclose(priv.handle);
-        priv.handle = NULL;
+        priv = kgpc_file_private_get(file);
+        if (priv.handle != NULL)
+        {
+            fclose(priv.handle);
+            priv.handle = NULL;
+        }
     }
 
     priv.handle = fopen(file->name, "rb");
     if (priv.handle != NULL)
     {
         file->handle = fileno(priv.handle);
-        file->mode = KGPC_FM_INPUT;
+        file->mode = KGPC_FM_INOUT;
         kgpc_ioresult_set(0);
     }
     else
@@ -431,6 +476,8 @@ void kgpc_tfile_close(KGPCFileRec *file)
     KGPCFilePrivate priv = kgpc_file_private_get(file);
     if (priv.handle == NULL)
     {
+        file->handle = -1;
+        file->mode = KGPC_FM_CLOSED;
         kgpc_ioresult_set(0);
         return;
     }

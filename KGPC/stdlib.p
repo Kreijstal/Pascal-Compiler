@@ -109,6 +109,7 @@ const
   fmClosed = $D7B0;
   fmInput = $D7B1;
   fmOutput = $D7B2;
+  fmInOut = $D7B3;
 
 { ============================================================================
   Compiler Intrinsic Functions
