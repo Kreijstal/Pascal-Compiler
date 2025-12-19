@@ -7103,6 +7103,37 @@ int semcheck_varid(int *type_return,
             return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
         }
 
+        /* FPC-style module property fallback: resolve Foo as GetFoo() when present. */
+        if (with_status != 0 && id != NULL)
+        {
+            size_t id_len = strlen(id);
+            char *getter_id = (char *)malloc(id_len + 4);
+            if (getter_id != NULL)
+            {
+                snprintf(getter_id, id_len + 4, "Get%s", id);
+                HashNode_t *getter_node = NULL;
+                int getter_found = (FindIdent(&getter_node, symtab, getter_id) == 0);
+                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                {
+                    fprintf(stderr, "[SemCheck] varid fallback: id=%s getter=%s found=%d hash=%d\n",
+                        id, getter_id, getter_found,
+                        getter_node != NULL ? getter_node->hash_type : -1);
+                }
+                if (getter_found &&
+                    getter_node != NULL && getter_node->hash_type == HASHTYPE_FUNCTION)
+                {
+                    expr->type = EXPR_FUNCTION_CALL;
+                    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                    expr->expr_data.function_call_data.id = getter_id;
+                    expr->expr_data.function_call_data.args_expr = NULL;
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                    semcheck_reset_function_call_cache(expr);
+                    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+                }
+                free(getter_id);
+            }
+        }
+
         if (with_status == -1)
         {
             semantic_error(expr->line_num, expr->col_num,

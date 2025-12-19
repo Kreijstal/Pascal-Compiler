@@ -1783,6 +1783,66 @@ sys.exit(3)
             self.assertIn(token, combined_non_pty)
             self.assertIn(token, combined_pty)
 
+    def test_const_expr_operators(self):
+        """Tests const expressions with bitwise ops, NOT, and shifts."""
+        input_file = os.path.join(TEST_CASES_DIR, "const_expr_operators.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(
+            process.stdout,
+            "41\n17\n6\n9\n-1\n-2\n1\n1073741824\n",
+        )
+
+    def test_const_expr_typecasts(self):
+        """Tests integer typecasts in const expressions."""
+        input_file = os.path.join(TEST_CASES_DIR, "const_expr_typecasts.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(
+            process.stdout,
+            "4294967295\n4294967295\n4294967296\n-1\n4294967295\n4294967295\n",
+        )
+
+    def test_fpc_directives_and_properties(self):
+        """Tests FPC-style bracket directives and interface-level properties."""
+        input_file = os.path.join(TEST_CASES_DIR, "directives_and_properties.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "10\n15\n3\n")
+
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")

@@ -2707,6 +2707,152 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     return property;
 }
 
+static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *property_node)
+{
+    if (subprograms == NULL || property_node == NULL)
+        return;
+
+    struct ClassProperty *prop = convert_property_decl(property_node);
+    if (prop == NULL)
+        return;
+
+    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC] module property name=%s type=%d type_id=%s read=%s write=%s\n",
+            prop->name ? prop->name : "<null>",
+            prop->type,
+            prop->type_id ? prop->type_id : "<null>",
+            prop->read_accessor ? prop->read_accessor : "<null>",
+            prop->write_accessor ? prop->write_accessor : "<null>");
+    }
+
+    if (prop->name != NULL)
+    {
+        if (prop->write_accessor != NULL)
+        {
+            char *proc_name = strdup(prop->name);
+            if (proc_name != NULL)
+            {
+                char *param_name = strdup("Value");
+                ListNode_t *param_ids = NULL;
+                if (param_name != NULL)
+                    param_ids = CreateListNode(param_name, LIST_STRING);
+
+                char *param_type_id = prop->type_id != NULL ? strdup(prop->type_id) : NULL;
+                Tree_t *param_decl = NULL;
+                if (param_ids != NULL)
+                    param_decl = mk_vardecl(0, param_ids, prop->type, param_type_id,
+                        0, 0, NULL, NULL, NULL);
+                if (param_decl == NULL && param_type_id != NULL)
+                    free(param_type_id);
+
+                ListNode_t *params = NULL;
+                if (param_decl != NULL)
+                    params = CreateListNode(param_decl, LIST_TREE);
+
+                struct Expression *value_expr = mk_varid(0, strdup("Value"));
+                ListNode_t *call_args = NULL;
+                if (value_expr != NULL)
+                    call_args = CreateListNode(value_expr, LIST_EXPR);
+                struct Statement *call_stmt = NULL;
+                if (call_args != NULL)
+                    call_stmt = mk_procedurecall(0, strdup(prop->write_accessor), call_args);
+
+                ListNode_t *body_list = NULL;
+                if (call_stmt != NULL)
+                    body_list = CreateListNode(call_stmt, LIST_STMT);
+                struct Statement *body_stmt = NULL;
+                if (body_list != NULL)
+                    body_stmt = mk_compoundstatement(0, body_list);
+
+                Tree_t *proc_tree = NULL;
+                if (body_stmt != NULL)
+                    proc_tree = mk_procedure(0, proc_name, params, NULL, NULL, NULL, NULL, NULL,
+                        body_stmt, 0, 0);
+
+                if (proc_tree != NULL)
+                {
+                    append_subprogram_node(subprograms, proc_tree);
+                }
+                else
+                {
+                    if (body_stmt != NULL)
+                        destroy_stmt(body_stmt);
+                    free(proc_name);
+                }
+            }
+        }
+
+        if (prop->read_accessor != NULL)
+        {
+            char *func_name = strdup(prop->name);
+            if (func_name != NULL)
+            {
+                struct Expression *accessor_call = mk_functioncall(0, strdup(prop->read_accessor), NULL);
+                if (accessor_call != NULL)
+                {
+                    struct Expression *result_var = mk_varid(0, strdup("Result"));
+                    if (result_var != NULL)
+                    {
+                        struct Statement *assign_stmt = mk_varassign(0, 0, result_var, accessor_call);
+                        if (assign_stmt != NULL)
+                        {
+                            ListNode_t *body_list = CreateListNode((void *)assign_stmt, LIST_STMT);
+                            struct Statement *body_stmt = mk_compoundstatement(0, body_list);
+                            if (body_stmt != NULL)
+                            {
+                                char *return_type_id = prop->type_id != NULL ? strdup(prop->type_id) : NULL;
+                                Tree_t *func_tree = mk_function(0, func_name, NULL, NULL, NULL, NULL, NULL, NULL, body_stmt,
+                                    prop->type, return_type_id, NULL, 0, 0);
+                                if (func_tree != NULL)
+                                {
+                                    append_subprogram_node(subprograms, func_tree);
+                                    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+                                    {
+                                        fprintf(stderr, "[KGPC] Created synthetic function '%s' for module property\n", prop->name);
+                                    }
+                                }
+                                else
+                                {
+                                    destroy_stmt(body_stmt);
+                                    free(func_name);
+                                }
+                            }
+                            else
+                            {
+                                destroy_stmt(assign_stmt);
+                                free(func_name);
+                            }
+                        }
+                        else
+                        {
+                            destroy_expr(accessor_call);
+                            destroy_expr(result_var);
+                            free(func_name);
+                        }
+                    }
+                    else
+                    {
+                        destroy_expr(accessor_call);
+                        free(func_name);
+                    }
+                }
+                else
+                {
+                    free(func_name);
+                }
+            }
+        }
+    }
+
+    if (prop->name) free(prop->name);
+    if (prop->type_id) free(prop->type_id);
+    if (prop->read_accessor) free(prop->read_accessor);
+    if (prop->write_accessor) free(prop->write_accessor);
+    free(prop);
+}
+
 static void annotate_method_template(struct MethodTemplate *method_template, ast_t *method_ast)
 {
     if (method_template == NULL || method_ast == NULL)
@@ -7334,65 +7480,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             }
             case PASCAL_T_PROPERTY_DECL: {
-                /* Module-level property declaration (FPC extension)
-                 * Syntax: property Name: Type read ReadFunc [write WriteFunc];
-                 * We convert this to a synthetic function that calls the read accessor.
-                 * This allows property access like "my_value" to be resolved as a function call. */
-                struct ClassProperty *prop = convert_property_decl(section);
-                if (prop != NULL && prop->name != NULL && prop->read_accessor != NULL) {
-                    /* Create a synthetic function declaration that returns the property value
-                     * by calling the read accessor. The function has the same name as the property. */
-                    char *func_name = strdup(prop->name);
-                    if (func_name != NULL) {
-                        /* Create the function's body: a single statement that calls the read accessor */
-                        struct Expression *accessor_call = mk_functioncall(0, strdup(prop->read_accessor), NULL);
-                        if (accessor_call != NULL) {
-                            /* Create an assignment to Result */
-                            struct Expression *result_var = mk_varid(0, strdup("Result"));
-                            if (result_var != NULL) {
-                                struct Statement *assign_stmt = mk_varassign(0, 0, result_var, accessor_call);
-                                if (assign_stmt != NULL) {
-                                    /* Create compound statement with just this assignment */
-                                    ListNode_t *body_list = CreateListNode((void *)assign_stmt, LIST_STMT);
-                                    struct Statement *body_stmt = mk_compoundstatement(0, body_list);
-                                    if (body_stmt != NULL) {
-                                        /* Create function with return type matching property type */
-                                        char *return_type_id = prop->type_id != NULL ? strdup(prop->type_id) : NULL;
-                                        Tree_t *func_tree = mk_function(0, func_name, NULL, NULL, NULL, NULL, NULL, NULL, body_stmt,
-                                            prop->type, return_type_id, NULL, 0, 0);
-                                        if (func_tree != NULL) {
-                                            append_subprogram_node(&subprograms, func_tree);
-                                            if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
-                                                fprintf(stderr, "[KGPC] Created synthetic function '%s' for module property\n", prop->name);
-                                            }
-                                        } else {
-                                            destroy_stmt(body_stmt);
-                                            free(func_name);
-                                        }
-                                    } else {
-                                        destroy_stmt(assign_stmt);
-                                        free(func_name);
-                                    }
-                                } else {
-                                    destroy_expr(accessor_call);
-                                    destroy_expr(result_var);
-                                    free(func_name);
-                                }
-                            } else {
-                                destroy_expr(accessor_call);
-                                free(func_name);
-                            }
-                        } else {
-                            free(func_name);
-                        }
-                    }
-                    /* Free property structure */
-                    if (prop->name) free(prop->name);
-                    if (prop->type_id) free(prop->type_id);
-                    if (prop->read_accessor) free(prop->read_accessor);
-                    if (prop->write_accessor) free(prop->write_accessor);
-                    free(prop);
-                }
+                /* Module-level property declaration (FPC extension). */
+                append_module_property_wrappers(&subprograms, section);
                 break;
             }
             case PASCAL_T_BEGIN_BLOCK:
@@ -7618,25 +7707,30 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     }
                     
                     ast_t *node = unwrap_pascal_node(section);
-                    if (node != NULL) {
-                        switch (node->typ) {
+                    for (ast_t *node_cursor = node; node_cursor != NULL;
+                         node_cursor = (section->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
+                        if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
+                            fprintf(stderr, "[KGPC] interface node typ=%d (%s)\n",
+                                node_cursor->typ, pascal_tag_to_string(node_cursor->typ));
+                        }
+                        switch (node_cursor->typ) {
                         case PASCAL_T_USES_SECTION:
-                            append_uses_from_section(node, &interface_uses);
+                            append_uses_from_section(node_cursor, &interface_uses);
                             break;
                         case PASCAL_T_TYPE_SECTION:
-                            interface_type_section_ast = node;  /* Save for const array enum resolution */
-                            append_type_decls_from_section(node, &interface_type_decls, NULL);
+                            interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
+                            append_type_decls_from_section(node_cursor, &interface_type_decls, NULL);
                             break;
                         case PASCAL_T_CONST_SECTION:
-                            append_const_decls_from_section(node, &interface_const_decls,
+                            append_const_decls_from_section(node_cursor, &interface_const_decls,
                                                             &interface_var_builder, interface_type_section_ast);
                             break;
                         case PASCAL_T_VAR_SECTION:
-                            list_builder_extend(&interface_var_builder, convert_var_section(node));
+                            list_builder_extend(&interface_var_builder, convert_var_section(node_cursor));
                             break;
                         case PASCAL_T_PROPERTY_DECL:
-                            /* Module-level property declaration in interface - skip for now
-                             * but don't break iteration. This is an FPC extension. */
+                            /* Module-level property declaration (FPC extension). */
+                            append_module_property_wrappers(&subprograms, node_cursor);
                             break;
                         default:
                             break;
@@ -7663,29 +7757,30 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     }
                     
                     ast_t *node = unwrap_pascal_node(definition);
-                    if (node != NULL) {
+                    for (ast_t *node_cursor = node; node_cursor != NULL;
+                         node_cursor = (definition->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
                         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
-                            fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node->typ);
+                            fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }
-                        switch (node->typ) {
+                        switch (node_cursor->typ) {
                         case PASCAL_T_USES_SECTION:
-                            append_uses_from_section(node, &implementation_uses);
+                            append_uses_from_section(node_cursor, &implementation_uses);
                             break;
                         case PASCAL_T_TYPE_SECTION:
-                            implementation_type_section_ast = node;  /* Save for const array enum resolution */
-                            append_type_decls_from_section(node, &implementation_type_decls, &subprograms);
+                            implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
+                            append_type_decls_from_section(node_cursor, &implementation_type_decls, &subprograms);
                             break;
                         case PASCAL_T_CONST_SECTION:
-                            append_const_decls_from_section(node, &implementation_const_decls,
+                            append_const_decls_from_section(node_cursor, &implementation_const_decls,
                                                             &implementation_var_builder, implementation_type_section_ast);
                             break;
                         case PASCAL_T_VAR_SECTION:
-                            list_builder_extend(&implementation_var_builder, convert_var_section(node));
+                            list_builder_extend(&implementation_var_builder, convert_var_section(node_cursor));
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
-                            Tree_t *proc = convert_procedure(node);
+                            Tree_t *proc = convert_procedure(node_cursor);
                             if (kgpc_debug_subprog_enabled()) {
-                                char *proc_id = (node->child != NULL) ? dup_symbol(node->child) : strdup("?");
+                                char *proc_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] convert_procedure(%s) => %p\n", proc_id, (void*)proc);
                                 free(proc_id);
                             }
@@ -7693,9 +7788,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         }
                         case PASCAL_T_FUNCTION_DECL: {
-                            Tree_t *func = convert_function(node);
+                            Tree_t *func = convert_function(node_cursor);
                             if (kgpc_debug_subprog_enabled()) {
-                                char *func_id = (node->child != NULL) ? dup_symbol(node->child) : strdup("?");
+                                char *func_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] convert_function(%s) => %p\n", func_id, (void*)func);
                                 free(func_id);
                             }
@@ -7705,7 +7800,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         case PASCAL_T_METHOD_IMPL:
                         case PASCAL_T_CONSTRUCTOR_DECL:
                         case PASCAL_T_DESTRUCTOR_DECL: {
-                            Tree_t *method_tree = convert_method_impl(node);
+                            Tree_t *method_tree = convert_method_impl(node_cursor);
                             append_subprogram_node(&subprograms, method_tree);
                             break;
                         }

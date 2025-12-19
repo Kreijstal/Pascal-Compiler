@@ -321,6 +321,8 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
     int max_scope_lev);
 static int semcheck_try_property_assignment(SymTab_t *symtab,
     struct Statement *stmt, int max_scope_lev);
+static int semcheck_try_module_property_assignment(SymTab_t *symtab,
+    struct Statement *stmt, int max_scope_lev);
 static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     struct Statement *stmt, struct Expression *lhs, HashNode_t *setter_node,
     int max_scope_lev);
@@ -1664,6 +1666,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     return_val = 0;
 
+    int module_property_result = semcheck_try_module_property_assignment(symtab, stmt, max_scope_lev);
+    if (module_property_result >= 0)
+        return module_property_result;
+
     var = stmt->stmt_data.var_assign_data.var;
     expr = stmt->stmt_data.var_assign_data.expr;
 
@@ -1883,6 +1889,73 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         destroy_kgpc_type(rhs_kgpctype);
 
     return return_val;
+}
+
+static int semcheck_try_module_property_assignment(SymTab_t *symtab,
+    struct Statement *stmt, int max_scope_lev)
+{
+    if (symtab == NULL || stmt == NULL || stmt->type != STMT_VAR_ASSIGN)
+        return -1;
+
+    struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+    struct Expression *rhs = stmt->stmt_data.var_assign_data.expr;
+    if (lhs == NULL || rhs == NULL || lhs->type != EXPR_VAR_ID)
+        return -1;
+
+    const char *prop_name = lhs->expr_data.id;
+    if (prop_name == NULL)
+        return -1;
+
+    ListNode_t *matches = FindAllIdents(symtab, (char *)prop_name);
+    HashNode_t *setter = NULL;
+    int has_storage_symbol = 0;
+
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node == NULL)
+            continue;
+        if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
+            node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
+        {
+            has_storage_symbol = 1;
+            break;
+        }
+        if (node->hash_type == HASHTYPE_PROCEDURE && node->type != NULL &&
+            node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            int param_count = ListLength(node->type->info.proc_info.params);
+            if (param_count == 1)
+                setter = node;
+        }
+    }
+
+    if (matches != NULL)
+        DestroyList(matches);
+
+    if (has_storage_symbol || setter == NULL)
+        return -1;
+
+    char *call_id = lhs->expr_data.id;
+    lhs->expr_data.id = NULL;
+    destroy_expr(lhs);
+    stmt->stmt_data.var_assign_data.var = NULL;
+    stmt->stmt_data.var_assign_data.expr = NULL;
+
+    ListNode_t *args = CreateListNode(rhs, LIST_EXPR);
+    if (args == NULL)
+    {
+        free(call_id);
+        return 1;
+    }
+
+    stmt->type = STMT_PROCEDURE_CALL;
+    memset(&stmt->stmt_data.procedure_call_data, 0, sizeof(stmt->stmt_data.procedure_call_data));
+    stmt->stmt_data.procedure_call_data.id = call_id;
+    stmt->stmt_data.procedure_call_data.expr_args = args;
+    stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+
+    return semcheck_proccall(symtab, stmt, max_scope_lev);
 }
 
 static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
