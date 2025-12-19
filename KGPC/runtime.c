@@ -1260,18 +1260,13 @@ static void kgpc_keyboard_decode_escape_sequences(void)
             default: break;
         }
 
+        if (mapped == -1)
+            return;
+
         /* Consume the escape sequence */
         (void)kgpc_keybuf_pop();
         (void)kgpc_keybuf_pop();
         (void)kgpc_keybuf_pop();
-
-        if (mapped == -1)
-        {
-            /* Not a recognised navigation sequence; push back the trailing bytes */
-            kgpc_keybuf_push((unsigned char)b);
-            kgpc_keybuf_push((unsigned char)c);
-            return;
-        }
 
         /* Preserve original ordering: inject 0,<mapped> ahead of remaining bytes. */
         unsigned char remainder[sizeof(kgpc_keybuf)];
@@ -1358,12 +1353,22 @@ static void kgpc_keyboard_try_extend_escape(void)
 #ifndef _WIN32
     if (kgpc_keybuf_count() == 1 && kgpc_keybuf_peek_at(0) == 27)
     {
-        unsigned char extra[2];
-        ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
-        if (got > 0)
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(STDIN_FILENO, &rfds);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 10000;
+        int ready = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+        if (ready > 0 && FD_ISSET(STDIN_FILENO, &rfds))
         {
-            for (ssize_t i = 0; i < got; ++i)
-                kgpc_keybuf_push(extra[i]);
+            unsigned char extra[2];
+            ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
+            if (got > 0)
+            {
+                for (ssize_t i = 0; i < got; ++i)
+                    kgpc_keybuf_push(extra[i]);
+            }
         }
     }
 #endif

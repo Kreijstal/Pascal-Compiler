@@ -47,6 +47,14 @@ typedef struct {
     size_t size;
 } VisitedSet;
 
+static int kgpc_debug_subprog_enabled(void)
+{
+    static int cached = -1;
+    if (cached == -1)
+        cached = (getenv("KGPC_DEBUG_SUBPROG") != NULL) ? 1 : 0;
+    return cached;
+}
+
 static VisitedSet *visited_set_create(void) {
     VisitedSet *set = (VisitedSet *)malloc(sizeof(VisitedSet));
     if (set == NULL) return NULL;
@@ -7676,7 +7684,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node);
-                            if (getenv("KGPC_DEBUG_SUBPROG") != NULL) {
+                            if (kgpc_debug_subprog_enabled()) {
                                 char *proc_id = (node->child != NULL) ? dup_symbol(node->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] convert_procedure(%s) => %p\n", proc_id, (void*)proc);
                                 free(proc_id);
@@ -7686,7 +7694,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         }
                         case PASCAL_T_FUNCTION_DECL: {
                             Tree_t *func = convert_function(node);
-                            if (getenv("KGPC_DEBUG_SUBPROG") != NULL) {
+                            if (kgpc_debug_subprog_enabled()) {
                                 char *func_id = (node->child != NULL) ? dup_symbol(node->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] convert_function(%s) => %p\n", func_id, (void*)func);
                                 free(func_id);

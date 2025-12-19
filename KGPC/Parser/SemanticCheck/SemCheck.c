@@ -328,6 +328,10 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
                 if (error_count != NULL)
                     ++(*error_count);
             }
+            else
+            {
+                subprogram->tree_data.subprogram_data.return_type = builtin_type;
+            }
         }
     }
 
