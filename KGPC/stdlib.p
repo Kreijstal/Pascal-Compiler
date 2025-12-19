@@ -223,6 +223,40 @@ begin
     pred := i - 1;
 end;
 
+procedure interlocked_exchange_add_i32_impl(var target: longint; value: longint; var result: longint);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_i32
+    end
+end;
+
+procedure interlocked_exchange_add_i64_impl(var target: int64; value: int64; var result: int64);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_i64
+    end
+end;
+
+function InterlockedExchangeAdd(var target: longint; value: longint): longint; overload;
+var
+    result: longint;
+begin
+    result := 0;
+    interlocked_exchange_add_i32_impl(target, value, result);
+    InterlockedExchangeAdd := result;
+end;
+
+function InterlockedExchangeAdd(var target: int64; value: int64): int64; overload;
+var
+    result: int64;
+begin
+    result := 0;
+    interlocked_exchange_add_i64_impl(target, value, result);
+    InterlockedExchangeAdd := result;
+end;
+
 function file_is_text(var f: file): longint;
 begin
     assembler;

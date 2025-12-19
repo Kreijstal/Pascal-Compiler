@@ -73,6 +73,34 @@ int kgpc_ioresult_peek(void)
     return kgpc_ioresult;
 }
 
+void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    int32_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+#elif defined(_WIN32)
+    int32_t old = (int32_t)InterlockedExchangeAdd((volatile LONG *)target, (LONG)value);
+#else
+    int32_t old = *target;
+    *target += value;
+#endif
+    if (result != NULL)
+        *result = old;
+}
+
+void kgpc_interlocked_exchange_add_i64(int64_t *target, int64_t value, int64_t *result)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    int64_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+#elif defined(_WIN32) && defined(_WIN64)
+    int64_t old = (int64_t)InterlockedExchangeAdd64((volatile LONGLONG *)target, (LONGLONG)value);
+#else
+    int64_t old = *target;
+    *target += value;
+#endif
+    if (result != NULL)
+        *result = old;
+}
+
 
 typedef enum {
     KGPC_BINARY_UNSPECIFIED = 0,
