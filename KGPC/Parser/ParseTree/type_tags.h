@@ -95,4 +95,15 @@ static inline int is_integer_type(int type_tag)
     return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE);
 }
 
+/**
+ * Check if a type tag represents a string type.
+ * String types include:
+ * - STRING_TYPE (dynamic string/AnsiString)
+ * - SHORTSTRING_TYPE (fixed-length short strings)
+ */
+static inline int is_string_type(int type_tag)
+{
+    return (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE);
+}
+
 #endif /* TYPE_TAGS_H */

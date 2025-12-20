@@ -601,7 +601,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
-    /* Allow PChar <-> String assignment */
+    /* Allow PChar <-> String/ShortString assignment */
     /* PChar is ^Char */
     int lhs_is_pchar = (lhs_type->kind == TYPE_KIND_POINTER && lhs_type->info.points_to != NULL &&
                         lhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
@@ -609,10 +609,19 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     int rhs_is_pchar = (rhs_type->kind == TYPE_KIND_POINTER && rhs_type->info.points_to != NULL &&
                         rhs_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
                         rhs_type->info.points_to->info.primitive_type_tag == CHAR_TYPE);
-    int lhs_is_string = (lhs_type->kind == TYPE_KIND_PRIMITIVE && lhs_type->info.primitive_type_tag == STRING_TYPE);
-    int rhs_is_string = (rhs_type->kind == TYPE_KIND_PRIMITIVE && rhs_type->info.primitive_type_tag == STRING_TYPE);
+    int lhs_is_string = (lhs_type->kind == TYPE_KIND_PRIMITIVE && 
+                         (lhs_type->info.primitive_type_tag == STRING_TYPE ||
+                          lhs_type->info.primitive_type_tag == SHORTSTRING_TYPE));
+    int rhs_is_string = (rhs_type->kind == TYPE_KIND_PRIMITIVE && 
+                         (rhs_type->info.primitive_type_tag == STRING_TYPE ||
+                          rhs_type->info.primitive_type_tag == SHORTSTRING_TYPE));
 
     if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
+        return 1;
+    }
+
+    /* Allow String <-> ShortString assignment */
+    if (lhs_is_string && rhs_is_string) {
         return 1;
     }
 

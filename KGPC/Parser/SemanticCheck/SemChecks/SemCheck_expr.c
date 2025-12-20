@@ -1758,7 +1758,7 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
 
 
     const char *mangled_name = NULL;
-    if (error_count == 0 && arg_type == STRING_TYPE)
+    if (error_count == 0 && is_string_type(arg_type))
         mangled_name = "kgpc_string_length";
     else if (error_count == 0 && is_dynamic_array)
         mangled_name = "__kgpc_dynarray_length";
@@ -1910,7 +1910,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int substr_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && substr_type != STRING_TYPE && substr_type != CHAR_TYPE)
+    if (error_count == 0 && !is_string_type(substr_type) && substr_type != CHAR_TYPE)
     {
         fprintf(stderr, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
         ++error_count;
@@ -1918,7 +1918,7 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && value_type != STRING_TYPE)
+    if (error_count == 0 && !is_string_type(value_type))
     {
         fprintf(stderr, "Error on line %d, Pos target must be a string.\n", expr->line_num);
         ++error_count;
@@ -6658,7 +6658,7 @@ int semcheck_relop(int *type_return,
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
-                int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
+                int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
@@ -6674,7 +6674,7 @@ int semcheck_relop(int *type_return,
 
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
-                int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
+                int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
 
                 if(!numeric_ok && !string_ok && !char_ok)
@@ -6779,8 +6779,8 @@ int semcheck_addop(int *type_return,
 
     if (op_type == PLUS)
     {
-        int left_is_string_like = (type_first == STRING_TYPE || type_first == CHAR_TYPE);
-        int right_is_string_like = (type_second == STRING_TYPE || type_second == CHAR_TYPE);
+        int left_is_string_like = (is_string_type(type_first) || type_first == CHAR_TYPE);
+        int right_is_string_like = (is_string_type(type_second) || type_second == CHAR_TYPE);
 
         if (left_is_string_like && right_is_string_like)
         {
@@ -7516,7 +7516,7 @@ int semcheck_arrayaccess(int *type_return,
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
-    int base_is_string = (base_type == STRING_TYPE && !array_expr->is_array_expr);
+    int base_is_string = (is_string_type(base_type) && !array_expr->is_array_expr);
     int base_is_pointer = (base_type == POINTER_TYPE);
     
     if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)

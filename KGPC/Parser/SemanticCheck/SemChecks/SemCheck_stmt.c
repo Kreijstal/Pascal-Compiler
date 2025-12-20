@@ -765,7 +765,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
 
     int target_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    if (target_type != STRING_TYPE)
+    if (!is_string_type(target_type))
     {
         fprintf(stderr, "Error on line %d, Delete target must be a string variable.\n",
             stmt->line_num);
