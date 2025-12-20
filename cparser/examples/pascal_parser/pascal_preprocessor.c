@@ -1791,6 +1791,7 @@ static bool parse_expression(const char **cursor,
 
 // SimpleExpression = Term { AddOp Term }
 // AddOp = +, -, OR, XOR
+// Note: OR and XOR use short-circuit evaluation for boolean contexts
 static bool parse_simple_expression(const char **cursor,
                                     int64_t *value,
                                     PascalPreprocessor *pp,
@@ -1826,6 +1827,33 @@ static bool parse_simple_expression(const char **cursor,
             break;
         }
 
+        // Short-circuit evaluation for OR: if LHS is true (non-zero), skip RHS
+        if (op == OP_OR && *value != 0) {
+            // Skip the RHS expression but still need to consume it syntactically
+            // Try to find the end of the term (look for next operator or end)
+            const char *skip_cursor = *cursor;
+            int paren_depth = 0;
+            while (*skip_cursor) {
+                if (*skip_cursor == '(') paren_depth++;
+                else if (*skip_cursor == ')') {
+                    if (paren_depth == 0) break;
+                    paren_depth--;
+                }
+                else if (paren_depth == 0) {
+                    // Check for operators that would end this term
+                    if (*skip_cursor == '+' || *skip_cursor == '-') break;
+                    if (ascii_strncasecmp(skip_cursor, "OR", 2) == 0 && !isalnum((unsigned char)skip_cursor[2]) && skip_cursor[2] != '_') break;
+                    if (ascii_strncasecmp(skip_cursor, "XOR", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
+                    // Also check relational operators
+                    if (*skip_cursor == '=' || *skip_cursor == '<' || *skip_cursor == '>') break;
+                }
+                skip_cursor++;
+            }
+            *cursor = skip_cursor;
+            // Result stays true (non-zero)
+            continue;
+        }
+
         int64_t rhs = 0;
         if (!parse_term(cursor, &rhs, pp, error_message)) {
             return false;
@@ -1844,6 +1872,7 @@ static bool parse_simple_expression(const char **cursor,
 
 // Term = Factor { MulOp Factor }
 // MulOp = *, /, DIV, MOD, AND
+// Note: AND uses short-circuit evaluation for boolean contexts
 static bool parse_term(const char **cursor,
                        int64_t *value,
                        PascalPreprocessor *pp,
@@ -1881,6 +1910,36 @@ static bool parse_term(const char **cursor,
         if (op == OP_NONE) {
             *cursor = start;
             break;
+        }
+
+        // Short-circuit evaluation for AND: if LHS is false (zero), skip RHS
+        if (op == OP_AND && *value == 0) {
+            // Skip the RHS expression but still need to consume it syntactically
+            const char *skip_cursor = *cursor;
+            int paren_depth = 0;
+            while (*skip_cursor) {
+                if (*skip_cursor == '(') paren_depth++;
+                else if (*skip_cursor == ')') {
+                    if (paren_depth == 0) break;
+                    paren_depth--;
+                }
+                else if (paren_depth == 0) {
+                    // Check for operators that would end this factor
+                    if (*skip_cursor == '*' || *skip_cursor == '/') break;
+                    if (*skip_cursor == '+' || *skip_cursor == '-') break;
+                    if (ascii_strncasecmp(skip_cursor, "DIV", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
+                    if (ascii_strncasecmp(skip_cursor, "MOD", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
+                    if (ascii_strncasecmp(skip_cursor, "AND", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
+                    if (ascii_strncasecmp(skip_cursor, "OR", 2) == 0 && !isalnum((unsigned char)skip_cursor[2]) && skip_cursor[2] != '_') break;
+                    if (ascii_strncasecmp(skip_cursor, "XOR", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
+                    // Also check relational operators
+                    if (*skip_cursor == '=' || *skip_cursor == '<' || *skip_cursor == '>') break;
+                }
+                skip_cursor++;
+            }
+            *cursor = skip_cursor;
+            // Result stays false (zero)
+            continue;
         }
 
         int64_t rhs = 0;
@@ -1976,27 +2035,36 @@ static bool parse_factor(const char **cursor,
         int64_t size = 0;
         bool found = false;
         
-        // Integer types
+        // Integer types (64-bit on x86_64)
         if (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
             strcmp(type_name, "TSYSPARAM") == 0 || strcmp(type_name, "V") == 0 || strcmp(type_name, "ALUUINT") == 0 ||
             strcmp(type_name, "ALUSINT") == 0 || strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "VALUINT") == 0 ||
             strcmp(type_name, "FREECHUNK") == 0 || strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
-            strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0) {
+            strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0 ||
+            strcmp(type_name, "NATIVEINT") == 0 || strcmp(type_name, "NATIVEUINT") == 0 ||
+            strcmp(type_name, "TBITSBASE") == 0 || strcmp(type_name, "TUNSIGNEDINTTYPE") == 0 ||
+            strcmp(type_name, "TSIGNEDINTTYPE") == 0 || strcmp(type_name, "INTPTR") == 0 ||
+            strcmp(type_name, "UINTPTR") == 0 || strcmp(type_name, "HANDLE") == 0 ||
+            strcmp(type_name, "THANDLE") == 0 || strcmp(type_name, "TLARGEINTEGER") == 0 ||
+            strcmp(type_name, "TTHREADID") == 0) {
             size = 8;
             found = true;
         } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0 || 
                    strcmp(type_name, "CARDINAL") == 0 || strcmp(type_name, "DWORD") == 0 || 
-                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0) {
+                   strcmp(type_name, "UINT32") == 0 || strcmp(type_name, "LONGWORD") == 0 ||
+                   strcmp(type_name, "LONGBOOL") == 0) {
             size = 4;
             found = true;
         } else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "SMALLINT") == 0 || 
                    strcmp(type_name, "INT16") == 0 || strcmp(type_name, "WORD") == 0 || 
-                   strcmp(type_name, "UINT16") == 0) {
+                   strcmp(type_name, "UINT16") == 0 || strcmp(type_name, "WIDECHAR") == 0 ||
+                   strcmp(type_name, "WORDBOOL") == 0) {
             size = 2;
             found = true;
         } else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 || 
                    strcmp(type_name, "BYTE") == 0 || strcmp(type_name, "UINT8") == 0 || 
-                   strcmp(type_name, "CHAR") == 0 || strcmp(type_name, "BOOLEAN") == 0) {
+                   strcmp(type_name, "CHAR") == 0 || strcmp(type_name, "BOOLEAN") == 0 ||
+                   strcmp(type_name, "ANSICHAR") == 0 || strcmp(type_name, "BYTEBOOL") == 0) {
             size = 1;
             found = true;
         }
