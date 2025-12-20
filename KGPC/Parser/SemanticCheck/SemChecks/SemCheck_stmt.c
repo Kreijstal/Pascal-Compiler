@@ -2793,6 +2793,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     /* If we found multiple matches but they all have the same mangled name,
      * treat it as a single match (they're duplicates from different scopes) */
+    int force_best_match = 0;
     if (match_count > 1 && resolved_proc != NULL) {
         /* Verify all matches have the same mangled name */
         int same_mangled = 1;
@@ -2807,11 +2808,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             cur = cur->next;
         }
         if (same_mangled) {
-            match_count = 1;  /* Treat as single match */
+            match_count = 0;
+            resolved_proc = NULL;
+            force_best_match = 1;
         }
     }
 
-    if (match_count == 0 && overload_candidates != NULL)
+    if (match_count == 0 && overload_candidates != NULL && !force_best_match)
     {
         HashNode_t *wildcard_proc = semcheck_find_untyped_mangled_match(overload_candidates,
             proc_id, mangled_name);

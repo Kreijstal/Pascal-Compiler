@@ -516,6 +516,8 @@ static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
         return BOOL;
     if (pascal_identifier_equals(id, "Pointer"))
         return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "CodePointer"))
+        return POINTER_TYPE;
     if (pascal_identifier_equals(id, "Byte") || pascal_identifier_equals(id, "Word"))
         return INT_TYPE;
 
@@ -4134,6 +4136,27 @@ static int semcheck_typecast(int *type_return,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
+    if (target_type == PROCEDURE)
+    {
+        HashNode_t *target_node = NULL;
+        if (expr->expr_data.typecast_data.target_type_id != NULL)
+        {
+            target_node = semcheck_find_type_node_with_kgpc_type(
+                symtab, expr->expr_data.typecast_data.target_type_id);
+            if (target_node == NULL &&
+                FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0)
+            {
+                /* target_node assigned by FindIdent when present */
+            }
+        }
+
+        if (target_node != NULL && target_node->type != NULL &&
+            target_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            kgpc_type_retain(target_node->type);
+            expr->resolved_kgpc_type = target_node->type;
+        }
+    }
     if (target_type == POINTER_TYPE)
     {
         /* Resolve full pointer type info so deref preserves record/element types */
@@ -6191,6 +6214,23 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             }
             break;
         }
+        case EXPR_TYPECAST:
+        {
+            const char *target_id = expr->expr_data.typecast_data.target_type_id;
+            if (target_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, (char *)target_id) >= 0 &&
+                    type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return type_node->type;
+                }
+            }
+            break;
+        }
         
         default:
             break;
@@ -6493,9 +6533,11 @@ int semcheck_expr_main(int *type_return,
                     /* Add the function name as the return variable */
                     PushFuncRetOntoScope_Typed(symtab, expr->expr_data.anonymous_method_data.generated_name, return_type);
                     
-                    /* Also add "Result" as an alias */
+                    /* Also add "Result" as an alias in the current scope */
                     HashNode_t *result_check = NULL;
-                    if (FindIdent(&result_check, symtab, "Result") == -1)
+                    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+                    result_check = (cur_hash != NULL) ? FindIdentInTable(cur_hash, "Result") : NULL;
+                    if (result_check == NULL)
                     {
                         PushFuncRetOntoScope_Typed(symtab, "Result", return_type);
                     }
@@ -6686,8 +6728,9 @@ int semcheck_relop(int *type_return,
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
+                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
 
-                if(!numeric_ok && !string_ok && !char_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok)
                 {
                     fprintf(stderr,
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",

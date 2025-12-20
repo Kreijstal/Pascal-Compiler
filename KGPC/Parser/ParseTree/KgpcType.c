@@ -642,6 +642,10 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     if (rhs_is_string && is_char_array_type(lhs_type))
         return 1;
+    if (is_char_array_type(lhs_type) && rhs_is_pchar)
+        return 1;
+    if (is_char_array_type(rhs_type) && lhs_is_pchar)
+        return 1;
 
     /* Allow procedure variables to accept explicit @proc references */
     if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
