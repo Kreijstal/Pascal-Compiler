@@ -95,4 +95,29 @@ static inline int is_integer_type(int type_tag)
     return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE || type_tag == INT64_TYPE);
 }
 
+/**
+ * Check if a type tag represents a string type.
+ * String types include:
+ * - STRING_TYPE (dynamic string/AnsiString)
+ * - SHORTSTRING_TYPE (fixed-length short strings)
+ */
+static inline int is_string_type(int type_tag)
+{
+    return (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE);
+}
+
+/**
+ * Check if an expression represents a shortstring (array of char).
+ * ShortString variables are stored as array[0..255] of char internally,
+ * and resolve to CHAR_TYPE as the element type.
+ * 
+ * @param type_tag The resolved type tag of the expression
+ * @param is_array_expr Whether the expression is marked as an array expression
+ * @return 1 if this represents a shortstring/char array, 0 otherwise
+ */
+static inline int is_shortstring_array(int type_tag, int is_array_expr)
+{
+    return is_array_expr && type_tag == CHAR_TYPE;
+}
+
 #endif /* TYPE_TAGS_H */

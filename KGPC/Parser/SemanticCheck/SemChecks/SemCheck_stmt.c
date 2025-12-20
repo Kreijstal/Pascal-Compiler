@@ -765,7 +765,12 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
 
     int target_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    if (target_type != STRING_TYPE)
+    
+    /* Check if target is a string type OR a shortstring (array of char) */
+    int is_valid_target = is_string_type(target_type) || 
+                          is_shortstring_array(target_type, target_expr->is_array_expr);
+    
+    if (!is_valid_target)
     {
         fprintf(stderr, "Error on line %d, Delete target must be a string variable.\n",
             stmt->line_num);
@@ -2788,6 +2793,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     /* If we found multiple matches but they all have the same mangled name,
      * treat it as a single match (they're duplicates from different scopes) */
+    int force_best_match = 0;
     if (match_count > 1 && resolved_proc != NULL) {
         /* Verify all matches have the same mangled name */
         int same_mangled = 1;
@@ -2802,11 +2808,13 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             cur = cur->next;
         }
         if (same_mangled) {
-            match_count = 1;  /* Treat as single match */
+            match_count = 0;
+            resolved_proc = NULL;
+            force_best_match = 1;
         }
     }
 
-    if (match_count == 0 && overload_candidates != NULL)
+    if (match_count == 0 && overload_candidates != NULL && !force_best_match)
     {
         HashNode_t *wildcard_proc = semcheck_find_untyped_mangled_match(overload_candidates,
             proc_id, mangled_name);

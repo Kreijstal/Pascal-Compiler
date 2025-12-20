@@ -70,6 +70,8 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         return BOOL;
     if (pascal_identifier_equals(id, "Pointer"))
         return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "CodePointer"))
+        return POINTER_TYPE;
     if (pascal_identifier_equals(id, "file"))
         return FILE_TYPE;
     return UNKNOWN_TYPE;
@@ -142,6 +144,91 @@ static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const ch
 
     DestroyList(matches);
     return NULL;
+}
+
+static int semcheck_param_decl_equivalent(const Tree_t *lhs, const Tree_t *rhs)
+{
+    if (lhs == NULL || rhs == NULL)
+        return 0;
+    if (lhs->type != rhs->type)
+        return 0;
+
+    if (lhs->type == TREE_VAR_DECL)
+    {
+        const char *lhs_id = lhs->tree_data.var_decl_data.type_id;
+        const char *rhs_id = rhs->tree_data.var_decl_data.type_id;
+        int lhs_tag = lhs->tree_data.var_decl_data.type;
+        int rhs_tag = rhs->tree_data.var_decl_data.type;
+        int lhs_var = lhs->tree_data.var_decl_data.is_var_param;
+        int rhs_var = rhs->tree_data.var_decl_data.is_var_param;
+
+        if (lhs_var != rhs_var)
+            return 0;
+        if (lhs_id != NULL || rhs_id != NULL)
+            return (lhs_id != NULL && rhs_id != NULL && pascal_identifier_equals(lhs_id, rhs_id));
+        return lhs_tag == rhs_tag;
+    }
+
+    if (lhs->type == TREE_ARR_DECL)
+    {
+        const char *lhs_id = lhs->tree_data.arr_decl_data.type_id;
+        const char *rhs_id = rhs->tree_data.arr_decl_data.type_id;
+        int lhs_tag = lhs->tree_data.arr_decl_data.type;
+        int rhs_tag = rhs->tree_data.arr_decl_data.type;
+        int lhs_start = lhs->tree_data.arr_decl_data.s_range;
+        int rhs_start = rhs->tree_data.arr_decl_data.s_range;
+        int lhs_end = lhs->tree_data.arr_decl_data.e_range;
+        int rhs_end = rhs->tree_data.arr_decl_data.e_range;
+
+        if ((lhs_id != NULL || rhs_id != NULL) &&
+            !(lhs_id != NULL && rhs_id != NULL && pascal_identifier_equals(lhs_id, rhs_id)))
+            return 0;
+        if (lhs_tag != rhs_tag)
+            return 0;
+        return (lhs_start == rhs_start && lhs_end == rhs_end);
+    }
+
+    return 0;
+}
+
+static int semcheck_subprogram_signatures_equivalent(const Tree_t *lhs, const Tree_t *rhs)
+{
+    if (lhs == NULL || rhs == NULL)
+        return 0;
+    if (lhs->type != TREE_SUBPROGRAM || rhs->type != TREE_SUBPROGRAM)
+        return 0;
+
+    ListNode_t *lhs_args = lhs->tree_data.subprogram_data.args_var;
+    ListNode_t *rhs_args = rhs->tree_data.subprogram_data.args_var;
+
+    while (lhs_args != NULL && rhs_args != NULL)
+    {
+        Tree_t *lhs_decl = (Tree_t *)lhs_args->cur;
+        Tree_t *rhs_decl = (Tree_t *)rhs_args->cur;
+        if (!semcheck_param_decl_equivalent(lhs_decl, rhs_decl))
+            return 0;
+        lhs_args = lhs_args->next;
+        rhs_args = rhs_args->next;
+    }
+
+    return (lhs_args == NULL && rhs_args == NULL);
+}
+
+static ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
+{
+    char *param_name = strdup(name);
+    if (param_name == NULL)
+        return NULL;
+
+    ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
+    if (ids == NULL)
+        return NULL;
+
+    Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 0, 0, NULL, NULL, NULL);
+    if (decl == NULL)
+        return NULL;
+
+    return CreateListNode(decl, LIST_TREE);
 }
 
 /* Adds built-in functions */
@@ -3784,6 +3871,40 @@ void semcheck_add_builtins(SymTab_t *symtab)
         free(delete_name);
     }
 
+    {
+        const char *swap_name = "SwapEndian";
+
+        ListNode_t *param_int = semcheck_create_builtin_param("AValue", INT_TYPE);
+        KgpcType *swap_int = create_procedure_type(param_int, create_primitive_type(INT_TYPE));
+        if (swap_int != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_int);
+            destroy_kgpc_type(swap_int);
+        }
+        if (param_int != NULL)
+            DestroyList(param_int);
+
+        ListNode_t *param_long = semcheck_create_builtin_param("AValue", LONGINT_TYPE);
+        KgpcType *swap_long = create_procedure_type(param_long, create_primitive_type(LONGINT_TYPE));
+        if (swap_long != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_long);
+            destroy_kgpc_type(swap_long);
+        }
+        if (param_long != NULL)
+            DestroyList(param_long);
+
+        ListNode_t *param_int64 = semcheck_create_builtin_param("AValue", INT64_TYPE);
+        KgpcType *swap_int64 = create_procedure_type(param_int64, create_primitive_type(INT64_TYPE));
+        if (swap_int64 != NULL)
+        {
+            AddBuiltinFunction_Typed(symtab, strdup(swap_name), swap_int64);
+            destroy_kgpc_type(swap_int64);
+        }
+        if (param_int64 != NULL)
+            DestroyList(param_int64);
+    }
+
 
     char *inc_name = strdup("Inc");
     if (inc_name != NULL) {
@@ -5442,11 +5563,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         PushFuncRetOntoScope_Typed(symtab, id_to_use_for_lookup, return_kgpc_type);
         
 /* Also add "Result" as an alias for the return variable for Pascal compatibility */
-        /* Check if "Result" (or "result") is already used as a parameter or local variable */
+        /* Check if "Result" is already used in the current scope */
         HashNode_t *result_check = NULL;
-        if (FindIdent(&result_check, symtab, "Result") == -1)
+        HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+        result_check = (cur_hash != NULL) ? FindIdentInTable(cur_hash, "Result") : NULL;
+        if (result_check == NULL)
         {
-            /* "Result" is not already declared, so we can add it as an alias */
+            /* "Result" is not already declared in this scope, so add it as an alias */
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
         }
 
@@ -5697,8 +5820,21 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             if (candidate != NULL && candidate->mangled_id != NULL &&
                 strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
             {
-                already_exists = 1;
-                break;
+                int same_signature = 1;
+                if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    Tree_t *candidate_def = candidate->type->info.proc_info.definition;
+                    if (candidate_def != NULL &&
+                        !semcheck_subprogram_signatures_equivalent(subprogram, candidate_def))
+                    {
+                        same_signature = 0;
+                    }
+                }
+                if (same_signature)
+                {
+                    already_exists = 1;
+                    break;
+                }
             }
             /* If this exact subprogram was already registered (even with a different
              * mangled name), reuse that declaration instead of creating a duplicate. */
