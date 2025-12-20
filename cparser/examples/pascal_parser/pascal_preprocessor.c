@@ -1789,6 +1789,42 @@ static bool parse_expression(const char **cursor,
     return true;
 }
 
+/* Helper function to check if a string matches an operator keyword */
+static bool is_keyword_operator(const char *cursor, const char *keyword, size_t keyword_len)
+{
+    if (ascii_strncasecmp(cursor, keyword, keyword_len) != 0)
+        return false;
+    char next = cursor[keyword_len];
+    return !isalnum((unsigned char)next) && next != '_';
+}
+
+/* Skip an expression term during short-circuit evaluation.
+ * Tracks parentheses and stops at operators that would end the term.
+ */
+static void skip_shortcircuit_term(const char **cursor)
+{
+    int paren_depth = 0;
+    while (**cursor) {
+        char c = **cursor;
+        if (c == '(') {
+            paren_depth++;
+        } else if (c == ')') {
+            if (paren_depth == 0) break;
+            paren_depth--;
+        } else if (paren_depth == 0) {
+            /* Check for operators that would end this term */
+            if (c == '+' || c == '-' || c == '*' || c == '/' ||
+                c == '=' || c == '<' || c == '>') break;
+            if (is_keyword_operator(*cursor, "DIV", 3) ||
+                is_keyword_operator(*cursor, "MOD", 3) ||
+                is_keyword_operator(*cursor, "AND", 3) ||
+                is_keyword_operator(*cursor, "OR", 2) ||
+                is_keyword_operator(*cursor, "XOR", 3)) break;
+        }
+        (*cursor)++;
+    }
+}
+
 // SimpleExpression = Term { AddOp Term }
 // AddOp = +, -, OR, XOR
 // Note: OR and XOR use short-circuit evaluation for boolean contexts
@@ -1829,27 +1865,7 @@ static bool parse_simple_expression(const char **cursor,
 
         // Short-circuit evaluation for OR: if LHS is true (non-zero), skip RHS
         if (op == OP_OR && *value != 0) {
-            // Skip the RHS expression but still need to consume it syntactically
-            // Try to find the end of the term (look for next operator or end)
-            const char *skip_cursor = *cursor;
-            int paren_depth = 0;
-            while (*skip_cursor) {
-                if (*skip_cursor == '(') paren_depth++;
-                else if (*skip_cursor == ')') {
-                    if (paren_depth == 0) break;
-                    paren_depth--;
-                }
-                else if (paren_depth == 0) {
-                    // Check for operators that would end this term
-                    if (*skip_cursor == '+' || *skip_cursor == '-') break;
-                    if (ascii_strncasecmp(skip_cursor, "OR", 2) == 0 && !isalnum((unsigned char)skip_cursor[2]) && skip_cursor[2] != '_') break;
-                    if (ascii_strncasecmp(skip_cursor, "XOR", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
-                    // Also check relational operators
-                    if (*skip_cursor == '=' || *skip_cursor == '<' || *skip_cursor == '>') break;
-                }
-                skip_cursor++;
-            }
-            *cursor = skip_cursor;
+            skip_shortcircuit_term(cursor);
             // Result stays true (non-zero)
             continue;
         }
@@ -1914,30 +1930,7 @@ static bool parse_term(const char **cursor,
 
         // Short-circuit evaluation for AND: if LHS is false (zero), skip RHS
         if (op == OP_AND && *value == 0) {
-            // Skip the RHS expression but still need to consume it syntactically
-            const char *skip_cursor = *cursor;
-            int paren_depth = 0;
-            while (*skip_cursor) {
-                if (*skip_cursor == '(') paren_depth++;
-                else if (*skip_cursor == ')') {
-                    if (paren_depth == 0) break;
-                    paren_depth--;
-                }
-                else if (paren_depth == 0) {
-                    // Check for operators that would end this factor
-                    if (*skip_cursor == '*' || *skip_cursor == '/') break;
-                    if (*skip_cursor == '+' || *skip_cursor == '-') break;
-                    if (ascii_strncasecmp(skip_cursor, "DIV", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
-                    if (ascii_strncasecmp(skip_cursor, "MOD", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
-                    if (ascii_strncasecmp(skip_cursor, "AND", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
-                    if (ascii_strncasecmp(skip_cursor, "OR", 2) == 0 && !isalnum((unsigned char)skip_cursor[2]) && skip_cursor[2] != '_') break;
-                    if (ascii_strncasecmp(skip_cursor, "XOR", 3) == 0 && !isalnum((unsigned char)skip_cursor[3]) && skip_cursor[3] != '_') break;
-                    // Also check relational operators
-                    if (*skip_cursor == '=' || *skip_cursor == '<' || *skip_cursor == '>') break;
-                }
-                skip_cursor++;
-            }
-            *cursor = skip_cursor;
+            skip_shortcircuit_term(cursor);
             // Result stays false (zero)
             continue;
         }

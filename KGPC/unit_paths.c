@@ -159,7 +159,8 @@ bool unit_search_paths_add_unit_path(UnitSearchPaths *paths, const char *path)
     
     if (paths->unit_path_count >= MAX_UNIT_SEARCH_PATHS)
     {
-        fprintf(stderr, "Warning: Maximum unit search paths (%d) exceeded\n", MAX_UNIT_SEARCH_PATHS);
+        fprintf(stderr, "Warning: Maximum unit search paths (%d) exceeded. "
+                        "Additional path '%s' will be ignored.\n", MAX_UNIT_SEARCH_PATHS, path);
         return false;
     }
     
