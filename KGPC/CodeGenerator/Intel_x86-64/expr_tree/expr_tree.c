@@ -2688,7 +2688,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
             {
                 const int use_qword_op = codegen_type_uses_qword(expr->resolved_type);
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
-                if (expr->resolved_type == BOOL && type == OR)
+                if (type == OR)
                 {
                     snprintf(buffer, sizeof(buffer), "\tor%c\t%s, %s\n", arith_suffix, right, left);
                     inst_list = add_inst(inst_list, buffer);
