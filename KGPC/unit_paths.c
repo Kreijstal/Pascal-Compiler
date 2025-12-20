@@ -71,6 +71,10 @@ void unit_search_paths_init(UnitSearchPaths *paths)
 
     paths->vendor_dir = NULL;
     paths->user_dir = NULL;
+    paths->unit_path_count = 0;
+    paths->disable_vendor_units = false;
+    for (int i = 0; i < MAX_UNIT_SEARCH_PATHS; ++i)
+        paths->unit_paths[i] = NULL;
 }
 
 void unit_search_paths_destroy(UnitSearchPaths *paths)
@@ -82,6 +86,13 @@ void unit_search_paths_destroy(UnitSearchPaths *paths)
     free(paths->user_dir);
     paths->vendor_dir = NULL;
     paths->user_dir = NULL;
+    
+    for (int i = 0; i < paths->unit_path_count; ++i)
+    {
+        free(paths->unit_paths[i]);
+        paths->unit_paths[i] = NULL;
+    }
+    paths->unit_path_count = 0;
 }
 
 bool unit_search_paths_set_vendor(UnitSearchPaths *paths, const char *stdlib_path)
@@ -141,37 +152,52 @@ bool unit_search_paths_set_user(UnitSearchPaths *paths, const char *input_path)
     return success;
 }
 
+bool unit_search_paths_add_unit_path(UnitSearchPaths *paths, const char *path)
+{
+    if (paths == NULL || path == NULL)
+        return false;
+    
+    if (paths->unit_path_count >= MAX_UNIT_SEARCH_PATHS)
+    {
+        fprintf(stderr, "Warning: Maximum unit search paths (%d) exceeded\n", MAX_UNIT_SEARCH_PATHS);
+        return false;
+    }
+    
+    char *dup = duplicate_path(path);
+    if (dup == NULL)
+        return false;
+    
+    paths->unit_paths[paths->unit_path_count++] = dup;
+    return true;
+}
+
+void unit_search_paths_disable_vendor(UnitSearchPaths *paths)
+{
+    if (paths != NULL)
+        paths->disable_vendor_units = true;
+}
+
 char *unit_search_paths_resolve(const UnitSearchPaths *paths, const char *unit_name)
 {
     if (paths == NULL || unit_name == NULL)
         return NULL;
 
-    char *path = build_candidate_unit_path(paths->vendor_dir, unit_name);
-    if (path != NULL)
-        return path;
+    char *path = NULL;
 
-    path = build_candidate_unit_path("KGPC/Units", unit_name);
-    if (path != NULL)
-        return path;
-
-    const char *source_root = getenv("MESON_SOURCE_ROOT");
-    if (source_root != NULL)
+    /* 1. First search in -Fu paths (highest priority for FPC compatibility) */
+    for (int i = 0; i < paths->unit_path_count; ++i)
     {
-        char buffer[PATH_MAX];
-        int written = snprintf(buffer, sizeof(buffer), "%s/KGPC/Units", source_root);
-        if (written > 0 && written < (int)sizeof(buffer))
-        {
-            path = build_candidate_unit_path(buffer, unit_name);
-            if (path != NULL)
-                return path;
-        }
+        path = build_candidate_unit_path(paths->unit_paths[i], unit_name);
+        if (path != NULL)
+            return path;
     }
 
+    /* 2. Search in user directory (same directory as input file) */
     path = build_candidate_unit_path(paths->user_dir, unit_name);
     if (path != NULL)
         return path;
 
-    /* Search in preprocessor include paths (from -I flags) */
+    /* 3. Search in preprocessor include paths (from -I flags) */
     int include_count = 0;
     const char * const *include_paths = pascal_frontend_get_include_paths(&include_count);
     for (int i = 0; i < include_count; ++i)
@@ -181,6 +207,32 @@ char *unit_search_paths_resolve(const UnitSearchPaths *paths, const char *unit_n
             return path;
     }
 
+    /* 4. Search in vendor directories (KGPC built-in units) unless disabled */
+    if (!paths->disable_vendor_units)
+    {
+        path = build_candidate_unit_path(paths->vendor_dir, unit_name);
+        if (path != NULL)
+            return path;
+
+        path = build_candidate_unit_path("KGPC/Units", unit_name);
+        if (path != NULL)
+            return path;
+
+        const char *source_root = getenv("MESON_SOURCE_ROOT");
+        if (source_root != NULL)
+        {
+            char buffer[PATH_MAX];
+            int written = snprintf(buffer, sizeof(buffer), "%s/KGPC/Units", source_root);
+            if (written > 0 && written < (int)sizeof(buffer))
+            {
+                path = build_candidate_unit_path(buffer, unit_name);
+                if (path != NULL)
+                    return path;
+            }
+        }
+    }
+
+    /* 5. Search in current directory (fallback) */
     return build_candidate_unit_path(".", unit_name);
 }
 
