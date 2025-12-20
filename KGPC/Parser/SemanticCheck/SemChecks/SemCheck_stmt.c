@@ -321,6 +321,8 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
     int max_scope_lev);
 static int semcheck_try_property_assignment(SymTab_t *symtab,
     struct Statement *stmt, int max_scope_lev);
+static int semcheck_try_module_property_assignment(SymTab_t *symtab,
+    struct Statement *stmt, int max_scope_lev);
 static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     struct Statement *stmt, struct Expression *lhs, HashNode_t *setter_node,
     int max_scope_lev);
@@ -1664,6 +1666,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
     return_val = 0;
 
+    int module_property_result = semcheck_try_module_property_assignment(symtab, stmt, max_scope_lev);
+    if (module_property_result >= 0)
+        return module_property_result;
+
     var = stmt->stmt_data.var_assign_data.var;
     expr = stmt->stmt_data.var_assign_data.expr;
 
@@ -1883,6 +1889,73 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         destroy_kgpc_type(rhs_kgpctype);
 
     return return_val;
+}
+
+static int semcheck_try_module_property_assignment(SymTab_t *symtab,
+    struct Statement *stmt, int max_scope_lev)
+{
+    if (symtab == NULL || stmt == NULL || stmt->type != STMT_VAR_ASSIGN)
+        return -1;
+
+    struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+    struct Expression *rhs = stmt->stmt_data.var_assign_data.expr;
+    if (lhs == NULL || rhs == NULL || lhs->type != EXPR_VAR_ID)
+        return -1;
+
+    const char *prop_name = lhs->expr_data.id;
+    if (prop_name == NULL)
+        return -1;
+
+    ListNode_t *matches = FindAllIdents(symtab, (char *)prop_name);
+    HashNode_t *setter = NULL;
+    int has_storage_symbol = 0;
+
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node == NULL)
+            continue;
+        if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
+            node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
+        {
+            has_storage_symbol = 1;
+            break;
+        }
+        if (node->hash_type == HASHTYPE_PROCEDURE && node->type != NULL &&
+            node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            int param_count = ListLength(node->type->info.proc_info.params);
+            if (param_count == 1)
+                setter = node;
+        }
+    }
+
+    if (matches != NULL)
+        DestroyList(matches);
+
+    if (has_storage_symbol || setter == NULL)
+        return -1;
+
+    char *call_id = lhs->expr_data.id;
+    lhs->expr_data.id = NULL;
+    destroy_expr(lhs);
+    stmt->stmt_data.var_assign_data.var = NULL;
+    stmt->stmt_data.var_assign_data.expr = NULL;
+
+    ListNode_t *args = CreateListNode(rhs, LIST_EXPR);
+    if (args == NULL)
+    {
+        free(call_id);
+        return 1;
+    }
+
+    stmt->type = STMT_PROCEDURE_CALL;
+    memset(&stmt->stmt_data.procedure_call_data, 0, sizeof(stmt->stmt_data.procedure_call_data));
+    stmt->stmt_data.procedure_call_data.id = call_id;
+    stmt->stmt_data.procedure_call_data.expr_args = args;
+    stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+
+    return semcheck_proccall(symtab, stmt, max_scope_lev);
 }
 
 static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
@@ -2749,50 +2822,119 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
         }
     }
 
-    /* If no exact mangled match, try forward declarations with matching parameter count */
+    /* If no exact mangled match, choose the best overload by parameter compatibility */
     if (match_count == 0 && overload_candidates != NULL)
     {
+        ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
+    int call_arg_count = 0;
+    ListNode_t *count_args = call_args;
+    while (count_args != NULL)
+    {
+        call_arg_count++;
+        count_args = count_args->next;
+    }
+    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    {
+        fprintf(stderr, "[SemCheck] proccall id='%s' args=%d\n",
+            proc_id != NULL ? proc_id : "(null)", call_arg_count);
+    }
+
+        HashNode_t *best_candidate = NULL;
+        int best_score = INT_MAX;
+        int num_best_matches = 0;
+
         ListNode_t *cur = overload_candidates;
-        while (cur != NULL && match_count == 0)
+        while (cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
             if ((candidate->hash_type == HASHTYPE_PROCEDURE ||
                  candidate->hash_type == HASHTYPE_FUNCTION) &&
                 candidate->id != NULL && pascal_identifier_equals(candidate->id, proc_id))
             {
-                /* Check if parameter count matches */
                 int candidate_param_count = 0;
+                ListNode_t *param = NULL;
                 if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
+                    param = candidate->type->info.proc_info.params;
+                ListNode_t *param_count = param;
+                while (param_count != NULL)
                 {
-                    ListNode_t *param = candidate->type->info.proc_info.params;
-                    while (param != NULL)
-                    {
-                        candidate_param_count++;
-                        param = param->next;
-                    }
+                    candidate_param_count++;
+                    param_count = param_count->next;
                 }
-                
-                ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
-                int call_arg_count = 0;
-                while (call_args != NULL)
-                {
-                    call_arg_count++;
-                    call_args = call_args->next;
-                }
-                
+
                 if (candidate_param_count == call_arg_count)
                 {
-                    resolved_proc = candidate;
-                    match_count = 1;
-                    /* Use the mangled name from the forward declaration */
-                    if (candidate->mangled_id != NULL)
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
-                        free(mangled_name);
-                        mangled_name = strdup(candidate->mangled_id);
+                        fprintf(stderr, "[SemCheck] proccall candidate %s params=%d\n",
+                            candidate->id != NULL ? candidate->id : "(null)", candidate_param_count);
+                    }
+                    int score = 0;
+                    ListNode_t *param_iter = param;
+                    ListNode_t *arg_iter = call_args;
+                    while (param_iter != NULL && arg_iter != NULL)
+                    {
+                        Tree_t *param_decl = (Tree_t *)param_iter->cur;
+                        struct Expression *arg_expr = (struct Expression *)arg_iter->cur;
+                        int expected_owned = 0;
+                        int actual_owned = 0;
+                        KgpcType *expected = resolve_type_from_vardecl(param_decl, symtab, &expected_owned);
+                        KgpcType *actual = semcheck_resolve_expression_kgpc_type(symtab, arg_expr,
+                            INT_MAX, NO_MUTATE, &actual_owned);
+
+                        if (expected == NULL)
+                        {
+                            /* Untyped parameters accept any argument. */
+                        }
+                        else if (actual == NULL ||
+                            !are_types_compatible_for_assignment(expected, actual, symtab))
+                        {
+                            score += 1000;
+                        }
+                        else
+                        {
+                            int expected_tag = kgpc_type_get_legacy_tag(expected);
+                            int actual_tag = kgpc_type_get_legacy_tag(actual);
+                            if (expected_tag != UNKNOWN_TYPE && actual_tag != UNKNOWN_TYPE &&
+                                expected_tag != actual_tag)
+                            {
+                                score += 1;
+                            }
+                        }
+
+                        if (expected_owned && expected != NULL)
+                            destroy_kgpc_type(expected);
+                        if (actual_owned && actual != NULL)
+                            destroy_kgpc_type(actual);
+
+                        param_iter = param_iter->next;
+                        arg_iter = arg_iter->next;
+                    }
+
+                    if (score < best_score)
+                    {
+                        best_score = score;
+                        best_candidate = candidate;
+                        num_best_matches = 1;
+                    }
+                    else if (score == best_score)
+                    {
+                        num_best_matches++;
                     }
                 }
             }
             cur = cur->next;
+        }
+
+        if (num_best_matches == 1 && best_candidate != NULL)
+        {
+            resolved_proc = best_candidate;
+            match_count = 1;
+            if (best_candidate->mangled_id != NULL)
+            {
+                free(mangled_name);
+                mangled_name = strdup(best_candidate->mangled_id);
+            }
         }
     }
 
@@ -2983,6 +3125,15 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
                 if (!types_match)
                 {
+                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    {
+                        fprintf(stderr,
+                            "[SemCheck] proccall %s arg %d mismatch: expected=%s actual=%s\n",
+                            proc_id ? proc_id : "<null>",
+                            cur_arg,
+                            expected_kgpc_type ? kgpc_type_to_string(expected_kgpc_type) : "<null>",
+                            arg_kgpc_type ? kgpc_type_to_string(arg_kgpc_type) : "<null>");
+                    }
                     fprintf(stderr, "Error on line %d, on procedure call %s, argument %d: Type mismatch!\n\n",
                         stmt->line_num, proc_id, cur_arg);
                     ++return_val;

@@ -153,6 +153,8 @@ static void print_class_property(struct ClassProperty *property, FILE *f, int nu
         fprintf(f, " read=%s", property->read_accessor);
     if (property->write_accessor != NULL)
     fprintf(f, " write=%s", property->write_accessor);
+    if (property->is_indexed)
+        fprintf(f, " indexed");
     fprintf(f, "]\n");
 }
 
@@ -244,6 +246,7 @@ static struct ClassProperty *clone_class_property(const struct ClassProperty *pr
     clone->type_id = property->type_id != NULL ? strdup(property->type_id) : NULL;
     clone->read_accessor = property->read_accessor != NULL ? strdup(property->read_accessor) : NULL;
     clone->write_accessor = property->write_accessor != NULL ? strdup(property->write_accessor) : NULL;
+    clone->is_indexed = property->is_indexed;
     return clone;
 }
 

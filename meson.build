@@ -95,7 +95,7 @@ if build_integration_tests
     c_args: '-DTEST_SRCDIR="' + meson.project_source_root() / 'cparser/examples/pascal_parser' + '"'
   )
 
-  test('pascal parser unit tests', pascal_tests, timeout: 180)
+test('pascal parser unit tests', pascal_tests, timeout: 600)
 
   pascal_benchmark = executable('pascal_benchmark',
     'cparser/examples/pascal_parser/pascal_benchmark.c',

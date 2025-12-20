@@ -157,11 +157,17 @@ static inline int get_var_storage_size(HashNode_t *node)
                     return 8;
                 case REAL_TYPE:
                 case STRING_TYPE:  /* PCHAR */
-                case FILE_TYPE:
-                case TEXT_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8;
+                case FILE_TYPE:
+                case TEXT_TYPE:
+                {
+                    long long size = kgpc_type_sizeof(node->type);
+                    if (size > 0)
+                        return (int)size;
+                    return 8;
+                }
                 case SET_TYPE:
                 {
                     /* Check if this is a character set */
@@ -1527,9 +1533,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             case REAL_TYPE:
                             case STRING_TYPE:
                             case POINTER_TYPE:
-                            case FILE_TYPE:
-                            case TEXT_TYPE:
                                 element_size = 8;
+                                break;
+                            case FILE_TYPE:
+                                element_size = 368;
+                                break;
+                            case TEXT_TYPE:
+                                element_size = 632;
                                 break;
                             case CHAR_TYPE:
                                 element_size = 1;
