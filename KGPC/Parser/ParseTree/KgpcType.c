@@ -319,6 +319,17 @@ void destroy_kgpc_type(KgpcType *type) {
 
 // --- Utility Implementations ---
 
+/* Helper function to check if a KgpcType is a char array (shortstring representation) */
+static int is_char_array_type(KgpcType *type) {
+    if (type == NULL || type->kind != TYPE_KIND_ARRAY)
+        return 0;
+    if (type->info.array_info.element_type == NULL)
+        return 0;
+    if (type->info.array_info.element_type->kind != TYPE_KIND_PRIMITIVE)
+        return 0;
+    return type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE;
+}
+
 /* Helper function to check numeric type compatibility */
 static int types_numeric_compatible(int lhs, int rhs) {
     /* Exact match */
@@ -626,26 +637,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     }
 
     /* Allow String/ShortString <-> array[0..255] of char assignment (ShortString compatibility) */
-    if (lhs_is_string && rhs_type->kind == TYPE_KIND_ARRAY)
-    {
-        /* Check if rhs is array of char (shortstring representation) */
-        if (rhs_type->info.array_info.element_type != NULL &&
-            rhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-            rhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
-        {
-            return 1;
-        }
-    }
-    if (rhs_is_string && lhs_type->kind == TYPE_KIND_ARRAY)
-    {
-        /* Check if lhs is array of char (shortstring representation) */
-        if (lhs_type->info.array_info.element_type != NULL &&
-            lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-            lhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
-        {
-            return 1;
-        }
-    }
+    /* Allow String/ShortString <-> array of char assignment (ShortString compatibility) */
+    if (lhs_is_string && is_char_array_type(rhs_type))
+        return 1;
+    if (rhs_is_string && is_char_array_type(lhs_type))
+        return 1;
 
     /* Allow procedure variables to accept explicit @proc references */
     if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)

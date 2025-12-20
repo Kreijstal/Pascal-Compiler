@@ -767,14 +767,8 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     error_count += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     
     /* Check if target is a string type OR a shortstring (array of char) */
-    int is_valid_target = is_string_type(target_type);
-    if (!is_valid_target && target_expr->is_array_expr && target_type == CHAR_TYPE)
-    {
-        /* ShortString variables are stored as array[0..255] of char,
-         * and resolve to CHAR_TYPE as the element type.
-         * Check if this is a char array (which includes shortstring). */
-        is_valid_target = 1;
-    }
+    int is_valid_target = is_string_type(target_type) || 
+                          is_shortstring_array(target_type, target_expr->is_array_expr);
     
     if (!is_valid_target)
     {
