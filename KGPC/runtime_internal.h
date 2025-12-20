@@ -21,6 +21,7 @@ typedef struct kgpc_class_typeinfo
 
 char *kgpc_alloc_empty_string(void);
 char *kgpc_string_duplicate(const char *value);
+void kgpc_set_codepage_string(char **value, uint16_t codepage, int convert);
 int kgpc_rtti_is(const kgpc_class_typeinfo *value_type,
     const kgpc_class_typeinfo *target_type);
 void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,

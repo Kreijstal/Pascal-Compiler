@@ -917,10 +917,12 @@ long long expr_effective_size_bytes(const struct Expression *expr)
         case SET_TYPE:
         case ENUM_TYPE:
             return 4;
+        case FILE_TYPE:
+            return 368;
+        case TEXT_TYPE:
+            return 632;
         case STRING_TYPE:
         case POINTER_TYPE:
-        case FILE_TYPE:
-        case TEXT_TYPE:
         case REAL_TYPE:
             return 8;
         case LONGINT_TYPE:
@@ -2818,14 +2820,48 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
     return inst_list;
 }
 
+static int codegen_resolve_is_array(struct Expression *array_expr, CodeGenContext *ctx,
+    StackNode_t **out_stack_node)
+{
+    if (out_stack_node != NULL)
+        *out_stack_node = NULL;
+    if (array_expr == NULL || ctx == NULL)
+        return 0;
+
+    KgpcType *base_type = expr_get_kgpc_type(array_expr);
+    int base_is_array = (array_expr->is_array_expr ||
+        (base_type != NULL && kgpc_type_is_array(base_type)));
+    if (!base_is_array && ctx->symtab != NULL && array_expr->type == EXPR_VAR_ID)
+    {
+        HashNode_t *array_node = NULL;
+        if (FindIdent(&array_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            array_node != NULL && hashnode_is_array(array_node))
+        {
+            base_is_array = 1;
+        }
+    }
+    if (array_expr->type == EXPR_VAR_ID)
+    {
+        StackNode_t *stack_node = find_label(array_expr->expr_data.id);
+        if (out_stack_node != NULL)
+            *out_stack_node = stack_node;
+        if (!base_is_array && stack_node != NULL && stack_node->is_array)
+            base_is_array = 1;
+    }
+
+    return base_is_array;
+}
+
 static int codegen_get_indexable_element_size(struct Expression *array_expr,
     CodeGenContext *ctx, long long *out_size)
 {
     assert(array_expr != NULL);
     assert(out_size != NULL);
 
-    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
-    int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !array_expr->is_array_expr);
+    StackNode_t *array_stack_node = NULL;
+    int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
+    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !base_is_array);
+    int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
     long long element_size_ll = 1;
 
     if (base_is_string)
@@ -2895,10 +2931,12 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         return inst_list;
     }
 
-    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !array_expr->is_array_expr);
-    int base_is_pointer = expr_has_type_tag(array_expr, POINTER_TYPE);
+    StackNode_t *array_stack_node = NULL;
+    int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
+    int base_is_string = (expr_has_type_tag(array_expr, STRING_TYPE) && !base_is_array);
+    int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
 
-    if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
+    if (!base_is_array && !base_is_string && !base_is_pointer)
     {
         codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
         return inst_list;
@@ -2931,7 +2969,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     char buffer[128];
 
-    if (!base_is_string && !base_is_pointer && array_expr->array_is_dynamic)
+    if (!base_is_string && !base_is_pointer && array_expr->array_is_dynamic &&
+        !(array_stack_node != NULL && array_stack_node->is_array && !array_stack_node->is_dynamic))
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", base_reg->bit_64, base_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);

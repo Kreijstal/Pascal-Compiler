@@ -8,6 +8,8 @@ import socket
 import select
 import subprocess
 import sys
+import tempfile
+import textwrap
 import time
 import traceback
 import unittest
@@ -35,6 +37,7 @@ IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
 build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
 KGPC_PATH = os.path.join(build_dir, "KGPC/kgpc.exe" if IS_WINDOWS_ABI else "KGPC/kgpc")
 TEST_CASES_DIR = "tests/test_cases"
+INPUT_DATA_DIR = TEST_CASES_DIR
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 # Default execution timeout per compiled test program (seconds).
@@ -63,6 +66,26 @@ COMPILER_RUNS = []
 
 FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")
 FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
+
+UNIT_ONLY_TESTS = {
+    "directives_and_properties_unit",
+    "dotted_alias_base_unit",
+    "dotted_alias_reexport_unit",
+    "fpc_import_const_alias",
+    "fpc_import_const_unit",
+    "fpc_interface_const_after_external",
+    "fpc_qualified_const_import",
+    "property_indexed_unit",
+    "unit_cardinal_type",
+    "unit_high_type_const",
+    "unit_longword_type",
+    "unit_low_type_const",
+    "unit_pointer_deref_nil",
+    "unit_sizeof_array_bounds",
+    "unit_sizeof_const",
+}
+
+UNIT_ONLY_FLAGS = {}
 
 
 def _sanitize_test_identifier(name):
@@ -299,6 +322,50 @@ def run_executable_with_valgrind(executable_args, **kwargs):
             os.close(master_fd)
 
     return subprocess.run(command, **kwargs)
+
+
+def _write_helper_script(tmpdir, body):
+    """Write a small Python helper script used to exercise PTY/non-PTY paths."""
+    script = os.path.join(tmpdir, "pty_helper.py")
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env {sys.executable}
+                import sys
+                import time
+
+                def main():
+            """
+            )
+        )
+        for line in textwrap.dedent(body).splitlines():
+            handle.write(f"    {line}\n")
+        handle.write(
+            textwrap.dedent(
+                """\
+                if __name__ == "__main__":
+                    main()
+                """
+            )
+        )
+    os.chmod(script, 0o755)
+    return script
+
+
+def _run_helper_with_valgrind(command, *, timeout=None, text=True, input_data=None,
+                              capture_output=True, check=False, **kwargs):
+    """Wrapper to keep PTY helper tests consistent."""
+    runner_kwargs = {
+        "timeout": timeout if timeout is not None else EXEC_TIMEOUT,
+        "text": text,
+        "capture_output": capture_output,
+        "check": check,
+    }
+    if input_data is not None:
+        runner_kwargs["input"] = input_data
+    runner_kwargs.update(kwargs)
+    return run_executable_with_valgrind(command, **runner_kwargs)
 
 
 def run_compiler(input_file, output_file, flags=None):
@@ -1005,7 +1072,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_mtinf_sample_parses(self):
         """The mtinf QL sample should parse in parse-only mode without errors."""
-        input_file = os.path.join(TEST_CASES_DIR, "mtinf.pas")
+        input_file = os.path.join(TEST_CASES_DIR, "mtinf.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "mtinf_parse_only.s")
 
         run_compiler(
@@ -1632,6 +1699,171 @@ class TestCompiler(unittest.TestCase):
 
         self.assertEqual(kgpc_run.stdout, fpc_run.stdout)
 
+    def test_run_executable_with_valgrind_pty_crlf_and_echo(self):
+        """PTY path should normalize CRLF, merge stderr, and avoid input echo."""
+        if not HAS_PTY:
+            self.skipTest("PTY not available on this platform")
+
+        helper_body = r"""
+sys.stdout.write("line1\n")
+sys.stdout.write("line2\r\n")
+sys.stdout.flush()
+sys.stderr.write("err-line\n")
+sys.stderr.flush()
+data = sys.stdin.readline()
+sys.stdout.write("got:" + data)
+sys.stdout.flush()
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script = _write_helper_script(tmpdir, helper_body)
+            input_line = "user-input\n"
+            result = _run_helper_with_valgrind(
+                [sys.executable, script],
+                input_data=input_line,
+                timeout=5,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+
+        self.assertIn(result.stderr, (None, ""))
+        stdout = result.stdout or ""
+        self.assertNotIn("\r", stdout)
+        self.assertIn("line1\n", stdout)
+        self.assertIn("line2\n", stdout)
+        self.assertIn("err-line\n", stdout)
+        lines = stdout.splitlines()
+        self.assertNotIn("user-input", lines)
+        self.assertIn("got:user-input", lines)
+
+    def test_run_executable_with_valgrind_pty_timeout(self):
+        """PTY path should terminate processes that exceed timeout."""
+        if not HAS_PTY:
+            self.skipTest("PTY not available on this platform")
+
+        helper_body = r"""
+time.sleep(10.0)
+sys.stdout.write("should-not-see-this\n")
+sys.stdout.flush()
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script = _write_helper_script(tmpdir, helper_body)
+            result = _run_helper_with_valgrind(
+                [sys.executable, script],
+                timeout=0.5,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("should-not-see-this", result.stdout or "")
+
+    def test_run_executable_with_valgrind_pty_vs_non_pty_equivalence(self):
+        """PTY and non-PTY paths should surface the same output and exit codes."""
+        if not HAS_PTY:
+            self.skipTest("PTY not available on this platform")
+
+        helper_body = r"""
+sys.stdout.write("hello\n")
+sys.stderr.write("world\n")
+sys.stdout.flush()
+sys.stderr.flush()
+sys.exit(3)
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script = _write_helper_script(tmpdir, helper_body)
+            non_pty_result = _run_helper_with_valgrind(
+                [sys.executable, script],
+                timeout=5,
+                text=True,
+                capture_output=False,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            pty_result = _run_helper_with_valgrind(
+                [sys.executable, script],
+                timeout=5,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(non_pty_result.returncode, 3)
+        self.assertEqual(pty_result.returncode, 3)
+
+        combined_non_pty = (
+            (non_pty_result.stdout or "") + (non_pty_result.stderr or "")
+        ).replace("\r\n", "\n").replace("\r", "")
+        combined_pty = (
+            (pty_result.stdout or "") + (pty_result.stderr or "")
+        ).replace("\r\n", "\n").replace("\r", "")
+
+        for token in ("hello\n", "world\n"):
+            self.assertIn(token, combined_non_pty)
+            self.assertIn(token, combined_pty)
+
+    def test_const_expr_operators(self):
+        """Tests const expressions with bitwise ops, NOT, and shifts."""
+        input_file = os.path.join(TEST_CASES_DIR, "const_expr_operators.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(
+            process.stdout,
+            "41\n17\n6\n9\n-1\n-2\n1\n1073741824\n",
+        )
+
+    def test_const_expr_typecasts(self):
+        """Tests integer typecasts in const expressions."""
+        input_file = os.path.join(TEST_CASES_DIR, "const_expr_typecasts.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(
+            process.stdout,
+            "4294967295\n4294967295\n4294967296\n-1\n4294967295\n4294967295\n",
+        )
+
+    def test_fpc_directives_and_properties(self):
+        """Tests FPC-style bracket directives and interface-level properties."""
+        input_file = os.path.join(TEST_CASES_DIR, "directives_and_properties.p")
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties")
+
+        run_compiler(input_file, asm_file)
+        self.compile_executable(asm_file, executable_file)
+
+        process = subprocess.run(
+            [executable_file],
+            capture_output=True,
+            text=True,
+            timeout=EXEC_TIMEOUT,
+        )
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(process.stdout, "10\n15\n3\n")
+
     def test_repeat_type_inference(self):
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
@@ -2185,6 +2417,15 @@ class TestCompiler(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     self.fail("Test execution timed out.")
 
+    def test_unit_compile_only(self):
+        """Compiles standalone unit sources to ensure they parse and check cleanly."""
+        for base_name in sorted(UNIT_ONLY_TESTS):
+            with self.subTest(unit=base_name):
+                input_file = os.path.join(TEST_CASES_DIR, f"{base_name}.p")
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{base_name}.s")
+                flags = UNIT_ONLY_FLAGS.get(base_name)
+                run_compiler(input_file, asm_file, flags=flags)
+
 
 def _discover_and_add_auto_tests():
     """
@@ -2238,7 +2479,7 @@ def _discover_and_add_auto_tests():
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
-                input_data_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.input")
+                input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
                 compiler_output = None
                 actual_output = None

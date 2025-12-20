@@ -23,6 +23,7 @@
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../../Parser/SemanticCheck/NameMangling.h"
 
 static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
@@ -1579,6 +1580,118 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             /* Normal function call */
             const char *call_target = expr->expr_data.function_call_data.mangled_id;
+            if (call_target == NULL || call_target[0] == '\0')
+            {
+                HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
+                if (resolved != NULL && resolved->mangled_id != NULL &&
+                    resolved->mangled_id[0] != '\0')
+                {
+                    call_target = resolved->mangled_id;
+                }
+                else if (resolved != NULL && resolved->type != NULL &&
+                         resolved->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    Tree_t *def = resolved->type->info.proc_info.definition;
+                    if (def != NULL)
+                    {
+                        const char *alias = def->tree_data.subprogram_data.cname_override;
+                        if (alias != NULL && alias[0] != '\0')
+                            call_target = alias;
+                        else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                                 def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                            call_target = def->tree_data.subprogram_data.mangled_id;
+                    }
+                }
+            }
+            if ((call_target == NULL || call_target[0] == '\0') &&
+                ctx != NULL && ctx->symtab != NULL &&
+                expr->expr_data.function_call_data.id != NULL)
+            {
+                HashNode_t *sym = NULL;
+                if (FindIdent(&sym, ctx->symtab,
+                        expr->expr_data.function_call_data.id) == 0 &&
+                    sym != NULL)
+                {
+                    if (sym->mangled_id != NULL && sym->mangled_id[0] != '\0')
+                    {
+                        call_target = sym->mangled_id;
+                    }
+                    else if (sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE)
+                    {
+                        Tree_t *def = sym->type->info.proc_info.definition;
+                        if (def != NULL)
+                        {
+                            const char *alias = def->tree_data.subprogram_data.cname_override;
+                            if (alias != NULL && alias[0] != '\0')
+                                call_target = alias;
+                            else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                                     def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                                call_target = def->tree_data.subprogram_data.mangled_id;
+                        }
+                    }
+                }
+            }
+            char *computed_mangled = NULL;
+            if ((call_target == NULL || call_target[0] == '\0') &&
+                expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type
+                    ->info.proc_info.definition;
+                int is_external = 0;
+                if (def != NULL)
+                {
+                    is_external = def->tree_data.subprogram_data.cname_flag != 0 ||
+                        def->tree_data.subprogram_data.cname_override != NULL;
+                }
+                if (!is_external && expr->expr_data.function_call_data.id != NULL)
+                {
+                    computed_mangled = MangleFunctionName(
+                        expr->expr_data.function_call_data.id,
+                        expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.params,
+                        ctx->symtab);
+                    if (computed_mangled != NULL && computed_mangled[0] != '\0')
+                        call_target = computed_mangled;
+                }
+            }
+            if ((call_target == NULL || call_target[0] == '\0') &&
+                ctx != NULL && ctx->symtab != NULL &&
+                expr->expr_data.function_call_data.id != NULL)
+            {
+                int arg_count = ListLength(expr->expr_data.function_call_data.args_expr);
+                ListNode_t *candidates = FindAllIdents(ctx->symtab,
+                    expr->expr_data.function_call_data.id);
+                HashNode_t *unique = NULL;
+                int matches = 0;
+                for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *node = (HashNode_t *)cur->cur;
+                    if (node == NULL || node->type == NULL ||
+                        node->type->kind != TYPE_KIND_PROCEDURE)
+                        continue;
+                    ListNode_t *params = node->type->info.proc_info.params;
+                    if (ListLength(params) != arg_count)
+                        continue;
+                    unique = node;
+                    matches++;
+                    if (matches > 1)
+                        break;
+                }
+                if (matches == 1 && unique != NULL)
+                {
+                    if (unique->mangled_id != NULL && unique->mangled_id[0] != '\0')
+                        call_target = unique->mangled_id;
+                    else
+                    {
+                        computed_mangled = MangleFunctionName(
+                            unique->id, unique->type->info.proc_info.params, ctx->symtab);
+                        if (computed_mangled != NULL && computed_mangled[0] != '\0')
+                            call_target = computed_mangled;
+                    }
+                }
+                if (candidates != NULL)
+                    DestroyList(candidates);
+            }
             if (call_target == NULL)
                 call_target = expr->expr_data.function_call_data.id;
             
@@ -1593,6 +1706,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 snprintf(buffer, sizeof(buffer), "\t# ERROR: function call with NULL target\n");
                 inst_list = add_inst(inst_list, buffer);
             }
+            if (computed_mangled != NULL)
+                free(computed_mangled);
         }
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);

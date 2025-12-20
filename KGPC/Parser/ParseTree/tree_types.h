@@ -90,6 +90,7 @@ struct ClassProperty
     char *type_id;
     char *read_accessor;
     char *write_accessor;
+    int is_indexed;
 };
 
 /* Method information for classes */

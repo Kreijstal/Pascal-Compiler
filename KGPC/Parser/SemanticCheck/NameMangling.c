@@ -95,7 +95,8 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     
     // String types
     if (strcasecmp(type_name, "String") == 0 || strcasecmp(type_name, "AnsiString") == 0 ||
-        strcasecmp(type_name, "RawByteString") == 0)
+        strcasecmp(type_name, "RawByteString") == 0 || strcasecmp(type_name, "UnicodeString") == 0 ||
+        strcasecmp(type_name, "WideString") == 0)
         return HASHVAR_PCHAR;
     
     // Integer types

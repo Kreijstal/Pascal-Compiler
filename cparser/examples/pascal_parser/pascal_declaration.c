@@ -1844,11 +1844,25 @@ void init_pascal_unit_parser(combinator_t** p) {
     set_combinator_name(class_operator_impl, "class_operator_impl");
 
     // Module-level property declaration for interface section (FPC extension)
-    // Syntax: property Name: Type read ReadFunc [write WriteFunc];
+    // Syntax: property Name[Index: Type]: Type read ReadFunc [write WriteFunc];
     // Example from baseunix.pp: property errno: cint read fpgeterrno write fpseterrno;
+    combinator_t* interface_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
+        between(
+            token(match("[")),
+            token(match("]")),
+            sep_by(seq(new_combinator(), PASCAL_T_PARAM,
+                sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+                token(match(":")),
+                type_name(PASCAL_T_IDENTIFIER),
+                NULL
+            ), token(match(";")))
+        ),
+        NULL
+    ));
     combinator_t* interface_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
+        interface_property_indexer,
         token(match(":")),
         token(cident(PASCAL_T_IDENTIFIER)), // type name (simple identifier)
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -3004,11 +3018,25 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     );
 
     // Module-level property declaration (FPC extension)
-    // Syntax: property Name: Type read ReadFunc [write WriteFunc];
+    // Syntax: property Name[Index: Type]: Type read ReadFunc [write WriteFunc];
     // Example from system.pp: property cmdline:PAnsiChar read get_cmdline;
+    combinator_t* module_property_indexer = optional(seq(new_combinator(), PASCAL_T_PARAM_LIST,
+        between(
+            token(match("[")),
+            token(match("]")),
+            sep_by(seq(new_combinator(), PASCAL_T_PARAM,
+                sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))),
+                token(match(":")),
+                type_name(PASCAL_T_IDENTIFIER),
+                NULL
+            ), token(match(";")))
+        ),
+        NULL
+    ));
     combinator_t* module_property_decl = seq(new_combinator(), PASCAL_T_PROPERTY_DECL,
         token(keyword_ci("property")),
         token(cident(PASCAL_T_IDENTIFIER)), // property name
+        module_property_indexer,
         token(match(":")),
         type_name(PASCAL_T_IDENTIFIER), // type name (simple identifier)
         optional(seq(new_combinator(), PASCAL_T_NONE,

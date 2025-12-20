@@ -73,11 +73,34 @@ int kgpc_ioresult_peek(void)
     return kgpc_ioresult;
 }
 
+void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    int32_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+#elif defined(_WIN32)
+    int32_t old = (int32_t)InterlockedExchangeAdd((volatile LONG *)target, (LONG)value);
+#else
+    int32_t old = *target;
+    *target += value;
+#endif
+    if (result != NULL)
+        *result = old;
+}
 
-typedef enum {
-    KGPC_FILE_KIND_TEXT = 0,
-    KGPC_FILE_KIND_BINARY = 1
-} KGPCFileKind;
+void kgpc_interlocked_exchange_add_i64(int64_t *target, int64_t value, int64_t *result)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    int64_t old = __atomic_fetch_add(target, value, __ATOMIC_SEQ_CST);
+#elif defined(_WIN32) && defined(_WIN64)
+    int64_t old = (int64_t)InterlockedExchangeAdd64((volatile LONGLONG *)target, (LONGLONG)value);
+#else
+    int64_t old = *target;
+    *target += value;
+#endif
+    if (result != NULL)
+        *result = old;
+}
+
 
 typedef enum {
     KGPC_BINARY_UNSPECIFIED = 0,
@@ -86,28 +109,75 @@ typedef enum {
     KGPC_BINARY_DOUBLE
 } KGPCBinaryType;
 
-typedef struct KGPCTextFile
+typedef struct KGPCTextRec
+{
+    int32_t handle;
+    int32_t mode;
+    int64_t bufsize;
+    int64_t private_data;
+    int64_t bufpos;
+    int64_t bufend;
+    char *bufptr;
+    void *openfunc;
+    void *inoutfunc;
+    void *flushfunc;
+    void *closefunc;
+    unsigned char userdata[32];
+    char name[256];
+    char line_end[4];
+    char buffer[256];
+    uint16_t codepage;
+} KGPCTextRec;
+
+typedef struct KGPCFileRec
+{
+    int32_t handle;
+    int32_t mode;
+    int64_t recsize;
+    unsigned char private_data[64];
+    unsigned char userdata[32];
+    char name[256];
+} KGPCFileRec;
+
+typedef struct KGPCFilePrivate
 {
     FILE *handle;
-    char *path;
-    int mode;
-    KGPCFileKind kind;
     KGPCBinaryType element_type;
     size_t element_size;
-} KGPCTextFile;
+} KGPCFilePrivate;
+
+#define KGPC_FILE_PRIVATE_MAGIC 0x4B475046u
+#define KGPC_FILE_PRIVATE_MAGIC_INV (~KGPC_FILE_PRIVATE_MAGIC)
+
+static int kgpc_file_private_magic_valid(const KGPCFileRec *file)
+{
+    if (file == NULL)
+        return 0;
+    uint32_t magic = 0;
+    uint32_t inv = 0;
+    size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
+    memcpy(&magic, file->private_data + base, sizeof(magic));
+    memcpy(&inv, file->private_data + base + sizeof(magic), sizeof(inv));
+    return (magic == KGPC_FILE_PRIVATE_MAGIC && inv == KGPC_FILE_PRIVATE_MAGIC_INV);
+}
+
+#define KGPC_FM_CLOSED 0xD7B0
+#define KGPC_FM_INPUT  0xD7B1
+#define KGPC_FM_OUTPUT 0xD7B2
+#define KGPC_FM_INOUT  0xD7B3
 
 /* Global standard I/O file variables for Pascal programs */
 /* These are initialized lazily in the output/input stream functions */
-static KGPCTextFile kgpc_stdin_file = { NULL, NULL, 0, KGPC_FILE_KIND_TEXT, KGPC_BINARY_UNSPECIFIED, 0 };
-static KGPCTextFile kgpc_stdout_file = { NULL, NULL, 0, KGPC_FILE_KIND_TEXT, KGPC_BINARY_UNSPECIFIED, 0 };
-static KGPCTextFile kgpc_stderr_file = { NULL, NULL, 0, KGPC_FILE_KIND_TEXT, KGPC_BINARY_UNSPECIFIED, 0 };
+static KGPCTextRec kgpc_stdin_file = { 0 };
+static KGPCTextRec kgpc_stdout_file = { 0 };
+static KGPCTextRec kgpc_stderr_file = { 0 };
 
 /* Global pointers exported for Pascal programs to reference */
-KGPCTextFile *stdin_ptr = NULL;
-KGPCTextFile *stdout_ptr = NULL;
-KGPCTextFile *stderr_ptr = NULL;
-KGPCTextFile *Input_ptr = NULL;   /* Standard Pascal Input */
-KGPCTextFile *Output_ptr = NULL;  /* Standard Pascal Output */
+KGPCTextRec *stdin_ptr = NULL;
+KGPCTextRec *stdout_ptr = NULL;
+KGPCTextRec *stderr_ptr = NULL;
+KGPCTextRec *Input_ptr = NULL;   /* Standard Pascal Input */
+KGPCTextRec *Output_ptr = NULL;  /* Standard Pascal Output */
 
 /* Initialize standard I/O file handles (called once) */
 static void kgpc_init_stdio(void)
@@ -117,9 +187,21 @@ static void kgpc_init_stdio(void)
         return;
     initialized = 1;
     
-    kgpc_stdin_file.handle = stdin;
-    kgpc_stdout_file.handle = stdout;
-    kgpc_stderr_file.handle = stderr;
+    kgpc_stdin_file.handle = fileno(stdin);
+    kgpc_stdout_file.handle = fileno(stdout);
+    kgpc_stderr_file.handle = fileno(stderr);
+    kgpc_stdin_file.mode = KGPC_FM_INPUT;
+    kgpc_stdout_file.mode = KGPC_FM_OUTPUT;
+    kgpc_stderr_file.mode = KGPC_FM_OUTPUT;
+    kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
+    kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
+    kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
+    kgpc_stdin_file.bufptr = kgpc_stdin_file.buffer;
+    kgpc_stdout_file.bufptr = kgpc_stdout_file.buffer;
+    kgpc_stderr_file.bufptr = kgpc_stderr_file.buffer;
+    kgpc_stdin_file.bufsize = (int64_t)sizeof(kgpc_stdin_file.buffer);
+    kgpc_stdout_file.bufsize = (int64_t)sizeof(kgpc_stdout_file.buffer);
+    kgpc_stderr_file.bufsize = (int64_t)sizeof(kgpc_stderr_file.buffer);
     
     stdin_ptr = &kgpc_stdin_file;
     stdout_ptr = &kgpc_stdout_file;
@@ -128,21 +210,80 @@ static void kgpc_init_stdio(void)
     Output_ptr = &kgpc_stdout_file; /* Output = stdout */
 }
 
-int kgpc_file_is_text(void **slot)
+static void kgpc_textrec_init_defaults(KGPCTextRec *file)
+{
+    if (file == NULL)
+        return;
+    if (file->bufptr == NULL)
+        file->bufptr = file->buffer;
+    if (file->bufsize == 0)
+        file->bufsize = (int64_t)sizeof(file->buffer);
+    if (file->mode == 0)
+        file->mode = KGPC_FM_CLOSED;
+}
+
+static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
+{
+    kgpc_init_stdio();
+    if (file == NULL)
+        return fallback;
+    if (file->private_data != 0)
+        return (FILE *)(uintptr_t)file->private_data;
+    return fallback;
+}
+
+static void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream)
+{
+    if (file == NULL)
+        return;
+    file->private_data = (int64_t)(uintptr_t)stream;
+    if (stream != NULL)
+        file->handle = fileno(stream);
+}
+
+static KGPCFilePrivate kgpc_file_private_get(const KGPCFileRec *file)
+{
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file == NULL)
+        return priv;
+    if (!kgpc_file_private_magic_valid(file))
+        return priv;
+    memcpy(&priv, file->private_data, sizeof(priv));
+    return priv;
+}
+
+static void kgpc_file_private_set(KGPCFileRec *file, const KGPCFilePrivate *priv)
+{
+    if (file == NULL || priv == NULL)
+        return;
+    memset(file->private_data, 0, sizeof(file->private_data));
+    memcpy(file->private_data, priv, sizeof(*priv));
+    uint32_t magic = KGPC_FILE_PRIVATE_MAGIC;
+    uint32_t inv = KGPC_FILE_PRIVATE_MAGIC_INV;
+    size_t base = sizeof(file->private_data) - (2 * sizeof(uint32_t));
+    memcpy(file->private_data + base, &magic, sizeof(magic));
+    memcpy(file->private_data + base + sizeof(magic), &inv, sizeof(inv));
+}
+
+static void kgpc_copy_name(char *dest, size_t dest_size, const char *src);
+
+int kgpc_file_is_text(void *slot)
 {
     if (slot == NULL)
         return 1;
-    KGPCTextFile *file = (KGPCTextFile *)(*slot);
-    if (file == NULL)
-        return 1;
-    return (file->kind != KGPC_FILE_KIND_BINARY);
+    return 1;
 }
 
-static FILE *kgpc_text_output_stream(KGPCTextFile *file)
+static FILE *kgpc_text_output_stream(KGPCTextRec *file)
 {
     kgpc_init_stdio();  /* Ensure stdio is initialized */
-    if (file != NULL && file->handle != NULL)
-        return file->handle;
+    if (file != NULL)
+    {
+        FILE *stream = kgpc_textrec_get_stream(file, stdout);
+        if (stream != NULL)
+            return stream;
+    }
 #ifdef _WIN32
     static int kgpc_stdout_binary_set = 0;
     if (!kgpc_stdout_binary_set)
@@ -168,366 +309,205 @@ static void kgpc_flush_text_output_stream(FILE *dest)
 #endif
 }
 
-static FILE *kgpc_text_input_stream(KGPCTextFile *file)
+static FILE *kgpc_text_input_stream(KGPCTextRec *file)
 {
     kgpc_init_stdio();  /* Ensure stdio is initialized */
-    if (file != NULL)
-        return file->handle;
-    return stdin;
+    return kgpc_textrec_get_stream(file, stdin);
 }
 
 /* ------------------------------------------------------------------
  * Typed file support (binary files: file of Integer/Char/Real).
  *
- * These helpers share the same descriptor layout as text files but
- * open the underlying FILE* streams in binary mode and use fread/fwrite
- * to read/write fixed-size elements.
+ * These helpers operate on FileRec-compatible records and store the
+ * FILE* pointer in the record's private data buffer.
  * ------------------------------------------------------------------ */
 
-void kgpc_tfile_assign(KGPCTextFile **slot, const char *path)
+static void kgpc_copy_name(char *dest, size_t dest_size, const char *src)
 {
-    /* For now, reuse the same assign logic as text files. */
-    if (slot == NULL)
+    if (dest == NULL || dest_size == 0)
         return;
-
-    KGPCTextFile *file = *slot;
-    if (file == NULL)
+    if (src == NULL)
     {
-        file = (KGPCTextFile *)calloc(1, sizeof(KGPCTextFile));
-        if (file == NULL)
-        {
-            kgpc_ioresult_set(EACCES);
-            return;
-        }
-        *slot = file;
+        dest[0] = '\0';
+        return;
     }
-
-    file->kind = KGPC_FILE_KIND_BINARY;
-    file->element_type = KGPC_BINARY_UNSPECIFIED;
-    file->element_size = 0;
-    if (file->handle != NULL)
-    {
-        fclose(file->handle);
-        file->handle = NULL;
-    }
-    if (file->path != NULL)
-    {
-        free(file->path);
-        file->path = NULL;
-    }
-
-    if (path != NULL)
-    {
-        size_t len = strlen(path);
-        file->path = (char *)malloc(len + 1);
-        if (file->path != NULL)
-            memcpy(file->path, path, len + 1);
-    }
-
-    if (file->element_type == KGPC_BINARY_UNSPECIFIED)
-    {
-        file->element_type = KGPC_BINARY_INT32;
-        file->element_size = sizeof(int32_t);
-    }
+    strncpy(dest, src, dest_size - 1);
+    dest[dest_size - 1] = '\0';
 }
 
-void kgpc_tfile_configure(KGPCTextFile **slot, size_t element_size, int element_tag)
+void kgpc_tfile_assign(KGPCFileRec *file, const char *path)
 {
-    if (slot == NULL)
-        return;
-    KGPCTextFile *file = *slot;
     if (file == NULL)
         return;
-    file->kind = KGPC_FILE_KIND_BINARY;
+
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
+    {
+        priv = kgpc_file_private_get(file);
+        if (priv.handle != NULL)
+        {
+            fclose(priv.handle);
+            priv.handle = NULL;
+        }
+    }
+    priv.element_type = KGPC_BINARY_UNSPECIFIED;
+    priv.element_size = 0;
+    kgpc_file_private_set(file, &priv);
+
+    file->handle = -1;
+    file->mode = KGPC_FM_CLOSED;
+    kgpc_copy_name(file->name, sizeof(file->name), path);
+}
+
+void kgpc_tfile_configure(KGPCFileRec *file, size_t element_size, int element_tag)
+{
+    if (file == NULL)
+        return;
+
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
+        priv = kgpc_file_private_get(file);
     if (element_size > 0)
-        file->element_size = element_size;
+    {
+        priv.element_size = element_size;
+        file->recsize = (int64_t)element_size;
+    }
 
     switch (element_tag)
     {
         case HASHVAR_CHAR:
-            file->element_type = KGPC_BINARY_CHAR;
+            priv.element_type = KGPC_BINARY_CHAR;
             break;
         case HASHVAR_REAL:
-            file->element_type = KGPC_BINARY_DOUBLE;
+            priv.element_type = KGPC_BINARY_DOUBLE;
             break;
         case HASHVAR_INTEGER:
         case HASHVAR_LONGINT:
         default:
-            file->element_type = KGPC_BINARY_INT32;
+            priv.element_type = KGPC_BINARY_INT32;
             break;
     }
+
+    kgpc_file_private_set(file, &priv);
 }
 
-void kgpc_tfile_rewrite(KGPCTextFile **slot)
+void kgpc_tfile_rewrite(KGPCFileRec *file)
 {
-    if (slot == NULL)
+    if (file == NULL || file->name[0] == '\0')
         return;
 
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->path == NULL)
-        return;
-
-    if (file->handle != NULL)
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
     {
-        fclose(file->handle);
-        file->handle = NULL;
+        priv = kgpc_file_private_get(file);
+        if (priv.handle != NULL)
+        {
+            fclose(priv.handle);
+            priv.handle = NULL;
+        }
     }
 
-    file->handle = fopen(file->path, "wb");
-    if (file->handle != NULL)
+    priv.handle = fopen(file->name, "wb");
+    if (priv.handle != NULL)
     {
-        file->mode = 1; /* write mode */
-        file->kind = KGPC_FILE_KIND_BINARY;
+        file->handle = fileno(priv.handle);
+        file->mode = KGPC_FM_INOUT;
         kgpc_ioresult_set(0);
     }
     else
     {
-        file->mode = 0;
+        file->handle = -1;
+        file->mode = KGPC_FM_CLOSED;
         kgpc_ioresult_set(errno);
     }
+
+    kgpc_file_private_set(file, &priv);
 }
 
-void kgpc_tfile_reset(KGPCTextFile **slot)
+void kgpc_tfile_reset(KGPCFileRec *file)
 {
-    if (slot == NULL)
+    if (file == NULL || file->name[0] == '\0')
         return;
 
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->path == NULL)
-        return;
-
-    if (file->handle != NULL)
+    KGPCFilePrivate priv;
+    memset(&priv, 0, sizeof(priv));
+    if (file->mode == KGPC_FM_INPUT || file->mode == KGPC_FM_OUTPUT ||
+        file->mode == KGPC_FM_INOUT)
     {
-        fclose(file->handle);
-        file->handle = NULL;
+        priv = kgpc_file_private_get(file);
+        if (priv.handle != NULL)
+        {
+            fclose(priv.handle);
+            priv.handle = NULL;
+        }
     }
 
-    file->handle = fopen(file->path, "rb");
-    if (file->handle != NULL)
+    priv.handle = fopen(file->name, "rb");
+    if (priv.handle != NULL)
     {
-        file->mode = 2; /* read mode */
-        file->kind = KGPC_FILE_KIND_BINARY;
+        file->handle = fileno(priv.handle);
+        file->mode = KGPC_FM_INOUT;
         kgpc_ioresult_set(0);
     }
     else
     {
-        file->mode = 0;
+        file->handle = -1;
+        file->mode = KGPC_FM_CLOSED;
         kgpc_ioresult_set(errno);
     }
+
+    kgpc_file_private_set(file, &priv);
 }
 
-void kgpc_tfile_close(KGPCTextFile **slot)
+void kgpc_tfile_close(KGPCFileRec *file)
 {
-    if (slot == NULL) {
+    if (file == NULL)
+    {
         kgpc_ioresult_set(EINVAL);
         return;
     }
 
-    KGPCTextFile *file = *slot;
-    if (file == NULL) {
-        kgpc_ioresult_set(EBADF);
-        return;
-    }
-    if (file->handle == NULL) {
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        file->handle = -1;
+        file->mode = KGPC_FM_CLOSED;
         kgpc_ioresult_set(0);
         return;
     }
 
-    if (fclose(file->handle) == 0) {
+    if (fclose(priv.handle) == 0)
+    {
         kgpc_ioresult_set(0);
-    } else {
+    }
+    else
+    {
         kgpc_ioresult_set(errno);
     }
-    file->handle = NULL;
+
+    priv.handle = NULL;
+    file->handle = -1;
+    file->mode = KGPC_FM_CLOSED;
+    kgpc_file_private_set(file, &priv);
 }
 
-int kgpc_tfile_read_int(KGPCTextFile **slot, int32_t *ptr)
+static size_t kgpc_tfile_element_size(KGPCFileRec *file, KGPCFilePrivate *priv)
 {
-    if (slot == NULL || ptr == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    file->element_type = KGPC_BINARY_INT32;
-    file->element_size = sizeof(int32_t);
-    size_t n = fread(ptr, sizeof(int32_t), 1, file->handle);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    if (feof(file->handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
-    return ferror(file->handle) ? 1 : 0;
-}
+    size_t elem_size = 0;
+    if (priv->element_size > 0)
+        elem_size = priv->element_size;
+    else if (file != NULL && file->recsize > 0)
+        elem_size = (size_t)file->recsize;
 
-int kgpc_tfile_read_char(KGPCTextFile **slot, char *ptr)
-{
-    if (slot == NULL || ptr == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    unsigned char ch;
-    file->element_type = KGPC_BINARY_CHAR;
-    file->element_size = sizeof(unsigned char);
-    size_t n = fread(&ch, sizeof(unsigned char), 1, file->handle);
-    if (n == 1)
-    {
-        *ptr = (char)ch;
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    if (feof(file->handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
-    return ferror(file->handle) ? 1 : 0;
-}
-
-int kgpc_tfile_read_real(KGPCTextFile **slot, double *ptr)
-{
-    if (slot == NULL || ptr == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    file->element_type = KGPC_BINARY_DOUBLE;
-    file->element_size = sizeof(double);
-    size_t n = fread(ptr, sizeof(double), 1, file->handle);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    if (feof(file->handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 0);
-    return ferror(file->handle) ? 1 : 0;
-}
-
-int kgpc_tfile_write_int(KGPCTextFile **slot, int32_t value)
-{
-    if (slot == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    file->element_type = KGPC_BINARY_INT32;
-    file->element_size = sizeof(int32_t);
-    size_t n = fwrite(&value, sizeof(int32_t), 1, file->handle);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
-    return 1;
-}
-
-int kgpc_tfile_write_char(KGPCTextFile **slot, char value)
-{
-    if (slot == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    unsigned char ch = (unsigned char)value;
-    file->element_type = KGPC_BINARY_CHAR;
-    file->element_size = sizeof(unsigned char);
-    size_t n = fwrite(&ch, sizeof(unsigned char), 1, file->handle);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
-    return 1;
-}
-
-int kgpc_tfile_write_real(KGPCTextFile **slot, double value)
-{
-    if (slot == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-    file->element_type = KGPC_BINARY_DOUBLE;
-    file->element_size = sizeof(double);
-    size_t n = fwrite(&value, sizeof(double), 1, file->handle);
-    if (n == 1)
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
-    return 1;
-}
-
-int kgpc_tfile_blockread(KGPCTextFile **slot, void *buffer, size_t count, long long *actual_read)
-{
-    if (slot == NULL || buffer == NULL)
-    {
-        kgpc_ioresult_set(EINVAL);
-        return 1;
-    }
-
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
-    {
-        kgpc_ioresult_set(EBADF);
-        return 1;
-    }
-
-    size_t elem_size = file->element_size;
     if (elem_size == 0)
     {
-        switch (file->element_type)
+        switch (priv->element_type)
         {
             case KGPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
             case KGPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
@@ -537,9 +517,190 @@ int kgpc_tfile_blockread(KGPCTextFile **slot, void *buffer, size_t count, long l
                 elem_size = sizeof(int32_t);
                 break;
         }
-        file->element_size = elem_size;
+    }
+    return elem_size;
+}
+
+int kgpc_tfile_read_int(KGPCFileRec *file, int32_t *ptr)
+{
+    if (file == NULL || ptr == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+    priv.element_type = KGPC_BINARY_INT32;
+    priv.element_size = sizeof(int32_t);
+    size_t n = fread(ptr, sizeof(int32_t), 1, priv.handle);
+    kgpc_file_private_set(file, &priv);
+    if (n == 1 || feof(priv.handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
+    return ferror(priv.handle) ? 1 : 0;
+}
+
+int kgpc_tfile_read_char(KGPCFileRec *file, char *ptr)
+{
+    if (file == NULL || ptr == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+    unsigned char ch = 0;
+    priv.element_type = KGPC_BINARY_CHAR;
+    priv.element_size = sizeof(unsigned char);
+    size_t n = fread(&ch, sizeof(unsigned char), 1, priv.handle);
+    kgpc_file_private_set(file, &priv);
+    if (n == 1)
+    {
+        *ptr = (char)ch;
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    if (feof(priv.handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
+    return ferror(priv.handle) ? 1 : 0;
+}
+
+int kgpc_tfile_read_real(KGPCFileRec *file, double *ptr)
+{
+    if (file == NULL || ptr == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+    priv.element_type = KGPC_BINARY_DOUBLE;
+    priv.element_size = sizeof(double);
+    size_t n = fread(ptr, sizeof(double), 1, priv.handle);
+    kgpc_file_private_set(file, &priv);
+    if (n == 1 || feof(priv.handle))
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 0);
+    return ferror(priv.handle) ? 1 : 0;
+}
+
+int kgpc_tfile_write_int(KGPCFileRec *file, int32_t value)
+{
+    if (file == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+    priv.element_type = KGPC_BINARY_INT32;
+    priv.element_size = sizeof(int32_t);
+    size_t n = fwrite(&value, sizeof(int32_t), 1, priv.handle);
+    kgpc_file_private_set(file, &priv);
+    if (n == 1)
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+    return 1;
+}
+
+int kgpc_tfile_write_char(KGPCFileRec *file, char value)
+{
+    if (file == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+    unsigned char ch = (unsigned char)value;
+    priv.element_type = KGPC_BINARY_CHAR;
+    priv.element_size = sizeof(unsigned char);
+    size_t n = fwrite(&ch, sizeof(unsigned char), 1, priv.handle);
+    kgpc_file_private_set(file, &priv);
+    if (n == 1)
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+    return 1;
+}
+
+int kgpc_tfile_write_real(KGPCFileRec *file, double value)
+{
+    if (file == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+    priv.element_type = KGPC_BINARY_DOUBLE;
+    priv.element_size = sizeof(double);
+    size_t n = fwrite(&value, sizeof(double), 1, priv.handle);
+    kgpc_file_private_set(file, &priv);
+    if (n == 1)
+    {
+        kgpc_ioresult_set(0);
+        return 0;
+    }
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
+    return 1;
+}
+
+int kgpc_tfile_blockread(KGPCFileRec *file, void *buffer, size_t count, long long *actual_read)
+{
+    if (file == NULL || buffer == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
     }
 
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+
+    size_t elem_size = kgpc_tfile_element_size(file, &priv);
     if (count == 0)
     {
         if (actual_read != NULL)
@@ -548,55 +709,36 @@ int kgpc_tfile_blockread(KGPCTextFile **slot, void *buffer, size_t count, long l
         return 0;
     }
 
-    size_t read_elems = fread(buffer, elem_size, count, file->handle);
+    size_t read_elems = fread(buffer, elem_size, count, priv.handle);
     if (actual_read != NULL)
         *actual_read = (long long)read_elems;
 
-    if (read_elems == count)
+    kgpc_file_private_set(file, &priv);
+    if (read_elems == count || feof(priv.handle))
     {
         kgpc_ioresult_set(0);
         return 0;
     }
-    if (feof(file->handle))
-    {
-        kgpc_ioresult_set(0);
-        return 0;
-    }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
     return 1;
 }
 
-int kgpc_tfile_blockwrite(KGPCTextFile **slot, const void *buffer, size_t count, long long *actual_written)
+int kgpc_tfile_blockwrite(KGPCFileRec *file, const void *buffer, size_t count, long long *actual_written)
 {
-    if (slot == NULL || buffer == NULL)
+    if (file == NULL || buffer == NULL)
     {
         kgpc_ioresult_set(EINVAL);
         return 1;
     }
 
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
     {
         kgpc_ioresult_set(EBADF);
         return 1;
     }
 
-    size_t elem_size = file->element_size;
-    if (elem_size == 0)
-    {
-        switch (file->element_type)
-        {
-            case KGPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
-            case KGPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
-            case KGPC_BINARY_INT32:
-            case KGPC_BINARY_UNSPECIFIED:
-            default:
-                elem_size = sizeof(int32_t);
-                break;
-        }
-        file->element_size = elem_size;
-    }
-
+    size_t elem_size = kgpc_tfile_element_size(file, &priv);
     if (count == 0)
     {
         if (actual_written != NULL)
@@ -605,51 +747,36 @@ int kgpc_tfile_blockwrite(KGPCTextFile **slot, const void *buffer, size_t count,
         return 0;
     }
 
-    size_t written = fwrite(buffer, elem_size, count, file->handle);
+    size_t written = fwrite(buffer, elem_size, count, priv.handle);
     if (actual_written != NULL)
         *actual_written = (long long)written;
 
+    kgpc_file_private_set(file, &priv);
     if (written == count)
     {
         kgpc_ioresult_set(0);
         return 0;
     }
-    kgpc_ioresult_set(ferror(file->handle) ? EIO : 1);
+    kgpc_ioresult_set(ferror(priv.handle) ? EIO : 1);
     return 1;
 }
 
-
-int kgpc_tfile_seek(KGPCTextFile **slot, long long index)
+int kgpc_tfile_seek(KGPCFileRec *file, long long index)
 {
-    if (slot == NULL)
+    if (file == NULL)
     {
         kgpc_ioresult_set(EINVAL);
         return 1;
     }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
     {
         kgpc_ioresult_set(EBADF);
         return 1;
     }
 
-    size_t elem_size = file->element_size;
-    if (elem_size == 0)
-    {
-        switch (file->element_type)
-        {
-            case KGPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
-            case KGPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
-            case KGPC_BINARY_INT32:
-            case KGPC_BINARY_UNSPECIFIED:
-            default:
-                elem_size = sizeof(int32_t);
-                break;
-        }
-        file->element_size = elem_size;
-    }
-
-    if (fseeko(file->handle, elem_size * index, SEEK_SET) != 0)
+    size_t elem_size = kgpc_tfile_element_size(file, &priv);
+    if (fseeko(priv.handle, (off_t)(elem_size * index), SEEK_SET) != 0)
     {
         kgpc_ioresult_set(errno);
         return 1;
@@ -658,37 +785,22 @@ int kgpc_tfile_seek(KGPCTextFile **slot, long long index)
     return 0;
 }
 
-int kgpc_tfile_filepos(KGPCTextFile **slot, long long *position)
+int kgpc_tfile_filepos(KGPCFileRec *file, long long *position)
 {
-    if (slot == NULL || position == NULL)
+    if (file == NULL || position == NULL)
     {
         kgpc_ioresult_set(EINVAL);
         return 1;
     }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
     {
         kgpc_ioresult_set(EBADF);
         return 1;
     }
 
-    size_t elem_size = file->element_size;
-    if (elem_size == 0)
-    {
-        switch (file->element_type)
-        {
-            case KGPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
-            case KGPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
-            case KGPC_BINARY_INT32:
-            case KGPC_BINARY_UNSPECIFIED:
-            default:
-                elem_size = sizeof(int32_t);
-                break;
-        }
-        file->element_size = elem_size;
-    }
-
-    off_t offset = ftello(file->handle);
+    size_t elem_size = kgpc_tfile_element_size(file, &priv);
+    off_t offset = ftello(priv.handle);
     if (offset == (off_t)-1)
     {
         kgpc_ioresult_set(errno);
@@ -699,70 +811,59 @@ int kgpc_tfile_filepos(KGPCTextFile **slot, long long *position)
     return 0;
 }
 
-int kgpc_tfile_truncate(KGPCTextFile **slot, long long length)
+int kgpc_tfile_truncate(KGPCFileRec *file, long long length)
 {
-    if (slot == NULL)
+    if (file == NULL)
     {
         kgpc_ioresult_set(EINVAL);
         return 1;
     }
-    KGPCTextFile *file = *slot;
-    if (file == NULL || file->handle == NULL)
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
     {
         kgpc_ioresult_set(EBADF);
         return 1;
     }
 
-    size_t elem_size = file->element_size;
-    if (elem_size == 0)
-    {
-        switch (file->element_type)
-        {
-            case KGPC_BINARY_CHAR: elem_size = sizeof(unsigned char); break;
-            case KGPC_BINARY_DOUBLE: elem_size = sizeof(double); break;
-            case KGPC_BINARY_INT32:
-            case KGPC_BINARY_UNSPECIFIED:
-            default:
-                elem_size = sizeof(int32_t);
-                break;
-        }
-        file->element_size = elem_size;
-    }
-
+    size_t elem_size = kgpc_tfile_element_size(file, &priv);
     off_t target = (off_t)(elem_size * length);
-    if (fflush(file->handle) != 0)
+    if (fflush(priv.handle) != 0)
     {
         kgpc_ioresult_set(errno);
         return 1;
     }
 
 #ifdef _WIN32
-    int fd = _fileno(file->handle);
-    if (fd == -1)
     {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    if (_chsize_s(fd, target) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
+        int fd = _fileno(priv.handle);
+        if (fd == -1)
+        {
+            kgpc_ioresult_set(errno);
+            return 1;
+        }
+        if (_chsize_s(fd, target) != 0)
+        {
+            kgpc_ioresult_set(errno);
+            return 1;
+        }
     }
 #else
-    int fd = fileno(file->handle);
-    if (fd == -1)
     {
-        kgpc_ioresult_set(errno);
-        return 1;
-    }
-    if (ftruncate(fd, target) != 0)
-    {
-        kgpc_ioresult_set(errno);
-        return 1;
+        int fd = fileno(priv.handle);
+        if (fd == -1)
+        {
+            kgpc_ioresult_set(errno);
+            return 1;
+        }
+        if (ftruncate(fd, target) != 0)
+        {
+            kgpc_ioresult_set(errno);
+            return 1;
+        }
     }
 #endif
 
-    if (fseeko(file->handle, target, SEEK_SET) != 0)
+    if (fseeko(priv.handle, target, SEEK_SET) != 0)
     {
         kgpc_ioresult_set(errno);
         return 1;
@@ -771,12 +872,12 @@ int kgpc_tfile_truncate(KGPCTextFile **slot, long long length)
     return 0;
 }
 
-int kgpc_tfile_truncate_current(KGPCTextFile **slot)
+int kgpc_tfile_truncate_current(KGPCFileRec *file)
 {
     long long position = 0;
-    if (kgpc_tfile_filepos(slot, &position) != 0)
+    if (kgpc_tfile_filepos(file, &position) != 0)
         return 1;
-    return kgpc_tfile_truncate(slot, position);
+    return kgpc_tfile_truncate(file, position);
 }
 static int kgpc_vprintf_impl(const char *format, va_list args) {
     return vprintf(format, args);
@@ -890,25 +991,25 @@ static inline int kgpc_scanf_result_to_ioresult(int scan_res)
     return scan_res;
 }
 
-int kgpc_read_integer(KGPCTextFile *file, int32_t *ptr) {
+int kgpc_read_integer(KGPCTextRec *file, int32_t *ptr) {
     FILE *stream = kgpc_text_input_stream(file);
     int res = fscanf(stream, "%d", ptr);
     return kgpc_scanf_result_to_ioresult(res);
 }
 
-int kgpc_read_longint(KGPCTextFile *file, int32_t *ptr) {
+int kgpc_read_longint(KGPCTextRec *file, int32_t *ptr) {
     FILE *stream = kgpc_text_input_stream(file);
     int res = fscanf(stream, "%" PRId32, ptr);
     return kgpc_scanf_result_to_ioresult(res);
 }
 
-int kgpc_read_char(KGPCTextFile *file, char *ptr) {
+int kgpc_read_char(KGPCTextRec *file, char *ptr) {
     FILE *stream = kgpc_text_input_stream(file);
     int res = fscanf(stream, " %c", ptr);
     return kgpc_scanf_result_to_ioresult(res);
 }
 
-int kgpc_read_real(KGPCTextFile *file, double *ptr) {
+int kgpc_read_real(KGPCTextRec *file, double *ptr) {
     FILE *stream = kgpc_text_input_stream(file);
     int res = fscanf(stream, "%lf", ptr);
     return kgpc_scanf_result_to_ioresult(res);
@@ -1260,18 +1361,14 @@ static void kgpc_keyboard_decode_escape_sequences(void)
             default: break;
         }
 
+        if (mapped == -1)
+            /* Leave the raw ESC sequence intact when we don't recognize it. */
+            return;
+
         /* Consume the escape sequence */
         (void)kgpc_keybuf_pop();
         (void)kgpc_keybuf_pop();
         (void)kgpc_keybuf_pop();
-
-        if (mapped == -1)
-        {
-            /* Not a recognised navigation sequence; push back the trailing bytes */
-            kgpc_keybuf_push((unsigned char)b);
-            kgpc_keybuf_push((unsigned char)c);
-            return;
-        }
 
         /* Preserve original ordering: inject 0,<mapped> ahead of remaining bytes. */
         unsigned char remainder[sizeof(kgpc_keybuf)];
@@ -1353,17 +1450,27 @@ static void kgpc_keyboard_fill_nonblocking(void)
     kgpc_keyboard_decode_escape_sequences();
 }
 
-static void kgpc_keyboard_try_extend_escape(void)
+static void kgpc_keyboard_try_extend_escape(int allow_blocking)
 {
 #ifndef _WIN32
     if (kgpc_keybuf_count() == 1 && kgpc_keybuf_peek_at(0) == 27)
     {
-        unsigned char extra[2];
-        ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
-        if (got > 0)
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(STDIN_FILENO, &rfds);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = allow_blocking ? 10000 : 0;
+        int ready = select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv);
+        if (ready > 0 && FD_ISSET(STDIN_FILENO, &rfds))
         {
-            for (ssize_t i = 0; i < got; ++i)
-                kgpc_keybuf_push(extra[i]);
+            unsigned char extra[2];
+            ssize_t got = read(STDIN_FILENO, extra, sizeof(extra));
+            if (got > 0)
+            {
+                for (ssize_t i = 0; i < got; ++i)
+                    kgpc_keybuf_push(extra[i]);
+            }
         }
     }
 #endif
@@ -1372,7 +1479,7 @@ static void kgpc_keyboard_try_extend_escape(void)
 int kgpc_keyboard_poll(void)
 {
     kgpc_keyboard_fill_nonblocking();
-    kgpc_keyboard_try_extend_escape();
+    kgpc_keyboard_try_extend_escape(0);
     kgpc_keyboard_decode_escape_sequences();
     return kgpc_keybuf_peek();
 }
@@ -1380,7 +1487,7 @@ int kgpc_keyboard_poll(void)
 int kgpc_keyboard_get(void)
 {
     kgpc_keyboard_fill_nonblocking();
-    kgpc_keyboard_try_extend_escape();
+    kgpc_keyboard_try_extend_escape(0);
     kgpc_keyboard_decode_escape_sequences();
     return kgpc_keybuf_pop();
 }
@@ -1398,7 +1505,7 @@ int kgpc_keyboard_read_char(void)
     for (;;)
     {
         kgpc_keyboard_fill_nonblocking();
-        kgpc_keyboard_try_extend_escape();
+        kgpc_keyboard_try_extend_escape(1);
         kgpc_keyboard_decode_escape_sequences();
 
         int buffered = kgpc_keybuf_count();
@@ -1511,7 +1618,7 @@ void kgpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t e
     descriptor->length = new_length;
 }
 
-void kgpc_write_integer(KGPCTextFile *file, int width, int64_t value)
+void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1531,7 +1638,7 @@ void kgpc_write_integer(KGPCTextFile *file, int width, int64_t value)
     kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_write_unsigned(KGPCTextFile *file, int width, uint64_t value)
+void kgpc_write_unsigned(KGPCTextRec *file, int width, uint64_t value)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1553,7 +1660,7 @@ void kgpc_write_unsigned(KGPCTextFile *file, int width, uint64_t value)
 
 static size_t kgpc_string_known_length(const char *value);
 
-void kgpc_write_string(KGPCTextFile *file, int width, const char *value)
+void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1600,7 +1707,7 @@ void kgpc_write_string(KGPCTextFile *file, int width, const char *value)
 }
 
 /* Write a char array with specified maximum length (for Pascal char arrays) */
-void kgpc_write_char_array(KGPCTextFile *file, int width, const char *value, size_t max_len)
+void kgpc_write_char_array(KGPCTextRec *file, int width, const char *value, size_t max_len)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1629,7 +1736,7 @@ void kgpc_write_char_array(KGPCTextFile *file, int width, const char *value, siz
 }
 
 /* Write ShortString (Pascal string with length byte at index 0) */
-void kgpc_write_shortstring(KGPCTextFile *file, int width, const char *value)
+void kgpc_write_shortstring(KGPCTextRec *file, int width, const char *value)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL || value == NULL)
@@ -1655,7 +1762,7 @@ void kgpc_write_shortstring(KGPCTextFile *file, int width, const char *value)
     kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_write_newline(KGPCTextFile *file)
+void kgpc_write_newline(KGPCTextRec *file)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1665,7 +1772,7 @@ void kgpc_write_newline(KGPCTextFile *file)
     fflush(dest);
 }
 
-void kgpc_write_char(KGPCTextFile *file, int width, int value)
+void kgpc_write_char(KGPCTextRec *file, int width, int value)
 {
     unsigned char ch = (unsigned char)value;
     char buffer[2];
@@ -1674,7 +1781,7 @@ void kgpc_write_char(KGPCTextFile *file, int width, int value)
     kgpc_write_string(file, width, buffer);
 }
 
-void kgpc_write_boolean(KGPCTextFile *file, int width, int value)
+void kgpc_write_boolean(KGPCTextRec *file, int width, int value)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1692,7 +1799,7 @@ void kgpc_write_boolean(KGPCTextFile *file, int width, int value)
     kgpc_flush_text_output_stream(dest);
 }
 
-void kgpc_write_real(KGPCTextFile *file, int width, int precision, int64_t value_bits)
+void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_bits)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
@@ -1964,6 +2071,13 @@ void kgpc_string_assign(char **target, const char *value)
     *target = copy;
 }
 
+void kgpc_set_codepage_string(char **value, uint16_t codepage, int convert)
+{
+    (void)value;
+    (void)codepage;
+    (void)convert;
+}
+
 void kgpc_string_setlength(char **target, int64_t new_length)
 {
     if (target == NULL)
@@ -2189,57 +2303,18 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
 }
 
 
-static char *kgpc_textfile_duplicate_path(const char *path)
-{
-    if (path == NULL)
-        return NULL;
-
-    size_t len = strlen(path);
-    char *copy = (char *)malloc(len + 1);
-    if (copy == NULL)
-        return NULL;
-
-    memcpy(copy, path, len + 1);
-    return copy;
-}
-
-static void kgpc_textfile_free_path(KGPCTextFile *file)
-{
-    if (file == NULL || file->path == NULL)
-        return;
-
-    free(file->path);
-    file->path = NULL;
-}
-
-static void kgpc_textfile_close_handle(KGPCTextFile *file)
+static void kgpc_text_close_stream(KGPCTextRec *file)
 {
     if (file == NULL)
         return;
-
-    if (file->handle != NULL)
-    {
-        fclose(file->handle);
-        file->handle = NULL;
-    }
-    file->mode = 0;
-}
-
-static KGPCTextFile *kgpc_textfile_prepare(KGPCTextFile **slot)
-{
-    if (slot == NULL)
-        return NULL;
-
-    KGPCTextFile *file = *slot;
-    if (file == NULL)
-    {
-        file = (KGPCTextFile *)calloc(1, sizeof(KGPCTextFile));
-        if (file == NULL)
-            return NULL;
-        *slot = file;
-    }
-
-    return file;
+    FILE *stream = kgpc_textrec_get_stream(file, NULL);
+    if (stream == NULL)
+        return;
+    if (stream == stdin || stream == stdout || stream == stderr)
+        return;
+    fclose(stream);
+    kgpc_textrec_set_stream(file, NULL);
+    file->mode = KGPC_FM_CLOSED;
 }
 
 static char *kgpc_text_read_line_from_stream(FILE *stream)
@@ -2300,90 +2375,104 @@ static char *kgpc_text_read_line_from_stream(FILE *stream)
     return buffer;
 }
 
-void kgpc_text_assign(KGPCTextFile **slot, const char *path)
+void kgpc_text_assign(KGPCTextRec *file, const char *path)
 {
-    if (slot == NULL)
-        return;
-
-    KGPCTextFile *file = kgpc_textfile_prepare(slot);
     if (file == NULL)
         return;
-
-    kgpc_textfile_close_handle(file);
-    kgpc_textfile_free_path(file);
-
-    if (path != NULL)
-        file->path = kgpc_textfile_duplicate_path(path);
+    kgpc_text_close_stream(file);
+    kgpc_copy_name(file->name, sizeof(file->name), path);
+    kgpc_textrec_init_defaults(file);
 }
 
-void kgpc_text_rewrite(KGPCTextFile **slot)
+void kgpc_text_rewrite(KGPCTextRec *file)
 {
-    KGPCTextFile *file = kgpc_textfile_prepare(slot);
-    if (file == NULL || file->path == NULL)
+    if (file == NULL)
         return;
+    kgpc_text_close_stream(file);
+    kgpc_textrec_init_defaults(file);
 
-    kgpc_textfile_close_handle(file);
-
-    file->handle = fopen(file->path, "w");
-    if (file->handle != NULL)
-        file->mode = 1;
+    FILE *stream = NULL;
+    if (file->name[0] == '\0')
+        stream = stdout;
     else
-        file->mode = 0;
-}
-
-void kgpc_text_append(KGPCTextFile **slot)
-{
-    KGPCTextFile *file = kgpc_textfile_prepare(slot);
-    if (file == NULL || file->path == NULL)
-        return;
-
-    kgpc_textfile_close_handle(file);
-
-    file->handle = fopen(file->path, "a");
-    if (file->handle != NULL)
+        stream = fopen(file->name, "w");
+    if (stream != NULL)
     {
-        file->mode = 1;
-        fseek(file->handle, 0, SEEK_END);
+        kgpc_textrec_set_stream(file, stream);
+        file->mode = KGPC_FM_OUTPUT;
+        kgpc_ioresult_set(0);
     }
     else
     {
-        file->mode = 0;
+        file->mode = KGPC_FM_CLOSED;
+        kgpc_ioresult_set(errno);
     }
 }
 
-void kgpc_text_app(KGPCTextFile **slot)
+void kgpc_text_append(KGPCTextRec *file)
 {
-    kgpc_text_append(slot);
-}
-
-void kgpc_text_reset(KGPCTextFile **slot)
-{
-    KGPCTextFile *file = kgpc_textfile_prepare(slot);
-    if (file == NULL || file->path == NULL)
-        return;
-
-    kgpc_textfile_close_handle(file);
-
-    file->handle = fopen(file->path, "r");
-    if (file->handle != NULL)
-        file->mode = 2;
-    else
-        file->mode = 0;
-}
-
-void kgpc_text_close(KGPCTextFile **slot)
-{
-    if (slot == NULL)
-        return;
-
-    KGPCTextFile *file = *slot;
     if (file == NULL)
         return;
+    kgpc_text_close_stream(file);
+    kgpc_textrec_init_defaults(file);
 
-    kgpc_textfile_close_handle(file);
+    FILE *stream = NULL;
+    if (file->name[0] == '\0')
+        stream = stdout;
+    else
+        stream = fopen(file->name, "a");
+    if (stream != NULL)
+    {
+        kgpc_textrec_set_stream(file, stream);
+        file->mode = KGPC_FM_OUTPUT;
+        fseek(stream, 0, SEEK_END);
+        kgpc_ioresult_set(0);
+    }
+    else
+    {
+        file->mode = KGPC_FM_CLOSED;
+        kgpc_ioresult_set(errno);
+    }
 }
 
-int kgpc_text_eof(KGPCTextFile *file)
+void kgpc_text_app(KGPCTextRec *file)
+{
+    kgpc_text_append(file);
+}
+
+void kgpc_text_reset(KGPCTextRec *file)
+{
+    if (file == NULL)
+        return;
+    kgpc_text_close_stream(file);
+    kgpc_textrec_init_defaults(file);
+
+    FILE *stream = NULL;
+    if (file->name[0] == '\0')
+        stream = stdin;
+    else
+        stream = fopen(file->name, "r");
+    if (stream != NULL)
+    {
+        kgpc_textrec_set_stream(file, stream);
+        file->mode = KGPC_FM_INPUT;
+        kgpc_ioresult_set(0);
+    }
+    else
+    {
+        file->mode = KGPC_FM_CLOSED;
+        kgpc_ioresult_set(errno);
+    }
+}
+
+void kgpc_text_close(KGPCTextRec *file)
+{
+    if (file == NULL)
+        return;
+    kgpc_text_close_stream(file);
+}
+
+int kgpc_text_eof(KGPCTextRec *file)
 {
     FILE *stream = kgpc_text_input_stream(file);
     if (stream == NULL)
@@ -2405,7 +2494,7 @@ int kgpc_text_eof_default(void)
     return kgpc_text_eof(NULL);
 }
 
-int kgpc_text_eoln(KGPCTextFile *file)
+int kgpc_text_eoln(KGPCTextRec *file)
 {
     FILE *stream = kgpc_text_input_stream(file);
     if (stream == NULL)
@@ -2439,7 +2528,7 @@ int kgpc_text_eoln_default(void)
     return kgpc_text_eoln(NULL);
 }
 
-void kgpc_text_readln_into(KGPCTextFile *file, char **target)
+void kgpc_text_readln_into(KGPCTextRec *file, char **target)
 {
     if (target == NULL)
         return;
@@ -2462,7 +2551,7 @@ void kgpc_text_readln_into(KGPCTextFile *file, char **target)
     free(line);
 }
 
-void kgpc_text_readln_into_char(KGPCTextFile *file, char *target)
+void kgpc_text_readln_into_char(KGPCTextRec *file, char *target)
 {
     if (target == NULL)
         return;
@@ -2489,7 +2578,7 @@ void kgpc_text_readln_into_char(KGPCTextFile *file, char *target)
     free(line);
 }
 
-void kgpc_text_readln_discard(KGPCTextFile *file)
+void kgpc_text_readln_discard(KGPCTextRec *file)
 {
     FILE *stream = kgpc_text_input_stream(file);
     if (stream == NULL)

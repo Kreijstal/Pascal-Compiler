@@ -38,7 +38,7 @@ begin
     SymPROGRAM: Write('"program" expected');
   end;
   WriteLn(' at line ', CurrentLine:1, ' at column ', CurrentColumn:1);
-  Halt;
+  Halt(0);
 end;
 
 procedure ReadChar;

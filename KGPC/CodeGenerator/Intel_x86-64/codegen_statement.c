@@ -1127,6 +1127,17 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         *out_reg = addr_reg;
         goto cleanup;
     }
+    else if (expr->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = expr->expr_data.typecast_data.expr;
+        int target_type = expr->expr_data.typecast_data.target_type;
+        if (inner != NULL &&
+            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE))
+        {
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+    }
     else if (expr->type == EXPR_AS)
     {
         if (expr->expr_data.as_data.expr != NULL)
@@ -3691,11 +3702,18 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         struct Expression *first_expr = (struct Expression *)args->cur;
         if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
-            expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
             if (file_reg != NULL)
             {
-                inst_list = gencode_expr_tree(file_tree, inst_list, ctx, file_reg);
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_address_for_expr(first_expr, inst_list, ctx, &addr_reg);
+                if (addr_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                        addr_reg->bit_64, file_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), addr_reg);
+                }
                 has_file_arg = 1;
                 file_spill = add_l_t("write_file");
                 if (file_spill != NULL)
@@ -3711,7 +3729,6 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                 codegen_report_error(ctx,
                     "ERROR: Unable to allocate register for write file argument.");
             }
-            free_expr_tree(file_tree);
             args = args->next;
         }
     }
@@ -4135,11 +4152,18 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
         struct Expression *first_expr = (struct Expression *)args->cur;
         if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
-            expr_node_t *file_tree = build_expr_tree(first_expr);
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
             if (file_reg != NULL)
             {
-                inst_list = gencode_expr_tree(file_tree, inst_list, ctx, file_reg);
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_address_for_expr(first_expr, inst_list, ctx, &addr_reg);
+                if (addr_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                        addr_reg->bit_64, file_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), addr_reg);
+                }
                 has_file_arg = 1;
                 file_spill = add_l_t("read_file");
                 if (file_spill != NULL)
@@ -4155,7 +4179,6 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
                 codegen_report_error(ctx,
                     "ERROR: Unable to allocate register for read file argument.");
             }
-            free_expr_tree(file_tree);
             args = args->next;
         }
     }
