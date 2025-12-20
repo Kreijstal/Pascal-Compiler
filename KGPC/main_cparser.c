@@ -1081,7 +1081,27 @@ int main(int argc, char **argv)
                 ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
             prelude_tree->tree_data.program_data.type_declaration = NULL;
         }
-        
+
+        /* Merge stdlib constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
+        ListNode_t *prelude_consts = prelude_tree->tree_data.program_data.const_declaration;
+        if (prelude_consts != NULL)
+        {
+            mark_unit_const_decls(prelude_consts, 1);  /* Mark as exported from unit */
+            user_tree->tree_data.unit_data.interface_const_decls =
+                ConcatList(prelude_consts, user_tree->tree_data.unit_data.interface_const_decls);
+            prelude_tree->tree_data.program_data.const_declaration = NULL;
+        }
+
+        /* Merge stdlib variables into unit */
+        ListNode_t *prelude_vars = prelude_tree->tree_data.program_data.var_declaration;
+        if (prelude_vars != NULL)
+        {
+            mark_unit_var_decls(prelude_vars, 1);  /* Mark as exported from unit */
+            user_tree->tree_data.unit_data.interface_var_decls =
+                ConcatList(prelude_vars, user_tree->tree_data.unit_data.interface_var_decls);
+            prelude_tree->tree_data.program_data.var_declaration = NULL;
+        }
+
         /* Load used units */
         UnitSet visited_units;
         unit_set_init(&visited_units);

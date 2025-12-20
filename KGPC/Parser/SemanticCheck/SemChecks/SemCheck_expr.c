@@ -516,6 +516,8 @@ static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
         return BOOL;
     if (pascal_identifier_equals(id, "Pointer"))
         return POINTER_TYPE;
+    if (pascal_identifier_equals(id, "CodePointer"))
+        return POINTER_TYPE;
     if (pascal_identifier_equals(id, "Byte") || pascal_identifier_equals(id, "Word"))
         return INT_TYPE;
 
@@ -1758,7 +1760,7 @@ static int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
 
 
     const char *mangled_name = NULL;
-    if (error_count == 0 && arg_type == STRING_TYPE)
+    if (error_count == 0 && is_string_type(arg_type))
         mangled_name = "kgpc_string_length";
     else if (error_count == 0 && is_dynamic_array)
         mangled_name = "__kgpc_dynarray_length";
@@ -1910,7 +1912,12 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int substr_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && substr_type != STRING_TYPE && substr_type != CHAR_TYPE)
+    
+    /* Check if substr is a string type, char, or shortstring (array of char) */
+    int is_valid_substr = is_string_type(substr_type) || substr_type == CHAR_TYPE ||
+                          is_shortstring_array(substr_type, substr_expr->is_array_expr);
+    
+    if (error_count == 0 && !is_valid_substr)
     {
         fprintf(stderr, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
         ++error_count;
@@ -1918,7 +1925,12 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && value_type != STRING_TYPE)
+    
+    /* Check if value is a string type OR a shortstring (array of char) */
+    int is_valid_value = is_string_type(value_type) ||
+                         is_shortstring_array(value_type, value_expr->is_array_expr);
+    
+    if (error_count == 0 && !is_valid_value)
     {
         fprintf(stderr, "Error on line %d, Pos target must be a string.\n", expr->line_num);
         ++error_count;
@@ -4124,6 +4136,27 @@ static int semcheck_typecast(int *type_return,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
+    if (target_type == PROCEDURE)
+    {
+        HashNode_t *target_node = NULL;
+        if (expr->expr_data.typecast_data.target_type_id != NULL)
+        {
+            target_node = semcheck_find_type_node_with_kgpc_type(
+                symtab, expr->expr_data.typecast_data.target_type_id);
+            if (target_node == NULL &&
+                FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) >= 0)
+            {
+                /* target_node assigned by FindIdent when present */
+            }
+        }
+
+        if (target_node != NULL && target_node->type != NULL &&
+            target_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            kgpc_type_retain(target_node->type);
+            expr->resolved_kgpc_type = target_node->type;
+        }
+    }
     if (target_type == POINTER_TYPE)
     {
         /* Resolve full pointer type info so deref preserves record/element types */
@@ -6181,6 +6214,23 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             }
             break;
         }
+        case EXPR_TYPECAST:
+        {
+            const char *target_id = expr->expr_data.typecast_data.target_type_id;
+            if (target_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, (char *)target_id) >= 0 &&
+                    type_node != NULL && type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 0;
+                    return type_node->type;
+                }
+            }
+            break;
+        }
         
         default:
             break;
@@ -6483,9 +6533,11 @@ int semcheck_expr_main(int *type_return,
                     /* Add the function name as the return variable */
                     PushFuncRetOntoScope_Typed(symtab, expr->expr_data.anonymous_method_data.generated_name, return_type);
                     
-                    /* Also add "Result" as an alias */
+                    /* Also add "Result" as an alias in the current scope */
                     HashNode_t *result_check = NULL;
-                    if (FindIdent(&result_check, symtab, "Result") == -1)
+                    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+                    result_check = (cur_hash != NULL) ? FindIdentInTable(cur_hash, "Result") : NULL;
+                    if (result_check == NULL)
                     {
                         PushFuncRetOntoScope_Typed(symtab, "Result", return_type);
                     }
@@ -6658,7 +6710,7 @@ int semcheck_relop(int *type_return,
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
                 int boolean_ok = (type_first == BOOL && type_second == BOOL);
-                int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
+                int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
                 int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok)
@@ -6674,10 +6726,11 @@ int semcheck_relop(int *type_return,
 
                 int numeric_ok = types_numeric_compatible(type_first, type_second) &&
                                  is_type_ir(&type_first) && is_type_ir(&type_second);
-                int string_ok = (type_first == STRING_TYPE && type_second == STRING_TYPE);
+                int string_ok = (is_string_type(type_first) && is_string_type(type_second));
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE);
+                int pointer_ok = (type_first == POINTER_TYPE && type_second == POINTER_TYPE);
 
-                if(!numeric_ok && !string_ok && !char_ok)
+                if(!numeric_ok && !string_ok && !char_ok && !pointer_ok)
                 {
                     fprintf(stderr,
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
@@ -6779,8 +6832,8 @@ int semcheck_addop(int *type_return,
 
     if (op_type == PLUS)
     {
-        int left_is_string_like = (type_first == STRING_TYPE || type_first == CHAR_TYPE);
-        int right_is_string_like = (type_second == STRING_TYPE || type_second == CHAR_TYPE);
+        int left_is_string_like = (is_string_type(type_first) || type_first == CHAR_TYPE);
+        int right_is_string_like = (is_string_type(type_second) || type_second == CHAR_TYPE);
 
         if (left_is_string_like && right_is_string_like)
         {
@@ -7516,7 +7569,7 @@ int semcheck_arrayaccess(int *type_return,
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
-    int base_is_string = (base_type == STRING_TYPE && !array_expr->is_array_expr);
+    int base_is_string = (is_string_type(base_type) && !array_expr->is_array_expr);
     int base_is_pointer = (base_type == POINTER_TYPE);
     
     if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)

@@ -1149,6 +1149,32 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             return inst_list;
         }
 
+        if (expr->expr_data.function_call_data.id != NULL &&
+            strcasecmp(expr->expr_data.function_call_data.id, "SwapEndian") == 0)
+        {
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            if (args == NULL || args->cur == NULL)
+            {
+                codegen_report_error(ctx, "ERROR: SwapEndian intrinsic expects one argument.");
+                return inst_list;
+            }
+
+            struct Expression *arg_expr = (struct Expression *)args->cur;
+            expr_node_t *arg_tree = build_expr_tree(arg_expr);
+            if (arg_tree != NULL)
+            {
+                inst_list = gencode_expr_tree(arg_tree, inst_list, ctx, target_reg);
+                free_expr_tree(arg_tree);
+            }
+
+            int use_qword = codegen_type_uses_qword(expr->resolved_type);
+            const char *swap_reg = use_qword ? target_reg->bit_64 : target_reg->bit_32;
+            char swap_suffix = use_qword ? 'q' : 'l';
+            snprintf(buffer, sizeof(buffer), "\tbswap%c\t%s\n", swap_suffix, swap_reg);
+            inst_list = add_inst(inst_list, buffer);
+            return inst_list;
+        }
+
         /* For function calls, get the KgpcType from cached call info populated during semcheck.
          * Fall back to a fresh symbol lookup when metadata is unavailable. */
         struct KgpcType *func_type = NULL;
@@ -3163,6 +3189,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
 
                 const char *cmp_left = left;
                 const char *cmp_right = right;
+                Register_t *imm_reg = NULL;
                 char left32_buf[16];
                 char right32_buf[16];
                 char left64_buf[16];
@@ -3187,8 +3214,31 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const char *ri
                         cmp_right = right64;
                 }
 
+                if (use_qword && cmp_right != NULL && cmp_right[0] == '$')
+                {
+                    char *endptr = NULL;
+                    long long imm_value = strtoll(cmp_right + 1, &endptr, 0);
+                    if (endptr != NULL && *endptr == '\0' &&
+                        (imm_value > 2147483647LL || imm_value < -2147483648LL))
+                    {
+                        imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (imm_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate temporary for 64-bit immediate comparison.");
+                            break;
+                        }
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                            imm_value, imm_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        cmp_right = imm_reg->bit_64;
+                    }
+                }
+
                 snprintf(buffer, sizeof(buffer), "\tcmp%c\t%s, %s\n", cmp_suffix, cmp_right, cmp_left);
                 inst_list = add_inst(inst_list, buffer);
+                if (imm_reg != NULL)
+                    free_reg(get_reg_stack(), imm_reg);
 
                 const char *set_instr = NULL;
                 switch (relop_kind)

@@ -119,6 +119,9 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     // Boolean type
     if (strcasecmp(type_name, "Boolean") == 0)
         return HASHVAR_BOOLEAN;
+
+    if (strcasecmp(type_name, "CodePointer") == 0)
+        return HASHVAR_POINTER;
     
     // File types
     if (strcasecmp(type_name, "Text") == 0)
@@ -131,6 +134,39 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
         return HASHVAR_POINTER;
     
     return HASHVAR_UNTYPED;
+}
+
+static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab, const char *type_id)
+{
+    if (symtab == NULL || type_id == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    if (FindIdent(&type_node, symtab, (char *)type_id) >= 0 && type_node != NULL)
+    {
+        if (type_node->hash_type == HASHTYPE_TYPE)
+            return type_node;
+    }
+
+    ListNode_t *matches = FindAllIdents(symtab, (char *)type_id);
+    ListNode_t *cur = matches;
+    while (cur != NULL)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate != NULL && candidate->hash_type == HASHTYPE_TYPE)
+        {
+            DestroyList(matches);
+            return candidate;
+        }
+        cur = cur->next;
+    }
+    DestroyList(matches);
+
+    const char *dot = strrchr(type_id, '.');
+    if (dot != NULL && dot[1] != '\0')
+        return find_type_node_for_mangling(symtab, dot + 1);
+
+    return NULL;
 }
 
 // Helper function to flatten argument lists into a list of HASHVAR_ types.
@@ -158,8 +194,8 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 
                 // If not a built-in type, look it up in the symbol table
                 if (resolved_type == HASHVAR_UNTYPED) {
-                    HashNode_t* type_node;
-                    if (FindIdent(&type_node, symtab, (char *)type_id) != -1 && type_node->hash_type == HASHTYPE_TYPE) {
+                    HashNode_t* type_node = find_type_node_for_mangling(symtab, type_id);
+                    if (type_node != NULL) {
                         resolved_type = GetVarTypeFromTypeNode(type_node);
                     }
                 }
@@ -261,12 +297,27 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
     ListNode_t* type_list = NULL;
     ListNode_t* arg_cur = args_expr;
     while (arg_cur != NULL) {
+        struct Expression *arg_expr = (struct Expression *)arg_cur->cur;
         int type;
-        semcheck_expr_main(&type, symtab, (struct Expression *)arg_cur->cur, max_scope_lev, NO_MUTATE);
+        semcheck_expr_main(&type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+        enum VarType resolved_type = ConvertParserTypeToVarType(type);
+        if (arg_expr != NULL && arg_expr->resolved_kgpc_type != NULL)
+        {
+            KgpcType *kgpc_type = arg_expr->resolved_kgpc_type;
+            if (kgpc_type_is_array(kgpc_type) || kgpc_type_is_array_of_const(kgpc_type))
+                resolved_type = HASHVAR_ARRAY;
+            else if (kgpc_type->kind == TYPE_KIND_RECORD)
+                resolved_type = HASHVAR_RECORD;
+            else if (kgpc_type->kind == TYPE_KIND_POINTER)
+                resolved_type = HASHVAR_POINTER;
+            else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
+                resolved_type = HASHVAR_PROCEDURE;
+        }
 
         int* type_ptr = malloc(sizeof(int));
         assert(type_ptr != NULL);
-        *type_ptr = ConvertParserTypeToVarType(type);
+        *type_ptr = resolved_type;
         if (type_list == NULL) {
             type_list = CreateListNode(type_ptr, LIST_UNSPECIFIED);
         } else {
