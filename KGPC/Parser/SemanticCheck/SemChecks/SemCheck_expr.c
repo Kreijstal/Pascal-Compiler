@@ -1910,7 +1910,13 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int substr_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&substr_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !is_string_type(substr_type) && substr_type != CHAR_TYPE)
+    
+    /* Check if substr is a string type OR a shortstring (array of char) */
+    int is_valid_substr = is_string_type(substr_type) || substr_type == CHAR_TYPE;
+    if (!is_valid_substr && substr_expr->is_array_expr && substr_type == CHAR_TYPE)
+        is_valid_substr = 1;
+    
+    if (error_count == 0 && !is_valid_substr)
     {
         fprintf(stderr, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
         ++error_count;
@@ -1918,7 +1924,13 @@ static int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_expr_main(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !is_string_type(value_type))
+    
+    /* Check if value is a string type OR a shortstring (array of char) */
+    int is_valid_value = is_string_type(value_type);
+    if (!is_valid_value && value_expr->is_array_expr && value_type == CHAR_TYPE)
+        is_valid_value = 1;
+    
+    if (error_count == 0 && !is_valid_value)
     {
         fprintf(stderr, "Error on line %d, Pos target must be a string.\n", expr->line_num);
         ++error_count;
