@@ -625,6 +625,28 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
         return 1;
     }
 
+    /* Allow String/ShortString <-> array[0..255] of char assignment (ShortString compatibility) */
+    if (lhs_is_string && rhs_type->kind == TYPE_KIND_ARRAY)
+    {
+        /* Check if rhs is array of char (shortstring representation) */
+        if (rhs_type->info.array_info.element_type != NULL &&
+            rhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+        {
+            return 1;
+        }
+    }
+    if (rhs_is_string && lhs_type->kind == TYPE_KIND_ARRAY)
+    {
+        /* Check if lhs is array of char (shortstring representation) */
+        if (lhs_type->info.array_info.element_type != NULL &&
+            lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+            lhs_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+        {
+            return 1;
+        }
+    }
+
     /* Allow procedure variables to accept explicit @proc references */
     if (lhs_type->kind == TYPE_KIND_PROCEDURE && rhs_type->kind == TYPE_KIND_POINTER)
     {
@@ -881,6 +903,22 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                 if (lhs_type->info.array_info.end_index != rhs_type->info.array_info.end_index)
                     return 0;
             }
+            
+            /* Handle NULL element types - if both NULL, they're compatible (untyped arrays) */
+            if (lhs_type->info.array_info.element_type == NULL && 
+                rhs_type->info.array_info.element_type == NULL)
+                return 1;
+            
+            /* If only one is NULL, check if indices match (for shortstring-like arrays) */
+            if (lhs_type->info.array_info.element_type == NULL ||
+                rhs_type->info.array_info.element_type == NULL)
+            {
+                /* Allow if array bounds match (for shortstring compatibility) */
+                if (!lhs_dynamic && !rhs_dynamic)
+                    return 1;
+                return 0;
+            }
+            
             return are_types_compatible_for_assignment(
                 lhs_type->info.array_info.element_type,
                 rhs_type->info.array_info.element_type,
