@@ -391,13 +391,65 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         return NULL;
 
     int var_type_tag = var_decl->tree_data.var_decl_data.type;
+    const char *type_id = var_decl->tree_data.var_decl_data.type_id;
+
+    if (var_type_tag == POINTER_TYPE && type_id != NULL)
+    {
+        KgpcType *pointee_type = NULL;
+        if (symtab != NULL)
+        {
+            struct HashNode *type_node = NULL;
+            if (FindIdent(&type_node, symtab, (char *)type_id) != -1 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                pointee_type = type_node->type;
+            }
+        }
+        if (pointee_type == NULL)
+        {
+            int builtin_tag = UNKNOWN_TYPE;
+            if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
+                pascal_identifier_equals(type_id, "RawByteString") ||
+                pascal_identifier_equals(type_id, "UnicodeString") ||
+                pascal_identifier_equals(type_id, "WideString"))
+                builtin_tag = STRING_TYPE;
+            else if (pascal_identifier_equals(type_id, "ShortString"))
+                builtin_tag = SHORTSTRING_TYPE;
+            else if (pascal_identifier_equals(type_id, "Integer"))
+                builtin_tag = INT_TYPE;
+            else if (pascal_identifier_equals(type_id, "LongInt"))
+                builtin_tag = LONGINT_TYPE;
+            else if (pascal_identifier_equals(type_id, "Int64") ||
+                     pascal_identifier_equals(type_id, "SizeUInt") || pascal_identifier_equals(type_id, "QWord") ||
+                     pascal_identifier_equals(type_id, "NativeUInt") || pascal_identifier_equals(type_id, "NativeInt") ||
+                     pascal_identifier_equals(type_id, "PtrInt") || pascal_identifier_equals(type_id, "PtrUInt"))
+                builtin_tag = INT64_TYPE;
+            else if (pascal_identifier_equals(type_id, "Byte") || pascal_identifier_equals(type_id, "SmallInt") ||
+                     pascal_identifier_equals(type_id, "Word"))
+                builtin_tag = INT_TYPE;
+            else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
+                builtin_tag = REAL_TYPE;
+            else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar"))
+                builtin_tag = CHAR_TYPE;
+            else if (pascal_identifier_equals(type_id, "Boolean"))
+                builtin_tag = BOOL;
+            else if (pascal_identifier_equals(type_id, "Pointer"))
+                builtin_tag = POINTER_TYPE;
+
+            if (builtin_tag != UNKNOWN_TYPE)
+                pointee_type = create_primitive_type(builtin_tag);
+        }
+
+        if (owns_type != NULL)
+            *owns_type = 1;
+        return create_pointer_type(pointee_type);
+    }
 
     /* Handle named type references using the symbol table */
-    if ((var_type_tag == UNKNOWN_TYPE || var_type_tag == -1) && 
-        var_decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL) {
+    if (type_id != NULL && symtab != NULL) {
         /* Look up the named type in the symbol table */
         struct HashNode *type_node = NULL;
-        if (FindIdent(&type_node, symtab, var_decl->tree_data.var_decl_data.type_id) != -1 && 
+        if (FindIdent(&type_node, symtab, (char *)type_id) != -1 && 
             type_node != NULL && type_node->type != NULL) {
             /* Return a shared reference from the symbol table - caller doesn't own it */
             if (owns_type != NULL)
@@ -407,12 +459,13 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         }
         
         /* Fallback: Check for built-in type names not in symbol table */
-        const char *type_id = var_decl->tree_data.var_decl_data.type_id;
         int builtin_tag = UNKNOWN_TYPE;
         
         /* String types */
         if (pascal_identifier_equals(type_id, "String") || pascal_identifier_equals(type_id, "AnsiString") ||
-            pascal_identifier_equals(type_id, "RawByteString")) {
+            pascal_identifier_equals(type_id, "RawByteString") ||
+            pascal_identifier_equals(type_id, "UnicodeString") ||
+            pascal_identifier_equals(type_id, "WideString")) {
             builtin_tag = STRING_TYPE;
         }
         else if (pascal_identifier_equals(type_id, "ShortString")) {
@@ -455,8 +508,11 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
             return create_primitive_type(builtin_tag);
         }
         
-        /* If we couldn't resolve the named type, return NULL */
-        return NULL;
+        if (var_type_tag == UNKNOWN_TYPE || var_type_tag == -1)
+        {
+            /* If we couldn't resolve the named type, return NULL */
+            return NULL;
+        }
     }
 
     /* For primitive types, create a KgpcType - caller owns this */

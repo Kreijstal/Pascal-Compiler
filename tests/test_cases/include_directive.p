@@ -1,6 +1,6 @@
 program IncludeDirective;
 
-{$I include_test_impl.inc}
+{$I ../test_data/includes/include_test_impl.inc}
 
 begin
   TestInclude;

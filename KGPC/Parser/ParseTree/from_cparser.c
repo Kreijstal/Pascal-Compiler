@@ -1299,7 +1299,11 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("double");
         return REAL_TYPE;
     }
-    if (strcasecmp(name, "string") == 0) {
+    if (strcasecmp(name, "string") == 0 ||
+        strcasecmp(name, "ansistring") == 0 ||
+        strcasecmp(name, "rawbytestring") == 0 ||
+        strcasecmp(name, "unicodestring") == 0 ||
+        strcasecmp(name, "widestring") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
         return STRING_TYPE;
@@ -2620,10 +2624,25 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     ast_t *type_node = NULL;
     char *read_accessor = NULL;
     char *write_accessor = NULL;
+    int has_indexer = 0;
 
     ast_t *cursor = property_node->child;
+    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+    {
+        fprintf(stderr, "[KGPC] property decl child list:\n");
+        for (ast_t *dbg = cursor; dbg != NULL; dbg = dbg->next)
+        {
+            fprintf(stderr, "  - typ=%d (%s)\n", dbg->typ, pascal_tag_to_string(dbg->typ));
+        }
+    }
     while (cursor != NULL)
     {
+        if (cursor->typ == PASCAL_T_PARAM_LIST)
+        {
+            has_indexer = 1;
+            cursor = cursor->next;
+            continue;
+        }
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped == NULL)
         {
@@ -2678,6 +2697,7 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
 
     if (property_name == NULL)
         return NULL;
+    (void)has_indexer;
 
     int property_type = UNKNOWN_TYPE;
     char *property_type_id = NULL;
@@ -2708,6 +2728,7 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     property->type_id = property_type_id;
     property->read_accessor = read_accessor;
     property->write_accessor = write_accessor;
+    property->is_indexed = has_indexer;
 
     return property;
 }
@@ -2732,7 +2753,7 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
             prop->write_accessor ? prop->write_accessor : "<null>");
     }
 
-    if (prop->name != NULL)
+    if (prop->name != NULL && !prop->is_indexed)
     {
         if (prop->write_accessor != NULL)
         {

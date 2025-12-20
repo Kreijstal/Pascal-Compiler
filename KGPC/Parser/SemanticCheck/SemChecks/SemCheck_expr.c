@@ -417,6 +417,64 @@ static int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *s
 int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expression *arg_expr,
     SymTab_t *symtab, int max_scope_lev, int line_num);
 
+static int semcheck_try_indexed_property_getter(int *type_return,
+    SymTab_t *symtab, struct Expression *expr, int max_scope_lev, int mutating)
+{
+    if (type_return == NULL || symtab == NULL || expr == NULL)
+        return -1;
+    if (mutating != NO_MUTATE)
+        return -1;
+    if (expr->type != EXPR_ARRAY_ACCESS)
+        return -1;
+
+    struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
+    struct Expression *index_expr = expr->expr_data.array_access_data.index_expr;
+    if (array_expr == NULL)
+        return -1;
+
+    const char *base_id = NULL;
+    if (array_expr->type == EXPR_VAR_ID)
+        base_id = array_expr->expr_data.id;
+    else if (array_expr->type == EXPR_FUNCTION_CALL &&
+             array_expr->expr_data.function_call_data.args_expr == NULL)
+        base_id = array_expr->expr_data.function_call_data.id;
+
+    if (base_id == NULL || index_expr == NULL)
+        return -1;
+
+    size_t id_len = strlen(base_id);
+    char *getter_id = (char *)malloc(id_len + 4);
+    if (getter_id == NULL)
+        return -1;
+    snprintf(getter_id, id_len + 4, "Get%s", base_id);
+
+    HashNode_t *getter_node = NULL;
+    int getter_found = (FindIdent(&getter_node, symtab, getter_id) == 0);
+    if (!getter_found || getter_node == NULL || getter_node->hash_type != HASHTYPE_FUNCTION)
+    {
+        free(getter_id);
+        return -1;
+    }
+
+    ListNode_t *args = CreateListNode(index_expr, LIST_EXPR);
+    if (args == NULL)
+    {
+        free(getter_id);
+        return -1;
+    }
+
+    expr->type = EXPR_FUNCTION_CALL;
+    memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+    expr->expr_data.function_call_data.id = getter_id;
+    expr->expr_data.function_call_data.args_expr = args;
+    expr->expr_data.function_call_data.mangled_id = NULL;
+    semcheck_reset_function_call_cache(expr);
+
+    destroy_expr(array_expr);
+
+    return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
+}
+
 static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
 {
     if (id == NULL)
@@ -444,7 +502,11 @@ static int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
         return LONGINT_TYPE;
     if (pascal_identifier_equals(id, "Real") || pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
-    if (pascal_identifier_equals(id, "String"))
+    if (pascal_identifier_equals(id, "String") ||
+        pascal_identifier_equals(id, "AnsiString") ||
+        pascal_identifier_equals(id, "RawByteString") ||
+        pascal_identifier_equals(id, "UnicodeString") ||
+        pascal_identifier_equals(id, "WideString"))
         return STRING_TYPE;
     if (pascal_identifier_equals(id, "ShortString"))
         return SHORTSTRING_TYPE;
@@ -749,6 +811,52 @@ static void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t
     semcheck_clear_array_info(expr);
     if (alias == NULL || !alias->is_array)
         return;
+
+    if (alias->array_dimensions != NULL &&
+        alias->array_start == 0 && alias->array_end < alias->array_start)
+    {
+        ListNode_t *first_dim = alias->array_dimensions;
+        if (first_dim != NULL && first_dim->type == LIST_STRING && first_dim->cur != NULL)
+        {
+            char *dim_str = (char *)first_dim->cur;
+            if (strstr(dim_str, "..") == NULL)
+            {
+                if (pascal_identifier_equals(dim_str, "Boolean"))
+                {
+                    alias->array_start = 0;
+                    alias->array_end = 1;
+                    alias->is_open_array = 0;
+                }
+                else if (symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindIdent(&type_node, symtab, dim_str) >= 0 &&
+                        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *dim_alias = get_type_alias_from_node(type_node);
+                        if (dim_alias != NULL && dim_alias->is_enum &&
+                            dim_alias->enum_literals != NULL)
+                        {
+                            int count = ListLength(dim_alias->enum_literals);
+                            if (count > 0)
+                            {
+                                alias->array_start = 0;
+                                alias->array_end = count - 1;
+                                alias->is_open_array = 0;
+                            }
+                        }
+                        else if (dim_alias != NULL && dim_alias->is_range &&
+                            dim_alias->range_known)
+                        {
+                            alias->array_start = dim_alias->range_start;
+                            alias->array_end = dim_alias->range_end;
+                            alias->is_open_array = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     expr->is_array_expr = 1;
     expr->array_lower_bound = alias->array_start;
@@ -2209,6 +2317,11 @@ static int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_abs_real";
             result_type = REAL_TYPE;
         }
+        else if (arg_type == INT64_TYPE)
+        {
+            mangled_name = "kgpc_abs_longint";
+            result_type = INT64_TYPE;
+        }
         else
         {
             fprintf(stderr, "Error on line %d, Abs expects integer or real arguments.\n", expr->line_num);
@@ -2956,6 +3069,13 @@ static int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : (-9223372036854775807LL - 1));
         expr->resolved_type = LONGINT_TYPE;
         *type_return = LONGINT_TYPE;
+        return 0;
+    }
+    if (arg_type == INT64_TYPE)
+    {
+        semcheck_replace_call_with_integer_literal(expr, is_high ? 9223372036854775807LL : (-9223372036854775807LL - 1));
+        expr->resolved_type = INT64_TYPE;
+        *type_return = INT64_TYPE;
         return 0;
     }
     if (arg_type == BOOL)
@@ -6619,13 +6739,25 @@ int semcheck_addop(int *type_return,
     int op_type = expr->expr_data.addop_data.addop_type;
     if (op_type == OR)
     {
-        if (type_first != BOOL || type_second != BOOL)
+        if (type_first == BOOL && type_second == BOOL)
         {
-            fprintf(stderr, "Error on line %d, expected boolean operands for OR expression!\n\n",
-                expr->line_num);
-            ++return_val;
+            *type_return = BOOL;
+            return return_val;
         }
-        *type_return = BOOL;
+        if (is_integer_type(type_first) && is_integer_type(type_second))
+        {
+            if (type_first == INT64_TYPE || type_second == INT64_TYPE)
+                *type_return = INT64_TYPE;
+            else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
+                *type_return = LONGINT_TYPE;
+            else
+                *type_return = INT_TYPE;
+            return return_val;
+        }
+        fprintf(stderr, "Error on line %d, expected boolean or integer operands for OR expression!\n\n",
+            expr->line_num);
+        ++return_val;
+        *type_return = UNKNOWN_TYPE;
         return return_val;
     }
 
@@ -7369,6 +7501,18 @@ int semcheck_arrayaccess(int *type_return,
         return 1;
     }
 
+    if (array_expr->type == EXPR_VAR_ID)
+    {
+        HashNode_t *array_node = NULL;
+        if (FindIdent(&array_node, symtab, array_expr->expr_data.id) == -1)
+        {
+            int property_result = semcheck_try_indexed_property_getter(type_return, symtab,
+                expr, max_scope_lev, mutating);
+            if (property_result >= 0)
+                return return_val + property_result;
+        }
+    }
+
     int base_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&base_type, symtab, array_expr, max_scope_lev, mutating);
 
@@ -7377,6 +7521,11 @@ int semcheck_arrayaccess(int *type_return,
     
     if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
+        int property_result = semcheck_try_indexed_property_getter(type_return, symtab,
+            expr, max_scope_lev, mutating);
+        if (property_result >= 0)
+            return return_val + property_result;
+
         fprintf(stderr, "Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
@@ -7523,19 +7672,23 @@ int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
         type_id = decl->tree_data.arr_decl_data.type_id;
     }
 
-    if (type_tag != UNKNOWN_TYPE)
-        return type_tag;
-
     if (type_id != NULL)
     {
+        if (pascal_identifier_equals(type_id, "ShortString"))
+            return SHORTSTRING_TYPE;
+
         HashNode_t *type_node = NULL;
         if (FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL)
         {
             int resolved_type = UNKNOWN_TYPE;
             set_type_from_hashtype(&resolved_type, type_node);
-            return resolved_type;
+            if (resolved_type != UNKNOWN_TYPE)
+                return resolved_type;
         }
     }
+
+    if (type_tag != UNKNOWN_TYPE)
+        return type_tag;
 
     return UNKNOWN_TYPE;
 }
@@ -8463,7 +8616,13 @@ method_call_resolved:
                         call_type = formal_type;
                     }
 
-                    if(formal_type == call_type)
+                    int is_string_literal = (call_expr != NULL && call_expr->type == EXPR_STRING);
+                    if (formal_type == UNKNOWN_TYPE || formal_type == BUILTIN_ANY_TYPE)
+                        current_score += 0;
+                    else if (is_string_literal && formal_type == SHORTSTRING_TYPE &&
+                        call_type == STRING_TYPE)
+                        current_score += 0;
+                    else if(formal_type == call_type)
                         current_score += 0;
                     else if (formal_type == LONGINT_TYPE && call_type == INT_TYPE)
                         current_score += 1;
@@ -8865,7 +9024,12 @@ skip_overload_resolution:
                 {
                     arg_type = expected_type;
                 }
-                if(arg_type != expected_type && expected_type != BUILTIN_ANY_TYPE)
+                if (expected_type == UNKNOWN_TYPE || expected_type == BUILTIN_ANY_TYPE)
+                {
+                    /* Untyped parameters accept any argument type. */
+                    /* No validation needed. */
+                }
+                else if(arg_type != expected_type)
                 {
                     /* Allow integer type conversion (INT_TYPE, LONGINT_TYPE, INT64_TYPE all compatible) */
                     int type_compatible = 0;
@@ -8874,6 +9038,10 @@ skip_overload_resolution:
                         type_compatible = 1;
                     }
                     else if (expected_type == STRING_TYPE && arg_type == CHAR_TYPE)
+                    {
+                        type_compatible = 1;
+                    }
+                    else if (expected_type == SHORTSTRING_TYPE && arg_type == STRING_TYPE)
                     {
                         type_compatible = 1;
                     }
@@ -8891,6 +9059,12 @@ skip_overload_resolution:
                     
                     if (!type_compatible)
                     {
+                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        {
+                            fprintf(stderr,
+                                "[SemCheck] call %s arg %d type mismatch: expected=%d actual=%d\n",
+                                id ? id : "<null>", cur_arg, expected_type, arg_type);
+                        }
                         fprintf(stderr, "Error on line %d, on function call %s, argument %d: Type mismatch!\n\n",
                             expr->line_num, id, cur_arg);
                         ++return_val;

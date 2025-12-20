@@ -2071,6 +2071,13 @@ void kgpc_string_assign(char **target, const char *value)
     *target = copy;
 }
 
+void kgpc_set_codepage_string(char **value, uint16_t codepage, int convert)
+{
+    (void)value;
+    (void)codepage;
+    (void)convert;
+}
+
 void kgpc_string_setlength(char **target, int64_t new_length)
 {
     if (target == NULL)

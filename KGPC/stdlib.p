@@ -50,6 +50,9 @@ type
   PCardinal = ^Cardinal;
   PShortInt = ^ShortInt;
   PSmallInt = ^SmallInt;
+  PInt64 = ^Int64;
+  PQWord = ^QWord;
+  PBoolean = ^Boolean;
 
   { FPC bootstrap compatibility aliases }
   PText = ^text;
@@ -65,10 +68,14 @@ type
   CodePointer = Pointer;
   
   { String types - for FPC bootstrap compatibility }
+  AnsiString = String;
+  UnicodeString = String;
+  WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
   { ShortString: length-prefixed string[255] compatible layout.
     Note: most bootstrap-compatible aliases live in KGPC/stdlib.p (the implicit prelude). }
   ShortString = array[0..255] of Char;
+  PWideString = ^WideString;
 
   TLineEndStr = string[3];
   TextBuf = array[0..255] of AnsiChar;
@@ -105,6 +112,9 @@ type
 const
   TextRecNameLength = 256;
   TextRecBufSize = 256;
+
+  DefaultSystemCodePage = 65001;
+  DefaultFileSystemCodePage = 65001;
 
   fmClosed = $D7B0;
   fmInput = $D7B1;
@@ -242,6 +252,8 @@ end;
 
 function InterlockedExchangeAdd(var target: longint; value: longint): longint; overload;
 var
+  EnvP: PPAnsiChar = nil;
+  envp: PPAnsiChar = nil;
     result: longint;
 begin
     result := 0;
@@ -372,6 +384,24 @@ end;
 procedure SetTextCodePage(var T: Text; CodePage: TSystemCodePage);
 begin
     { Stub implementation - code page handling not yet implemented }
+end;
+
+procedure SetCodePage(var S: RawByteString; CodePage: TSystemCodePage; Convert: Boolean); overload;
+begin
+    assembler;
+    asm
+        call kgpc_set_codepage_string
+    end
+end;
+
+function ToSingleByteFileSystemEncodedFileName(const S: RawByteString): RawByteString;
+begin
+    ToSingleByteFileSystemEncodedFileName := S;
+end;
+
+function ArrayStringToPPchar(const S: array of RawByteString; reserveentries: LongInt): PPAnsiChar;
+begin
+    ArrayStringToPPchar := nil;
 end;
 
 procedure MkDir(path: string);

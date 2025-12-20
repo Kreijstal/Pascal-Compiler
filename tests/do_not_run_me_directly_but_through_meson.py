@@ -37,6 +37,7 @@ IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
 build_dir = os.environ.get("MESON_BUILD_ROOT", "build")
 KGPC_PATH = os.path.join(build_dir, "KGPC/kgpc.exe" if IS_WINDOWS_ABI else "KGPC/kgpc")
 TEST_CASES_DIR = "tests/test_cases"
+INPUT_DATA_DIR = TEST_CASES_DIR
 TEST_OUTPUT_DIR = "tests/output"
 GOLDEN_AST_DIR = "tests/golden_ast"
 # Default execution timeout per compiled test program (seconds).
@@ -65,6 +66,26 @@ COMPILER_RUNS = []
 
 FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")
 FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
+
+UNIT_ONLY_TESTS = {
+    "directives_and_properties_unit",
+    "dotted_alias_base_unit",
+    "dotted_alias_reexport_unit",
+    "fpc_import_const_alias",
+    "fpc_import_const_unit",
+    "fpc_interface_const_after_external",
+    "fpc_qualified_const_import",
+    "property_indexed_unit",
+    "unit_cardinal_type",
+    "unit_high_type_const",
+    "unit_longword_type",
+    "unit_low_type_const",
+    "unit_pointer_deref_nil",
+    "unit_sizeof_array_bounds",
+    "unit_sizeof_const",
+}
+
+UNIT_ONLY_FLAGS = {}
 
 
 def _sanitize_test_identifier(name):
@@ -1051,7 +1072,7 @@ class TestCompiler(unittest.TestCase):
 
     def test_mtinf_sample_parses(self):
         """The mtinf QL sample should parse in parse-only mode without errors."""
-        input_file = os.path.join(TEST_CASES_DIR, "mtinf.pas")
+        input_file = os.path.join(TEST_CASES_DIR, "mtinf.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "mtinf_parse_only.s")
 
         run_compiler(
@@ -2396,6 +2417,15 @@ sys.exit(3)
                 except subprocess.TimeoutExpired:
                     self.fail("Test execution timed out.")
 
+    def test_unit_compile_only(self):
+        """Compiles standalone unit sources to ensure they parse and check cleanly."""
+        for base_name in sorted(UNIT_ONLY_TESTS):
+            with self.subTest(unit=base_name):
+                input_file = os.path.join(TEST_CASES_DIR, f"{base_name}.p")
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{base_name}.s")
+                flags = UNIT_ONLY_FLAGS.get(base_name)
+                run_compiler(input_file, asm_file, flags=flags)
+
 
 def _discover_and_add_auto_tests():
     """
@@ -2449,7 +2479,7 @@ def _discover_and_add_auto_tests():
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, test_base_name)
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
-                input_data_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.input")
+                input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
                 compiler_output = None
                 actual_output = None
