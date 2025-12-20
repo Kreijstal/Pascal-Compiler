@@ -396,6 +396,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     if (var_type_tag == POINTER_TYPE && type_id != NULL)
     {
         KgpcType *pointee_type = NULL;
+        int pointee_shared = 0;
         if (symtab != NULL)
         {
             struct HashNode *type_node = NULL;
@@ -403,6 +404,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 type_node != NULL && type_node->type != NULL)
             {
                 pointee_type = type_node->type;
+                pointee_shared = 1;
             }
         }
         if (pointee_type == NULL)
@@ -440,6 +442,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 pointee_type = create_primitive_type(builtin_tag);
         }
 
+        if (pointee_shared)
+            kgpc_type_retain(pointee_type);
         if (owns_type != NULL)
             *owns_type = 1;
         return create_pointer_type(pointee_type);
