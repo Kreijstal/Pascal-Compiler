@@ -122,9 +122,8 @@ type
   Int32 = LongInt;               { 32-bit signed }
   UInt32 = Cardinal;             { 32-bit unsigned }
 
-  { Note: TDateTime is defined in sysutils vendor unit as Int64 for KGPC
-    runtime compatibility. For FPC bootstrap, define it locally in units 
-    that need FPC's Double-based TDateTime. }
+  { FPC-compatible TDateTime (days since 1899-12-30, with fractional day) }
+  TDateTime = type Double;
 
   { Comp type - 64-bit integer type (FPC Comp is special but Int64 is close) }
   { Note: 'Comp' conflicts with common variable names - use carefully }

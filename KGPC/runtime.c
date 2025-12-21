@@ -3107,7 +3107,7 @@ void kgpc_str_int64(int64_t value, char **target)
     *target = result;
 }
 
-int64_t kgpc_now(void)
+double kgpc_now(void)
 {
 #ifdef _WIN32
     FILETIME ft;
@@ -3117,12 +3117,14 @@ int64_t kgpc_now(void)
     uli.HighPart = ft.dwHighDateTime;
     /* FILETIME is in 100-nanosecond intervals since January 1, 1601. */
     uint64_t ticks = uli.QuadPart - 116444736000000000ULL;
-    return (int64_t)(ticks / 10000ULL);
+    double unix_seconds = (double)ticks / 10000000.0;
+    return (unix_seconds / 86400.0) + 25569.0;
 #else
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
         return 0;
-    return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+    double unix_seconds = (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
+    return (unix_seconds / 86400.0) + 25569.0;
 #endif
 }
 
@@ -3163,17 +3165,25 @@ static int match_token_ci(const char *cursor, const char *token)
     return 1;
 }
 
-char *kgpc_format_datetime(const char *format, int64_t datetime_ms)
+char *kgpc_format_datetime(const char *format, double datetime)
 {
     if (format == NULL)
         format = "";
 
-    time_t seconds = (time_t)(datetime_ms / 1000);
-    int millis = (int)(datetime_ms % 1000);
-    if (millis < 0)
+    double unix_seconds = (datetime - 25569.0) * 86400.0;
+    double whole_seconds = floor(unix_seconds);
+    double frac = unix_seconds - whole_seconds;
+    if (frac < 0.0)
     {
-        millis += 1000;
-        seconds -= 1;
+        frac += 1.0;
+        whole_seconds -= 1.0;
+    }
+    time_t seconds = (time_t)whole_seconds;
+    int millis = (int)floor((frac * 1000.0) + 0.5);
+    if (millis >= 1000)
+    {
+        millis = 0;
+        seconds += 1;
     }
 
     struct tm tm_value;
