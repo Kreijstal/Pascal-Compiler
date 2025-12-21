@@ -665,6 +665,17 @@ static ast_t* wrap_external_name_clause(ast_t* parsed) {
     return node;
 }
 
+static ast_t* wrap_public_name_clause(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_PUBLIC_NAME;
+    node->child = parsed;
+    node->next = NULL;
+    node->sym = NULL;
+    return node;
+}
+
 static combinator_t* make_generic_type_prefix(void) {
     return seq(new_combinator(), PASCAL_T_NONE,
         optional(token(keyword_ci("generic"))),
@@ -1459,6 +1470,25 @@ void init_pascal_unit_parser(combinator_t** p) {
     *var_expr_parser = new_combinator();
     init_pascal_expression_parser(var_expr_parser, NULL);
 
+    // Support optional 'absolute <identifier>' clause
+    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("absolute")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+
+    // Hint directives for variables: deprecated ['message'] | platform | library
+    combinator_t* var_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional deprecated message
+        NULL
+    ));
+
     combinator_t* typed_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
         token(match(":")),                          // colon
@@ -1468,6 +1498,8 @@ void init_pascal_unit_parser(combinator_t** p) {
             lazy(var_expr_parser),                   // initializer expression
             NULL
         )),
+        absolute_clause,                             // optional absolute clause
+        var_hint_directive,                          // optional hint directive
         optional(token(match(";"))),                // optional semicolon
         NULL
     );
@@ -2335,7 +2367,54 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Support optional 'absolute <identifier>' clause
     combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("absolute")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+
+    // Hint directives for variables: deprecated ['message'] | platform | library
+    combinator_t* var_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional deprecated message
+        NULL
+    ));
+
+    // Support 'external name <string>' clause for variables (FPC bootstrap compatibility)
+    // FPC syntax: var x: type; external name 'symbol'; (note: semicolon before external)
+    combinator_t* var_external_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("external")),
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_external_name_clause
+    );
+
+    // Support 'public name <string>' clause for variables (FPC bootstrap compatibility)
+    combinator_t* var_public_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("public")),
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_public_name_clause
+    );
+
+    // Combined variable modifier clause (external name or public name)
+    // In FPC syntax, these come after a semicolon: "var x: type; external name 'foo';"
+    combinator_t* var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            var_external_name_clause,
+            var_public_name_clause,
+            NULL
+        ),
+        token(match(";")),  // trailing semicolon after linkage clause
         NULL
     ));
 
@@ -2349,7 +2428,9 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             NULL
         )),
         absolute_clause,                                // optional absolute clause
-        token(match(";")),                              // semicolon
+        var_hint_directive,                             // optional hint directive
+        token(match(";")),                              // semicolon (before optional linkage clause)
+        var_linkage_clause,                             // optional external/public name clause (with its own ;)
         NULL
     );
 

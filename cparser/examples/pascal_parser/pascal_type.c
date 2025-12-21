@@ -1304,22 +1304,36 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         NULL
     );
 
-    // Simple procedure header inside a record (with optional class prefix and static directive)
+    // Method directives for advanced record members (e.g., overload; static; inline;)
+    combinator_t* record_method_directive_keyword = multi(new_combinator(), PASCAL_T_NONE,
+        token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("overload", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("inline", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("deprecated", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("platform", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("library", PASCAL_T_IDENTIFIER)),
+        NULL
+    );
+    combinator_t* record_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
+        record_method_directive_keyword,
+        optional(token(pascal_string(PASCAL_T_STRING))),
+        token(match(";")),
+        NULL
+    );
+    combinator_t* record_method_directives = many(record_method_directive);
+
+    // Simple procedure header inside a record (with optional class prefix and method directives)
     combinator_t* adv_proc_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("procedure")),
         token(cident(PASCAL_T_IDENTIFIER)),
         create_pascal_param_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-            token(match(";")),
-            NULL
-        )),
+        record_method_directives,
         NULL
     );
 
-    // Simple function header inside a record (with optional class prefix and static directive)
+    // Simple function header inside a record (with optional class prefix and method directives)
     combinator_t* adv_func_decl = seq(new_combinator(), PASCAL_T_METHOD_DECL,
         optional(token(keyword_ci("class"))),
         token(keyword_ci("function")),
@@ -1328,11 +1342,7 @@ static ParseResult record_type_fn(input_t* in, void* args, char* parser_name) {
         token(match(":")),
         create_type_ref_parser(),
         token(match(";")),
-        optional(seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
-            token(create_keyword_parser("static", PASCAL_T_IDENTIFIER)),
-            token(match(";")),
-            NULL
-        )),
+        record_method_directives,
         NULL
     );
 
@@ -1741,6 +1751,7 @@ static ParseResult set_type_fn(input_t* in, void* args, char* parser_name) {
 
     // Parse element type (identifier or subrange like 1..10)
     combinator_t* element_type = multi(new_combinator(), PASCAL_T_NONE,
+        enumerated_type(PASCAL_T_ENUMERATED_TYPE),
         token(range_type(PASCAL_T_RANGE_TYPE)),
         token(cident(PASCAL_T_IDENTIFIER)),
         NULL

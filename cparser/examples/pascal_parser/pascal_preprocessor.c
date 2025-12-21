@@ -2027,19 +2027,26 @@ static bool parse_factor(const char **cursor,
         
         int64_t size = 0;
         bool found = false;
-        
+        bool cpu64 = pascal_preprocessor_is_defined(pp, "CPU64");
+
+        if (strcmp(type_name, "NATIVEINT") == 0 || strcmp(type_name, "NATIVEUINT") == 0 ||
+            strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
+            strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0 ||
+            strcmp(type_name, "INTPTR") == 0 || strcmp(type_name, "UINTPTR") == 0) {
+            size = cpu64 ? 8 : 4;
+            found = true;
+        }
+
         // Integer types (64-bit on x86_64)
-        if (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
+        if (!found && (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
             strcmp(type_name, "TSYSPARAM") == 0 || strcmp(type_name, "V") == 0 || strcmp(type_name, "ALUUINT") == 0 ||
             strcmp(type_name, "ALUSINT") == 0 || strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "VALUINT") == 0 ||
-            strcmp(type_name, "FREECHUNK") == 0 || strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
-            strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0 ||
-            strcmp(type_name, "NATIVEINT") == 0 || strcmp(type_name, "NATIVEUINT") == 0 ||
+            strcmp(type_name, "FREECHUNK") == 0 ||
             strcmp(type_name, "TBITSBASE") == 0 || strcmp(type_name, "TUNSIGNEDINTTYPE") == 0 ||
             strcmp(type_name, "TSIGNEDINTTYPE") == 0 || strcmp(type_name, "INTPTR") == 0 ||
             strcmp(type_name, "UINTPTR") == 0 || strcmp(type_name, "HANDLE") == 0 ||
             strcmp(type_name, "THANDLE") == 0 || strcmp(type_name, "TLARGEINTEGER") == 0 ||
-            strcmp(type_name, "TTHREADID") == 0) {
+            strcmp(type_name, "TTHREADID") == 0)) {
             size = 8;
             found = true;
         } else if (strcmp(type_name, "LONGINT") == 0 || strcmp(type_name, "INT32") == 0 || 

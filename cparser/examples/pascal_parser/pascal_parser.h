@@ -115,6 +115,7 @@ typedef enum {
     // Compiler directive types
     PASCAL_T_COMPILER_DIRECTIVE,
     PASCAL_T_EXTERNAL_NAME,
+    PASCAL_T_PUBLIC_NAME,
     PASCAL_T_COMMENT,
     // Type definition types
     PASCAL_T_TYPE_SECTION,

@@ -1185,6 +1185,8 @@ void destroy_tree(Tree_t *tree)
               destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
               tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
           }
+          if (tree->tree_data.var_decl_data.absolute_target != NULL)
+              free(tree->tree_data.var_decl_data.absolute_target);
           break;
 
         case TREE_ARR_DECL:
@@ -1997,7 +1999,8 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     int is_var_param, int inferred_type, struct Statement *initializer,
-    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias)
+    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias,
+    char *absolute_target)
 {
     Tree_t *new_tree;
     new_tree = (Tree_t *)malloc(sizeof(Tree_t));
@@ -2016,6 +2019,9 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
     new_tree->tree_data.var_decl_data.defined_in_unit = 0;
     new_tree->tree_data.var_decl_data.unit_is_public = 0;
+    new_tree->tree_data.var_decl_data.cname_override = NULL;
+    new_tree->tree_data.var_decl_data.is_external = 0;
+    new_tree->tree_data.var_decl_data.absolute_target = absolute_target;
 
     return new_tree;
 }
