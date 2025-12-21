@@ -3717,7 +3717,10 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
         }
         
-        if (init_node != NULL) {
+        /* Skip EXTERNAL_NAME and PUBLIC_NAME modifiers - they're handled later */
+        if (init_node != NULL && 
+            init_node->typ != PASCAL_T_EXTERNAL_NAME && 
+            init_node->typ != PASCAL_T_PUBLIC_NAME) {
             struct Expression *init_expr = convert_expression(init_node);
             if (init_expr != NULL) {
                 if (ids != NULL && ids->next == NULL) {
@@ -3776,8 +3779,41 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         }
     }
 
+    /* Scan for external/public name modifiers (FPC bootstrap compatibility) */
+    char *cname_override = NULL;
+    int is_external = 0;
+    ast_t *scan = decl_node->child;
+    while (scan != NULL) {
+        if (scan->typ == PASCAL_T_EXTERNAL_NAME) {
+            /* External name: variable is defined externally, use specified symbol */
+            if (scan->child != NULL && scan->child->typ == PASCAL_T_STRING) {
+                if (cname_override != NULL)
+                    free(cname_override);
+                cname_override = dup_symbol(scan->child);
+            }
+            is_external = 1;
+        } else if (scan->typ == PASCAL_T_PUBLIC_NAME) {
+            /* Public name: variable is exported with specified symbol */
+            if (scan->child != NULL && scan->child->typ == PASCAL_T_STRING) {
+                if (cname_override != NULL)
+                    free(cname_override);
+                cname_override = dup_symbol(scan->child);
+            }
+            /* is_external = 0 for public; variable is defined here but exported */
+        }
+        scan = scan->next;
+    }
+
     Tree_t *decl = mk_vardecl(decl_node->line, ids, var_type, type_id, 0,
         inferred, initializer_stmt, inline_record, inline_alias);
+    
+    /* Apply external/public name override */
+    if (decl != NULL && cname_override != NULL) {
+        decl->tree_data.var_decl_data.cname_override = cname_override;
+        decl->tree_data.var_decl_data.is_external = is_external;
+    } else if (cname_override != NULL) {
+        free(cname_override);
+    }
 
     destroy_type_info_contents(&type_info);
 

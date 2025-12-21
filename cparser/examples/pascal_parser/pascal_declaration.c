@@ -665,6 +665,17 @@ static ast_t* wrap_external_name_clause(ast_t* parsed) {
     return node;
 }
 
+static ast_t* wrap_public_name_clause(ast_t* parsed) {
+    if (parsed == NULL || parsed == ast_nil)
+        return parsed;
+    ast_t* node = new_ast();
+    node->typ = PASCAL_T_PUBLIC_NAME;
+    node->child = parsed;
+    node->next = NULL;
+    node->sym = NULL;
+    return node;
+}
+
 static combinator_t* make_generic_type_prefix(void) {
     return seq(new_combinator(), PASCAL_T_NONE,
         optional(token(keyword_ci("generic"))),
@@ -2339,6 +2350,41 @@ void init_pascal_complete_program_parser(combinator_t** p) {
         NULL
     ));
 
+    // Support 'external name <string>' clause for variables (FPC bootstrap compatibility)
+    // FPC syntax: var x: type; external name 'symbol'; (note: semicolon before external)
+    combinator_t* var_external_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("external")),
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_external_name_clause
+    );
+
+    // Support 'public name <string>' clause for variables (FPC bootstrap compatibility)
+    combinator_t* var_public_name_clause = map(
+        seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("public")),
+            token(keyword_ci("name")),
+            token(pascal_string(PASCAL_T_STRING)),
+            NULL
+        ),
+        wrap_public_name_clause
+    );
+
+    // Combined variable modifier clause (external name or public name)
+    // In FPC syntax, these come after a semicolon: "var x: type; external name 'foo';"
+    combinator_t* var_linkage_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            var_external_name_clause,
+            var_public_name_clause,
+            NULL
+        ),
+        token(match(";")),  // trailing semicolon after linkage clause
+        NULL
+    ));
+
     combinator_t* typed_program_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         var_identifier_list,                            // multiple variable names
         token(match(":")),                              // colon
@@ -2349,7 +2395,8 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             NULL
         )),
         absolute_clause,                                // optional absolute clause
-        token(match(";")),                              // semicolon
+        token(match(";")),                              // semicolon (before optional linkage clause)
+        var_linkage_clause,                             // optional external/public name clause (with its own ;)
         NULL
     );
 

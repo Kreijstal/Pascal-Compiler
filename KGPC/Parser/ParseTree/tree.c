@@ -2016,6 +2016,8 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
     new_tree->tree_data.var_decl_data.defined_in_unit = 0;
     new_tree->tree_data.var_decl_data.unit_is_public = 0;
+    new_tree->tree_data.var_decl_data.cname_override = NULL;
+    new_tree->tree_data.var_decl_data.is_external = 0;
 
     return new_tree;
 }

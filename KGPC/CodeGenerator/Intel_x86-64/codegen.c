@@ -1663,12 +1663,31 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (is_program_scope)
                     {
-                        char *static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                        char *static_label = NULL;
+                        int is_external_var = tree->tree_data.var_decl_data.is_external;
+                        char *cname_override = tree->tree_data.var_decl_data.cname_override;
+                        
+                        if (cname_override != NULL) {
+                            /* Use the external/public name directly */
+                            static_label = strdup(cname_override);
+                        } else {
+                            static_label = codegen_make_program_var_label(ctx, (char *)id_list->cur);
+                        }
+                        
                         if (ctx->output_file != NULL && static_label != NULL)
                         {
-                            int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
-                            fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                static_label, alloc_size, alignment);
+                            if (is_external_var) {
+                                /* External variable: don't allocate storage, just reference the symbol */
+                                /* No .comm directive needed - the symbol is defined elsewhere */
+                            } else {
+                                int alignment = alloc_size >= 8 ? 8 : DOUBLEWORD;
+                                if (cname_override != NULL) {
+                                    /* Public name: make it globally visible */
+                                    fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
+                                }
+                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                    static_label, alloc_size, alignment);
+                            }
                         }
                         add_static_var((char *)id_list->cur, alloc_size, static_label);
                         if (static_label != NULL)

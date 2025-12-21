@@ -125,6 +125,8 @@ typedef struct Tree
             struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
             int defined_in_unit;
             int unit_is_public;
+            char *cname_override;    /* External/public name alias (FPC bootstrap) */
+            int is_external;         /* True if declared with 'external name' */
         } var_decl_data;
 
         /* An array declaration */
