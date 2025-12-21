@@ -105,6 +105,8 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
     fprintf(stderr, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
     fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
+    fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
+    fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
 }
 
@@ -383,6 +385,16 @@ static void set_flags(char **optional_args, int count)
         {
             /* Include path: -I/path/to/include */
             pascal_frontend_add_include_path(&arg[2]);
+        }
+        else if (arg[0] == '-' && arg[1] == 'F' && arg[2] == 'u' && arg[3] != '\0')
+        {
+            /* Unit search path: -Fu/path/to/units (FPC compatible) */
+            unit_search_paths_add_unit_path(&g_unit_paths, &arg[3]);
+        }
+        else if (strcmp(arg, "--no-vendor-units") == 0)
+        {
+            /* Disable built-in KGPC vendor units */
+            unit_search_paths_disable_vendor(&g_unit_paths);
         }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
         {

@@ -372,7 +372,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     // Define our own dialect symbol and FPC for Lazarus-compatible headers
     const char *default_symbols[] = { 
-        "KGPC", "FPC", "FPC_FULLVERSION := 30200", "maxExitCode := 255", 
+        "KGPC", "FPC", "FPC_FULLVERSION := 30200", "FPC_VERSION := 3", 
+        "FPC_RELEASE := 2", "maxExitCode := 255", 
         "FPC_STACKALIGNMENT := 16", "SizeIndexBits := 64", "FixedBitPos := 64", 
         "VarSizeQuant := 8", "FirstVarStepP2 := 3", "MaxVarHeaderAndPayload := 255", 
         "MaxFixedHeaderAndPayload := 255", "VarSizesCount := 32", 
