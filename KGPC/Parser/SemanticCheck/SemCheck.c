@@ -224,7 +224,7 @@ static ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
     if (ids == NULL)
         return NULL;
 
-    Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 0, 0, NULL, NULL, NULL);
+    Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 0, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
         return NULL;
 
@@ -503,6 +503,25 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
         symtab);
 }
 
+/* Forward declaration for type resolution helper used in const evaluation. */
+static const char *resolve_type_to_base_name(SymTab_t *symtab, const char *type_name);
+
+static int is_real_type_name(SymTab_t *symtab, const char *type_name)
+{
+    if (type_name == NULL)
+        return 0;
+
+    const char *resolved = resolve_type_to_base_name(symtab, type_name);
+    const char *name = (resolved != NULL) ? resolved : type_name;
+
+    return (pascal_identifier_equals(name, "Real") ||
+            pascal_identifier_equals(name, "Double") ||
+            pascal_identifier_equals(name, "Single") ||
+            pascal_identifier_equals(name, "Extended") ||
+            pascal_identifier_equals(name, "Comp") ||
+            pascal_identifier_equals(name, "Currency"));
+}
+
 /* Helper to check if an expression contains a real number literal or real constant */
 static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr)
 {
@@ -529,7 +548,26 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
     {
         return expression_contains_real_literal_impl(symtab, expr->expr_data.sign_term);
     }
-    
+
+    if (expr->type == EXPR_TYPECAST)
+    {
+        const char *target_id = expr->expr_data.typecast_data.target_type_id;
+        int target_type = expr->expr_data.typecast_data.target_type;
+        if (target_type == REAL_TYPE || is_real_type_name(symtab, target_id))
+            return 1;
+        return 0;
+    }
+
+    if (expr->type == EXPR_FUNCTION_CALL)
+    {
+        const char *id = expr->expr_data.function_call_data.id;
+        if (id != NULL && pascal_identifier_equals(id, "Trunc"))
+            return 0;
+        if (id != NULL && is_real_type_name(symtab, id))
+            return 1;
+        return 0;
+    }
+
     if (expr->type == EXPR_ADDOP)
     {
         return expression_contains_real_literal_impl(symtab, expr->expr_data.addop_data.left_expr) ||
@@ -734,6 +772,17 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
 
     switch (expr->type)
     {
+        case EXPR_TYPECAST:
+        {
+            const char *target_id = expr->expr_data.typecast_data.target_type_id;
+            int target_type = expr->expr_data.typecast_data.target_type;
+            if (target_type == REAL_TYPE || is_real_type_name(symtab, target_id))
+            {
+                return evaluate_real_const_expr(symtab, expr->expr_data.typecast_data.expr, out_value);
+            }
+            fprintf(stderr, "Error: unsupported real const typecast target.\n");
+            return 1;
+        }
         case EXPR_RNUM:
             *out_value = (double)expr->expr_data.r_num;
             return 0;
@@ -807,6 +856,27 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                     return 0;
                 default:
                     break;
+            }
+            break;
+        }
+        case EXPR_FUNCTION_CALL:
+        {
+            const char *id = expr->expr_data.function_call_data.id;
+            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+            if (id != NULL && is_real_type_name(symtab, id))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: %s in const expression requires exactly one argument.\n", id);
+                    return 1;
+                }
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: %s argument is NULL.\n", id);
+                    return 1;
+                }
+                return evaluate_real_const_expr(symtab, arg, out_value);
             }
             break;
         }
@@ -1038,7 +1108,12 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         {
             long long inner_value = 0;
             if (evaluate_const_expr(symtab, expr->expr_data.typecast_data.expr, &inner_value) != 0)
-                return 1;
+            {
+                double real_value = 0.0;
+                if (evaluate_real_const_expr(symtab, expr->expr_data.typecast_data.expr, &real_value) != 0)
+                    return 1;
+                inner_value = (long long)real_value;
+            }
 
             int target_type = expr->expr_data.typecast_data.target_type;
             if (target_type == UNKNOWN_TYPE &&
@@ -1595,6 +1670,36 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 *out_value = int_value;
                 return 0;
             }
+
+            /* Handle Trunc() for constant expressions */
+            if (id != NULL && pascal_identifier_equals(id, "Trunc"))
+            {
+                if (args == NULL || args->next != NULL)
+                {
+                    fprintf(stderr, "Error: Trunc in const expression requires exactly one argument.\n");
+                    return 1;
+                }
+                struct Expression *arg = (struct Expression *)args->cur;
+                if (arg == NULL)
+                {
+                    fprintf(stderr, "Error: Trunc argument is NULL.\n");
+                    return 1;
+                }
+                double real_value = 0.0;
+                if (evaluate_real_const_expr(symtab, arg, &real_value) == 0)
+                {
+                    *out_value = (long long)real_value;
+                    return 0;
+                }
+                long long int_value = 0;
+                if (evaluate_const_expr(symtab, arg, &int_value) == 0)
+                {
+                    *out_value = int_value;
+                    return 0;
+                }
+                fprintf(stderr, "Error: Trunc argument must be a const expression.\n");
+                return 1;
+            }
             
             /* Handle Cardinal, LongWord, DWord, QWord, Int64, UInt64 and other integer typecasts 
              * for constant expressions (FPC bootstrap: Cardinal(not Cardinal(0))) */
@@ -1662,7 +1767,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             
             if (id != NULL)
                 fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
-            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), and Chr() function calls are supported in const expressions.\n");
+            fprintf(stderr, "Error: only Ord(), High(), Low(), SizeOf(), Chr(), Trunc(), and integer typecasts are supported in const expressions.\n");
             return 1;
         }
         case EXPR_RELOP:
@@ -5224,15 +5329,22 @@ next_identifier:
                             {
                                 int inferred_is_pointer = (inferred_var_type == HASHVAR_POINTER || expr_type == POINTER_TYPE);
                                 int current_is_pointer = (current_var_type == HASHVAR_POINTER);
+                                int current_is_proc = (current_var_type == HASHVAR_PROCEDURE);
                                 if (var_node->type != NULL)
                                 {
                                     current_is_pointer |= kgpc_type_is_pointer(var_node->type);
                                     if (kgpc_type_get_legacy_tag(var_node->type) == POINTER_TYPE)
                                         current_is_pointer = 1;
+                                    if (var_node->type->kind == TYPE_KIND_PROCEDURE)
+                                        current_is_proc = 1;
                                 }
                                 if (tree->tree_data.var_decl_data.type == POINTER_TYPE)
                                     current_is_pointer = 1;
+                                if (tree->tree_data.var_decl_data.type == PROCEDURE)
+                                    current_is_proc = 1;
                                 if (inferred_is_pointer && current_is_pointer)
+                                    compatible = 1;
+                                if (!compatible && inferred_is_pointer && current_is_proc)
                                     compatible = 1;
                             }
 

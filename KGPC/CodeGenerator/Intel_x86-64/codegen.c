@@ -34,6 +34,7 @@
 static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, KgpcType *array_type);
 static int codegen_dynamic_array_descriptor_bytes(int element_size);
 static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_label);
+static int add_absolute_var_alias(const char *alias_label, const char *target_label);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
@@ -1663,6 +1664,28 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
                     if (is_program_scope)
                     {
+                        const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
+                        if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
+                        {
+                            if (strchr(absolute_target, '.') != NULL)
+                            {
+                                fprintf(stderr,
+                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    absolute_target);
+                            }
+                            else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
+                            {
+                                id_list = id_list->next;
+                                continue;
+                            }
+                            else
+                            {
+                                fprintf(stderr,
+                                    "Warning: failed to resolve absolute variable alias target '%s'.\n",
+                                    absolute_target);
+                            }
+                        }
+
                         char *static_label = NULL;
                         int is_external_var = tree->tree_data.var_decl_data.is_external;
                         char *cname_override = tree->tree_data.var_decl_data.cname_override;
@@ -1695,6 +1718,28 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     }
                     else
                     {
+                        const char *absolute_target = tree->tree_data.var_decl_data.absolute_target;
+                        if (absolute_target != NULL && id_list != NULL && id_list->next == NULL)
+                        {
+                            if (strchr(absolute_target, '.') != NULL)
+                            {
+                                fprintf(stderr,
+                                    "Warning: absolute variable alias to record field '%s' not supported yet.\n",
+                                    absolute_target);
+                            }
+                            else if (add_absolute_var_alias((char *)id_list->cur, absolute_target) == 0)
+                            {
+                                id_list = id_list->next;
+                                continue;
+                            }
+                            else
+                            {
+                                fprintf(stderr,
+                                    "Warning: failed to resolve absolute variable alias target '%s'.\n",
+                                    absolute_target);
+                            }
+                        }
+
                         add_l_x((char *)id_list->cur, alloc_size);
                     }
                 }
@@ -2614,6 +2659,48 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
                 cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
         }
     }
+}
+
+static int add_absolute_var_alias(const char *alias_label, const char *target_label)
+{
+    if (alias_label == NULL || alias_label[0] == '\0' ||
+        target_label == NULL || target_label[0] == '\0')
+        return 1;
+
+    StackNode_t *target = find_label((char *)target_label);
+    if (target == NULL)
+        return 1;
+
+    StackNode_t *alias = init_stack_node(target->offset, (char *)alias_label, target->size);
+    if (alias == NULL)
+        return 1;
+
+    alias->element_size = target->element_size;
+    alias->is_alias = 1;
+    alias->is_static = target->is_static;
+    if (target->static_label != NULL)
+        alias->static_label = strdup(target->static_label);
+
+    StackScope_t *cur_scope = get_cur_scope();
+    if (cur_scope == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
+    if (new_list_node == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    if (cur_scope->x == NULL)
+        cur_scope->x = new_list_node;
+    else
+        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+
+    return 0;
 }
 
 /* Helper function to add a Result alias for anonymous function return variable */

@@ -1470,6 +1470,25 @@ void init_pascal_unit_parser(combinator_t** p) {
     *var_expr_parser = new_combinator();
     init_pascal_expression_parser(var_expr_parser, NULL);
 
+    // Support optional 'absolute <identifier>' clause
+    combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
+        token(keyword_ci("absolute")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+
+    // Hint directives for variables: deprecated ['message'] | platform | library
+    combinator_t* var_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional deprecated message
+        NULL
+    ));
+
     combinator_t* typed_var_decl = seq(new_combinator(), PASCAL_T_VAR_DECL,
         sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match(","))), // variable name(s)
         token(match(":")),                          // colon
@@ -1479,6 +1498,8 @@ void init_pascal_unit_parser(combinator_t** p) {
             lazy(var_expr_parser),                   // initializer expression
             NULL
         )),
+        absolute_clause,                             // optional absolute clause
+        var_hint_directive,                          // optional hint directive
         optional(token(match(";"))),                // optional semicolon
         NULL
     );
@@ -2346,7 +2367,19 @@ void init_pascal_complete_program_parser(combinator_t** p) {
     // Support optional 'absolute <identifier>' clause
     combinator_t* absolute_clause = optional(seq(new_combinator(), PASCAL_T_NONE,
         token(keyword_ci("absolute")),
-        token(cident(PASCAL_T_IDENTIFIER)),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        NULL
+    ));
+
+    // Hint directives for variables: deprecated ['message'] | platform | library
+    combinator_t* var_hint_directive = optional(seq(new_combinator(), PASCAL_T_NONE,
+        multi(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("deprecated")),
+            token(keyword_ci("platform")),
+            token(keyword_ci("library")),
+            NULL
+        ),
+        optional(token(pascal_string(PASCAL_T_STRING))),  // optional deprecated message
         NULL
     ));
 
@@ -2395,6 +2428,7 @@ void init_pascal_complete_program_parser(combinator_t** p) {
             NULL
         )),
         absolute_clause,                                // optional absolute clause
+        var_hint_directive,                             // optional hint directive
         token(match(";")),                              // semicolon (before optional linkage clause)
         var_linkage_clause,                             // optional external/public name clause (with its own ;)
         NULL
