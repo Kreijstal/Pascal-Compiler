@@ -33,7 +33,6 @@ const
 
 procedure Sleep(milliseconds: integer);
 function GetTickCount64: longint;
-function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
 function Now: TDateTime;
 function IntToStr(value: longint): AnsiString;
 function UpperCase(const S: AnsiString): AnsiString;
@@ -146,14 +145,6 @@ end;
 function GetTickCount64: longint;
 begin
     GetTickCount64 := kgpc_get_tick_count64();
-end;
-
-function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
-begin
-    if endTick >= startTick then
-        MillisecondsBetween := Round((endTick - startTick) * 86400000.0)
-    else
-        MillisecondsBetween := Round((startTick - endTick) * 86400000.0);
 end;
 
 function Now: TDateTime;

@@ -3,11 +3,7 @@ program tdatetime_basics;
 {$mode objfpc}
 
 uses
-{$ifdef FPC}
   sysutils, dateutils;
-{$else}
-  sysutils;
-{$endif}
 
 const
   JulianEpoch = TDateTime(-2415018.5);
