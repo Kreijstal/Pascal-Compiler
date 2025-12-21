@@ -122,13 +122,12 @@ type
   Int32 = LongInt;               { 32-bit signed }
   UInt32 = Cardinal;             { 32-bit unsigned }
 
-  { Date/Time types }
-  TDateTime = type Double;       { Date/time as floating point days since 12/30/1899 }
-  TDate = TDateTime;             { Date component }
-  TTime = TDateTime;             { Time component }
-  PDateTime = ^TDateTime;
+  { Note: TDateTime is defined in sysutils vendor unit as Int64 for KGPC
+    runtime compatibility. For FPC bootstrap, define it locally in units 
+    that need FPC's Double-based TDateTime. }
 
-  { Comp type - 64-bit currency/integer type for extended precision }
+  { Comp type - 64-bit integer type (FPC Comp is special but Int64 is close) }
+  { Note: 'Comp' conflicts with common variable names - use carefully }
   Comp = Int64;
 
   { Currency type - fixed-point decimal with 4 decimal places }
@@ -153,14 +152,7 @@ type
   { Text line break style enumeration }
   TTextLineBreakStyle = (tlbsLF, tlbsCRLF, tlbsCR);
 
-  { Exception base class - compatible with FPC Exception }
-  Exception = class
-  private
-    FMessage: String;
-  public
-    constructor Create(const Msg: String);
-    property Message: String read FMessage write FMessage;
-  end;
+  { Exception is defined in vendor unit sysutils.p - don't define here to avoid duplication }
   ExceptAddr = Pointer;
   TExceptAddr = ExceptAddr;
   PExceptAddr = ^TExceptAddr;
@@ -819,12 +811,6 @@ begin
     actual64 := 0;
     blockwrite_impl(f, buffer, count, @actual64);
     result := longint(actual64);
-end;
-
-{ Exception class constructor }
-constructor Exception.Create(const Msg: String);
-begin
-    FMessage := Msg;
 end;
 
 begin

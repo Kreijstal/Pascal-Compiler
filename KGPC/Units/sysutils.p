@@ -1,14 +1,31 @@
 unit SysUtils;
 
-{ SysUtils Unit for KGPC
-  Note: Base types like TDateTime, AnsiString, Byte, Word, Exception, etc. are 
-  now defined in stdlib.p for consistency with FPC bootstrap compatibility.
-  This unit uses those types rather than redefining them locally. }
-
 interface
 
 uses
     ctypes;
+
+type
+    TDateTime = Int64;
+    AnsiString = string;
+    PChar = ^Char;
+    Uint64 = cuint64;
+
+    // Added for Unix support
+    AnsiChar = cchar;
+    PAnsiChar = pcchar;
+    SmallInt = -32768..32767;
+    Word = 0..65535;
+    LongWord = 0..4294967295;
+    Byte = 0..255;
+
+    Exception = class
+    private
+        FMessage: AnsiString;
+    public
+        constructor Create(const Msg: AnsiString);
+        property Message: AnsiString read FMessage;
+    end;
 
 const
     PathDelim = '/';
@@ -132,26 +149,16 @@ begin
 end;
 
 function MillisecondsBetween(startTick, endTick: TDateTime): Int64;
-var
-    diff: TDateTime;
 begin
     if endTick >= startTick then
-        diff := endTick - startTick
+        MillisecondsBetween := endTick - startTick
     else
-        diff := startTick - endTick;
-    { Convert from TDateTime (days) to milliseconds }
-    { TDateTime is days since 1899-12-30, so multiply by ms/day }
-    MillisecondsBetween := Trunc(diff * 86400000.0);
+        MillisecondsBetween := startTick - endTick;
 end;
 
 function Now: TDateTime;
-var
-    ms: Int64;
 begin
-    ms := kgpc_now();
-    { Convert from milliseconds since epoch to TDateTime (days since 1899-12-30) }
-    { Unix epoch (1970-01-01) is day 25569 in TDateTime }
-    Now := 25569.0 + (ms / 86400000.0);
+    Now := kgpc_now();
 end;
 
 function DigitToString(Value: longint): AnsiString;
@@ -374,12 +381,10 @@ function FormatDateTime(const FormatStr: string; DateTime: TDateTime): AnsiStrin
 var
     dt_value: Int64;
 begin
-    if DateTime < 0.0 then
+    if DateTime < 0 then
         dt_value := 0
     else
-        { Convert TDateTime to milliseconds since Unix epoch for runtime }
-        { TDateTime 25569.0 = Unix epoch (1970-01-01) }
-        dt_value := Trunc((DateTime - 25569.0) * 86400000.0);
+        dt_value := DateTime;
     FormatDateTime := kgpc_format_datetime(ToPChar(FormatStr), dt_value);
 end;
 
@@ -396,8 +401,8 @@ end;
 function UnixToDateTime(UnixTime: Int64): TDateTime;
 begin
     { Unix time is seconds since 1970-01-01 00:00:00 UTC }
-    { TDateTime is days since 1899-12-30, with Unix epoch at 25569 }
-    UnixToDateTime := 25569.0 + (UnixTime / 86400.0);
+    { TDateTime is milliseconds since 1970-01-01 00:00:00 UTC }
+    UnixToDateTime := UnixTime * 1000;
 end;
 
 function Format(const Fmt: string; const Args: array of const): string;
@@ -581,5 +586,11 @@ begin
         end;
     end;
 end;
+
+constructor Exception.Create(const Msg: AnsiString);
+begin
+    FMessage := Msg;
+end;
+
 
 end.
