@@ -130,12 +130,17 @@ type
   { Note: 'Comp' conflicts with common variable names - use carefully }
   Comp = Int64;
 
-  { Currency type - fixed-point decimal with 4 decimal places }
-  Currency = Int64;              { Actually a 64-bit fixed-point value in FPC }
+  { Currency type - 64-bit fixed-point decimal scaled by 10000 (4 decimal places) }
+  Currency = Int64;              { FPC Currency is Int64 scaled by 10000 }
   PCurrency = ^Currency;
 
-  { Variant type - placeholder for variant support }
-  Variant = Pointer;             { Stub: real variants require complex runtime }
+  { Variant type - stub implementation for basic compatibility }
+  { Note: Real Variant type requires complex runtime support for:
+    - Type coercion between different value types
+    - Memory management for string/array variants  
+    - COM interoperability (OleVariant)
+    This stub only provides the type name for parsing purposes. }
+  Variant = Pointer;
   PVariant = ^Variant;
   TVarRec = record
     VType: LongInt;
