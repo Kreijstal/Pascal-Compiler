@@ -996,10 +996,20 @@ void init_pascal_statement_parser(combinator_t** p) {
         NULL
     );
 
-    // Raise statement: raise [expression]
+    // Raise statement: raise [expression] [at addr[, frame]]
     combinator_t* raise_stmt = seq(new_combinator(), PASCAL_T_RAISE_STMT,
         token(keyword_ci("raise")),            // raise keyword (case-insensitive)
         optional(lazy(expr_parser)),           // optional exception expression
+        optional(seq(new_combinator(), PASCAL_T_NONE,
+            token(keyword_ci("at")),
+            lazy(expr_parser),
+            optional(seq(new_combinator(), PASCAL_T_NONE,
+                token(match(",")),
+                lazy(expr_parser),
+                NULL
+            )),
+            NULL
+        )),
         NULL
     );
 

@@ -125,6 +125,9 @@ typedef struct Tree
             struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
             int defined_in_unit;
             int unit_is_public;
+            char *cname_override;    /* External/public name alias (FPC bootstrap) */
+            int is_external;         /* True if declared with 'external name' */
+            char *absolute_target;   /* Absolute alias target name, if any */
         } var_decl_data;
 
         /* An array declaration */
@@ -216,7 +219,8 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
 
 Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     int is_var_param, int inferred_type, struct Statement *initializer,
-    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias);
+    struct RecordType *inline_record_type, struct TypeAlias *inline_type_alias,
+    char *absolute_target);
 
 Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int start, int end,
     char *range_str, struct Statement *initializer);
