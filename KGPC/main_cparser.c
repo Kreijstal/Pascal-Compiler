@@ -962,10 +962,8 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Prepend imported types so dependencies are processed BEFORE target types.
-     * Units are loaded in dependency order (ctypes before Windows), so placing
-     * imported types first ensures predeclare_types sees them in time. */
-    *type_list = ConcatList(unit_tree->tree_data.unit_data.interface_type_decls, *type_list);
+    /* Append imported types so dependencies stay ahead of later units. */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
@@ -987,12 +985,12 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Prepend imported constants so dependencies are available first. */
-    *const_list = ConcatList(unit_tree->tree_data.unit_data.interface_const_decls, *const_list);
+    /* Append imported constants so dependencies are available first. */
+    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.interface_const_decls);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
-    *var_list = ConcatList(unit_tree->tree_data.unit_data.interface_var_decls, *var_list);
+    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
     mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
@@ -1013,21 +1011,21 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             dbg = dbg->next;
         }
     }
-    /* Prepend implementation types to keep dependencies ahead of targets. */
-    *type_list = ConcatList(unit_tree->tree_data.unit_data.implementation_type_decls, *type_list);
+    /* Append implementation types to keep dependencies ahead of targets. */
+    *type_list = ConcatList(*type_list, unit_tree->tree_data.unit_data.implementation_type_decls);
     unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Prepend implementation constants to keep dependencies ahead of targets. */
-    *const_list = ConcatList(unit_tree->tree_data.unit_data.implementation_const_decls, *const_list);
+    /* Append implementation constants to keep dependencies ahead of targets. */
+    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
     unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
     mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    *var_list = ConcatList(unit_tree->tree_data.unit_data.implementation_var_decls, *var_list);
+    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
     unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
     mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
-    *sub_list = ConcatList(unit_tree->tree_data.unit_data.subprograms, *sub_list);
+    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
     unit_tree->tree_data.unit_data.subprograms = NULL;
 
     /* Only programs accumulate initialization/finalization */

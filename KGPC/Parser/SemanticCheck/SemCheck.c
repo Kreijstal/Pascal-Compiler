@@ -6304,6 +6304,11 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         while (cur != NULL)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate == NULL || candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+            {
+                cur = cur->next;
+                continue;
+            }
             if (candidate != NULL && candidate->type != NULL &&
                 candidate->type->kind == TYPE_KIND_PROCEDURE)
             {

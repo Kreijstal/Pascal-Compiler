@@ -1,6 +1,4 @@
-unit system;
-
-interface
+program system;
 
 
 { ============================================================================
@@ -358,7 +356,7 @@ begin
     end
 end;
 
-procedure halt;
+procedure halt; overload;
 begin
     assembler;
     asm
@@ -367,7 +365,7 @@ begin
     end
 end;
 
-procedure halt(exitcode: integer);
+procedure halt(exitcode: integer); overload;
 begin
     assembler;
     asm
@@ -821,8 +819,4 @@ begin
 end;
 
 begin
-end.
-
-implementation
-
 end.

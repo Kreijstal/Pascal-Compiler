@@ -216,15 +216,35 @@ static int builtin_arg_expects_string(const char *procedure_name, int arg_index)
     return 0;
 }
 
-static int codegen_param_expected_type(Tree_t *decl)
+static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
 {
     if (decl == NULL)
         return UNKNOWN_TYPE;
 
+    HashNode_t *type_node = NULL;
+    char *type_id = NULL;
+
     if (decl->type == TREE_VAR_DECL)
-        return decl->tree_data.var_decl_data.type;
+    {
+        type_id = decl->tree_data.var_decl_data.type_id;
+        if (decl->tree_data.var_decl_data.type != UNKNOWN_TYPE)
+            return decl->tree_data.var_decl_data.type;
+    }
     if (decl->type == TREE_ARR_DECL)
-        return decl->tree_data.arr_decl_data.type;
+    {
+        type_id = decl->tree_data.arr_decl_data.type_id;
+        if (decl->tree_data.arr_decl_data.type != UNKNOWN_TYPE)
+            return decl->tree_data.arr_decl_data.type;
+    }
+
+    if (type_id != NULL && symtab != NULL &&
+        FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL &&
+        type_node->type != NULL)
+    {
+        int resolved = kgpc_type_get_legacy_tag(type_node->type);
+        if (resolved != UNKNOWN_TYPE)
+            return resolved;
+    }
 
     return UNKNOWN_TYPE;
 }
@@ -3850,7 +3870,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         /* Also check if we're passing a static array argument (even if not declared as var param) */
         int is_array_arg = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
 
-        int expected_type = codegen_param_expected_type(formal_arg_decl);
+        int expected_type = codegen_param_expected_type(formal_arg_decl, ctx->symtab);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL)
             expected_type = codegen_expected_type_for_builtin(procedure_name);
         if (expected_type == UNKNOWN_TYPE && procedure_name != NULL &&

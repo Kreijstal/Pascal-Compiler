@@ -331,6 +331,7 @@ static int semcheck_mangled_suffix_matches_untyped(const char *candidate_suffix,
 static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
     const char *proc_id, const char *call_mangled);
 static int semcheck_var_decl_is_untyped(Tree_t *decl);
+static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
@@ -444,9 +445,16 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
         return 0;
 
-    HashNode_t *builtin_node = NULL;
-    if (FindIdent(&builtin_node, symtab, proc_id) != -1 && builtin_node != NULL &&
-        builtin_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+    /* Prefer user-defined/prologue procedures over builtins when available. */
+    HashNode_t *existing = NULL;
+    if (FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
+        existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
+    {
+        return 0;
+    }
+
+    HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, proc_id);
+    if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
         stmt->stmt_data.procedure_call_data.mangled_id = NULL;
@@ -1063,6 +1071,7 @@ static int semcheck_builtin_untyped_call(SymTab_t *symtab, struct Statement *stm
         ++arg_index;
     }
 
+    return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     return return_val;
 }
 
@@ -1081,6 +1090,133 @@ static int semcheck_builtin_settextcodepage(SymTab_t *symtab, struct Statement *
     return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
 }
 
+static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
+{
+    if (symtab == NULL || stmt == NULL)
+        return 0;
+
+    const char *proc_id = stmt->stmt_data.procedure_call_data.id;
+    if (proc_id == NULL)
+        return 0;
+
+    char *mangled = MangleFunctionNameFromCallSite(proc_id,
+        stmt->stmt_data.procedure_call_data.expr_args, symtab, max_scope_lev);
+    if (mangled == NULL)
+    {
+        fprintf(stderr, "Error: failed to mangle procedure name for call to %s.\n", proc_id);
+        return 1;
+    }
+
+    ListNode_t *candidates = FindAllIdents(symtab, (char *)proc_id);
+    HashNode_t *exact_match = NULL;
+    if (candidates != NULL)
+    {
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, mangled) == 0)
+            {
+                exact_match = candidate;
+                break;
+            }
+        }
+    }
+    if (exact_match == NULL && candidates != NULL)
+    {
+        HashNode_t *wildcard = semcheck_find_untyped_mangled_match(candidates, proc_id, mangled);
+        if (wildcard != NULL && wildcard->mangled_id != NULL)
+        {
+            free(mangled);
+            mangled = strdup(wildcard->mangled_id);
+            if (mangled == NULL)
+            {
+                if (candidates != NULL)
+                    DestroyList(candidates);
+                fprintf(stderr, "Error: failed to allocate mangled procedure name for %s.\n", proc_id);
+                return 1;
+            }
+        }
+    }
+    if (exact_match == NULL && candidates != NULL)
+    {
+        int call_arg_count = ListLength(stmt->stmt_data.procedure_call_data.expr_args);
+        HashNode_t *best_match = NULL;
+        int best_score = 9999;
+        int num_best = 0;
+
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate == NULL || candidate->type == NULL ||
+                candidate->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            ListNode_t *formal_params = candidate->type->info.proc_info.params;
+            if (ListLength(formal_params) != call_arg_count)
+                continue;
+
+            ListNode_t *formal = formal_params;
+            ListNode_t *actual = stmt->stmt_data.procedure_call_data.expr_args;
+            int current_score = 0;
+            while (formal != NULL && actual != NULL)
+            {
+                Tree_t *formal_decl = (Tree_t *)formal->cur;
+                struct Expression *actual_expr = (struct Expression *)actual->cur;
+                int formal_type = resolve_param_type(formal_decl, symtab);
+                int actual_type = UNKNOWN_TYPE;
+                semcheck_expr_main(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+
+                if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
+                    current_score += 0;
+                else if (formal_type == actual_type)
+                    current_score += 0;
+                else if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
+                         (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
+                    current_score += 1;
+                else
+                    current_score += 1000;
+
+                formal = formal->next;
+                actual = actual->next;
+            }
+
+            if (current_score < best_score)
+            {
+                best_score = current_score;
+                best_match = candidate;
+                num_best = 1;
+            }
+            else if (current_score == best_score)
+            {
+                num_best++;
+            }
+        }
+
+        if (num_best == 1 && best_match != NULL && best_match->mangled_id != NULL)
+        {
+            free(mangled);
+            mangled = strdup(best_match->mangled_id);
+            if (mangled == NULL)
+            {
+                if (candidates != NULL)
+                    DestroyList(candidates);
+                fprintf(stderr, "Error: failed to allocate mangled procedure name for %s.\n", proc_id);
+                return 1;
+            }
+        }
+    }
+    if (candidates != NULL)
+        DestroyList(candidates);
+
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.mangled_id);
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+    }
+    stmt->stmt_data.procedure_call_data.mangled_id = mangled;
+    return 0;
+}
+
 static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (stmt == NULL)
@@ -1096,7 +1232,7 @@ static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int m
             return 1;
         }
         stmt->stmt_data.procedure_call_data.expr_args = CreateListNode(zero_expr, LIST_EXPR);
-        return 0;
+        return semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     }
 
     if (args->next != NULL)
@@ -1109,6 +1245,7 @@ static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int m
     struct Expression *code_expr = (struct Expression *)args->cur;
     int code_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&code_type, symtab, code_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     return return_val;
 }
 
@@ -1131,6 +1268,7 @@ static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int
         struct Expression *size_expr = (struct Expression *)args->cur;
         int size_type = UNKNOWN_TYPE;
         return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+        return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
         return return_val;
     }
 
@@ -1140,6 +1278,7 @@ static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int
     int size_type = UNKNOWN_TYPE;
     return_val += semcheck_expr_main(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     return_val += semcheck_expr_main(&size_type, symtab, size_expr, max_scope_lev, NO_MUTATE);
+    return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     return return_val;
 }
 
@@ -1170,6 +1309,7 @@ static int semcheck_builtin_freemem(SymTab_t *symtab, struct Statement *stmt, in
         }
     }
 
+    return_val += semcheck_set_stmt_call_mangled_id(symtab, stmt, max_scope_lev);
     return return_val;
 }
 
@@ -2389,12 +2529,6 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
             }
         }
     }
-
-    if (proc_id != NULL && pascal_identifier_equals(proc_id, "SetCodePage"))
-        return semcheck_builtin_setcodepage(symtab, stmt, max_scope_lev);
-
-    if (proc_id != NULL && pascal_identifier_equals(proc_id, "ReallocMem"))
-        return semcheck_builtin_reallocmem(symtab, stmt, max_scope_lev);
 
     int handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Halt",
